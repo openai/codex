@@ -59,6 +59,7 @@ use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::RawResponseItemEvent;
+use codex_protocol::protocol::RequestUserInputResultEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
@@ -66,7 +67,10 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnStartedEvent;
+use codex_protocol::request_user_input::INTERRUPTED_ANSWER_TEXT;
+use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputArgs;
+use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
@@ -654,6 +658,167 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) personality: Option<Personality>,
 }
 
+fn initial_messages_from_history(initial_history: &InitialHistory) -> Option<Vec<EventMsg>> {
+    match initial_history {
+        InitialHistory::New => None,
+        InitialHistory::Resumed(resumed) => Some(derive_initial_messages_from_rollout(
+            resumed.history.as_slice(),
+        )),
+        InitialHistory::Forked(items) => Some(derive_initial_messages_from_rollout(items)),
+    }
+}
+
+fn derive_initial_messages_from_rollout(items: &[RolloutItem]) -> Vec<EventMsg> {
+    let mut messages = Vec::new();
+    let mut request_user_input_calls: HashMap<String, Vec<RequestUserInputQuestion>> =
+        HashMap::new();
+
+    for item in items {
+        match item {
+            RolloutItem::EventMsg(ev) => messages.push(ev.clone()),
+            RolloutItem::ResponseItem(response_item) => match response_item {
+                ResponseItem::FunctionCall {
+                    name,
+                    call_id,
+                    arguments,
+                    ..
+                } => {
+                    if name == "request_user_input"
+                        && let Ok(args) = serde_json::from_str::<RequestUserInputArgs>(arguments)
+                    {
+                        request_user_input_calls.insert(call_id.clone(), args.questions);
+                    }
+                }
+                ResponseItem::FunctionCallOutput { call_id, output } => {
+                    let content = output.content.trim();
+                    if content.is_empty() {
+                        continue;
+                    }
+                    let response = match serde_json::from_str::<RequestUserInputResponse>(content) {
+                        Ok(response) => response,
+                        Err(err) => {
+                            warn!(
+                                "failed to parse request_user_input response from initial history for {call_id}: {err}"
+                            );
+                            continue;
+                        }
+                    };
+
+                    let interrupted =
+                        initial_history_request_user_input_interrupted(&response.answers);
+                    let (questions, mapping_missing) = match request_user_input_calls.get(call_id) {
+                        Some(questions) => (questions.clone(), false),
+                        None => (
+                            initial_history_placeholder_request_user_input_questions_from_answers(
+                                &response.answers,
+                            ),
+                            true,
+                        ),
+                    };
+                    if questions.is_empty() {
+                        continue;
+                    }
+                    if mapping_missing && !interrupted {
+                        continue;
+                    }
+
+                    let question_ids = questions
+                        .iter()
+                        .map(|question| question.id.clone())
+                        .collect::<HashSet<_>>();
+                    let answers = initial_history_filter_request_user_input_answers(
+                        &response.answers,
+                        &question_ids,
+                    );
+                    let is_complete = questions
+                        .iter()
+                        .all(|question| answers.contains_key(&question.id));
+                    if !is_complete && !interrupted {
+                        continue;
+                    }
+
+                    messages.push(EventMsg::RequestUserInputResult(
+                        RequestUserInputResultEvent {
+                            call_id: call_id.clone(),
+                            turn_id: String::new(),
+                            questions,
+                            answers,
+                            interrupted,
+                        },
+                    ));
+                }
+                ResponseItem::CustomToolCallOutput { .. }
+                | ResponseItem::CustomToolCall { .. }
+                | ResponseItem::LocalShellCall { .. }
+                | ResponseItem::Message { .. }
+                | ResponseItem::Reasoning { .. }
+                | ResponseItem::WebSearchCall { .. }
+                | ResponseItem::GhostSnapshot { .. }
+                | ResponseItem::Compaction { .. }
+                | ResponseItem::Other => {}
+            },
+            RolloutItem::SessionMeta(_)
+            | RolloutItem::Compacted(_)
+            | RolloutItem::TurnContext(_) => {}
+        }
+    }
+
+    messages
+}
+
+fn initial_history_request_user_input_answer_is_marker(answer: &RequestUserInputAnswer) -> bool {
+    answer
+        .answers
+        .iter()
+        .any(|entry| entry == INTERRUPTED_ANSWER_TEXT)
+}
+
+fn initial_history_request_user_input_interrupted(
+    answers: &HashMap<String, RequestUserInputAnswer>,
+) -> bool {
+    answers
+        .values()
+        .any(initial_history_request_user_input_answer_is_marker)
+}
+
+fn initial_history_filter_request_user_input_answers(
+    answers: &HashMap<String, RequestUserInputAnswer>,
+    question_ids: &HashSet<String>,
+) -> HashMap<String, RequestUserInputAnswer> {
+    answers
+        .iter()
+        .filter(|(id, _)| question_ids.contains(*id))
+        .map(|(id, answer)| (id.clone(), answer.clone()))
+        .collect()
+}
+
+fn initial_history_placeholder_request_user_input_questions(
+    question_ids: &HashSet<String>,
+) -> Vec<RequestUserInputQuestion> {
+    let mut ids = question_ids.iter().cloned().collect::<Vec<_>>();
+    ids.sort();
+    ids.into_iter()
+        .map(|id| RequestUserInputQuestion {
+            header: id.clone(),
+            question: id.clone(),
+            id,
+            is_other: false,
+            options: None,
+        })
+        .collect()
+}
+
+fn initial_history_placeholder_request_user_input_questions_from_answers(
+    answers: &HashMap<String, RequestUserInputAnswer>,
+) -> Vec<RequestUserInputQuestion> {
+    let question_ids = answers
+        .iter()
+        .filter(|(_, answer)| !initial_history_request_user_input_answer_is_marker(answer))
+        .map(|(id, _)| id.clone())
+        .collect::<HashSet<_>>();
+    initial_history_placeholder_request_user_input_questions(&question_ids)
+}
+
 impl Session {
     /// Don't expand the number of mutated arguments on config. We are in the process of getting rid of it.
     pub(crate) fn build_per_turn_config(session_configuration: &SessionConfiguration) -> Config {
@@ -968,7 +1133,7 @@ impl Session {
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
-        let initial_messages = initial_history.get_event_msgs();
+        let initial_messages = initial_messages_from_history(&initial_history);
         let events = std::iter::once(Event {
             id: INITIAL_SUBMIT_ID.to_owned(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
@@ -1667,6 +1832,11 @@ impl Session {
             .iter()
             .map(|question| question.id.clone())
             .collect::<HashSet<_>>();
+        let questions_for_state = questions.clone();
+        {
+            let mut state = self.state.lock().await;
+            state.upsert_request_user_input_call(call_id.clone(), questions_for_state);
+        }
         let (tx_response, rx_response) = oneshot::channel();
         let pending = PendingUserInput::new(call_id.clone(), question_ids, tx_response);
         let event_id = sub_id.clone();
@@ -1715,10 +1885,11 @@ impl Session {
         };
 
         let call_id = update.call_id;
+        let question_ids = update.question_ids;
         let merged = update.merged;
         let is_complete = update.is_complete;
 
-        if !is_complete {
+        let pending_item = if !is_complete {
             let content = match serde_json::to_string(&merged) {
                 Ok(content) => content,
                 Err(err) => {
@@ -1728,23 +1899,32 @@ impl Session {
                     return;
                 }
             };
-            let pending_item = ResponseInputItem::FunctionCallOutput {
+            Some(ResponseInputItem::FunctionCallOutput {
                 call_id: call_id.clone(),
                 output: FunctionCallOutputPayload {
                     content,
                     success: Some(true),
                     ..Default::default()
                 },
-            };
-            let mut state = self.state.lock().await;
-            state.remove_pending_user_input_item(&call_id);
-            state.upsert_pending_user_input_item(call_id, pending_item);
-            return;
-        }
+            })
+        } else {
+            None
+        };
 
         {
             let mut state = self.state.lock().await;
+            if !state.has_request_user_input_call(&call_id) {
+                let placeholder = Self::placeholder_request_user_input_questions(&question_ids);
+                state.upsert_request_user_input_call(call_id.clone(), placeholder);
+            }
             state.remove_pending_user_input_item(&call_id);
+            if let Some(pending_item) = pending_item {
+                state.upsert_pending_user_input_item(call_id.clone(), pending_item);
+            }
+        }
+
+        if !is_complete {
+            return;
         }
 
         if let Some(tx_response) = update.tx {
@@ -1838,6 +2018,188 @@ impl Session {
         self.record_into_history(items, turn_context).await;
         self.persist_rollout_response_items(items).await;
         self.send_raw_response_items(turn_context, items).await;
+        let request_user_input_events = self
+            .collect_request_user_input_result_events(turn_context, items)
+            .await;
+        for event in request_user_input_events {
+            self.send_event(turn_context, EventMsg::RequestUserInputResult(event))
+                .await;
+        }
+    }
+
+    async fn collect_request_user_input_result_events(
+        &self,
+        turn_context: &TurnContext,
+        items: &[ResponseItem],
+    ) -> Vec<RequestUserInputResultEvent> {
+        let mut events = Vec::new();
+        let mut state = self.state.lock().await;
+
+        for item in items {
+            match item {
+                ResponseItem::FunctionCall {
+                    name,
+                    call_id,
+                    arguments,
+                    ..
+                } => {
+                    if name == Self::REQUEST_USER_INPUT_TOOL_NAME
+                        && let Some(questions) =
+                            Self::parse_request_user_input_questions(arguments, call_id)
+                    {
+                        state.upsert_request_user_input_call(call_id.clone(), questions);
+                    }
+                }
+                ResponseItem::FunctionCallOutput { call_id, output } => {
+                    let Some(response) = Self::parse_request_user_input_response(output, call_id)
+                    else {
+                        continue;
+                    };
+                    let interrupted =
+                        Self::request_user_input_response_interrupted(&response.answers);
+
+                    let (questions, mapping_missing) =
+                        match state.request_user_input_questions(call_id) {
+                            Some(questions) => (questions, false),
+                            None => (
+                                Self::placeholder_request_user_input_questions_from_answers(
+                                    &response.answers,
+                                ),
+                                true,
+                            ),
+                        };
+                    if questions.is_empty() {
+                        continue;
+                    }
+                    if mapping_missing && !interrupted {
+                        continue;
+                    }
+
+                    let question_ids = questions
+                        .iter()
+                        .map(|question| question.id.clone())
+                        .collect::<HashSet<_>>();
+                    let answers =
+                        Self::filter_request_user_input_answers(&response.answers, &question_ids);
+                    let is_complete = Self::request_user_input_is_complete(&questions, &answers);
+                    if !is_complete && !interrupted {
+                        continue;
+                    }
+
+                    events.push(RequestUserInputResultEvent {
+                        call_id: call_id.clone(),
+                        turn_id: turn_context.sub_id.clone(),
+                        questions,
+                        answers,
+                        interrupted,
+                    });
+                }
+                ResponseItem::CustomToolCallOutput { .. }
+                | ResponseItem::CustomToolCall { .. }
+                | ResponseItem::LocalShellCall { .. }
+                | ResponseItem::Message { .. }
+                | ResponseItem::Reasoning { .. }
+                | ResponseItem::WebSearchCall { .. }
+                | ResponseItem::GhostSnapshot { .. }
+                | ResponseItem::Compaction { .. }
+                | ResponseItem::Other => {}
+            }
+        }
+
+        events
+    }
+
+    const REQUEST_USER_INPUT_TOOL_NAME: &str = "request_user_input";
+
+    fn parse_request_user_input_questions(
+        arguments: &str,
+        call_id: &str,
+    ) -> Option<Vec<RequestUserInputQuestion>> {
+        match serde_json::from_str::<RequestUserInputArgs>(arguments) {
+            Ok(args) => Some(args.questions),
+            Err(err) => {
+                warn!("failed to parse request_user_input arguments for {call_id}: {err}");
+                None
+            }
+        }
+    }
+
+    fn parse_request_user_input_response(
+        output: &FunctionCallOutputPayload,
+        call_id: &str,
+    ) -> Option<RequestUserInputResponse> {
+        if output.content.trim().is_empty() {
+            return None;
+        }
+        match serde_json::from_str::<RequestUserInputResponse>(&output.content) {
+            Ok(response) => Some(response),
+            Err(err) => {
+                warn!("failed to parse request_user_input response for {call_id}: {err}");
+                None
+            }
+        }
+    }
+
+    fn request_user_input_answer_is_interrupt_marker(answer: &RequestUserInputAnswer) -> bool {
+        answer
+            .answers
+            .iter()
+            .any(|entry| entry == INTERRUPTED_ANSWER_TEXT)
+    }
+
+    fn request_user_input_response_interrupted(
+        answers: &HashMap<String, RequestUserInputAnswer>,
+    ) -> bool {
+        answers
+            .values()
+            .any(Self::request_user_input_answer_is_interrupt_marker)
+    }
+
+    fn filter_request_user_input_answers(
+        answers: &HashMap<String, RequestUserInputAnswer>,
+        question_ids: &HashSet<String>,
+    ) -> HashMap<String, RequestUserInputAnswer> {
+        answers
+            .iter()
+            .filter(|(id, _)| question_ids.contains(*id))
+            .map(|(id, answer)| (id.clone(), answer.clone()))
+            .collect()
+    }
+
+    fn request_user_input_is_complete(
+        questions: &[RequestUserInputQuestion],
+        answers: &HashMap<String, RequestUserInputAnswer>,
+    ) -> bool {
+        questions
+            .iter()
+            .all(|question| answers.contains_key(&question.id))
+    }
+
+    fn placeholder_request_user_input_questions(
+        question_ids: &HashSet<String>,
+    ) -> Vec<RequestUserInputQuestion> {
+        let mut ids = question_ids.iter().cloned().collect::<Vec<_>>();
+        ids.sort();
+        ids.into_iter()
+            .map(|id| RequestUserInputQuestion {
+                header: id.clone(),
+                question: id.clone(),
+                id,
+                is_other: false,
+                options: None,
+            })
+            .collect()
+    }
+
+    fn placeholder_request_user_input_questions_from_answers(
+        answers: &HashMap<String, RequestUserInputAnswer>,
+    ) -> Vec<RequestUserInputQuestion> {
+        let question_ids = answers
+            .iter()
+            .filter(|(_, answer)| !Self::request_user_input_answer_is_interrupt_marker(answer))
+            .map(|(id, _)| id.clone())
+            .collect::<HashSet<_>>();
+        Self::placeholder_request_user_input_questions(&question_ids)
     }
 
     async fn reconstruct_history_from_rollout(
@@ -4571,11 +4933,18 @@ mod tests {
     use crate::config::test_config;
     use crate::exec::ExecToolCallOutput;
     use crate::function_tool::FunctionCallError;
+    use crate::session_prefix::TURN_ABORTED_OPEN_TAG;
     use crate::shell::default_user_shell;
     use crate::tools::format_exec_output_str;
 
     use codex_protocol::ThreadId;
     use codex_protocol::models::FunctionCallOutputPayload;
+    use codex_protocol::models::ResponseInputItem;
+    use codex_protocol::request_user_input::INTERRUPTED_ANSWER_ID_BASE;
+    use codex_protocol::request_user_input::INTERRUPTED_ANSWER_TEXT;
+    use codex_protocol::request_user_input::RequestUserInputAnswer;
+    use codex_protocol::request_user_input::RequestUserInputQuestion;
+    use codex_protocol::request_user_input::RequestUserInputResponse;
 
     use crate::protocol::CompactedItem;
     use crate::protocol::CreditsSnapshot;
@@ -4601,6 +4970,7 @@ mod tests {
     use codex_app_server_protocol::AuthMode;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
+    use std::collections::HashMap;
     use std::path::Path;
     use std::time::Duration;
     use tokio::time::sleep;
@@ -5764,6 +6134,114 @@ mod tests {
         }
         // No extra events should be emitted after an abort.
         assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn abort_interrupt_flushes_pending_user_input_before_marker() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+
+        let call_id = "call-1".to_string();
+        let questions = vec![
+            RequestUserInputQuestion {
+                header: "Q1".to_string(),
+                question: "First?".to_string(),
+                id: "q1".to_string(),
+                is_other: false,
+                options: None,
+            },
+            RequestUserInputQuestion {
+                header: "Q2".to_string(),
+                question: "Second?".to_string(),
+                id: "q2".to_string(),
+                is_other: false,
+                options: None,
+            },
+        ];
+        let args = codex_protocol::request_user_input::RequestUserInputArgs {
+            questions: questions.clone(),
+        };
+        let call_item = ResponseItem::FunctionCall {
+            id: None,
+            call_id: call_id.clone(),
+            name: "request_user_input".to_string(),
+            arguments: serde_json::to_string(&args).expect("serialize request_user_input args"),
+        };
+        sess.record_conversation_items(&tc, &[call_item]).await;
+
+        let mut answers = HashMap::new();
+        answers.insert(
+            "q1".to_string(),
+            RequestUserInputAnswer {
+                answers: vec!["Option 1".to_string()],
+            },
+        );
+        answers.insert(
+            INTERRUPTED_ANSWER_ID_BASE.to_string(),
+            RequestUserInputAnswer {
+                answers: vec![INTERRUPTED_ANSWER_TEXT.to_string()],
+            },
+        );
+        let response = RequestUserInputResponse { answers };
+        let content = serde_json::to_string(&response).expect("serialize user input response");
+        let pending_item = ResponseInputItem::FunctionCallOutput {
+            call_id: call_id.clone(),
+            output: FunctionCallOutputPayload {
+                content,
+                success: Some(true),
+                ..Default::default()
+            },
+        };
+        {
+            let mut state = sess.state.lock().await;
+            state.upsert_request_user_input_call(call_id.clone(), questions);
+            state.upsert_pending_user_input_item(call_id.clone(), pending_item);
+        }
+
+        let input = vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }];
+        sess.spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: false,
+            },
+        )
+        .await;
+
+        sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+
+        assert!(!sess.has_pending_user_input_items().await);
+
+        let history = sess.clone_history().await;
+        let mut output_idx = None;
+        let mut marker_idx = None;
+        for (idx, item) in history.raw_items().iter().enumerate() {
+            if let ResponseItem::FunctionCallOutput { call_id: cid, .. } = item
+                && cid == &call_id
+            {
+                output_idx = Some(idx);
+            } else if let ResponseItem::Message { role, content, .. } = item
+                && role == "user"
+                && content.iter().any(|content_item| {
+                    matches!(
+                        content_item,
+                        ContentItem::InputText { text } if text.contains(TURN_ABORTED_OPEN_TAG)
+                    )
+                })
+            {
+                marker_idx = Some(idx);
+            }
+        }
+
+        let output_idx = output_idx.expect("expected pending user input output in history");
+        let marker_idx = marker_idx.expect("expected turn aborted marker in history");
+        assert!(
+            output_idx < marker_idx,
+            "expected pending user input output before turn aborted marker"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

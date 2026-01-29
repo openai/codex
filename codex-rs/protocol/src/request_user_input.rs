@@ -5,6 +5,11 @@ use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
+/// Base id used when emitting an interruption marker answer.
+pub const INTERRUPTED_ANSWER_ID_BASE: &str = "__codex_request_user_input_interrupted__";
+/// Marker value used to indicate the questions UI was interrupted early.
+pub const INTERRUPTED_ANSWER_TEXT: &str = "interrupted_with_unanswered_questions";
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct RequestUserInputQuestionOption {
     pub label: String,

@@ -43,6 +43,7 @@ use codex_core::config::types::McpServerTransportConfig;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpInvocation;
+use codex_core::protocol::RequestUserInputResultEvent;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::web_search::web_search_detail;
 use codex_otel::RuntimeMetricsSummary;
@@ -52,6 +53,7 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::user_input::TextElement;
 use image::DynamicImage;
 use image::ImageReader;
@@ -1760,6 +1762,137 @@ pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     // in terminals like Ghostty.
     let lines: Vec<Line<'static>> = vec![vec![format!("■ {message}").red()].into()];
     PlainHistoryCell { lines }
+}
+
+pub(crate) fn new_request_user_input_result(
+    event: RequestUserInputResultEvent,
+) -> RequestUserInputResultCell {
+    RequestUserInputResultCell { event }
+}
+
+#[derive(Debug)]
+pub(crate) struct RequestUserInputResultCell {
+    event: RequestUserInputResultEvent,
+}
+
+impl HistoryCell for RequestUserInputResultCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let width = width.max(1) as usize;
+        let total = self.event.questions.len();
+        let answered = self
+            .event
+            .questions
+            .iter()
+            .filter(|question| {
+                self.event
+                    .answers
+                    .get(&question.id)
+                    .is_some_and(|answer| !answer.answers.is_empty())
+            })
+            .count();
+        let unanswered = total.saturating_sub(answered);
+
+        let mut header = vec!["? ".dim(), "User input".bold()];
+        header.push(format!(" {answered}/{total} answered").dim());
+        if self.event.interrupted {
+            header.push(" (interrupted)".yellow());
+        }
+
+        let mut lines: Vec<Line<'static>> = vec![header.into()];
+
+        for question in &self.event.questions {
+            let answer = self.event.answers.get(&question.id);
+            let answer_missing = match answer {
+                Some(answer) => answer.answers.is_empty(),
+                None => true,
+            };
+            let mut question_text = format!("{}: {}", question.header, question.question);
+            if answer_missing {
+                question_text.push_str(" (unanswered)");
+            }
+            lines.extend(wrap_with_prefix(
+                &question_text,
+                width,
+                "  • ".into(),
+                "    ".into(),
+                Style::default(),
+            ));
+
+            let Some(answer) = answer.filter(|answer| !answer.answers.is_empty()) else {
+                continue;
+            };
+            let (options, note) = split_request_user_input_answer(answer);
+
+            for option in options {
+                lines.extend(wrap_with_prefix(
+                    &option,
+                    width,
+                    "    - ".dim(),
+                    "      ".dim(),
+                    Style::default().fg(Color::Green),
+                ));
+            }
+            if let Some(note) = note {
+                lines.extend(wrap_with_prefix(
+                    &note,
+                    width,
+                    "    note: ".dim(),
+                    "          ".dim(),
+                    Style::default().add_modifier(Modifier::DIM),
+                ));
+            }
+        }
+
+        if self.event.interrupted && unanswered > 0 {
+            let summary = format!("interrupted with {unanswered} unanswered");
+            lines.extend(wrap_with_prefix(
+                &summary,
+                width,
+                "  ↳ ".yellow().dim(),
+                "    ".dim(),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::DIM),
+            ));
+        }
+
+        lines
+    }
+}
+
+fn wrap_with_prefix(
+    text: &str,
+    width: usize,
+    initial_prefix: Span<'static>,
+    subsequent_prefix: Span<'static>,
+    style: Style,
+) -> Vec<Line<'static>> {
+    let prefix_width = initial_prefix
+        .content
+        .width()
+        .max(subsequent_prefix.content.width());
+    let wrap_width = width.saturating_sub(prefix_width).max(1);
+    let wrapped = textwrap::wrap(text, wrap_width);
+    let wrapped_lines = wrapped
+        .into_iter()
+        .map(|segment| Span::from(segment.to_string()).set_style(style).into())
+        .collect::<Vec<Line<'static>>>();
+    prefix_lines(wrapped_lines, initial_prefix, subsequent_prefix)
+}
+
+fn split_request_user_input_answer(
+    answer: &RequestUserInputAnswer,
+) -> (Vec<String>, Option<String>) {
+    let mut options = Vec::new();
+    let mut note = None;
+    for entry in &answer.answers {
+        if let Some(note_text) = entry.strip_prefix("user_note: ") {
+            note = Some(note_text.to_string());
+        } else {
+            options.push(entry.clone());
+        }
+    }
+    (options, note)
 }
 
 /// Render a user‑friendly plan update styled like a checkbox todo list.

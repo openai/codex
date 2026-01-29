@@ -86,6 +86,7 @@ pub(crate) struct PendingUserInput {
 
 pub(crate) struct PendingUserInputUpdate {
     pub(crate) call_id: String,
+    pub(crate) question_ids: HashSet<String>,
     pub(crate) merged: RequestUserInputResponse,
     pub(crate) is_complete: bool,
     pub(crate) tx: Option<oneshot::Sender<RequestUserInputResponse>>,
@@ -163,9 +164,11 @@ impl TurnState {
         let merged = pending.apply_update(update);
         let is_complete = pending.is_complete(&merged);
         let call_id = pending.call_id.clone();
+        let question_ids = pending.question_ids.clone();
         if !is_complete {
             return Some(PendingUserInputUpdate {
                 call_id,
+                question_ids,
                 merged,
                 is_complete,
                 tx: None,
@@ -174,6 +177,7 @@ impl TurnState {
         let pending = self.pending_user_input.remove(key)?;
         Some(PendingUserInputUpdate {
             call_id,
+            question_ids,
             merged,
             is_complete,
             tx: Some(pending.tx),

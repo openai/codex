@@ -30,6 +30,8 @@ use crate::bottom_pane::selection_popup_common::measure_rows_height;
 use crate::render::renderable::Renderable;
 
 use codex_core::protocol::Op;
+use codex_protocol::request_user_input::INTERRUPTED_ANSWER_ID_BASE;
+use codex_protocol::request_user_input::INTERRUPTED_ANSWER_TEXT;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::request_user_input::RequestUserInputResponse;
@@ -51,8 +53,6 @@ const UNANSWERED_CONFIRM_GO_BACK_DESC: &str = "Return to the first unanswered qu
 const UNANSWERED_CONFIRM_SUBMIT: &str = "Proceed";
 const UNANSWERED_CONFIRM_SUBMIT_DESC_SINGULAR: &str = "question";
 const UNANSWERED_CONFIRM_SUBMIT_DESC_PLURAL: &str = "questions";
-const INTERRUPTED_ANSWER_ID: &str = "__codex_request_user_input_interrupted__";
-const INTERRUPTED_ANSWER_TEXT: &str = "interrupted_with_unanswered_questions";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Focus {
@@ -134,7 +134,6 @@ pub(crate) struct RequestUserInputOverlay {
     done: bool,
     pending_submission_draft: Option<ComposerDraft>,
     confirm_unanswered: Option<ScrollState>,
-    submitted_answers: HashMap<String, RequestUserInputAnswer>,
 }
 
 impl RequestUserInputOverlay {
@@ -168,7 +167,6 @@ impl RequestUserInputOverlay {
             done: false,
             pending_submission_draft: None,
             confirm_unanswered: None,
-            submitted_answers: HashMap::new(),
         };
         overlay.reset_for_request();
         overlay.ensure_focus_available();
@@ -566,7 +564,6 @@ impl RequestUserInputOverlay {
             .set_text_content(String::new(), Vec::new(), Vec::new());
         self.confirm_unanswered = None;
         self.pending_submission_draft = None;
-        self.submitted_answers.clear();
     }
 
     fn options_len_for_question(
@@ -715,7 +712,7 @@ impl RequestUserInputOverlay {
     }
 
     fn interrupted_marker_key(&self) -> String {
-        let base = INTERRUPTED_ANSWER_ID;
+        let base = INTERRUPTED_ANSWER_ID_BASE;
         if self
             .request
             .questions
@@ -739,32 +736,6 @@ impl RequestUserInputOverlay {
         }
     }
 
-    fn send_submitted_answers(&self) {
-        if self.submitted_answers.is_empty() {
-            return;
-        }
-        self.app_event_tx
-            .send(AppEvent::CodexOp(Op::UserInputAnswer {
-                id: self.request.turn_id.clone(),
-                response: RequestUserInputResponse {
-                    answers: self.submitted_answers.clone(),
-                },
-            }));
-    }
-
-    fn submit_current_answer_update(&mut self) {
-        let idx = self.current_index();
-        let Some(question) = self.request.questions.get(idx) else {
-            return;
-        };
-        if let Some(answer) = self.answer_for_question(idx, false) {
-            self.submitted_answers.insert(question.id.clone(), answer);
-        } else {
-            self.submitted_answers.remove(&question.id);
-        }
-        self.send_submitted_answers();
-    }
-
     fn submit_committed_answers_for_interrupt(&mut self) {
         let mut answers = HashMap::new();
         for (idx, question) in self.request.questions.iter().enumerate() {
@@ -784,8 +755,11 @@ impl RequestUserInputOverlay {
         if answers.is_empty() {
             return;
         }
-        self.submitted_answers = answers;
-        self.send_submitted_answers();
+        self.app_event_tx
+            .send(AppEvent::CodexOp(Op::UserInputAnswer {
+                id: self.request.turn_id.clone(),
+                response: RequestUserInputResponse { answers },
+            }));
     }
 
     /// Advance to next question, or submit when on the last one.
@@ -793,13 +767,11 @@ impl RequestUserInputOverlay {
         if self.current_index() + 1 >= self.question_count() {
             self.save_current_draft();
             if self.unanswered_count() > 0 {
-                self.submit_current_answer_update();
                 self.open_unanswered_confirmation();
             } else {
                 self.submit_answers();
             }
         } else {
-            self.submit_current_answer_update();
             self.move_question(true);
         }
     }
@@ -839,7 +811,6 @@ impl RequestUserInputOverlay {
                 },
             );
         }
-        self.submitted_answers = answers.clone();
         self.app_event_tx
             .send(AppEvent::CodexOp(Op::UserInputAnswer {
                 id: self.request.turn_id.clone(),
@@ -1579,19 +1550,10 @@ mod tests {
         let first_answer = &overlay.answers[0];
         assert!(first_answer.answer_committed);
         assert_eq!(first_answer.options_state.selected_idx, Some(0));
-        let event = rx.try_recv().expect("expected incremental AppEvent");
-        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
-            panic!("expected UserInputAnswer");
-        };
-        let mut expected = HashMap::new();
-        expected.insert(
-            "q1".to_string(),
-            RequestUserInputAnswer {
-                answers: vec!["Option 1".to_string()],
-            },
+        assert!(
+            rx.try_recv().is_err(),
+            "unexpected AppEvent before full submission"
         );
-        assert_eq!(response.answers, expected);
-        assert!(rx.try_recv().is_err(), "unexpected extra AppEvent");
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
         let event = rx.try_recv().expect("expected AppEvent");
@@ -1779,15 +1741,9 @@ mod tests {
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
         assert!(overlay.confirm_unanswered_active());
-        let event = rx.try_recv().expect("expected incremental AppEvent");
-        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
-            panic!("expected UserInputAnswer");
-        };
-        let answer = response.answers.get("q2").expect("answer missing");
-        assert_eq!(answer.answers, vec!["Option 1".to_string()]);
         assert!(
-            !response.answers.contains_key("q1"),
-            "did not expect q1 answer yet"
+            rx.try_recv().is_err(),
+            "unexpected AppEvent before confirmation submit"
         );
         overlay.handle_key_event(KeyEvent::from(KeyCode::Char('1')));
         overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
@@ -1822,7 +1778,7 @@ mod tests {
         };
         let marker = response
             .answers
-            .get(INTERRUPTED_ANSWER_ID)
+            .get(INTERRUPTED_ANSWER_ID_BASE)
             .expect("interrupt marker missing");
         assert_eq!(marker.answers, vec![INTERRUPTED_ANSWER_TEXT.to_string()]);
 
@@ -1853,7 +1809,7 @@ mod tests {
         };
         let marker = response
             .answers
-            .get(INTERRUPTED_ANSWER_ID)
+            .get(INTERRUPTED_ANSWER_ID_BASE)
             .expect("interrupt marker missing");
         assert_eq!(marker.answers, vec![INTERRUPTED_ANSWER_TEXT.to_string()]);
 
@@ -1887,7 +1843,7 @@ mod tests {
         };
         let marker = response
             .answers
-            .get(INTERRUPTED_ANSWER_ID)
+            .get(INTERRUPTED_ANSWER_ID_BASE)
             .expect("interrupt marker missing");
         assert_eq!(marker.answers, vec![INTERRUPTED_ANSWER_TEXT.to_string()]);
 
@@ -1922,7 +1878,7 @@ mod tests {
         };
         let marker = response
             .answers
-            .get(INTERRUPTED_ANSWER_ID)
+            .get(INTERRUPTED_ANSWER_ID_BASE)
             .expect("interrupt marker missing");
         assert_eq!(marker.answers, vec![INTERRUPTED_ANSWER_TEXT.to_string()]);
 
@@ -1951,7 +1907,10 @@ mod tests {
         );
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
-        let _ = rx.try_recv();
+        assert!(
+            rx.try_recv().is_err(),
+            "unexpected AppEvent before interruption"
+        );
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
 
@@ -1963,7 +1922,7 @@ mod tests {
         assert_eq!(answer.answers, vec!["Option 1".to_string()]);
         let marker = response
             .answers
-            .get(INTERRUPTED_ANSWER_ID)
+            .get(INTERRUPTED_ANSWER_ID_BASE)
             .expect("interrupt marker missing");
         assert_eq!(marker.answers, vec![INTERRUPTED_ANSWER_TEXT.to_string()]);
 
