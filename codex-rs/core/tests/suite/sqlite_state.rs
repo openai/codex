@@ -235,7 +235,8 @@ async fn tool_call_logs_include_thread_id() -> Result<()> {
     let expected_thread_id = test.session_configured.session_id.to_string();
 
     let subscriber = tracing_subscriber::registry().with(codex_state::log_db::start(db.clone()));
-    tracing::subscriber::set_global_default(subscriber).expect("set global tracing subscriber");
+    let dispatch = tracing::Dispatch::new(subscriber);
+    let _guard = tracing::dispatcher::set_default(&dispatch);
 
     test.submit_turn("run a shell command").await?;
     {
