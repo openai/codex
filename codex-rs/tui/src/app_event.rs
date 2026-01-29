@@ -301,6 +301,11 @@ pub(crate) enum AppEvent {
     StatusLineTimeoutWarning {
         timeout_ms: u64,
     },
+
+    /// Warns the user the first time the status line script fails (non-timeout).
+    StatusLineErrorWarning {
+        message: String,
+    },
 }
 
 /// The exit strategy requested by the UI layer.
