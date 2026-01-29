@@ -262,7 +262,7 @@ fn todo_update_emits_todo_list_started_updated_and_completed() {
         })]
     );
 
-    // Second todo_write update (todo_update; plan_update legacy alias) => item.updated (same id)
+    // Second todo_write update => item.updated (same id)
     let second = event(
         "p2",
         EventMsg::TodoUpdate(UpdateTodoArgs::new(
