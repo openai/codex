@@ -17,10 +17,7 @@ pub(crate) struct SkillDependencyInfo {
     pub(crate) description: Option<String>,
 }
 use crate::skills::SkillMetadata;
-use crate::skills::load_env_var;
-use crate::skills::save_env_var;
-
-/// Resolve required dependency values (session cache, env vars, then env store),
+/// Resolve required dependency values (session cache, then env vars),
 /// and prompt the UI for any missing ones.
 pub(crate) async fn resolve_skill_dependencies_for_turn(
     sess: &Arc<Session>,
@@ -31,7 +28,6 @@ pub(crate) async fn resolve_skill_dependencies_for_turn(
         return;
     }
 
-    let codex_home = sess.codex_home().await;
     let existing_env = sess.dependency_env().await;
     let mut loaded_values = HashMap::new();
     let mut missing = Vec::new();
@@ -55,19 +51,7 @@ pub(crate) async fn resolve_skill_dependencies_for_turn(
                 warn!("failed to read env var {name}: {err}");
             }
         }
-
-        match load_env_var(&codex_home, &name) {
-            Ok(Some(value)) => {
-                loaded_values.insert(name.clone(), value);
-            }
-            Ok(None) => {
-                missing.push(dependency.clone());
-            }
-            Err(err) => {
-                warn!("failed to load env var {name}: {err}");
-                missing.push(dependency.clone());
-            }
-        }
+        missing.push(dependency.clone());
     }
 
     if !loaded_values.is_empty() {
@@ -113,24 +97,24 @@ pub(crate) async fn request_skill_dependencies(
     let questions = dependencies
         .iter()
         .map(|dep| {
-            let header = dep.description.as_ref().map_or_else(
-                || format!("{} requires \"{}\" to be set", dep.skill_name, dep.name),
+            let requirement = dep.description.as_ref().map_or_else(
+                || format!("The skill \"{}\" requires \"{}\" to be set.", dep.skill_name, dep.name),
                 |description| {
                     format!(
-                        "{} requires \"{}\" to be set ({})",
+                        "The skill \"{}\" requires \"{}\" to be set ({}).",
                         dep.skill_name, dep.name, description
                     )
                 },
             );
             let question = format!(
-                "Enter a value for \"{}\". This will be stored in your Codex env store for future runs.",
-                dep.name
+                "{requirement} This is an experimental internal feature. The value is stored in memory for this session only.",
             );
             RequestUserInputQuestion {
                 id: dep.name.clone(),
-                header,
+                header: "Skill requires environment variable".to_string(),
                 question,
                 is_other: false,
+                is_secret: true,
                 options: None,
             }
         })
@@ -172,11 +156,5 @@ pub(crate) async fn request_skill_dependencies(
         return;
     }
 
-    let codex_home = sess.codex_home().await;
-    for (name, value) in &values {
-        if let Err(err) = save_env_var(&codex_home, name, value) {
-            warn!("failed to persist env var {name}: {err}");
-        }
-    }
     sess.set_dependency_env(values).await;
 }

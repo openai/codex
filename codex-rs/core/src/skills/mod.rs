@@ -1,4 +1,3 @@
-mod env_store;
 mod env_var_dependencies;
 pub mod injection;
 pub mod loader;
@@ -7,8 +6,6 @@ pub mod model;
 pub mod render;
 pub mod system;
 
-pub(crate) use env_store::load_env_var;
-pub(crate) use env_store::save_env_var;
 pub(crate) use env_var_dependencies::collect_env_var_dependencies;
 pub(crate) use env_var_dependencies::resolve_skill_dependencies_for_turn;
 pub(crate) use injection::SkillInjections;
