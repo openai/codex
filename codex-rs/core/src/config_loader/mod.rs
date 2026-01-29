@@ -13,6 +13,7 @@ mod tests;
 
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigToml;
+use crate::config::PROJECTS_TOML_FILE;
 use crate::config::deserialize_config_toml_with_base;
 use crate::config_loader::config_requirements::ConfigRequirementsWithSources;
 use crate::config_loader::layer_io::LoadedConfigLayers;
@@ -162,16 +163,16 @@ pub async fn load_config_layers_state(
     // exists, but is malformed, then this error should be propagated to the
     // user.
     let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home)?;
-    let user_layer = load_config_toml_for_required_layer(&user_file, |config_toml| {
-        ConfigLayerEntry::new(
-            ConfigLayerSource::User {
-                file: user_file.clone(),
-            },
-            config_toml,
-        )
-    })
-    .await?;
-    layers.push(user_layer);
+    let mut user_config = load_config_toml_value(&user_file).await?;
+    let projects_file = AbsolutePathBuf::resolve_path_against_base(PROJECTS_TOML_FILE, codex_home)?;
+    let projects_config = load_projects_toml_value(&projects_file).await?;
+    merge_toml_values(&mut user_config, &projects_config);
+    layers.push(ConfigLayerEntry::new(
+        ConfigLayerSource::User {
+            file: user_file.clone(),
+        },
+        user_config,
+    ));
 
     if let Some(cwd) = cwd {
         let mut merged_so_far = TomlValue::Table(toml::map::Map::new());
@@ -288,6 +289,11 @@ async fn load_config_toml_for_required_layer(
     config_toml: impl AsRef<Path>,
     create_entry: impl FnOnce(TomlValue) -> ConfigLayerEntry,
 ) -> io::Result<ConfigLayerEntry> {
+    let toml_value = load_config_toml_value(config_toml).await?;
+    Ok(create_entry(toml_value))
+}
+
+async fn load_config_toml_value(config_toml: impl AsRef<Path>) -> io::Result<TomlValue> {
     let toml_file = config_toml.as_ref();
     let toml_value = match tokio::fs::read_to_string(toml_file).await {
         Ok(contents) => {
@@ -318,7 +324,31 @@ async fn load_config_toml_for_required_layer(
         }
     }?;
 
-    Ok(create_entry(toml_value))
+    Ok(toml_value)
+}
+
+async fn load_projects_toml_value(projects_toml: &AbsolutePathBuf) -> io::Result<TomlValue> {
+    let config = load_config_toml_value(projects_toml).await?;
+    let mut output = toml::map::Map::new();
+    let Some(table) = config.as_table() else {
+        return Ok(TomlValue::Table(output));
+    };
+    let extra_keys: Vec<_> = table
+        .keys()
+        .filter(|key| *key != "projects")
+        .cloned()
+        .collect();
+    if !extra_keys.is_empty() {
+        let projects_path_display = projects_toml.as_path().display();
+        tracing::warn!(
+            "Ignoring unsupported keys in {projects_path_display}: {}",
+            extra_keys.join(", ")
+        );
+    }
+    if let Some(projects) = table.get("projects") {
+        output.insert("projects".to_string(), projects.clone());
+    }
+    Ok(TomlValue::Table(output))
 }
 
 /// If available, apply requirements from `/etc/codex/requirements.toml` to

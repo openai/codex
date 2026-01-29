@@ -1,4 +1,5 @@
 use crate::config::CONFIG_TOML_FILE;
+use crate::config::PROJECTS_TOML_FILE;
 use crate::config::types::McpServerConfig;
 use crate::config::types::Notice;
 use crate::path_utils::resolve_symlink_write_paths;
@@ -44,7 +45,7 @@ pub enum ConfigEdit {
     /// Set or clear a skill config entry under `[[skills.config]]`.
     SetSkillConfig { path: PathBuf, enabled: bool },
     /// Set trust_level under `[projects."<path>"]`,
-    /// migrating inline tables to explicit tables.
+    /// migrating inline tables to explicit tables in `projects.toml`.
     SetProjectTrustLevel { path: PathBuf, level: TrustLevel },
     /// Set the value stored at the exact dotted path.
     SetPath {
@@ -632,7 +633,23 @@ pub fn apply_blocking(
         return Ok(());
     }
 
-    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let (project_edits, config_edits) = split_project_edits(edits);
+    apply_blocking_to_file(codex_home, CONFIG_TOML_FILE, profile, &config_edits)?;
+    apply_blocking_to_file(codex_home, PROJECTS_TOML_FILE, profile, &project_edits)?;
+    Ok(())
+}
+
+fn apply_blocking_to_file(
+    codex_home: &Path,
+    file_name: &str,
+    profile: Option<&str>,
+    edits: &[ConfigEdit],
+) -> anyhow::Result<()> {
+    if edits.is_empty() {
+        return Ok(());
+    }
+
+    let config_path = codex_home.join(file_name);
     let write_paths = resolve_symlink_write_paths(&config_path)?;
     let serialized = match write_paths.read_path {
         Some(path) => match std::fs::read_to_string(&path) {
@@ -667,13 +684,24 @@ pub fn apply_blocking(
     }
 
     write_atomically(&write_paths.write_path, &document.doc.to_string()).with_context(|| {
-        format!(
-            "failed to persist config.toml at {}",
-            write_paths.write_path.display()
-        )
+        let write_path_display = write_paths.write_path.display();
+        format!("failed to persist {file_name} at {write_path_display}")
     })?;
 
     Ok(())
+}
+
+fn split_project_edits(edits: &[ConfigEdit]) -> (Vec<ConfigEdit>, Vec<ConfigEdit>) {
+    let mut project_edits = Vec::new();
+    let mut config_edits = Vec::new();
+    for edit in edits {
+        if matches!(edit, ConfigEdit::SetProjectTrustLevel { .. }) {
+            project_edits.push(edit.clone());
+        } else {
+            config_edits.push(edit.clone());
+        }
+    }
+    (project_edits, config_edits)
 }
 
 /// Persist edits asynchronously by offloading the blocking writer.

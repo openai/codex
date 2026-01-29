@@ -34,6 +34,8 @@ use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::OLLAMA_CHAT_PROVIDER_ID;
 use crate::model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use crate::model_provider_info::built_in_model_providers;
+use crate::path_utils::resolve_symlink_write_paths;
+use crate::path_utils::write_atomically;
 use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
@@ -92,6 +94,7 @@ pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
+pub const PROJECTS_TOML_FILE: &str = "projects.toml";
 
 #[cfg(test)]
 pub(crate) fn test_config() -> Config {
@@ -706,7 +709,7 @@ pub(crate) fn set_project_trust_level_inner(
     Ok(())
 }
 
-/// Patch `CODEX_HOME/config.toml` project state to set trust level.
+/// Patch `CODEX_HOME/projects.toml` project state to set trust level.
 /// Use with caution.
 pub fn set_project_trust_level(
     codex_home: &Path,
@@ -718,6 +721,121 @@ pub fn set_project_trust_level(
     ConfigEditsBuilder::new(codex_home)
         .set_project_trust_level(project_path, trust_level)
         .apply_blocking()
+}
+
+/// Returns true when `config.toml` contains a non-empty `projects` table.
+pub fn projects_in_config_toml(codex_home: &Path) -> std::io::Result<bool> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let contents = match std::fs::read_to_string(&config_path) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(err),
+    };
+    let config: TomlValue = toml::from_str(&contents).map_err(|err| {
+        let config_path_display = config_path.display();
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("Failed to parse config file {config_path_display}: {err}"),
+        )
+    })?;
+    let Some(table) = config.as_table() else {
+        return Ok(false);
+    };
+    let Some(projects) = table.get("projects").and_then(TomlValue::as_table) else {
+        return Ok(false);
+    };
+    Ok(!projects.is_empty())
+}
+
+/// Migrate `projects` entries from `config.toml` into `projects.toml`.
+/// Returns `true` if a migration was performed.
+pub fn migrate_projects_to_projects_toml(codex_home: &Path) -> anyhow::Result<bool> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let contents = match std::fs::read_to_string(&config_path) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(err.into()),
+    };
+
+    let config_toml: ConfigToml = toml::from_str(&contents)?;
+    let config_projects = filter_projects_with_trust(config_toml.projects.unwrap_or_default());
+    if config_projects.is_empty() {
+        return Ok(false);
+    }
+
+    let mut merged_projects = filter_projects_with_trust(read_projects_toml(codex_home)?);
+    for (path, project) in config_projects {
+        merged_projects.insert(path, project);
+    }
+
+    write_projects_toml(codex_home, &merged_projects)?;
+
+    let mut doc = contents.parse::<DocumentMut>()?;
+    if doc.as_table_mut().remove("projects").is_some() {
+        write_config_toml(codex_home, &doc)?;
+    }
+
+    Ok(true)
+}
+
+fn filter_projects_with_trust(
+    projects: HashMap<String, ProjectConfig>,
+) -> HashMap<String, ProjectConfig> {
+    projects
+        .into_iter()
+        .filter(|(_, project)| project.trust_level.is_some())
+        .collect()
+}
+
+fn read_projects_toml(codex_home: &Path) -> anyhow::Result<HashMap<String, ProjectConfig>> {
+    let projects_path = codex_home.join(PROJECTS_TOML_FILE);
+    let contents = match std::fs::read_to_string(&projects_path) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(HashMap::new()),
+        Err(err) => return Err(err.into()),
+    };
+    let value: TomlValue = toml::from_str(&contents)?;
+    let Some(table) = value.as_table() else {
+        return Ok(HashMap::new());
+    };
+    let Some(projects) = table.get("projects") else {
+        return Ok(HashMap::new());
+    };
+    let mut projects_only = toml::map::Map::new();
+    projects_only.insert("projects".to_string(), projects.clone());
+    let config_toml: ConfigToml = TomlValue::Table(projects_only).try_into()?;
+    Ok(config_toml.projects.unwrap_or_default())
+}
+
+fn write_projects_toml(
+    codex_home: &Path,
+    projects: &HashMap<String, ProjectConfig>,
+) -> anyhow::Result<()> {
+    let mut doc = DocumentMut::new();
+    let mut keys: Vec<_> = projects.keys().collect();
+    keys.sort();
+
+    for key in keys {
+        let Some(project) = projects.get(key) else {
+            continue;
+        };
+        let Some(trust_level) = project.trust_level else {
+            continue;
+        };
+        set_project_trust_level_inner(&mut doc, Path::new(key), trust_level)?;
+    }
+
+    let projects_path = codex_home.join(PROJECTS_TOML_FILE);
+    let write_paths = resolve_symlink_write_paths(&projects_path)?;
+    write_atomically(&write_paths.write_path, &doc.to_string())?;
+    Ok(())
+}
+
+fn write_config_toml(codex_home: &Path, doc: &DocumentMut) -> anyhow::Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let write_paths = resolve_symlink_write_paths(&config_path)?;
+    write_atomically(&write_paths.write_path, &doc.to_string())?;
+    Ok(())
 }
 
 /// Save the default OSS provider preference to config.toml
@@ -4111,6 +4229,34 @@ trust_level = "trusted"
 trust_level = "trusted"
 "#;
         assert_eq!(contents, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_set_project_trust_level_writes_projects_toml() -> anyhow::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let project_dir = temp_dir.path().join("repo");
+        std::fs::create_dir_all(&project_dir)?;
+
+        set_project_trust_level(temp_dir.path(), &project_dir, TrustLevel::Trusted)?;
+
+        let projects_path = temp_dir.path().join(PROJECTS_TOML_FILE);
+        let contents = std::fs::read_to_string(&projects_path)?;
+
+        let raw_path = project_dir.to_string_lossy();
+        let path_str = if raw_path.contains('\\') {
+            format!("'{raw_path}'")
+        } else {
+            format!("\"{raw_path}\"")
+        };
+        let expected = format!(
+            r#"[projects.{path_str}]
+trust_level = "trusted"
+"#
+        );
+        pretty_assertions::assert_eq!(contents, expected);
+        assert!(!temp_dir.path().join(CONFIG_TOML_FILE).exists());
 
         Ok(())
     }

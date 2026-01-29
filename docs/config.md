@@ -6,6 +6,12 @@ For advanced configuration instructions, see [this documentation](https://develo
 
 For a full configuration reference, see [this documentation](https://developers.openai.com/codex/config-reference).
 
+## Project trust
+
+Trusted project entries now live in `~/.codex/projects.toml`. Entries under `[projects]` in
+`~/.codex/config.toml` are still supported for backward compatibility but may prompt migration on
+startup.
+
 ## Connecting to MCP servers
 
 Codex can connect to MCP servers configured in `~/.codex/config.toml`. See the configuration reference for the latest MCP server options:

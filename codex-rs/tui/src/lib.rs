@@ -80,6 +80,7 @@ mod notifications;
 pub mod onboarding;
 mod oss_selection;
 mod pager_overlay;
+mod projects_migration;
 pub mod public_widgets;
 mod render;
 mod resume_picker;
@@ -409,27 +410,34 @@ async fn run_ratatui_app(
         }
     }
 
+    let mut config = initial_config;
+    if let Some(projects_migration::ProjectsMigrationOutcome::Migrated) =
+        projects_migration::run_projects_migration_prompt_if_needed(&mut tui, &config).await?
+    {
+        config = load_config_or_exit(cli_kv_overrides.clone(), overrides.clone()).await;
+    }
+
     // Initialize high-fidelity session event logging if enabled.
-    session_log::maybe_init(&initial_config);
+    session_log::maybe_init(&config);
 
     let auth_manager = AuthManager::shared(
-        initial_config.codex_home.clone(),
+        config.codex_home.clone(),
         false,
-        initial_config.cli_auth_credentials_store_mode,
+        config.cli_auth_credentials_store_mode,
     );
-    let login_status = get_login_status(&initial_config);
-    let should_show_trust_screen_flag = should_show_trust_screen(&initial_config);
+    let login_status = get_login_status(&config);
+    let should_show_trust_screen_flag = should_show_trust_screen(&config);
     let should_show_onboarding =
-        should_show_onboarding(login_status, &initial_config, should_show_trust_screen_flag);
+        should_show_onboarding(login_status, &config, should_show_trust_screen_flag);
 
     let config = if should_show_onboarding {
         let onboarding_result = run_onboarding_app(
             OnboardingScreenArgs {
-                show_login_screen: should_show_login_screen(login_status, &initial_config),
+                show_login_screen: should_show_login_screen(login_status, &config),
                 show_trust_screen: should_show_trust_screen_flag,
                 login_status,
                 auth_manager: auth_manager.clone(),
-                config: initial_config.clone(),
+                config: config.clone(),
             },
             &mut tui,
         )
@@ -453,10 +461,10 @@ async fn run_ratatui_app(
         {
             load_config_or_exit(cli_kv_overrides.clone(), overrides.clone()).await
         } else {
-            initial_config
+            config
         }
     } else {
-        initial_config
+        config
     };
 
     let ollama_chat_support_notice = match ollama_chat_deprecation_notice(&config).await {

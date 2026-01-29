@@ -4,6 +4,7 @@ use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigBuilder;
 use crate::config::ConfigOverrides;
 use crate::config::ConfigToml;
+use crate::config::PROJECTS_TOML_FILE;
 use crate::config::ProjectConfig;
 use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigLoadError;
@@ -50,6 +51,33 @@ async fn make_config_for_test(
         .expect("serialize config"),
     )
     .await
+}
+
+#[tokio::test]
+async fn projects_toml_sets_active_project_trust() -> std::io::Result<()> {
+    let codex_home = tempdir().expect("tempdir");
+    let workspace = tempdir().expect("workspace");
+    let raw_path = workspace.path().to_string_lossy();
+    let path_str = if raw_path.contains('\\') {
+        format!("'{raw_path}'")
+    } else {
+        format!("\"{raw_path}\"")
+    };
+    let contents = format!(
+        r#"[projects.{path_str}]
+trust_level = "trusted"
+"#
+    );
+    std::fs::write(codex_home.path().join(PROJECTS_TOML_FILE), contents).expect("write projects");
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(workspace.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(config.active_project.trust_level, Some(TrustLevel::Trusted));
+    Ok(())
 }
 
 #[tokio::test]
