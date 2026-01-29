@@ -1876,7 +1876,11 @@ impl Session {
             );
         }
         let git_info = crate::git_info::collect_git_info(turn_context.cwd.as_path()).await;
-        let remote_urls = crate::git_info::get_git_remote_urls(turn_context.cwd.as_path()).await;
+        let remote_urls = if git_info.is_some() {
+            crate::git_info::get_git_remote_urls(turn_context.cwd.as_path()).await
+        } else {
+            None
+        };
         let workspace_configuration = build_workspace_configuration(
             turn_context.cwd.as_path(),
             git_info.as_ref(),
