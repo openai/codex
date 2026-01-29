@@ -30,7 +30,7 @@ async fn responses_mode_stream_cli() {
     let repo_root = repo_root();
     let sse = responses::sse(vec![
         responses::ev_response_created("resp-1"),
-        responses::ev_output_text_delta("hi"),
+        responses::ev_assistant_message("msg-1", "hi"),
         responses::ev_completed("resp-1"),
     ]);
     let resp_mock = responses::mount_sse_once(&server, sse).await;
@@ -42,6 +42,7 @@ async fn responses_mode_stream_cli() {
     );
     let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
     let mut cmd = AssertCommand::new(bin);
+    cmd.timeout(Duration::from_secs(30));
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-c")
