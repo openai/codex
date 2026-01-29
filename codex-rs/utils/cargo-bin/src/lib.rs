@@ -30,7 +30,10 @@ pub enum CargoBinError {
 
 pub fn repo_root() -> Result<PathBuf, std::io::Error> {
     if let Ok(runfiles_dir) = std::env::var("RUNFILES_DIR") {
-        return Ok(PathBuf::from(runfiles_dir).join("_main"));
+        let root = PathBuf::from(runfiles_dir).join("_main");
+        if root.exists() {
+            return Ok(root);
+        }
     }
 
     if let Some(root) = runfiles_manifest_root() {
@@ -121,13 +124,49 @@ macro_rules! find_resource {
                         .join("_main")
                         .join(bazel_package)
                         .join(resource);
-                    // Note we also have to normalize (but not canonicalize!)
-                    // the path for _Bazel_ because the original value ends with
-                    // `codex-rs/exec-server/tests/common/../suite/bash`, but
-                    // the `tests/common` folder will not exist at runtime under
-                    // Bazel. As such, we have to normalize it before passing it
-                    // to `dotslash fetch`.
-                    manifest_dir.absolutize().map(|p| p.to_path_buf())
+                    if manifest_dir.exists() {
+                        // Note we also have to normalize (but not canonicalize!)
+                        // the path for _Bazel_ because the original value ends with
+                        // `codex-rs/exec-server/tests/common/../suite/bash`, but
+                        // the `tests/common` folder will not exist at runtime under
+                        // Bazel. As such, we have to normalize it before passing it
+                        // to `dotslash fetch`.
+                        return manifest_dir.absolutize().map(|p| p.to_path_buf());
+                    }
+                    if std::env::var_os("RUNFILES_MANIFEST_FILE").is_none() {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            "RUNFILES_DIR set but resource missing",
+                        ));
+                    }
+                    match option_env!("BAZEL_PACKAGE") {
+                        Some(bazel_package) => {
+                            if resource == std::path::Path::new(".") {
+                                $crate::runfiles_package_root_from_manifest(bazel_package)
+                                    .ok_or_else(|| {
+                                        std::io::Error::new(
+                                            std::io::ErrorKind::NotFound,
+                                            "runfiles manifest missing package root entry",
+                                        )
+                                    })
+                            } else {
+                                let key = $crate::runfiles_manifest_key_for_resource(
+                                    bazel_package,
+                                    resource,
+                                );
+                                $crate::runfiles_manifest_lookup(&key).ok_or_else(|| {
+                                    std::io::Error::new(
+                                        std::io::ErrorKind::NotFound,
+                                        format!("runfiles manifest missing entry for {key}"),
+                                    )
+                                })
+                            }
+                        }
+                        None => Err(std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            "BAZEL_PACKAGE not set in Bazel build",
+                        )),
+                    }
                 }
                 None => Err(std::io::Error::new(
                     std::io::ErrorKind::NotFound,
