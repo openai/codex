@@ -120,6 +120,10 @@ impl CommandPopup {
         if filter.is_empty() {
             // Built-ins first, in presentation order.
             for (_, cmd) in self.builtins.iter() {
+                // Skipping quit as it's a duplicate of exit.
+                if *cmd == SlashCommand::Quit {
+                    continue;
+                }
                 out.push((CommandItem::Builtin(*cmd), None));
             }
             // Then prompts, already sorted by name.
@@ -435,6 +439,18 @@ mod tests {
             !cmds.contains(&"compact"),
             "expected prefix search for '/ac' to exclude 'compact', got {cmds:?}"
         );
+    }
+
+    #[test]
+    fn quit_hidden_in_empty_filter_but_shown_for_prefix() {
+        let mut popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
+        popup.on_composer_text_change("/".to_string());
+        let items = popup.filtered_items();
+        assert!(!items.contains(&CommandItem::Builtin(SlashCommand::Quit)));
+
+        popup.on_composer_text_change("/qu".to_string());
+        let items = popup.filtered_items();
+        assert!(items.contains(&CommandItem::Builtin(SlashCommand::Quit)));
     }
 
     #[test]
