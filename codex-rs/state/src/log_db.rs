@@ -18,6 +18,8 @@
 //! # }
 //! ```
 
+use chrono::Duration as ChronoDuration;
+use chrono::Utc;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -38,6 +40,7 @@ use crate::StateRuntime;
 const LOG_QUEUE_CAPACITY: usize = 512;
 const LOG_BATCH_SIZE: usize = 64;
 const LOG_FLUSH_INTERVAL: Duration = Duration::from_millis(250);
+const LOG_RETENTION_DAYS: i64 = 90;
 
 pub struct LogDbLayer {
     sender: mpsc::Sender<LogEntry>,
@@ -45,7 +48,8 @@ pub struct LogDbLayer {
 
 pub fn start(state_db: std::sync::Arc<StateRuntime>) -> LogDbLayer {
     let (sender, receiver) = mpsc::channel(LOG_QUEUE_CAPACITY);
-    tokio::spawn(run_inserter(state_db, receiver));
+    tokio::spawn(run_inserter(std::sync::Arc::clone(&state_db), receiver));
+    tokio::spawn(run_retention_cleanup(state_db));
 
     LogDbLayer { sender }
 }
@@ -227,6 +231,14 @@ async fn flush(state_db: &std::sync::Arc<StateRuntime>, buffer: &mut Vec<LogEntr
     }
     let entries = buffer.split_off(0);
     let _ = state_db.insert_logs(entries.as_slice()).await;
+}
+
+async fn run_retention_cleanup(state_db: std::sync::Arc<StateRuntime>) {
+    let Some(cutoff) = Utc::now().checked_sub_signed(ChronoDuration::days(LOG_RETENTION_DAYS))
+    else {
+        return;
+    };
+    let _ = state_db.delete_logs_before(cutoff.timestamp()).await;
 }
 
 #[derive(Default)]
