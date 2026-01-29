@@ -1918,6 +1918,7 @@ dependencies = [
  "lazy_static",
  "libc",
  "mcp-types",
+ "notify",
  "pathdiff",
  "pretty_assertions",
  "pulldown-cmark",
