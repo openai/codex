@@ -113,7 +113,7 @@ fn exec_fixture() -> anyhow::Result<std::path::PathBuf> {
 }
 
 fn exec_repo_root() -> anyhow::Result<std::path::PathBuf> {
-    Ok(find_resource!(".")?)
+    Ok(codex_utils_cargo_bin::repo_root()?)
 }
 
 #[test]
