@@ -122,7 +122,8 @@ impl CommandPopup {
         if filter.is_empty() {
             // Built-ins first, in presentation order.
             for (_, cmd) in self.builtins.iter() {
-                // Skipping quit as it's a duplicate of exit.
+                // Hide alias commands in the default popup list so each unique action appears once.
+                // `quit` is an alias of `exit`, so we skip `quit` here.
                 if *cmd == SlashCommand::Quit {
                     continue;
                 }
