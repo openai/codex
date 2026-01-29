@@ -1333,7 +1333,7 @@ pub(crate) fn build_specs(
     builder.register_handler("read_mcp_resource", mcp_resource_handler);
 
     builder.push_spec(TODO_WRITE_TOOL.clone());
-    builder.register_handler("todo_write", todo_handler.clone());
+    builder.register_handler("todo_write", todo_handler);
 
     if config.collaboration_modes_tools {
         builder.push_spec(create_request_user_input_tool());
