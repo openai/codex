@@ -1542,7 +1542,11 @@ impl ChatWidget {
         };
 
         let text = String::from_utf8_lossy(chunk);
-        for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        for line in text
+            .lines()
+            .map(str::trim_end)
+            .filter(|line| !line.is_empty())
+        {
             process.recent_chunks.push(line.to_string());
         }
 

@@ -2096,6 +2096,19 @@ mod tests {
         insta::assert_snapshot!(rendered);
     }
 
+    #[test]
+    fn ps_output_chunk_leading_whitespace_snapshot() {
+        let cell = new_unified_exec_processes_output(vec![UnifiedExecProcessDetails {
+            command_display: "just fix".to_string(),
+            recent_chunks: vec![
+                "  indented first".to_string(),
+                "    more indented".to_string(),
+            ],
+        }]);
+        let rendered = render_lines(&cell.display_lines(60)).join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
     #[tokio::test]
     async fn mcp_tools_output_masks_sensitive_values() {
         let mut config = test_config().await;
