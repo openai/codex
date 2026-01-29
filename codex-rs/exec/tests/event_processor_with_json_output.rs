@@ -223,7 +223,7 @@ fn web_search_begin_then_end_reuses_item_id() {
 fn todo_update_emits_todo_list_started_updated_and_completed() {
     let mut ep = EventProcessorWithJsonOutput::new(None);
 
-    // First todo_write update (todo_update; plan_update legacy alias) => item.started (todo_list)
+    // First todo_write update => item.started (todo_list)
     let first = event(
         "p1",
         EventMsg::TodoUpdate(UpdateTodoArgs::new(
