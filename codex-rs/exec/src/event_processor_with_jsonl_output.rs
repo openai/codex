@@ -56,6 +56,9 @@ use serde_json::Value as JsonValue;
 use tracing::error;
 use tracing::warn;
 
+// Keep in sync with codex_core::exec::EXEC_OUTPUT_MAX_BYTES.
+const EXEC_OUTPUT_MAX_BYTES: usize = 1024 * 1024; // 1 MiB
+
 pub struct EventProcessorWithJsonOutput {
     last_message_path: Option<PathBuf>,
     next_event_id: AtomicU64,
@@ -236,7 +239,11 @@ impl EventProcessorWithJsonOutput {
 
     fn handle_output_chunk(&mut self, call_id: &str, chunk: &[u8]) -> Vec<ThreadEvent> {
         if let Some(running) = self.running_commands.get_mut(call_id) {
-            running.aggregated_output.extend_from_slice(chunk);
+            let remaining = EXEC_OUTPUT_MAX_BYTES.saturating_sub(running.aggregated_output.len());
+            if remaining > 0 {
+                let take = remaining.min(chunk.len());
+                running.aggregated_output.extend_from_slice(&chunk[..take]);
+            }
         }
         Vec::new()
     }
