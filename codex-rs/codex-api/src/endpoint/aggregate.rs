@@ -10,19 +10,12 @@ use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
 
-#[derive(Copy, Clone, Eq, PartialEq)]
-enum AggregateMode {
-    AggregatedOnly,
-    Streaming,
-}
-
 /// Stream adapter that merges token deltas into a single assistant message per turn.
 pub struct AggregatedStream {
     inner: ResponseStream,
     cumulative: String,
     cumulative_reasoning: String,
     pending: VecDeque<ResponseEvent>,
-    mode: AggregateMode,
 }
 
 impl Stream for AggregatedStream {
@@ -47,28 +40,16 @@ impl Stream for AggregatedStream {
                     );
 
                     if is_assistant_message {
-                        match this.mode {
-                            AggregateMode::AggregatedOnly => {
-                                if this.cumulative.is_empty()
-                                    && let ResponseItem::Message { content, .. } = &item
-                                    && let Some(text) = content.iter().find_map(|c| match c {
-                                        ContentItem::OutputText { text } => Some(text),
-                                        _ => None,
-                                    })
-                                {
-                                    this.cumulative.push_str(text);
-                                }
-                                continue;
-                            }
-                            AggregateMode::Streaming => {
-                                if this.cumulative.is_empty() {
-                                    return Poll::Ready(Some(Ok(ResponseEvent::OutputItemDone(
-                                        item,
-                                    ))));
-                                }
-                                continue;
-                            }
+                        if this.cumulative.is_empty()
+                            && let ResponseItem::Message { content, .. } = &item
+                            && let Some(text) = content.iter().find_map(|c| match c {
+                                ContentItem::OutputText { text } => Some(text),
+                                _ => None,
+                            })
+                        {
+                            this.cumulative.push_str(text);
                         }
+                        continue;
                     }
 
                     return Poll::Ready(Some(Ok(ResponseEvent::OutputItemDone(item))));
@@ -134,22 +115,13 @@ impl Stream for AggregatedStream {
                 Poll::Ready(Some(Ok(ResponseEvent::Created))) => continue,
                 Poll::Ready(Some(Ok(ResponseEvent::OutputTextDelta(delta)))) => {
                     this.cumulative.push_str(&delta);
-                    if matches!(this.mode, AggregateMode::Streaming) {
-                        return Poll::Ready(Some(Ok(ResponseEvent::OutputTextDelta(delta))));
-                    }
                     continue;
                 }
                 Poll::Ready(Some(Ok(ResponseEvent::ReasoningContentDelta {
                     delta,
-                    content_index,
+                    content_index: _,
                 }))) => {
                     this.cumulative_reasoning.push_str(&delta);
-                    if matches!(this.mode, AggregateMode::Streaming) {
-                        return Poll::Ready(Some(Ok(ResponseEvent::ReasoningContentDelta {
-                            delta,
-                            content_index,
-                        })));
-                    }
                     continue;
                 }
                 Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryDelta { .. }))) => continue,
@@ -164,28 +136,21 @@ impl Stream for AggregatedStream {
 
 pub trait AggregateStreamExt {
     fn aggregate(self) -> AggregatedStream;
-
-    fn streaming_mode(self) -> ResponseStream;
 }
 
 impl AggregateStreamExt for ResponseStream {
     fn aggregate(self) -> AggregatedStream {
-        AggregatedStream::new(self, AggregateMode::AggregatedOnly)
-    }
-
-    fn streaming_mode(self) -> ResponseStream {
-        self
+        AggregatedStream::new(self)
     }
 }
 
 impl AggregatedStream {
-    fn new(inner: ResponseStream, mode: AggregateMode) -> Self {
+    fn new(inner: ResponseStream) -> Self {
         AggregatedStream {
             inner,
             cumulative: String::new(),
             cumulative_reasoning: String::new(),
             pending: VecDeque::new(),
-            mode,
         }
     }
 }
