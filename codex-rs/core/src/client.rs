@@ -55,7 +55,6 @@ use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::config::Config;
-use crate::connection_manager::TransportManager;
 use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result;
@@ -66,6 +65,7 @@ use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::tools::spec::create_tools_json_for_chat_completions_api;
 use crate::tools::spec::create_tools_json_for_responses_api;
+use crate::transport_manager::TransportManager;
 
 pub const WEB_SEARCH_ELIGIBLE_HEADER: &str = "x-oai-web-search-eligible";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
@@ -81,7 +81,7 @@ struct ModelClientState {
     effort: Option<ReasoningEffortConfig>,
     summary: ReasoningSummaryConfig,
     session_source: SessionSource,
-    connection_manager: TransportManager,
+    transport_manager: TransportManager,
 }
 
 #[derive(Debug, Clone)]
@@ -93,7 +93,7 @@ pub struct ModelClientSession {
     state: Arc<ModelClientState>,
     connection: Option<ApiWebSocketConnection>,
     websocket_last_items: Vec<ResponseItem>,
-    connection_manager: TransportManager,
+    transport_manager: TransportManager,
     /// Turn state for sticky routing.
     ///
     /// This is an `OnceLock` that stores the turn state value received from the server
@@ -119,7 +119,7 @@ impl ModelClient {
         summary: ReasoningSummaryConfig,
         conversation_id: ThreadId,
         session_source: SessionSource,
-        connection_manager: TransportManager,
+        transport_manager: TransportManager,
     ) -> Self {
         Self {
             state: Arc::new(ModelClientState {
@@ -132,7 +132,7 @@ impl ModelClient {
                 effort,
                 summary,
                 session_source,
-                connection_manager,
+                transport_manager,
             }),
         }
     }
@@ -142,7 +142,7 @@ impl ModelClient {
             state: Arc::clone(&self.state),
             connection: None,
             websocket_last_items: Vec::new(),
-            connection_manager: self.state.connection_manager.clone(),
+            transport_manager: self.state.transport_manager.clone(),
             turn_state: Arc::new(OnceLock::new()),
         }
     }
@@ -177,8 +177,8 @@ impl ModelClient {
         self.state.session_source.clone()
     }
 
-    pub(crate) fn connection_manager(&self) -> TransportManager {
-        self.state.connection_manager.clone()
+    pub(crate) fn transport_manager(&self) -> TransportManager {
+        self.state.transport_manager.clone()
     }
 
     /// Returns the currently configured model slug.
@@ -261,7 +261,7 @@ impl ModelClientSession {
     /// based on the `show_raw_agent_reasoning` flag in the config.
     pub async fn stream(&mut self, prompt: &Prompt) -> Result<ResponseStream> {
         let wire_api = self
-            .connection_manager
+            .transport_manager
             .effective_wire_api(self.state.provider.wire_api);
         match wire_api {
             WireApi::Responses => self.stream_responses_api(prompt).await,
@@ -286,7 +286,7 @@ impl ModelClientSession {
 
     pub(crate) fn try_switch_fallback_transport(&mut self) -> bool {
         let activated = self
-            .connection_manager
+            .transport_manager
             .activate_http_fallback(self.state.provider.wire_api);
         if activated {
             warn!("falling back to HTTP");

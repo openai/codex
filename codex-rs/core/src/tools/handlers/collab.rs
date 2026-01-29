@@ -781,7 +781,7 @@ mod tests {
             turn.client.get_reasoning_summary(),
             session.conversation_id,
             session_source,
-            session.services.connection_manager.clone(),
+            session.services.transport_manager.clone(),
         );
 
         let invocation = invocation(
@@ -1222,7 +1222,7 @@ mod tests {
         let mut base_config = (*turn.client.config()).clone();
         base_config.user_instructions = Some("base-user".to_string());
         turn.user_instructions = Some("resolved-user".to_string());
-        let connection_manager = turn.client.connection_manager();
+        let transport_manager = turn.client.transport_manager();
         turn.client = ModelClient::new(
             Arc::new(base_config.clone()),
             Some(session.services.auth_manager.clone()),
@@ -1233,7 +1233,7 @@ mod tests {
             turn.client.get_reasoning_summary(),
             session.conversation_id,
             session_source,
-            connection_manager,
+            transport_manager,
         );
         let base_instructions = BaseInstructions {
             text: "base".to_string(),

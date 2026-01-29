@@ -18,7 +18,6 @@ use crate::compact;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
-use crate::connection_manager::TransportManager;
 use crate::connectors;
 use crate::exec_policy::ExecPolicyManager;
 use crate::features::Feature;
@@ -31,6 +30,7 @@ use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
 use crate::terminal;
+use crate::transport_manager::TransportManager;
 use crate::truncate::TruncationPolicy;
 use crate::user_notification::UserNotifier;
 use crate::util::error_or_panic;
@@ -612,7 +612,7 @@ impl Session {
         model_info: ModelInfo,
         conversation_id: ThreadId,
         sub_id: String,
-        connection_manager: TransportManager,
+        transport_manager: TransportManager,
     ) -> TurnContext {
         let otel_manager = otel_manager.clone().with_model(
             session_configuration.collaboration_mode.model(),
@@ -629,7 +629,7 @@ impl Session {
             session_configuration.model_reasoning_summary,
             conversation_id,
             session_configuration.session_source.clone(),
-            connection_manager,
+            transport_manager,
         );
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -859,7 +859,7 @@ impl Session {
             skills_manager,
             agent_control,
             state_db: state_db_ctx.clone(),
-            connection_manager: TransportManager::new(),
+            transport_manager: TransportManager::new(),
         };
 
         let sess = Arc::new(Session {
@@ -1179,7 +1179,7 @@ impl Session {
             model_info,
             self.conversation_id,
             sub_id,
-            self.services.connection_manager.clone(),
+            self.services.transport_manager.clone(),
         );
         if let Some(final_schema) = final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
@@ -3034,7 +3034,7 @@ async fn spawn_review_thread(
         per_turn_config.model_reasoning_summary,
         sess.conversation_id,
         parent_turn_context.client.get_session_source(),
-        parent_turn_context.client.connection_manager(),
+        parent_turn_context.client.transport_manager(),
     );
 
     let review_turn_context = TurnContext {
@@ -4611,7 +4611,7 @@ mod tests {
             skills_manager,
             agent_control,
             state_db: None,
-            connection_manager: TransportManager::new(),
+            transport_manager: TransportManager::new(),
         };
 
         let turn_context = Session::make_turn_context(
@@ -4623,7 +4623,7 @@ mod tests {
             model_info,
             conversation_id,
             "turn_id".to_string(),
-            services.connection_manager.clone(),
+            services.transport_manager.clone(),
         );
 
         let session = Session {
@@ -4725,7 +4725,7 @@ mod tests {
             skills_manager,
             agent_control,
             state_db: None,
-            connection_manager: TransportManager::new(),
+            transport_manager: TransportManager::new(),
         };
 
         let turn_context = Arc::new(Session::make_turn_context(
@@ -4737,7 +4737,7 @@ mod tests {
             model_info,
             conversation_id,
             "turn_id".to_string(),
-            services.connection_manager.clone(),
+            services.transport_manager.clone(),
         ));
 
         let session = Arc::new(Session {
