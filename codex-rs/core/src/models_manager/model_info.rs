@@ -1,13 +1,11 @@
-use std::collections::BTreeMap;
-
-use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
+use codex_protocol::openai_models::InstructionsVariables;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelInstructionsTemplate;
 use codex_protocol::openai_models::ModelVisibility;
-use codex_protocol::openai_models::PersonalityMessages;
+use codex_protocol::openai_models::PersonalityVariable;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationMode;
@@ -29,8 +27,13 @@ const GPT_5_1_CODEX_MAX_INSTRUCTIONS: &str = include_str!("../../gpt-5.1-codex-m
 const GPT_5_2_CODEX_INSTRUCTIONS: &str = include_str!("../../gpt-5.2-codex_prompt.md");
 const GPT_5_2_CODEX_INSTRUCTIONS_TEMPLATE: &str =
     include_str!("../../templates/model_instructions/gpt-5.2-codex_instructions_template.md");
-const PERSONALITY_FRIENDLY: &str = include_str!("../../templates/personalities/friendly.md");
-const PERSONALITY_PRAGMATIC: &str = include_str!("../../templates/personalities/pragmatic.md");
+
+const GPT_5_2_CODEX_PERSONALITY_DEFAULT: &str =
+    include_str!("../../templates/personalities/gpt-5.2-codex_default.md");
+const GPT_5_2_CODEX_PERSONALITY_FRIENDLY: &str =
+    include_str!("../../templates/personalities/gpt-5.2-codex_friendly.md");
+const GPT_5_2_CODEX_PERSONALITY_PRAGMATIC: &str =
+    include_str!("../../templates/personalities/gpt-5.2-codex_pragmatic.md");
 
 pub(crate) const CONTEXT_WINDOW_272K: i64 = 272_000;
 
@@ -170,14 +173,14 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             slug,
             base_instructions: GPT_5_2_CODEX_INSTRUCTIONS.to_string(),
             model_instructions_template: Some(ModelInstructionsTemplate {
-                template: GPT_5_2_CODEX_INSTRUCTIONS_TEMPLATE.to_string(),
-                personality_messages: Some(PersonalityMessages(BTreeMap::from([(
-                    Personality::Friendly,
-                    PERSONALITY_FRIENDLY.to_string(),
-                ), (
-                    Personality::Pragmatic,
-                    PERSONALITY_PRAGMATIC.to_string(),
-                )]))),
+                template: Some(GPT_5_2_CODEX_INSTRUCTIONS_TEMPLATE.to_string()),
+                variables: Some(InstructionsVariables {
+                    personality: Some(PersonalityVariable {
+                    default: Some(GPT_5_2_CODEX_PERSONALITY_DEFAULT.to_string()),
+                    friendly: Some(GPT_5_2_CODEX_PERSONALITY_FRIENDLY.to_string()),
+                    pragmatic: Some(GPT_5_2_CODEX_PERSONALITY_PRAGMATIC.to_string()),
+                }),
+                }),
             }),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             shell_type: ConfigShellToolType::ShellCommand,
@@ -213,15 +216,16 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             truncation_policy: TruncationPolicyConfig::tokens(10_000),
             context_window: Some(CONTEXT_WINDOW_272K),
             supported_reasoning_levels: supported_reasoning_level_low_medium_high_xhigh(),
+            base_instructions: GPT_5_2_CODEX_INSTRUCTIONS.to_string(),
             model_instructions_template: Some(ModelInstructionsTemplate {
-                template: GPT_5_2_CODEX_INSTRUCTIONS_TEMPLATE.to_string(),
-                personality_messages: Some(PersonalityMessages(BTreeMap::from([(
-                    Personality::Friendly,
-                    PERSONALITY_FRIENDLY.to_string(),
-                ), (
-                    Personality::Pragmatic,
-                    PERSONALITY_PRAGMATIC.to_string(),
-                )]))),
+                template: Some(GPT_5_2_CODEX_INSTRUCTIONS_TEMPLATE.to_string()),
+                variables: Some(InstructionsVariables {
+                    personality: Some(PersonalityVariable {
+                    default: Some(GPT_5_2_CODEX_PERSONALITY_DEFAULT.to_string()),
+                    friendly: Some(GPT_5_2_CODEX_PERSONALITY_FRIENDLY.to_string()),
+                    pragmatic: Some(GPT_5_2_CODEX_PERSONALITY_PRAGMATIC.to_string()),
+                }),
+                }),
             }),
         )
     } else if slug.starts_with("gpt-5.1-codex-max") {

@@ -1272,7 +1272,13 @@ impl Session {
             return None;
         }
         let model_info = next.client.get_model_info();
-        let personality_message = Self::personality_message_for(&model_info, personality);
+        let config = next.client.config();
+        let preset_model_info = crate::models_manager::model_info::with_config_overrides(
+            crate::models_manager::model_info::find_model_info_for_slug(model_info.slug.as_str()),
+            &config,
+        );
+        let personality_message = Self::personality_message_for(&preset_model_info, personality)
+            .or_else(|| Self::personality_message_for(&model_info, personality));
 
         personality_message.map(|personality_message| {
             DeveloperInstructions::personality_spec_message(personality_message).into()
@@ -1283,9 +1289,7 @@ impl Session {
         model_info
             .model_instructions_template
             .as_ref()
-            .and_then(|template| template.personality_messages.as_ref())
-            .and_then(|messages| messages.0.get(&personality))
-            .cloned()
+            .map(|template| template.get_personality_message(Some(personality)))
     }
 
     fn build_collaboration_mode_update_item(

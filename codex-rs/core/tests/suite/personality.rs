@@ -12,7 +12,7 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelInstructionsTemplate;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
-use codex_protocol::openai_models::PersonalityMessages;
+use codex_protocol::openai_models::PersonalityVariable;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationPolicyConfig;
@@ -29,7 +29,6 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::time::Duration;
@@ -291,11 +290,14 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
         upgrade: None,
         base_instructions: "base instructions".to_string(),
         model_instructions_template: Some(ModelInstructionsTemplate {
-            template: "Base instructions\n{{ personality_message }}\n".to_string(),
-            personality_messages: Some(PersonalityMessages(BTreeMap::from([(
-                Personality::Friendly,
-                remote_personality_message.to_string(),
-            )]))),
+            template: Some("Base instructions\n{{ personality_message }}\n".to_string()),
+            variables: Some(InstructionsVariables {
+                personality: Some(PersonalityVariable {
+                    default: None,
+                    friendly: Some(remote_personality_message.to_string()),
+                    pragmatic: None,
+                }),
+            }),
         }),
         supports_reasoning_summaries: false,
         support_verbosity: false,
