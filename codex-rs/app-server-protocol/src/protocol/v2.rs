@@ -2256,7 +2256,7 @@ pub struct TurnDiffUpdatedNotification {
 }
 
 #[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
-#[schemars(schema_with = "turn_todos_updated_schema")]
+#[schemars(schema_with = "TurnTodosUpdatedNotificationWire::json_schema")]
 #[ts(export_to = "v2/")]
 #[ts(as = "TurnTodosUpdatedNotificationWire")]
 /// Todo list update from the todo_write tool. `todo` is preferred; `plan` is a legacy alias.
@@ -2268,7 +2268,6 @@ pub struct TurnTodosUpdatedNotification {
     pub todo: Vec<TurnTodoStep>,
 }
 
-#[allow(dead_code)]
 #[derive(Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -2283,35 +2282,18 @@ struct TurnTodosUpdatedNotificationWire {
     plan: Vec<TurnTodoStep>,
 }
 
-#[allow(dead_code)]
-fn turn_todos_updated_schema(
-    generator: &mut schemars::r#gen::SchemaGenerator,
-) -> schemars::schema::Schema {
-    TurnTodosUpdatedNotificationWire::json_schema(generator)
-}
-
 impl Serialize for TurnTodosUpdatedNotification {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        #[derive(Serialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Wire<'a> {
-            thread_id: &'a str,
-            turn_id: &'a str,
-            explanation: Option<&'a str>,
-            todo: &'a [TurnTodoStep],
-            plan: &'a [TurnTodoStep],
-        }
-
         // Emit both `todo` and the legacy `plan` alias with identical data.
-        Wire {
-            thread_id: &self.thread_id,
-            turn_id: &self.turn_id,
-            explanation: self.explanation.as_deref(),
-            todo: &self.todo,
-            plan: &self.todo,
+        TurnTodosUpdatedNotificationWire {
+            thread_id: self.thread_id.clone(),
+            turn_id: self.turn_id.clone(),
+            explanation: self.explanation.clone(),
+            todo: self.todo.clone(),
+            plan: self.todo.clone(),
         }
         .serialize(serializer)
     }

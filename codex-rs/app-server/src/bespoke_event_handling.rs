@@ -1148,7 +1148,6 @@ async fn handle_turn_todo_update(
     outgoing: &OutgoingMessageSender,
 ) {
     if let ApiVersion::V2 = api_version {
-        // NOTE: The protocol keeps legacy plan aliases for compatibility; this is the todo list update.
         let (explanation, todo_items) = todo_update_event.into_parts();
         let steps: Vec<TurnTodoStep> = todo_items.into_iter().map(TurnTodoStep::from).collect();
         let notification = TurnTodoUpdatedNotification {
