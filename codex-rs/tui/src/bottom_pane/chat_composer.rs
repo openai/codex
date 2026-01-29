@@ -3,7 +3,7 @@
 //! It is responsible for:
 //!
 //! - Editing the input buffer (a [`TextArea`]), including placeholder "elements" for attachments.
-//! - Routing keys to the active popup (slash commands, file search, skill mentions).
+//! - Routing keys to the active popup (slash commands, file search, skill/apps mentions).
 //! - Handling submit vs newline on Enter.
 //! - Turning raw key streams into explicit paste operations on platforms where terminals
 //!   don't provide reliable bracketed paste (notably Windows).
@@ -124,6 +124,7 @@ use super::footer::single_line_footer_layout;
 use super::footer::toggle_shortcut_mode;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
+use super::skill_popup::MentionItem;
 use super::skill_popup::SkillPopup;
 use super::slash_commands;
 use crate::bottom_pane::paste_burst::FlushResult;
@@ -146,6 +147,7 @@ use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
 
 use crate::app_event::AppEvent;
+use crate::app_event::ConnectorsSnapshot;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::textarea::TextArea;
@@ -154,6 +156,8 @@ use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
 use crate::history_cell;
 use crate::ui_consts::LIVE_PREFIX_COLS;
+use codex_chatgpt::connectors;
+use codex_chatgpt::connectors::AppInfo;
 use codex_core::skills::model::SkillMetadata;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
@@ -276,12 +280,15 @@ pub(crate) struct ChatComposer {
     context_window_percent: Option<i64>,
     context_window_used_tokens: Option<i64>,
     skills: Option<Vec<SkillMetadata>>,
-    dismissed_skill_popup_token: Option<String>,
+    connectors_snapshot: Option<ConnectorsSnapshot>,
+    dismissed_mention_popup_token: Option<String>,
+    mention_paths: HashMap<String, String>,
     /// When enabled, `Enter` submits immediately and `Tab` requests queuing behavior.
     steer_enabled: bool,
     collaboration_modes_enabled: bool,
     config: ChatComposerConfig,
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
+    connectors_enabled: bool,
     personality_command_enabled: bool,
     windows_degraded_sandbox_active: bool,
 }
@@ -363,11 +370,14 @@ impl ChatComposer {
             context_window_percent: None,
             context_window_used_tokens: None,
             skills: None,
-            dismissed_skill_popup_token: None,
+            connectors_snapshot: None,
+            dismissed_mention_popup_token: None,
+            mention_paths: HashMap::new(),
             steer_enabled: false,
             collaboration_modes_enabled: false,
             config,
             collaboration_mode_indicator: None,
+            connectors_enabled: false,
             personality_command_enabled: false,
             windows_degraded_sandbox_active: false,
         };
@@ -378,6 +388,14 @@ impl ChatComposer {
 
     pub fn set_skill_mentions(&mut self, skills: Option<Vec<SkillMetadata>>) {
         self.skills = skills;
+    }
+
+    pub fn set_connector_mentions(&mut self, connectors_snapshot: Option<ConnectorsSnapshot>) {
+        self.connectors_snapshot = connectors_snapshot;
+    }
+
+    pub(crate) fn take_mention_paths(&mut self) -> HashMap<String, String> {
+        std::mem::take(&mut self.mention_paths)
     }
 
     /// Enables or disables "Steer" behavior for submission keys.
@@ -392,6 +410,10 @@ impl ChatComposer {
 
     pub fn set_collaboration_modes_enabled(&mut self, enabled: bool) {
         self.collaboration_modes_enabled = enabled;
+    }
+
+    pub fn set_connectors_enabled(&mut self, enabled: bool) {
+        self.connectors_enabled = enabled;
     }
 
     pub fn set_collaboration_mode_indicator(
@@ -697,6 +719,7 @@ impl ChatComposer {
         self.textarea.set_text_clearing_elements("");
         self.pending_pastes.clear();
         self.attached_images.clear();
+        self.mention_paths.clear();
 
         self.textarea.set_text_with_elements(&text, &text_elements);
 
@@ -1349,7 +1372,10 @@ impl ChatComposer {
             unreachable!();
         };
 
-        match key_event {
+        let mut selected_mention: Option<(String, Option<String>)> = None;
+        let mut close_popup = false;
+
+        let result = match key_event {
             KeyEvent {
                 code: KeyCode::Up, ..
             }
@@ -1376,8 +1402,8 @@ impl ChatComposer {
             KeyEvent {
                 code: KeyCode::Esc, ..
             } => {
-                if let Some(tok) = self.current_skill_token() {
-                    self.dismissed_skill_popup_token = Some(tok);
+                if let Some(tok) = self.current_mention_token() {
+                    self.dismissed_mention_popup_token = Some(tok);
                 }
                 self.active_popup = ActivePopup::None;
                 (InputResult::None, true)
@@ -1390,15 +1416,26 @@ impl ChatComposer {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                let selected = popup.selected_skill().map(|skill| skill.name.clone());
-                if let Some(name) = selected {
-                    self.insert_selected_skill(&name);
+                if let Some(mention) = popup.selected_mention() {
+                    selected_mention = Some((mention.insert_text.clone(), mention.path.clone()));
                 }
-                self.active_popup = ActivePopup::None;
+                close_popup = true;
                 (InputResult::None, true)
             }
             input => self.handle_input_basic(input),
+        };
+
+        if close_popup {
+            if let Some((insert_text, path)) = selected_mention {
+                if let Some(path) = path.as_deref() {
+                    self.record_mention_path(&insert_text, path);
+                }
+                self.insert_selected_mention(&insert_text);
+            }
+            self.active_popup = ActivePopup::None;
         }
+
+        result
     }
 
     fn is_image_path(path: &str) -> bool {
@@ -1511,12 +1548,21 @@ impl ChatComposer {
         (rebuilt, rebuilt_elements)
     }
 
-    fn skills_enabled(&self) -> bool {
-        self.skills.as_ref().is_some_and(|s| !s.is_empty())
-    }
-
     pub fn skills(&self) -> Option<&Vec<SkillMetadata>> {
         self.skills.as_ref()
+    }
+
+    fn mentions_enabled(&self) -> bool {
+        let skills_ready = self
+            .skills
+            .as_ref()
+            .is_some_and(|skills| !skills.is_empty());
+        let connectors_ready = self.connectors_enabled
+            && self
+                .connectors_snapshot
+                .as_ref()
+                .is_some_and(|snapshot| !snapshot.connectors.is_empty());
+        skills_ready || connectors_ready
     }
 
     /// Extract a token prefixed with `prefix` under the cursor, if any.
@@ -1632,8 +1678,8 @@ impl ChatComposer {
         Self::current_prefixed_token(textarea, '@', false)
     }
 
-    fn current_skill_token(&self) -> Option<String> {
-        if !self.skills_enabled() {
+    fn current_mention_token(&self) -> Option<String> {
+        if !self.mentions_enabled() {
             return None;
         }
         Self::current_prefixed_token(&self.textarea, '$', true)
@@ -1691,7 +1737,7 @@ impl ChatComposer {
         self.textarea.set_cursor(new_cursor);
     }
 
-    fn insert_selected_skill(&mut self, skill_name: &str) {
+    fn insert_selected_mention(&mut self, insert_text: &str) {
         let cursor_offset = self.textarea.cursor();
         let text = self.textarea.text();
         let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
@@ -1712,7 +1758,7 @@ impl ChatComposer {
             .unwrap_or(after_cursor.len());
         let end_idx = safe_cursor + end_rel_idx;
 
-        let inserted = format!("${skill_name}");
+        let inserted = insert_text.to_string();
 
         let mut new_text =
             String::with_capacity(text.len() - (end_idx - start_idx) + inserted.len() + 1);
@@ -1721,10 +1767,33 @@ impl ChatComposer {
         new_text.push(' ');
         new_text.push_str(&text[end_idx..]);
 
-        // Skill insertion rebuilds plain text, so drop existing elements.
+        // Mention insertion rebuilds plain text, so drop existing elements.
         self.textarea.set_text_clearing_elements(&new_text);
         let new_cursor = start_idx.saturating_add(inserted.len()).saturating_add(1);
         self.textarea.set_cursor(new_cursor);
+    }
+
+    fn record_mention_path(&mut self, insert_text: &str, path: &str) {
+        let Some(name) = Self::mention_name_from_insert_text(insert_text) else {
+            return;
+        };
+        self.mention_paths.insert(name, path.to_string());
+    }
+
+    fn mention_name_from_insert_text(insert_text: &str) -> Option<String> {
+        let name = insert_text.strip_prefix('$')?;
+        if name.is_empty() {
+            return None;
+        }
+        if name
+            .as_bytes()
+            .iter()
+            .all(|byte| is_mention_name_char(*byte))
+        {
+            Some(name.to_string())
+        } else {
+            None
+        }
     }
 
     /// Prepare text for submission/queuing. Returns None if submission should be suppressed.
@@ -1765,6 +1834,7 @@ impl ChatComposer {
                 let is_builtin = slash_commands::find_builtin_command(
                     name,
                     self.collaboration_modes_enabled,
+                    self.connectors_enabled,
                     self.personality_command_enabled,
                     self.windows_degraded_sandbox_active,
                 )
@@ -1951,6 +2021,7 @@ impl ChatComposer {
             && let Some(cmd) = slash_commands::find_builtin_command(
                 name,
                 self.collaboration_modes_enabled,
+                self.connectors_enabled,
                 self.personality_command_enabled,
                 self.windows_degraded_sandbox_active,
             )
@@ -1979,6 +2050,7 @@ impl ChatComposer {
                 && let Some(cmd) = slash_commands::find_builtin_command(
                     name,
                     self.collaboration_modes_enabled,
+                    self.connectors_enabled,
                     self.personality_command_enabled,
                     self.windows_degraded_sandbox_active,
                 )
@@ -2388,10 +2460,10 @@ impl ChatComposer {
             self.active_popup = ActivePopup::None;
             return;
         }
-        let skill_token = self.current_skill_token();
+        let mention_token = self.current_mention_token();
 
         let allow_command_popup =
-            self.slash_commands_enabled() && file_token.is_none() && skill_token.is_none();
+            self.slash_commands_enabled() && file_token.is_none() && mention_token.is_none();
         self.sync_command_popup(allow_command_popup);
 
         if matches!(self.active_popup, ActivePopup::Command(_)) {
@@ -2401,20 +2473,20 @@ impl ChatComposer {
                 self.current_file_query = None;
             }
             self.dismissed_file_popup_token = None;
-            self.dismissed_skill_popup_token = None;
+            self.dismissed_mention_popup_token = None;
             return;
         }
 
-        if let Some(token) = skill_token {
+        if let Some(token) = mention_token {
             if self.current_file_query.is_some() {
                 self.app_event_tx
                     .send(AppEvent::StartFileSearch(String::new()));
                 self.current_file_query = None;
             }
-            self.sync_skill_popup(token);
+            self.sync_mention_popup(token);
             return;
         }
-        self.dismissed_skill_popup_token = None;
+        self.dismissed_mention_popup_token = None;
 
         if let Some(token) = file_token {
             self.sync_file_search_popup(token);
@@ -2477,6 +2549,7 @@ impl ChatComposer {
         if slash_commands::has_builtin_prefix(
             name,
             self.collaboration_modes_enabled,
+            self.connectors_enabled,
             self.personality_command_enabled,
             self.windows_degraded_sandbox_active,
         ) {
@@ -2529,11 +2602,13 @@ impl ChatComposer {
             _ => {
                 if is_editing_slash_command_name {
                     let collaboration_modes_enabled = self.collaboration_modes_enabled;
+                    let connectors_enabled = self.connectors_enabled;
                     let personality_command_enabled = self.personality_command_enabled;
                     let mut command_popup = CommandPopup::new(
                         self.custom_prompts.clone(),
                         CommandPopupFlags {
                             collaboration_modes_enabled,
+                            connectors_enabled,
                             personality_command_enabled,
                             windows_degraded_sandbox_active: self.windows_degraded_sandbox_active,
                         },
@@ -2594,30 +2669,97 @@ impl ChatComposer {
         self.dismissed_file_popup_token = None;
     }
 
-    fn sync_skill_popup(&mut self, query: String) {
-        if self.dismissed_skill_popup_token.as_ref() == Some(&query) {
+    fn sync_mention_popup(&mut self, query: String) {
+        if self.dismissed_mention_popup_token.as_ref() == Some(&query) {
             return;
         }
 
-        let skills = match self.skills.as_ref() {
-            Some(skills) if !skills.is_empty() => skills.clone(),
-            _ => {
-                self.active_popup = ActivePopup::None;
-                return;
-            }
-        };
+        let mentions = self.mention_items();
+        if mentions.is_empty() {
+            self.active_popup = ActivePopup::None;
+            return;
+        }
 
         match &mut self.active_popup {
             ActivePopup::Skill(popup) => {
                 popup.set_query(&query);
-                popup.set_skills(skills);
+                popup.set_mentions(mentions);
             }
             _ => {
-                let mut popup = SkillPopup::new(skills);
+                let mut popup = SkillPopup::new(mentions);
                 popup.set_query(&query);
                 self.active_popup = ActivePopup::Skill(popup);
             }
         }
+    }
+
+    fn mention_items(&self) -> Vec<MentionItem> {
+        let mut mentions = Vec::new();
+
+        if let Some(skills) = self.skills.as_ref() {
+            for skill in skills {
+                let display_name = skill_display_name(skill).to_string();
+                let description = skill_description(skill);
+                let skill_name = skill.name.clone();
+                let search_terms = if display_name == skill.name {
+                    vec![skill_name.clone()]
+                } else {
+                    vec![skill_name.clone(), display_name.clone()]
+                };
+                mentions.push(MentionItem {
+                    display_name,
+                    description,
+                    insert_text: format!("${skill_name}"),
+                    search_terms,
+                    path: Some(skill.path.to_string_lossy().into_owned()),
+                });
+            }
+        }
+
+        if self.connectors_enabled
+            && let Some(snapshot) = self.connectors_snapshot.as_ref()
+        {
+            for connector in &snapshot.connectors {
+                if !connector.is_accessible {
+                    continue;
+                }
+                let display_name = connectors::connector_display_label(connector);
+                let description = Some(Self::connector_brief_description(connector));
+                let slug = codex_core::connectors::connector_mention_slug(connector);
+                let search_terms = vec![display_name.clone(), connector.id.clone(), slug.clone()];
+                let connector_id = connector.id.as_str();
+                mentions.push(MentionItem {
+                    display_name: display_name.clone(),
+                    description,
+                    insert_text: format!("${slug}"),
+                    search_terms,
+                    path: Some(format!("app://{connector_id}")),
+                });
+            }
+        }
+
+        mentions
+    }
+
+    fn connector_brief_description(connector: &AppInfo) -> String {
+        let status_label = if connector.is_accessible {
+            "Connected"
+        } else {
+            "Can be installed"
+        };
+        match Self::connector_description(connector) {
+            Some(description) => format!("{status_label} - {description}"),
+            None => status_label.to_string(),
+        }
+    }
+
+    fn connector_description(connector: &AppInfo) -> Option<String> {
+        connector
+            .description
+            .as_deref()
+            .map(str::trim)
+            .filter(|description| !description.is_empty())
+            .map(str::to_string)
     }
 
     fn set_has_focus(&mut self, has_focus: bool) {
@@ -2656,6 +2798,29 @@ impl ChatComposer {
             self.footer_mode = reset_mode_after_activity(self.footer_mode);
         }
     }
+}
+
+fn skill_display_name(skill: &SkillMetadata) -> &str {
+    skill
+        .interface
+        .as_ref()
+        .and_then(|interface| interface.display_name.as_deref())
+        .unwrap_or(&skill.name)
+}
+
+fn skill_description(skill: &SkillMetadata) -> Option<String> {
+    let description = skill
+        .interface
+        .as_ref()
+        .and_then(|interface| interface.short_description.as_deref())
+        .or(skill.short_description.as_deref())
+        .unwrap_or(&skill.description);
+    let trimmed = description.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+fn is_mention_name_char(byte: u8) -> bool {
+    matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'-')
 }
 
 impl Renderable for ChatComposer {
@@ -2938,6 +3103,7 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::app_event::AppEvent;
+
     use crate::bottom_pane::AppEventSender;
     use crate::bottom_pane::ChatComposer;
     use crate::bottom_pane::InputResult;

@@ -13,6 +13,7 @@
 - [Events](#events)
 - [Approvals](#approvals)
 - [Skills](#skills)
+- [Apps](#apps)
 - [Auth endpoints](#auth-endpoints)
 
 ## Protocol
@@ -290,6 +291,26 @@ Invoke a skill explicitly by including `$<skill-name>` in the text input and add
 } }
 { "id": 33, "result": { "turn": {
     "id": "turn_457",
+    "status": "inProgress",
+    "items": [],
+    "error": null
+} } }
+```
+
+### Example: Start a turn (invoke an app)
+
+Invoke an app by including `$<app-slug>` in the text input and adding a `mention` input item with the app id in `app://<connector-id>` form.
+
+```json
+{ "method": "turn/start", "id": 34, "params": {
+    "threadId": "thr_123",
+    "input": [
+        { "type": "text", "text": "$demo-app Summarize the latest updates." },
+        { "type": "mention", "name": "Demo App", "path": "app://demo-app" }
+    ]
+} }
+{ "id": 34, "result": { "turn": {
+    "id": "turn_458",
     "status": "inProgress",
     "items": [],
     "error": null
@@ -579,6 +600,57 @@ To enable or disable a skill by path:
   "params": {
     "path": "/Users/me/.codex/skills/skill-creator/SKILL.md",
     "enabled": false
+  }
+}
+```
+
+## Apps
+
+Use `app/list` to fetch available apps (connectors). Each entry includes metadata like the app `id`, display `name`, `installUrl`, and whether it is currently accessible.
+
+```json
+{ "method": "app/list", "id": 50, "params": {
+    "cursor": null,
+    "limit": 50
+} }
+{ "id": 50, "result": {
+    "data": [
+        {
+            "id": "demo-app",
+            "name": "Demo App",
+            "description": "Example connector for documentation.",
+            "logoUrl": "https://example.com/demo-app.png",
+            "logoUrlDark": null,
+            "distributionChannel": null,
+            "installUrl": "https://chatgpt.com/apps/demo-app/demo-app",
+            "isAccessible": true
+        }
+    ],
+    "nextCursor": null
+} }
+```
+
+Invoke an app by inserting `$<app-slug>` in the text input. The slug is derived from the app name and lowercased with non-alphanumeric characters replaced by `-` (for example, "Demo App" becomes `$demo-app`). Add a `mention` input item (recommended) so the server uses the exact `app://<connector-id>` path rather than guessing by name.
+
+Example:
+
+```
+$demo-app Pull the latest updates from the team.
+```
+
+```json
+{
+  "method": "turn/start",
+  "id": 51,
+  "params": {
+    "threadId": "thread-1",
+    "input": [
+      {
+        "type": "text",
+        "text": "$demo-app Pull the latest updates from the team."
+      },
+      { "type": "mention", "name": "Demo App", "path": "app://demo-app" }
+    ]
   }
 }
 ```

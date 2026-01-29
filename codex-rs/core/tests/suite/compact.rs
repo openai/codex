@@ -1339,6 +1339,101 @@ async fn auto_compact_emits_context_compaction_items() {
     assert!(legacy_event);
 }
 
+// Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
+#[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
+#[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
+async fn auto_compact_starts_after_turn_started() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let sse1 = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed_with_tokens("r1", 70_000),
+    ]);
+    let sse2 = sse(vec![
+        ev_assistant_message("m2", "SECOND_REPLY"),
+        ev_completed_with_tokens("r2", 330_000),
+    ]);
+    let sse3 = sse(vec![
+        ev_assistant_message("m3", AUTO_SUMMARY_TEXT),
+        ev_completed_with_tokens("r3", 200),
+    ]);
+    let sse4 = sse(vec![
+        ev_assistant_message("m4", FINAL_REPLY),
+        ev_completed_with_tokens("r4", 120),
+    ]);
+
+    mount_sse_sequence(&server, vec![sse1, sse2, sse3, sse4]).await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+        config.model_auto_compact_token_limit = Some(200_000);
+    });
+    let codex = builder.build(&server).await.unwrap().codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: FIRST_AUTO_MSG.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: SECOND_AUTO_MSG.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: POST_AUTO_USER_MSG.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+
+    let first = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::TurnStarted(_) => Some("turn"),
+        EventMsg::ItemStarted(ItemStartedEvent {
+            item: TurnItem::ContextCompaction(_),
+            ..
+        }) => Some("compaction"),
+        _ => None,
+    })
+    .await;
+    assert_eq!(first, "turn", "compaction started before turn started");
+
+    wait_for_event(&codex, |ev| {
+        matches!(
+            ev,
+            EventMsg::ItemStarted(ItemStartedEvent {
+                item: TurnItem::ContextCompaction(_),
+                ..
+            })
+        )
+    })
+    .await;
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
     skip_if_no_network!();

@@ -13,8 +13,10 @@
 //!
 //! Some UI is time-based rather than input-based, such as the transient "press again to quit"
 //! hint. The pane schedules redraws so those hints can expire even when the UI is otherwise idle.
+use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::app_event::ConnectorsSnapshot;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::queued_user_messages::QueuedUserMessages;
 use crate::bottom_pane::unified_exec_footer::UnifiedExecFooter;
@@ -36,8 +38,10 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use std::time::Duration;
 
+mod app_link_view;
 mod approval_overlay;
 mod request_user_input;
+pub(crate) use app_link_view::AppLinkView;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
 pub(crate) use request_user_input::RequestUserInputOverlay;
@@ -204,6 +208,15 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub fn set_connectors_snapshot(&mut self, snapshot: Option<ConnectorsSnapshot>) {
+        self.composer.set_connector_mentions(snapshot);
+        self.request_redraw();
+    }
+
+    pub fn take_mention_paths(&mut self) -> HashMap<String, String> {
+        self.composer.take_mention_paths()
+    }
+
     pub fn set_steer_enabled(&mut self, enabled: bool) {
         self.composer.set_steer_enabled(enabled);
     }
@@ -211,6 +224,10 @@ impl BottomPane {
     pub fn set_collaboration_modes_enabled(&mut self, enabled: bool) {
         self.composer.set_collaboration_modes_enabled(enabled);
         self.request_redraw();
+    }
+
+    pub fn set_connectors_enabled(&mut self, enabled: bool) {
+        self.composer.set_connectors_enabled(enabled);
     }
 
     #[cfg(target_os = "windows")]

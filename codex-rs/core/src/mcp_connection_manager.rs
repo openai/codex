@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::auth::McpAuthStatusEntry;
 use anyhow::Context;
 use anyhow::Result;
@@ -436,13 +437,33 @@ impl McpConnectionManager {
             .await
     }
 
+    pub(crate) async fn wait_for_server_ready(&self, server_name: &str, timeout: Duration) -> bool {
+        let Some(async_managed_client) = self.clients.get(server_name) else {
+            return false;
+        };
+
+        match tokio::time::timeout(timeout, async_managed_client.client()).await {
+            Ok(Ok(_)) => true,
+            Ok(Err(_)) | Err(_) => false,
+        }
+    }
+
     /// Returns a single map that contains all tools. Each key is the
     /// fully-qualified name for the tool.
     #[instrument(level = "trace", skip_all)]
     pub async fn list_all_tools(&self) -> HashMap<String, ToolInfo> {
         let mut tools = HashMap::new();
-        for managed_client in self.clients.values() {
-            if let Ok(client) = managed_client.client().await {
+        for (server_name, managed_client) in &self.clients {
+            let client = if server_name == CODEX_APPS_MCP_SERVER_NAME {
+                // Avoid blocking on codex_apps_mcp startup; use tools only when ready.
+                match managed_client.client.clone().now_or_never() {
+                    Some(Ok(client)) => Some(client),
+                    _ => None,
+                }
+            } else {
+                managed_client.client().await.ok()
+            };
+            if let Some(client) = client {
                 tools.extend(qualify_tools(filter_tools(
                     client.tools,
                     client.tool_filter,

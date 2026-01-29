@@ -213,6 +213,16 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             truncation_policy: TruncationPolicyConfig::tokens(10_000),
             context_window: Some(CONTEXT_WINDOW_272K),
             supported_reasoning_levels: supported_reasoning_level_low_medium_high_xhigh(),
+            model_instructions_template: Some(ModelInstructionsTemplate {
+                template: GPT_5_2_CODEX_INSTRUCTIONS_TEMPLATE.to_string(),
+                personality_messages: Some(PersonalityMessages(BTreeMap::from([(
+                    Personality::Friendly,
+                    PERSONALITY_FRIENDLY.to_string(),
+                ), (
+                    Personality::Pragmatic,
+                    PERSONALITY_PRAGMATIC.to_string(),
+                )]))),
+            }),
         )
     } else if slug.starts_with("gpt-5.1-codex-max") {
         model_info!(
