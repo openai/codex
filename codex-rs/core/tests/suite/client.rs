@@ -1,5 +1,6 @@
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
+use codex_core::TransportManager;
 use codex_core::ContentItem;
 use codex_core::LocalShellAction;
 use codex_core::LocalShellExecAction;
@@ -1186,6 +1187,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         summary,
         conversation_id,
         SessionSource::Exec,
+        TransportManager::new(),
     )
     .new_session();
 

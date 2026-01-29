@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::AuthManager;
 use crate::RolloutRecorder;
 use crate::agent::AgentControl;
+use crate::connection_manager::TransportManager;
 use crate::exec_policy::ExecPolicyManager;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::models_manager::manager::ModelsManager;
@@ -32,4 +33,5 @@ pub(crate) struct SessionServices {
     pub(crate) skills_manager: Arc<SkillsManager>,
     pub(crate) agent_control: AgentControl,
     pub(crate) state_db: Option<StateDbHandle>,
+    pub(crate) connection_manager: TransportManager,
 }

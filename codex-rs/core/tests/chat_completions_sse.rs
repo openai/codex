@@ -4,6 +4,7 @@ use std::sync::Arc;
 use tracing_test::traced_test;
 
 use codex_core::CodexAuth;
+use codex_core::TransportManager;
 use codex_core::ContentItem;
 use codex_core::ModelClient;
 use codex_core::ModelProviderInfo;
@@ -99,6 +100,7 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
         summary,
         conversation_id,
         SessionSource::Exec,
+        TransportManager::new(),
     )
     .new_session();
 

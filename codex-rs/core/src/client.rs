@@ -55,6 +55,7 @@ use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::config::Config;
+use crate::connection_manager::TransportManager;
 use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result;
@@ -80,6 +81,7 @@ struct ModelClientState {
     effort: Option<ReasoningEffortConfig>,
     summary: ReasoningSummaryConfig,
     session_source: SessionSource,
+    connection_manager: TransportManager,
 }
 
 #[derive(Debug, Clone)]
@@ -91,6 +93,7 @@ pub struct ModelClientSession {
     state: Arc<ModelClientState>,
     connection: Option<ApiWebSocketConnection>,
     websocket_last_items: Vec<ResponseItem>,
+    connection_manager: TransportManager,
     /// Turn state for sticky routing.
     ///
     /// This is an `OnceLock` that stores the turn state value received from the server
@@ -116,6 +119,7 @@ impl ModelClient {
         summary: ReasoningSummaryConfig,
         conversation_id: ThreadId,
         session_source: SessionSource,
+        connection_manager: TransportManager,
     ) -> Self {
         Self {
             state: Arc::new(ModelClientState {
@@ -128,6 +132,7 @@ impl ModelClient {
                 effort,
                 summary,
                 session_source,
+                connection_manager,
             }),
         }
     }
@@ -137,6 +142,7 @@ impl ModelClient {
             state: Arc::clone(&self.state),
             connection: None,
             websocket_last_items: Vec::new(),
+            connection_manager: self.state.connection_manager.clone(),
             turn_state: Arc::new(OnceLock::new()),
         }
     }
@@ -169,6 +175,10 @@ impl ModelClient {
 
     pub fn get_session_source(&self) -> SessionSource {
         self.state.session_source.clone()
+    }
+
+    pub(crate) fn connection_manager(&self) -> TransportManager {
+        self.state.connection_manager.clone()
     }
 
     /// Returns the currently configured model slug.
@@ -250,7 +260,10 @@ impl ModelClientSession {
     /// For Chat providers, the underlying stream is optionally aggregated
     /// based on the `show_raw_agent_reasoning` flag in the config.
     pub async fn stream(&mut self, prompt: &Prompt) -> Result<ResponseStream> {
-        match self.state.provider.wire_api {
+        let wire_api = self
+            .connection_manager
+            .effective_wire_api(self.state.provider.wire_api);
+        match wire_api {
             WireApi::Responses => self.stream_responses_api(prompt).await,
             WireApi::ResponsesWebsocket => self.stream_responses_websocket(prompt).await,
             WireApi::Chat => {
@@ -269,6 +282,19 @@ impl ModelClientSession {
                 }
             }
         }
+    }
+
+    pub(crate) fn try_switch_fallback_transport(&mut self) -> bool {
+        let activated = self
+            .connection_manager
+            .activate_http_fallback(self.state.provider.wire_api);
+        if activated {
+            warn!("falling back to HTTP");
+
+            self.connection = None;
+            self.websocket_last_items.clear();
+        }
+        activated
     }
 
     fn build_responses_request(&self, prompt: &Prompt) -> Result<ApiPrompt> {

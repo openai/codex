@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use codex_app_server_protocol::AuthMode;
+use codex_core::TransportManager;
 use codex_core::ContentItem;
 use codex_core::LocalShellAction;
 use codex_core::LocalShellExecAction;
@@ -98,6 +99,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
         summary,
         conversation_id,
         SessionSource::Exec,
+        TransportManager::new(),
     )
     .new_session();
 
