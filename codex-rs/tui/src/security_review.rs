@@ -97,10 +97,12 @@ use url::Url;
 const VALIDATION_SUMMARY_GRAPHEMES: usize = 96;
 const VALIDATION_OUTPUT_GRAPHEMES: usize = 480;
 const VALIDATION_REPORT_OUTPUT_MAX_BYTES: usize = 512 * 1024;
-const VALIDATION_MAX_FINDINGS: usize = 8;
-const VALIDATION_PLAN_CONCURRENCY: usize = 8;
-const VALIDATION_REFINE_CONCURRENCY: usize = 8;
-const VALIDATION_EXEC_CONCURRENCY: usize = 8;
+const VALIDATION_WORKER_MAX_CONCURRENCY: usize = 8;
+const VALIDATION_PLAN_CONCURRENCY: usize = VALIDATION_WORKER_MAX_CONCURRENCY;
+const VALIDATION_REFINE_CONCURRENCY: usize = VALIDATION_WORKER_MAX_CONCURRENCY;
+const VALIDATION_EXEC_CONCURRENCY: usize = VALIDATION_WORKER_MAX_CONCURRENCY;
+const VALIDATION_AGENT_TIMEOUT_SECS: u64 = 60 * 60;
+const POST_VALIDATION_REFINE_WORKER_TIMEOUT_SECS: u64 = 30 * 60;
 const VALIDATION_EXEC_TIMEOUT_SECS: u64 = 30 * 60;
 const VALIDATION_PREFLIGHT_TIMEOUT_SECS: u64 = 30 * 60;
 const VALIDATION_CURL_TIMEOUT_SECS: u64 = 60;
@@ -823,20 +825,189 @@ fn validation_target_prep_progress_path(output_root: &Path) -> PathBuf {
         .join("validation_target_prep.json")
 }
 
-fn validation_target_prep_complete(output_root: &Path, repo_root: &Path) -> bool {
+fn validation_target_prep_matches_repo(
+    progress: &ValidationTargetPrepProgress,
+    repo_root: &Path,
+) -> bool {
+    if progress.repo_root == repo_root.display().to_string() {
+        return true;
+    }
+
+    let Ok(repo_root) = repo_root.canonicalize() else {
+        return false;
+    };
+    let Ok(progress_root) = PathBuf::from(progress.repo_root.as_str()).canonicalize() else {
+        return false;
+    };
+
+    progress_root == repo_root
+}
+
+fn validation_target_prep_marker(
+    output_root: &Path,
+    repo_root: &Path,
+) -> Option<ValidationTargetPrepProgress> {
     let path = validation_target_prep_progress_path(output_root);
-    let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(_) => return false,
-    };
-    let progress = match serde_json::from_slice::<ValidationTargetPrepProgress>(&bytes) {
-        Ok(progress) => progress,
-        Err(_) => return false,
-    };
-    progress.version == 3
-        && progress.repo_root == repo_root.display().to_string()
-        && progress.local_build_ok
-        && progress.local_run_ok
+    let bytes = fs::read(path).ok()?;
+    let progress = serde_json::from_slice::<ValidationTargetPrepProgress>(&bytes).ok()?;
+    validation_target_prep_matches_repo(&progress, repo_root).then_some(progress)
+}
+
+fn validation_target_prep_complete(output_root: &Path, repo_root: &Path) -> bool {
+    validation_target_prep_marker(output_root, repo_root).is_some_and(|progress| {
+        progress.version == 3 && progress.local_build_ok && progress.local_run_ok
+    })
+}
+
+fn reconcile_validation_target_prep_resume_state(
+    output_root: &Path,
+    repo_root: &Path,
+    plan_tracker: &mut SecurityReviewPlanTracker,
+    progress_sender: &Option<AppEventSender>,
+    log_sink: &Option<Arc<SecurityReviewLogSink>>,
+    logs: &mut Vec<String>,
+) -> bool {
+    let validation_prep_marker = validation_target_prep_marker(output_root, repo_root);
+    let validation_prep_complete = validation_prep_marker.as_ref().is_some_and(|progress| {
+        progress.version == 3 && progress.local_build_ok && progress.local_run_ok
+    });
+
+    if validation_prep_marker.is_some() {
+        if validation_prep_complete {
+            push_progress_log(
+                progress_sender,
+                log_sink,
+                logs,
+                format!(
+                    "Prepare runnable validation targets: existing prep marker found at {}; skipping.",
+                    validation_target_prep_progress_path(output_root).display()
+                ),
+            );
+        }
+        plan_tracker.mark_complete(SecurityReviewPlanStep::PrepareValidationTargets);
+    } else if matches!(
+        plan_tracker.status_for(SecurityReviewPlanStep::PrepareValidationTargets),
+        Some(StepStatus::InProgress)
+    ) {
+        push_progress_log(
+            progress_sender,
+            log_sink,
+            logs,
+            "Prepare runnable validation targets: checkpoint marked this step in progress, but no prep marker was found; rerunning."
+                .to_string(),
+        );
+        plan_tracker.reset_step(SecurityReviewPlanStep::PrepareValidationTargets);
+    }
+
+    validation_prep_complete
+}
+
+#[cfg(test)]
+mod validation_target_prep_resume_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use tempfile::tempdir;
+
+    fn write_validation_target_prep_progress(
+        output_root: &Path,
+        progress: &ValidationTargetPrepProgress,
+    ) {
+        let path = validation_target_prep_progress_path(output_root);
+        fs::create_dir_all(path.parent().expect("progress parent")).expect("create dir");
+        let bytes = serde_json::to_vec_pretty(progress).expect("serialize progress");
+        fs::write(&path, bytes).expect("write progress");
+    }
+
+    fn new_plan_tracker(repo_root: &Path) -> SecurityReviewPlanTracker {
+        let include_paths: Vec<PathBuf> = Vec::new();
+        SecurityReviewPlanTracker::new(
+            SecurityReviewMode::Bugs,
+            &include_paths,
+            repo_root,
+            HashMap::new(),
+            None,
+            None,
+        )
+    }
+
+    #[test]
+    fn does_not_reset_completed_prepare_validation_targets_when_marker_exists_but_not_ready() {
+        let repo_dir = tempdir().expect("repo dir");
+        let output_dir = tempdir().expect("output dir");
+        let repo_root = repo_dir.path();
+        let output_root = output_dir.path();
+
+        let progress = ValidationTargetPrepProgress {
+            version: 3,
+            repo_root: repo_root.display().to_string(),
+            summary: None,
+            local_build_ok: false,
+            local_run_ok: false,
+            docker_build_ok: false,
+            docker_run_ok: false,
+            local_entrypoint: None,
+            local_build_command: None,
+            local_smoke_command: None,
+            dockerfile_path: None,
+            docker_image_tag: None,
+            docker_build_command: None,
+            docker_smoke_command: None,
+        };
+        write_validation_target_prep_progress(output_root, &progress);
+
+        let mut plan_tracker = new_plan_tracker(repo_root);
+        plan_tracker.mark_complete(SecurityReviewPlanStep::PrepareValidationTargets);
+
+        let mut logs = Vec::new();
+        let complete = reconcile_validation_target_prep_resume_state(
+            output_root,
+            repo_root,
+            &mut plan_tracker,
+            &None,
+            &None,
+            &mut logs,
+        );
+
+        assert_eq!(complete, false);
+        assert!(
+            matches!(
+                plan_tracker.status_for(SecurityReviewPlanStep::PrepareValidationTargets),
+                Some(StepStatus::Completed)
+            ),
+            "PrepareValidationTargets should remain completed"
+        );
+    }
+
+    #[test]
+    fn resets_in_progress_prepare_validation_targets_when_marker_missing() {
+        let repo_dir = tempdir().expect("repo dir");
+        let output_dir = tempdir().expect("output dir");
+        let repo_root = repo_dir.path();
+        let output_root = output_dir.path();
+
+        let mut plan_tracker = new_plan_tracker(repo_root);
+        plan_tracker.start_step(SecurityReviewPlanStep::PrepareValidationTargets);
+
+        let mut logs = Vec::new();
+        let complete = reconcile_validation_target_prep_resume_state(
+            output_root,
+            repo_root,
+            &mut plan_tracker,
+            &None,
+            &None,
+            &mut logs,
+        );
+
+        assert_eq!(complete, false);
+        assert!(
+            matches!(
+                plan_tracker.status_for(SecurityReviewPlanStep::PrepareValidationTargets),
+                Some(StepStatus::Pending)
+            ),
+            "PrepareValidationTargets should be reset to pending"
+        );
+        assert_eq!(logs.len(), 1);
+    }
 }
 
 pub fn running_review_candidates(repo_path: &Path) -> Vec<RunningSecurityReviewCandidate> {
@@ -1284,7 +1455,9 @@ impl SecurityReviewPlanTracker {
         next: Option<SecurityReviewPlanStep>,
     ) {
         let mut changed = self.set_status_if_present(finished, StepStatus::Completed);
-        if let Some(next_step) = next {
+        if let Some(next_step) = next
+            && !matches!(self.status_for(next_step), Some(StepStatus::Completed))
+        {
             changed |= self.set_status_if_present(next_step, StepStatus::InProgress);
         }
         if changed {
@@ -1296,6 +1469,10 @@ impl SecurityReviewPlanTracker {
     }
 
     fn start_step(&mut self, step: SecurityReviewPlanStep) {
+        if matches!(self.status_for(step), Some(StepStatus::Completed)) {
+            return;
+        }
+
         if self.set_status_if_present(step, StepStatus::InProgress) {
             self.emit_update();
             if self.snapshots_enabled {
@@ -1344,6 +1521,32 @@ impl SecurityReviewPlanTracker {
         }
         entry.status = status;
         true
+    }
+
+    fn normalize_validation_in_progress(&mut self) -> bool {
+        let mut found = false;
+        let mut changed = false;
+        for step in [
+            SecurityReviewPlanStep::ValidateFindings,
+            SecurityReviewPlanStep::PostValidationRefine,
+            SecurityReviewPlanStep::AssembleReport,
+        ] {
+            let Some(entry) = self.steps.iter_mut().find(|item| item.kind == step) else {
+                continue;
+            };
+            if !matches!(entry.status, StepStatus::InProgress) {
+                continue;
+            }
+            if found {
+                entry.status = StepStatus::Pending;
+                entry.started_at = None;
+                entry.completed_at = None;
+                changed = true;
+            } else {
+                found = true;
+            }
+        }
+        changed
     }
 
     fn emit_update(&self) {
@@ -1400,6 +1603,7 @@ impl SecurityReviewPlanTracker {
                 changed |= self.set_status_if_present(step, status.clone());
             }
         }
+        changed |= self.normalize_validation_in_progress();
         if changed {
             self.emit_update();
         }
@@ -2617,6 +2821,15 @@ pub enum BugValidationStatus {
     Passed,
     Failed,
     UnableToValidate,
+}
+
+fn validation_status_command_state(status: BugValidationStatus) -> SecurityReviewCommandState {
+    match status {
+        BugValidationStatus::Passed => SecurityReviewCommandState::Matches,
+        BugValidationStatus::Failed => SecurityReviewCommandState::NoMatches,
+        BugValidationStatus::UnableToValidate => SecurityReviewCommandState::Error,
+        BugValidationStatus::Pending => SecurityReviewCommandState::Running,
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -4805,32 +5018,14 @@ pub async fn run_security_review(
         plan_tracker.mark_complete(SecurityReviewPlanStep::DirTriage);
         plan_tracker.mark_complete(SecurityReviewPlanStep::FileTriage);
     }
-    let validation_prep_complete =
-        validation_target_prep_complete(&request.output_root, &repo_path);
-    if validation_prep_complete {
-        push_progress_log(
-            &progress_sender,
-            &log_sink,
-            &mut logs,
-            format!(
-                "Prepare runnable validation targets: existing prep marker found at {}; skipping.",
-                validation_target_prep_progress_path(&request.output_root).display()
-            ),
-        );
-        plan_tracker.mark_complete(SecurityReviewPlanStep::PrepareValidationTargets);
-    } else if matches!(
-        plan_tracker.status_for(SecurityReviewPlanStep::PrepareValidationTargets),
-        Some(StepStatus::Completed | StepStatus::InProgress)
-    ) {
-        push_progress_log(
-            &progress_sender,
-            &log_sink,
-            &mut logs,
-            "Prepare runnable validation targets: checkpoint marked this step complete, but no valid prep marker was found; rerunning."
-                .to_string(),
-        );
-        plan_tracker.reset_step(SecurityReviewPlanStep::PrepareValidationTargets);
-    }
+    let validation_prep_complete = reconcile_validation_target_prep_resume_state(
+        &request.output_root,
+        &repo_path,
+        &mut plan_tracker,
+        &progress_sender,
+        &log_sink,
+        &mut logs,
+    );
     if !validation_prep_complete
         && matches!(
             plan_tracker.status_for(SecurityReviewPlanStep::ValidateFindings),
@@ -5650,9 +5845,13 @@ pub async fn run_security_review(
                         ),
                     );
 
+                    let polish_completed = matches!(
+                        plan_tracker.status_for(SecurityReviewPlanStep::PolishFindings),
+                        Some(StepStatus::Completed)
+                    );
                     let mut removed = 0usize;
                     let mut filtered_low = 0usize;
-                    if loaded.bugs.len() > 1 {
+                    if loaded.bugs.len() > 1 && !polish_completed {
                         let dedupe_model = if request.spec_model.trim().is_empty() {
                             SPEC_GENERATION_MODEL
                         } else {
@@ -5710,6 +5909,12 @@ pub async fn run_security_review(
                                 count_files_with_findings_from_snapshots(&loaded.bugs),
                             );
                         }
+                    } else if loaded.bugs.len() > 1 && polish_completed {
+                        record(
+                            &mut logs,
+                            "Polish findings already completed; skipping resume dedupe."
+                                .to_string(),
+                        );
                     }
                     if removed > 0 {
                         record(
@@ -6633,58 +6838,69 @@ pub async fn run_security_review(
         });
     }
 
+    let validation_already_complete = matches!(
+        plan_tracker.status_for(SecurityReviewPlanStep::ValidateFindings),
+        Some(StepStatus::Completed)
+    );
     let include_web_browser = request
         .validation_target_url
         .as_deref()
         .map(str::trim)
         .is_some_and(|s| !s.is_empty());
-    let validation_targets = build_validation_findings_context(&snapshot, include_web_browser);
-
-    if validation_targets.ids.is_empty() {
+    if validation_already_complete {
         record(
             &mut logs,
-            "No high-risk findings selected for validation; skipping.".to_string(),
+            "Validate findings already completed; skipping validation.".to_string(),
         );
     } else {
-        record(
-            &mut logs,
-            format!(
-                "Validating high-risk findings... (model: {model}, reasoning: {validation_reasoning_label}).",
-                model = request.validation_model.as_str(),
-                validation_reasoning_label =
-                    reasoning_effort_label(normalize_reasoning_effort_for_model(
-                        request.validation_model.as_str(),
-                        validation_reasoning_effort,
-                    ))
-            ),
-        );
-        match run_asan_validation(
-            repo_path.clone(),
-            artifacts.snapshot_path.clone(),
-            artifacts.bugs_path.clone(),
-            None,
-            None,
-            request.provider.clone(),
-            request.validation_model.clone(),
-            validation_reasoning_effort,
-            &request.config,
-            request.auth_manager.clone(),
-            progress_sender.clone(),
-            metrics.clone(),
-            request.validation_target_url.clone(),
-            request.validation_creds_path.clone(),
-        )
-        .await
-        {
-            Ok(_) => {
-                record(
-                    &mut logs,
-                    "Validation complete; snapshot updated.".to_string(),
-                );
-            }
-            Err(err) => {
-                record(&mut logs, format!("Validation failed: {}", err.message));
-                logs.extend(err.logs);
+        let validation_targets = build_validation_findings_context(&snapshot, include_web_browser);
+
+        if validation_targets.ids.is_empty() {
+            record(
+                &mut logs,
+                "No findings selected for validation; skipping.".to_string(),
+            );
+        } else {
+            record(
+                &mut logs,
+                format!(
+                    "Validating findings... (model: {model}, reasoning: {validation_reasoning_label}).",
+                    model = request.validation_model.as_str(),
+                    validation_reasoning_label =
+                        reasoning_effort_label(normalize_reasoning_effort_for_model(
+                            request.validation_model.as_str(),
+                            validation_reasoning_effort,
+                        ))
+                ),
+            );
+            match run_asan_validation(
+                repo_path.clone(),
+                artifacts.snapshot_path.clone(),
+                artifacts.bugs_path.clone(),
+                None,
+                None,
+                request.provider.clone(),
+                request.validation_model.clone(),
+                validation_reasoning_effort,
+                &request.config,
+                request.auth_manager.clone(),
+                progress_sender.clone(),
+                metrics.clone(),
+                request.validation_target_url.clone(),
+                request.validation_creds_path.clone(),
+            )
+            .await
+            {
+                Ok(_) => {
+                    record(
+                        &mut logs,
+                        "Validation complete; snapshot updated.".to_string(),
+                    );
+                }
+                Err(err) => {
+                    record(&mut logs, format!("Validation failed: {}", err.message));
+                    logs.extend(err.logs);
+                }
             }
         }
     }
@@ -6724,14 +6940,16 @@ pub async fn run_security_review(
         }
     }
 
-    plan_tracker.complete_and_start_next(
-        SecurityReviewPlanStep::ValidateFindings,
-        Some(SecurityReviewPlanStep::PostValidationRefine),
-    );
-    plan_tracker.complete_and_start_next(
-        SecurityReviewPlanStep::PostValidationRefine,
-        Some(SecurityReviewPlanStep::AssembleReport),
-    );
+    if !validation_already_complete {
+        plan_tracker.complete_and_start_next(
+            SecurityReviewPlanStep::ValidateFindings,
+            Some(SecurityReviewPlanStep::PostValidationRefine),
+        );
+        plan_tracker.complete_and_start_next(
+            SecurityReviewPlanStep::PostValidationRefine,
+            Some(SecurityReviewPlanStep::AssembleReport),
+        );
+    }
     checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
     persist_checkpoint(&mut checkpoint, &mut logs);
 
@@ -7623,6 +7841,82 @@ fn log_model_reasoning(
             let message = format!("Model reasoning: {truncated}");
             push_progress_log(progress_sender, log_sink, logs, message);
         }
+    }
+}
+
+struct ReasoningAccumulator {
+    buffer: String,
+}
+
+impl ReasoningAccumulator {
+    fn new() -> Self {
+        Self {
+            buffer: String::new(),
+        }
+    }
+
+    fn push_delta(
+        &mut self,
+        delta: &str,
+        progress_sender: &Option<AppEventSender>,
+        log_sink: &Option<Arc<SecurityReviewLogSink>>,
+        logs: &mut Vec<String>,
+    ) {
+        if delta.is_empty() {
+            return;
+        }
+
+        self.buffer.push_str(delta);
+        self.flush_complete_lines(progress_sender, log_sink, logs);
+        if self.buffer.len() >= MODEL_REASONING_LOG_MAX_GRAPHEMES {
+            self.flush_remaining(progress_sender, log_sink, logs);
+        }
+    }
+
+    fn push_full(
+        &mut self,
+        reasoning: &str,
+        progress_sender: &Option<AppEventSender>,
+        log_sink: &Option<Arc<SecurityReviewLogSink>>,
+        logs: &mut Vec<String>,
+    ) {
+        self.flush_remaining(progress_sender, log_sink, logs);
+        log_model_reasoning(reasoning, progress_sender, log_sink, logs);
+    }
+
+    fn flush_complete_lines(
+        &mut self,
+        progress_sender: &Option<AppEventSender>,
+        log_sink: &Option<Arc<SecurityReviewLogSink>>,
+        logs: &mut Vec<String>,
+    ) {
+        if !self.buffer.contains('\n') {
+            return;
+        }
+
+        let mut parts: Vec<&str> = self.buffer.split('\n').collect();
+        let remainder = parts.pop().unwrap_or_default();
+        for part in parts {
+            if part.trim().is_empty() {
+                continue;
+            }
+            log_model_reasoning(part, progress_sender, log_sink, logs);
+        }
+        self.buffer = remainder.to_string();
+    }
+
+    fn flush_remaining(
+        &mut self,
+        progress_sender: &Option<AppEventSender>,
+        log_sink: &Option<Arc<SecurityReviewLogSink>>,
+        logs: &mut Vec<String>,
+    ) {
+        if self.buffer.trim().is_empty() {
+            self.buffer.clear();
+            return;
+        }
+        log_model_reasoning(self.buffer.as_str(), progress_sender, log_sink, logs);
+        self.buffer.clear();
     }
 }
 
@@ -10313,7 +10607,7 @@ mod validation_target_selection_tests {
     }
 
     #[test]
-    fn excludes_web_browser_findings_from_validation_targets() {
+    fn includes_web_browser_findings_in_validation_targets_even_when_disabled() {
         let snapshot = SecurityReviewSnapshot {
             generated_at: OffsetDateTime::now_utc(),
             findings_summary: String::new(),
@@ -10331,11 +10625,14 @@ mod validation_target_selection_tests {
         };
 
         let targets = build_validation_findings_context(&snapshot, false);
-        assert_eq!(targets.ids, vec![BugIdentifier::RiskRank(2)]);
+        assert_eq!(
+            targets.ids,
+            vec![BugIdentifier::RiskRank(1), BugIdentifier::RiskRank(2)]
+        );
     }
 
     #[test]
-    fn empty_when_only_web_browser_findings_present() {
+    fn includes_only_web_browser_findings_when_present() {
         let snapshot = SecurityReviewSnapshot {
             generated_at: OffsetDateTime::now_utc(),
             findings_summary: String::new(),
@@ -10350,7 +10647,7 @@ mod validation_target_selection_tests {
         };
 
         let targets = build_validation_findings_context(&snapshot, false);
-        assert_eq!(targets.ids, Vec::<BugIdentifier>::new());
+        assert_eq!(targets.ids, vec![BugIdentifier::RiskRank(1)]);
     }
 
     #[test]
@@ -10379,7 +10676,7 @@ mod validation_target_selection_tests {
     }
 
     #[test]
-    fn includes_crash_poc_release_and_excludes_crash_poc_func() {
+    fn includes_crash_poc_release_and_crash_poc_func() {
         let snapshot = SecurityReviewSnapshot {
             generated_at: OffsetDateTime::now_utc(),
             findings_summary: String::new(),
@@ -10403,7 +10700,10 @@ mod validation_target_selection_tests {
         };
 
         let targets = build_validation_findings_context(&snapshot, true);
-        assert_eq!(targets.ids, vec![BugIdentifier::RiskRank(2)]);
+        assert_eq!(
+            targets.ids,
+            vec![BugIdentifier::RiskRank(1), BugIdentifier::RiskRank(2)]
+        );
     }
 
     #[test]
@@ -17739,6 +18039,80 @@ fn emit_command_status(
     }
 }
 
+#[derive(Clone)]
+struct CommandStatusEmitter {
+    progress_sender: Option<AppEventSender>,
+    metrics: Arc<ReviewMetrics>,
+}
+
+impl CommandStatusEmitter {
+    fn new(progress_sender: Option<AppEventSender>, metrics: Arc<ReviewMetrics>) -> Self {
+        Self {
+            progress_sender,
+            metrics,
+        }
+    }
+
+    fn emit(
+        &self,
+        summary: impl Into<String>,
+        state: SecurityReviewCommandState,
+        preview: Vec<String>,
+    ) {
+        let id = self.metrics.next_command_id();
+        emit_command_status(&self.progress_sender, id, summary.into(), state, preview);
+    }
+
+    fn emit_with_preview(
+        &self,
+        summary: impl Into<String>,
+        state: SecurityReviewCommandState,
+        command: Option<&str>,
+        output: Option<&str>,
+    ) {
+        let preview = build_command_preview(command, output);
+        self.emit(summary, state, preview);
+    }
+}
+
+fn build_command_preview(command: Option<&str>, output: Option<&str>) -> Vec<String> {
+    let mut preview = Vec::new();
+    if let Some(command) = command.map(str::trim).filter(|s| !s.is_empty()) {
+        preview.push(format!("$ {command}"));
+    }
+    if let Some(output) = output.map(str::trim).filter(|s| !s.is_empty()) {
+        preview.extend(command_preview_snippets(output));
+    }
+    preview
+}
+
+fn emit_command_start(
+    emitter: &CommandStatusEmitter,
+    summary: impl Into<String>,
+    command: Option<&str>,
+) {
+    emitter.emit_with_preview(summary, SecurityReviewCommandState::Running, command, None);
+}
+
+fn emit_command_result(
+    emitter: &CommandStatusEmitter,
+    summary: impl Into<String>,
+    state: SecurityReviewCommandState,
+    command: Option<&str>,
+    output: Option<&str>,
+) {
+    emitter.emit_with_preview(summary, state, command, output);
+}
+
+fn emit_command_error(emitter: &CommandStatusEmitter, summary: impl Into<String>, message: &str) {
+    emitter.emit_with_preview(
+        summary,
+        SecurityReviewCommandState::Error,
+        None,
+        Some(message),
+    );
+}
+
 fn command_completion_state(result: &SearchResult) -> (SecurityReviewCommandState, Vec<String>) {
     match result {
         SearchResult::Matches(text) => (
@@ -19533,6 +19907,7 @@ async fn execute_bug_command(
     repo_path: PathBuf,
     work_dir: PathBuf,
     web_validation: Option<WebValidationConfig>,
+    command_emitter: CommandStatusEmitter,
 ) -> BugCommandResult {
     let mut logs: Vec<String> = Vec::new();
     let label = if let Some(rank) = plan.risk_rank {
@@ -19548,10 +19923,9 @@ async fn execute_bug_command(
     } else {
         format!("bug_{}", plan.summary_id)
     };
-    logs.push(format!(
-        "Running {} verification for {label}",
-        plan.request.tool.as_str()
-    ));
+    let tool = plan.request.tool.as_str();
+    let base_summary = format!("Validation {tool} for {label}");
+    logs.push(format!("Running {tool} verification for {label}"));
 
     let initial_target = plan.request.target.clone().filter(|t| !t.is_empty());
     let mut validation = BugValidationState {
@@ -19575,10 +19949,17 @@ async fn execute_bug_command(
     match plan.request.tool {
         BugVerificationTool::Curl => {
             let timeout = Duration::from_secs(VALIDATION_CURL_TIMEOUT_SECS);
+            let control_summary = format!("{base_summary} (control)");
+            let repro_summary = format!("{base_summary} (repro)");
             let Some(target_raw) = plan.request.target.clone().filter(|t| !t.is_empty()) else {
                 validation.status = BugValidationStatus::UnableToValidate;
                 validation.summary = Some("Missing target URL".to_string());
                 logs.push(format!("{label}: no target URL provided for curl"));
+                emit_command_error(
+                    &command_emitter,
+                    repro_summary.as_str(),
+                    "Missing target URL",
+                );
                 validation.run_at = Some(OffsetDateTime::now_utc());
                 return BugCommandResult {
                     index: plan.index,
@@ -19600,6 +19981,14 @@ async fn execute_bug_command(
                         logs.push(format!(
                             "{label}: refusing to validate against non-target url {target_raw}: {err}"
                         ));
+                        emit_command_error(
+                            &command_emitter,
+                            repro_summary.as_str(),
+                            validation
+                                .summary
+                                .as_deref()
+                                .unwrap_or("Invalid target URL"),
+                        );
                         validation.run_at = Some(OffsetDateTime::now_utc());
                         return BugCommandResult {
                             index: plan.index,
@@ -19617,6 +20006,14 @@ async fn execute_bug_command(
                         logs.push(format!(
                             "{label}: refusing to validate against non-local target {target_raw}"
                         ));
+                        emit_command_error(
+                            &command_emitter,
+                            repro_summary.as_str(),
+                            validation
+                                .summary
+                                .as_deref()
+                                .unwrap_or("Invalid local target"),
+                        );
                         validation.run_at = Some(OffsetDateTime::now_utc());
                         return BugCommandResult {
                             index: plan.index,
@@ -19643,9 +20040,17 @@ async fn execute_bug_command(
                             .collect::<String>()
                     })
                     .unwrap_or_default();
-                validation.control_steps.push(format!(
-                    "Run: `curl --silent --show-error --location --max-time 15{header_steps} {control_target}`"
-                ));
+                let control_command = format!(
+                    "curl --silent --show-error --location --max-time 15{header_steps} {control_target}"
+                );
+                validation
+                    .control_steps
+                    .push(format!("Run: `{control_command}`"));
+                emit_command_start(
+                    &command_emitter,
+                    control_summary.as_str(),
+                    Some(control_command.as_str()),
+                );
                 let mut control_cmd = Command::new("curl");
                 control_cmd
                     .arg("--silent")
@@ -19687,6 +20092,22 @@ async fn execute_bug_command(
                             validation.control_output_snippet =
                                 Some(truncate_text(trimmed, VALIDATION_OUTPUT_GRAPHEMES));
                         }
+                        let preview = validation
+                            .control_output_snippet
+                            .as_deref()
+                            .or(validation.control_summary.as_deref());
+                        let state = if success {
+                            SecurityReviewCommandState::Matches
+                        } else {
+                            SecurityReviewCommandState::Error
+                        };
+                        emit_command_result(
+                            &command_emitter,
+                            control_summary.as_str(),
+                            state,
+                            Some(control_command.as_str()),
+                            preview,
+                        );
                         let (stdout_path, stderr_path) = write_validation_output_files(
                             &bug_work_dir,
                             &repo_path,
@@ -19716,10 +20137,24 @@ async fn execute_bug_command(
                         .await;
                         validation.control_stdout_path = Some(stdout_path);
                         validation.control_stderr_path = Some(stderr_path);
+                        emit_command_result(
+                            &command_emitter,
+                            control_summary.as_str(),
+                            SecurityReviewCommandState::Error,
+                            Some(control_command.as_str()),
+                            Some(summary.as_str()),
+                        );
                     }
                     Err(err) => {
                         validation.control_summary =
                             Some(format!("Failed to run curl control: {err}"));
+                        emit_command_result(
+                            &command_emitter,
+                            control_summary.as_str(),
+                            SecurityReviewCommandState::Error,
+                            Some(control_command.as_str()),
+                            validation.control_summary.as_deref(),
+                        );
                     }
                 }
             }
@@ -19735,9 +20170,17 @@ async fn execute_bug_command(
                         .collect::<String>()
                 })
                 .unwrap_or_default();
-            validation.repro_steps.push(format!(
-                "Run: `curl --silent --show-error --location --max-time 15{header_steps} {target}`"
-            ));
+            let repro_command = format!(
+                "curl --silent --show-error --location --max-time 15{header_steps} {target}"
+            );
+            validation
+                .repro_steps
+                .push(format!("Run: `{repro_command}`"));
+            emit_command_start(
+                &command_emitter,
+                repro_summary.as_str(),
+                Some(repro_command.as_str()),
+            );
 
             let mut command = Command::new("curl");
             command
@@ -19789,6 +20232,17 @@ async fn execute_bug_command(
                         validation.output_snippet =
                             Some(truncate_text(trimmed_snippet, VALIDATION_OUTPUT_GRAPHEMES));
                     }
+                    let preview = validation
+                        .output_snippet
+                        .as_deref()
+                        .or(validation.summary.as_deref());
+                    emit_command_result(
+                        &command_emitter,
+                        repro_summary.as_str(),
+                        validation_status_command_state(validation.status),
+                        Some(repro_command.as_str()),
+                        preview,
+                    );
                     let (stdout_path, stderr_path) = write_validation_output_files(
                         &bug_work_dir,
                         &repo_path,
@@ -19825,11 +20279,25 @@ async fn execute_bug_command(
                     .await;
                     validation.stdout_path = Some(stdout_path);
                     validation.stderr_path = Some(stderr_path);
+                    emit_command_result(
+                        &command_emitter,
+                        repro_summary.as_str(),
+                        SecurityReviewCommandState::Error,
+                        Some(repro_command.as_str()),
+                        Some(summary.as_str()),
+                    );
                     logs.push(format!("{label}: curl timed out after {duration_label}"));
                 }
                 Err(err) => {
                     validation.status = BugValidationStatus::UnableToValidate;
                     validation.summary = Some(format!("Failed to run curl: {err}"));
+                    emit_command_result(
+                        &command_emitter,
+                        repro_summary.as_str(),
+                        SecurityReviewCommandState::Error,
+                        Some(repro_command.as_str()),
+                        validation.summary.as_deref(),
+                    );
                     logs.push(format!("{label}: failed to run curl: {err}"));
                 }
             }
@@ -19857,6 +20325,14 @@ async fn execute_bug_command(
                             label,
                             temp_path.display()
                         ));
+                        emit_command_error(
+                            &command_emitter,
+                            base_summary.as_str(),
+                            validation
+                                .summary
+                                .as_deref()
+                                .unwrap_or("Failed to write python script"),
+                        );
                         validation.run_at = Some(OffsetDateTime::now_utc());
                         return BugCommandResult {
                             index: plan.index,
@@ -19873,6 +20349,11 @@ async fn execute_bug_command(
                 validation.status = BugValidationStatus::UnableToValidate;
                 validation.summary = Some("Missing python script path".to_string());
                 logs.push(format!("{label}: no python script provided"));
+                emit_command_error(
+                    &command_emitter,
+                    base_summary.as_str(),
+                    "Missing python script path",
+                );
                 validation.run_at = Some(OffsetDateTime::now_utc());
                 return BugCommandResult {
                     index: plan.index,
@@ -19881,9 +20362,8 @@ async fn execute_bug_command(
                 };
             };
 
-            validation
-                .artifacts
-                .push(display_path_for(script_path, &repo_path));
+            let display_script = display_path_for(script_path, &repo_path);
+            validation.artifacts.push(display_script.clone());
             if !script_path.exists() {
                 validation.status = BugValidationStatus::UnableToValidate;
                 validation.summary =
@@ -19893,6 +20373,14 @@ async fn execute_bug_command(
                     label,
                     script_path.display()
                 ));
+                emit_command_error(
+                    &command_emitter,
+                    base_summary.as_str(),
+                    validation
+                        .summary
+                        .as_deref()
+                        .unwrap_or("Python script not found"),
+                );
                 validation.run_at = Some(OffsetDateTime::now_utc());
                 return BugCommandResult {
                     index: plan.index,
@@ -19929,12 +20417,13 @@ async fn execute_bug_command(
             }
             command.current_dir(&repo_path);
 
-            let mut cmd = format!("python {}", display_path_for(script_path, &repo_path));
+            let mut cmd = format!("python {display_script}");
             if let Some(target) = plan.request.target.as_ref().filter(|t| !t.is_empty()) {
                 cmd.push(' ');
                 cmd.push_str(target);
             }
             validation.repro_steps.push(format!("Run: `{cmd}`"));
+            emit_command_start(&command_emitter, base_summary.as_str(), Some(cmd.as_str()));
 
             let timeout = Duration::from_secs(VALIDATION_EXEC_TIMEOUT_SECS);
             match command_output_with_timeout(command, timeout).await {
@@ -20008,6 +20497,17 @@ async fn execute_bug_command(
                         validation.output_snippet =
                             Some(truncate_text(&snippet, VALIDATION_OUTPUT_GRAPHEMES));
                     }
+                    let preview = validation
+                        .output_snippet
+                        .as_deref()
+                        .or(validation.summary.as_deref());
+                    emit_command_result(
+                        &command_emitter,
+                        base_summary.as_str(),
+                        validation_status_command_state(validation.status),
+                        Some(cmd.as_str()),
+                        preview,
+                    );
                     let (stdout_path, stderr_path) = write_validation_output_files(
                         &bug_work_dir,
                         &repo_path,
@@ -20044,21 +20544,42 @@ async fn execute_bug_command(
                     .await;
                     validation.stdout_path = Some(stdout_path);
                     validation.stderr_path = Some(stderr_path);
+                    emit_command_result(
+                        &command_emitter,
+                        base_summary.as_str(),
+                        SecurityReviewCommandState::Error,
+                        Some(cmd.as_str()),
+                        Some(summary.as_str()),
+                    );
                     logs.push(format!("{label}: python timed out after {duration_label}"));
                 }
                 Err(err) => {
                     validation.status = BugValidationStatus::UnableToValidate;
                     validation.summary = Some(format!("Failed to run python: {err}"));
+                    emit_command_result(
+                        &command_emitter,
+                        base_summary.as_str(),
+                        SecurityReviewCommandState::Error,
+                        Some(cmd.as_str()),
+                        validation.summary.as_deref(),
+                    );
                     logs.push(format!("{label}: failed to run python: {err}"));
                 }
             }
         }
         BugVerificationTool::Playwright => {
             let timeout = Duration::from_secs(VALIDATION_PLAYWRIGHT_TIMEOUT_SECS);
+            let control_summary = format!("{base_summary} (control)");
+            let repro_summary = format!("{base_summary} (repro)");
             let Some(target_raw) = plan.request.target.clone().filter(|t| !t.is_empty()) else {
                 validation.status = BugValidationStatus::UnableToValidate;
                 validation.summary = Some("Missing target URL".to_string());
                 logs.push(format!("{label}: no target URL provided for playwright"));
+                emit_command_error(
+                    &command_emitter,
+                    repro_summary.as_str(),
+                    "Missing target URL",
+                );
                 validation.run_at = Some(OffsetDateTime::now_utc());
                 return BugCommandResult {
                     index: plan.index,
@@ -20080,6 +20601,14 @@ async fn execute_bug_command(
                         logs.push(format!(
                             "{label}: refusing to validate against non-target url {target_raw}: {err}"
                         ));
+                        emit_command_error(
+                            &command_emitter,
+                            repro_summary.as_str(),
+                            validation
+                                .summary
+                                .as_deref()
+                                .unwrap_or("Invalid target URL"),
+                        );
                         validation.run_at = Some(OffsetDateTime::now_utc());
                         return BugCommandResult {
                             index: plan.index,
@@ -20097,6 +20626,14 @@ async fn execute_bug_command(
                         logs.push(format!(
                             "{label}: refusing to validate against non-local target {target_raw}"
                         ));
+                        emit_command_error(
+                            &command_emitter,
+                            repro_summary.as_str(),
+                            validation
+                                .summary
+                                .as_deref()
+                                .unwrap_or("Invalid local target"),
+                        );
                         validation.run_at = Some(OffsetDateTime::now_utc());
                         return BugCommandResult {
                             index: plan.index,
@@ -20194,10 +20731,19 @@ function originOf(urlString) {
             validation.control_target = control_target.clone();
             if let Some(control_target) = control_target.as_ref() {
                 let control_screenshot_path = bug_work_dir.join(format!("{file_stem}_control.png"));
-                validation.control_steps.push(format!(
-                    "Run: `npx --yes -p playwright node {display_script} {control_target} {}`",
-                    display_path_for(&control_screenshot_path, &repo_path)
-                ));
+                let display_control_screenshot =
+                    display_path_for(&control_screenshot_path, &repo_path);
+                let control_command = format!(
+                    "npx --yes -p playwright node {display_script} {control_target} {display_control_screenshot}"
+                );
+                validation
+                    .control_steps
+                    .push(format!("Run: `{control_command}`"));
+                emit_command_start(
+                    &command_emitter,
+                    control_summary.as_str(),
+                    Some(control_command.as_str()),
+                );
 
                 let mut control_cmd = Command::new("npx");
                 control_cmd
@@ -20227,12 +20773,11 @@ function originOf(urlString) {
                         let success = output.status.success();
                         if success {
                             validation.control_summary = Some(format!(
-                                "Saved control screenshot to {}",
-                                display_path_for(&control_screenshot_path, &repo_path)
+                                "Saved control screenshot to {display_control_screenshot}"
                             ));
                             validation
                                 .artifacts
-                                .push(display_path_for(&control_screenshot_path, &repo_path));
+                                .push(display_control_screenshot.clone());
                         } else {
                             validation.control_summary =
                                 Some(summarize_process_output(success, &stdout, &stderr));
@@ -20243,6 +20788,22 @@ function originOf(urlString) {
                             validation.control_output_snippet =
                                 Some(truncate_text(trimmed, VALIDATION_OUTPUT_GRAPHEMES));
                         }
+                        let preview = validation
+                            .control_output_snippet
+                            .as_deref()
+                            .or(validation.control_summary.as_deref());
+                        let state = if success {
+                            SecurityReviewCommandState::Matches
+                        } else {
+                            SecurityReviewCommandState::Error
+                        };
+                        emit_command_result(
+                            &command_emitter,
+                            control_summary.as_str(),
+                            state,
+                            Some(control_command.as_str()),
+                            preview,
+                        );
                         let (stdout_path, stderr_path) = write_validation_output_files(
                             &bug_work_dir,
                             &repo_path,
@@ -20272,18 +20833,40 @@ function originOf(urlString) {
                         .await;
                         validation.control_stdout_path = Some(stdout_path);
                         validation.control_stderr_path = Some(stderr_path);
+                        emit_command_result(
+                            &command_emitter,
+                            control_summary.as_str(),
+                            SecurityReviewCommandState::Error,
+                            Some(control_command.as_str()),
+                            Some(summary.as_str()),
+                        );
                     }
                     Err(err) => {
                         validation.control_summary =
                             Some(format!("Failed to run playwright control: {err}"));
+                        emit_command_result(
+                            &command_emitter,
+                            control_summary.as_str(),
+                            SecurityReviewCommandState::Error,
+                            Some(control_command.as_str()),
+                            validation.control_summary.as_deref(),
+                        );
                     }
                 }
             }
 
-            validation.repro_steps.push(format!(
-                "Run: `npx --yes -p playwright node {display_script} {target} {}`",
-                display_path_for(&screenshot_path, &repo_path)
-            ));
+            let display_screenshot = display_path_for(&screenshot_path, &repo_path);
+            let repro_command = format!(
+                "npx --yes -p playwright node {display_script} {target} {display_screenshot}"
+            );
+            validation
+                .repro_steps
+                .push(format!("Run: `{repro_command}`"));
+            emit_command_start(
+                &command_emitter,
+                repro_summary.as_str(),
+                Some(repro_command.as_str()),
+            );
 
             let mut command = Command::new("npx");
             command
@@ -20336,6 +20919,17 @@ function originOf(urlString) {
                         validation.output_snippet =
                             Some(truncate_text(trimmed, VALIDATION_OUTPUT_GRAPHEMES));
                     }
+                    let preview = validation
+                        .output_snippet
+                        .as_deref()
+                        .or(validation.summary.as_deref());
+                    emit_command_result(
+                        &command_emitter,
+                        repro_summary.as_str(),
+                        validation_status_command_state(validation.status),
+                        Some(repro_command.as_str()),
+                        preview,
+                    );
                     let (stdout_path, stderr_path) = write_validation_output_files(
                         &bug_work_dir,
                         &repo_path,
@@ -20372,6 +20966,13 @@ function originOf(urlString) {
                     .await;
                     validation.stdout_path = Some(stdout_path);
                     validation.stderr_path = Some(stderr_path);
+                    emit_command_result(
+                        &command_emitter,
+                        repro_summary.as_str(),
+                        SecurityReviewCommandState::Error,
+                        Some(repro_command.as_str()),
+                        Some(summary.as_str()),
+                    );
                     logs.push(format!(
                         "{label}: playwright timed out after {duration_label}"
                     ));
@@ -20379,6 +20980,13 @@ function originOf(urlString) {
                 Err(err) => {
                     validation.status = BugValidationStatus::UnableToValidate;
                     validation.summary = Some(format!("Failed to run playwright: {err}"));
+                    emit_command_result(
+                        &command_emitter,
+                        repro_summary.as_str(),
+                        SecurityReviewCommandState::Error,
+                        Some(repro_command.as_str()),
+                        validation.summary.as_deref(),
+                    );
                     logs.push(format!("{label}: failed to run playwright: {err}"));
                 }
             }
@@ -20393,8 +21001,9 @@ function originOf(urlString) {
     }
 }
 
-pub(crate) async fn verify_bugs(
+async fn verify_bugs(
     batch: BugVerificationBatchRequest,
+    command_emitter: CommandStatusEmitter,
 ) -> Result<BugVerificationOutcome, BugVerificationFailure> {
     let mut logs: Vec<String> = Vec::new();
 
@@ -20449,7 +21058,11 @@ pub(crate) async fn verify_bugs(
             let repo_path = batch.repo_path.clone();
             let work_dir = batch.work_dir.clone();
             let web_validation = web_validation.clone();
-            async move { execute_bug_command(plan, repo_path, work_dir, web_validation).await }
+            let command_emitter = command_emitter.clone();
+            async move {
+                execute_bug_command(plan, repo_path, work_dir, web_validation, command_emitter)
+                    .await
+            }
         }))
         .buffer_unordered(VALIDATION_EXEC_CONCURRENCY)
         .collect::<Vec<_>>()
@@ -20736,66 +21349,12 @@ fn build_validation_findings_context(
     snapshot: &SecurityReviewSnapshot,
     include_web_browser: bool,
 ) -> ValidationFindingsContext {
-    let mut required: Vec<&BugSnapshot> = snapshot
-        .bugs
-        .iter()
-        .filter(|b| {
-            if !include_web_browser && has_verification_type(&b.bug, "web_browser") {
-                return false;
-            }
-            let sev = b.bug.severity.to_ascii_lowercase();
-            let is_high = sev.contains("critical") || sev.contains("high");
-            if !is_high {
-                return false;
-            }
-            if has_verification_type(&b.bug, "rce_bin")
-                || has_verification_type(&b.bug, "ssrf")
-                || has_verification_type(&b.bug, "crypto")
-            {
-                return true;
-            }
-            match crash_poc_category(&b.bug) {
-                Some("crash_poc_func") => return false,
-                Some("crash_poc_release") => return true,
-                _ => {}
-            }
-            let tag = b.bug.vulnerability_tag.clone().or_else(|| {
-                extract_vulnerability_tag_from_bug_markdown(b.original_markdown.as_str())
-            });
-            tag.as_deref().is_some_and(is_priority_validation_vuln_tag)
-        })
-        .collect();
-    required.sort_by_key(|b| b.bug.risk_rank.unwrap_or(usize::MAX));
-
-    let mut selected: Vec<&BugSnapshot> = Vec::new();
-    let mut seen: HashSet<usize> = HashSet::new();
-    for item in &required {
-        if selected.len() >= VALIDATION_MAX_FINDINGS {
-            break;
-        }
-        if seen.insert(item.bug.summary_id) {
-            selected.push(*item);
-        }
-    }
-
-    let mut high_risk: Vec<&BugSnapshot> = snapshot
-        .bugs
-        .iter()
-        .filter(|b| {
-            is_high_risk(&b.bug)
-                && crash_poc_category(&b.bug) != Some("crash_poc_func")
-                && (include_web_browser || !has_verification_type(&b.bug, "web_browser"))
-        })
-        .collect();
-    high_risk.sort_by_key(|b| b.bug.risk_rank.unwrap_or(usize::MAX));
-    for item in high_risk {
-        if selected.len() >= VALIDATION_MAX_FINDINGS {
-            break;
-        }
-        if seen.insert(item.bug.summary_id) {
-            selected.push(item);
-        }
-    }
+    let mut selected: Vec<&BugSnapshot> = snapshot.bugs.iter().collect();
+    selected.sort_by(|left, right| {
+        let left_rank = left.bug.risk_rank.unwrap_or(usize::MAX);
+        let right_rank = right.bug.risk_rank.unwrap_or(usize::MAX);
+        (left_rank, left.bug.summary_id).cmp(&(right_rank, right.bug.summary_id))
+    });
 
     let mut findings: Vec<ValidationFinding> = Vec::new();
     let mut ids: Vec<BugIdentifier> = Vec::new();
@@ -20827,6 +21386,11 @@ fn build_validation_findings_context(
         let crash_poc_category_line = crash_poc_category(&item.bug)
             .map(|category| format!("\n  crash_poc_category: {category}"))
             .unwrap_or_default();
+        let web_validation_enabled_line = if has_verification_type(&item.bug, "web_browser") {
+            format!("\n  web_validation_enabled: {include_web_browser}")
+        } else {
+            String::new()
+        };
         let (id_kind, id_value, identifier) = if let Some(risk_rank) = item.bug.risk_rank {
             ("risk_rank", risk_rank, BugIdentifier::RiskRank(risk_rank))
         } else {
@@ -20839,11 +21403,12 @@ fn build_validation_findings_context(
         ids.push(identifier);
         // Include the original markdown so the model can infer concrete targets
         let context = format!(
-            "- id_kind: {id_kind}\n  id_value: {id_value}\n  risk_rank: {rank}\n  title: {title}\n  severity: {severity}\n  vuln_tag: {vuln_tag}\n  verification_types: {types}{crash_poc_category_line}\n  details:\n{details}\n---\n",
+            "- id_kind: {id_kind}\n  id_value: {id_value}\n  risk_rank: {rank}\n  title: {title}\n  severity: {severity}\n  vuln_tag: {vuln_tag}\n  verification_types: {types}{crash_poc_category_line}{web_validation_enabled_line}\n  details:\n{details}\n---\n",
             title = item.bug.title,
             severity = item.bug.severity,
             types = types,
             crash_poc_category_line = crash_poc_category_line,
+            web_validation_enabled_line = web_validation_enabled_line,
             details = indent_block(&item.original_markdown, 2)
         );
         findings.push(ValidationFinding {
@@ -20981,6 +21546,7 @@ async fn run_validation_target_prep_agent(
         &mut logs,
         "Preparing runnable validation targets...".to_string(),
     );
+    let command_emitter = CommandStatusEmitter::new(progress_sender.clone(), metrics.clone());
 
     let mut prep_config = config.clone();
     prep_config.model = Some(model.to_string());
@@ -21013,6 +21579,7 @@ async fn run_validation_target_prep_agent(
     let mut next_prompt = prompt;
     let mut final_text: Option<String> = None;
     let mut last_tool_log: Option<String> = None;
+    let mut reasoning_accumulator = ReasoningAccumulator::new();
 
     for turn in 0..VALIDATION_TARGET_PREP_MAX_TURNS {
         if turn > 0 {
@@ -21065,7 +21632,39 @@ async fn run_validation_target_prep_agent(
                 }
                 EventMsg::AgentMessage(msg) => last_agent_message = Some(msg.message.clone()),
                 EventMsg::AgentReasoning(reason) => {
-                    log_model_reasoning(&reason.text, &progress_sender, &log_sink, &mut logs);
+                    reasoning_accumulator.push_full(
+                        &reason.text,
+                        &progress_sender,
+                        &log_sink,
+                        &mut logs,
+                    );
+                }
+                EventMsg::AgentReasoningRawContent(reason) => {
+                    reasoning_accumulator.push_full(
+                        &reason.text,
+                        &progress_sender,
+                        &log_sink,
+                        &mut logs,
+                    );
+                }
+                EventMsg::AgentReasoningDelta(delta) => {
+                    reasoning_accumulator.push_delta(
+                        &delta.delta,
+                        &progress_sender,
+                        &log_sink,
+                        &mut logs,
+                    );
+                }
+                EventMsg::AgentReasoningRawContentDelta(delta) => {
+                    reasoning_accumulator.push_delta(
+                        &delta.delta,
+                        &progress_sender,
+                        &log_sink,
+                        &mut logs,
+                    );
+                }
+                EventMsg::AgentReasoningSectionBreak(_) => {
+                    reasoning_accumulator.flush_remaining(&progress_sender, &log_sink, &mut logs);
                 }
                 EventMsg::McpToolCallBegin(begin) => {
                     let tool = begin.invocation.tool.clone();
@@ -21077,6 +21676,8 @@ async fn run_validation_target_prep_agent(
                 }
                 EventMsg::ExecCommandBegin(begin) => {
                     let command = strip_bash_lc_and_escape(&begin.command);
+                    let summary = format!("Validation prep: {command}");
+                    emit_command_start(&command_emitter, summary, Some(command.as_str()));
                     push_progress_log(
                         &progress_sender,
                         &log_sink,
@@ -21086,11 +21687,29 @@ async fn run_validation_target_prep_agent(
                 }
                 EventMsg::ExecCommandEnd(done) => {
                     let command = strip_bash_lc_and_escape(&done.command);
+                    let summary = format!("Validation prep: {command}");
                     exec_commands.push(ValidationPrepExecCommand {
                         command: command.clone(),
                         exit_code: done.exit_code,
                         duration_secs: done.duration.as_secs(),
                     });
+                    let output = if done.exit_code == 0 {
+                        done.stdout.as_str()
+                    } else {
+                        done.stderr.as_str()
+                    };
+                    let state = if done.exit_code == 0 {
+                        SecurityReviewCommandState::Matches
+                    } else {
+                        SecurityReviewCommandState::Error
+                    };
+                    emit_command_result(
+                        &command_emitter,
+                        summary,
+                        state,
+                        Some(command.as_str()),
+                        Some(output),
+                    );
 
                     let duration = fmt_elapsed_compact(done.duration.as_secs());
                     if done.exit_code == 0 {
@@ -21137,6 +21756,7 @@ async fn run_validation_target_prep_agent(
             }
         }
 
+        reasoning_accumulator.flush_remaining(&progress_sender, &log_sink, &mut logs);
         let Some(text) = last_agent_message
             .as_deref()
             .map(str::trim)
@@ -21216,6 +21836,12 @@ async fn run_validation_plan_agent(
     label: &str,
 ) -> Result<ValidationPlanAgentOutput, BugVerificationFailure> {
     let mut logs: Vec<String> = Vec::new();
+    let start = Instant::now();
+    let deadline = start + Duration::from_secs(VALIDATION_AGENT_TIMEOUT_SECS);
+    let remaining = || deadline.saturating_duration_since(Instant::now());
+    let command_emitter = CommandStatusEmitter::new(progress_sender.clone(), metrics.clone());
+    let mut reasoning_accumulator = ReasoningAccumulator::new();
+    let mut last_tool_log: Option<String> = None;
     push_progress_log(
         &progress_sender,
         &None,
@@ -21241,34 +21867,79 @@ async fn run_validation_plan_agent(
         )),
     );
 
-    let conversation = match manager.new_conversation(validation_config).await {
-        Ok(new_conversation) => new_conversation.conversation,
-        Err(err) => {
+    let conversation = match tokio::time::timeout(
+        remaining(),
+        manager.new_conversation(validation_config),
+    )
+    .await
+    {
+        Ok(Ok(new_conversation)) => new_conversation.conversation,
+        Ok(Err(err)) => {
             let message = format!("Failed to start validation agent for {label}: {err}");
+            push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+            return Err(BugVerificationFailure { message, logs });
+        }
+        Err(_) => {
+            let elapsed = fmt_elapsed_compact(start.elapsed().as_secs());
+            let message = format!("Validation planning timed out after {elapsed} for {label}.");
             push_progress_log(&progress_sender, &None, &mut logs, message.clone());
             return Err(BugVerificationFailure { message, logs });
         }
     };
 
-    if let Err(err) = conversation
-        .submit(Op::UserInput {
+    match tokio::time::timeout(
+        remaining(),
+        conversation.submit(Op::UserInput {
             items: vec![UserInput::Text { text: prompt }],
-        })
-        .await
+        }),
+    )
+    .await
     {
-        let message = format!("Failed to submit validation prompt for {label}: {err}");
-        push_progress_log(&progress_sender, &None, &mut logs, message.clone());
-        return Err(BugVerificationFailure { message, logs });
-    }
+        Ok(Ok(_)) => {}
+        Ok(Err(err)) => {
+            let message = format!("Failed to submit validation prompt for {label}: {err}");
+            push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+            return Err(BugVerificationFailure { message, logs });
+        }
+        Err(_) => {
+            let elapsed = fmt_elapsed_compact(start.elapsed().as_secs());
+            let message = format!(
+                "Validation planning timed out submitting the prompt after {elapsed} for {label}."
+            );
+            push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+            let _ = tokio::time::timeout(Duration::from_secs(1), conversation.submit(Op::Shutdown))
+                .await;
+            return Err(BugVerificationFailure { message, logs });
+        }
+    };
 
     let mut last_agent_message: Option<String> = None;
     loop {
-        let event = match conversation.next_event().await {
-            Ok(event) => event,
-            Err(err) => {
+        let remaining = remaining();
+        if remaining.is_zero() {
+            let elapsed = fmt_elapsed_compact(start.elapsed().as_secs());
+            let message = format!("Validation planning timed out after {elapsed} for {label}.");
+            push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+            let _ = tokio::time::timeout(Duration::from_secs(1), conversation.submit(Op::Shutdown))
+                .await;
+            return Err(BugVerificationFailure { message, logs });
+        }
+
+        let event = match tokio::time::timeout(remaining, conversation.next_event()).await {
+            Ok(Ok(event)) => event,
+            Ok(Err(err)) => {
                 let message =
                     format!("Validation agent terminated unexpectedly for {label}: {err}");
                 push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                return Err(BugVerificationFailure { message, logs });
+            }
+            Err(_) => {
+                let elapsed = fmt_elapsed_compact(start.elapsed().as_secs());
+                let message = format!("Validation planning timed out after {elapsed} for {label}.");
+                push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                let _ =
+                    tokio::time::timeout(Duration::from_secs(1), conversation.submit(Op::Shutdown))
+                        .await;
                 return Err(BugVerificationFailure { message, logs });
             }
         };
@@ -21286,7 +21957,78 @@ async fn run_validation_plan_agent(
                 last_agent_message = Some(msg.message.clone());
             }
             EventMsg::AgentReasoning(reason) => {
-                log_model_reasoning(&reason.text, &progress_sender, &None, &mut logs);
+                reasoning_accumulator.push_full(&reason.text, &progress_sender, &None, &mut logs);
+            }
+            EventMsg::AgentReasoningRawContent(reason) => {
+                reasoning_accumulator.push_full(&reason.text, &progress_sender, &None, &mut logs);
+            }
+            EventMsg::AgentReasoningDelta(delta) => {
+                reasoning_accumulator.push_delta(&delta.delta, &progress_sender, &None, &mut logs);
+            }
+            EventMsg::AgentReasoningRawContentDelta(delta) => {
+                reasoning_accumulator.push_delta(&delta.delta, &progress_sender, &None, &mut logs);
+            }
+            EventMsg::AgentReasoningSectionBreak(_) => {
+                reasoning_accumulator.flush_remaining(&progress_sender, &None, &mut logs);
+            }
+            EventMsg::McpToolCallBegin(begin) => {
+                let tool = begin.invocation.tool.clone();
+                let message = format!("Validation planning: tool → {tool}");
+                if last_tool_log.as_deref() != Some(message.as_str()) {
+                    push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                    last_tool_log = Some(message);
+                }
+            }
+            EventMsg::ExecCommandBegin(begin) => {
+                let command = strip_bash_lc_and_escape(&begin.command);
+                let summary = format!("Validation planning for {label}");
+                emit_command_start(&command_emitter, summary, Some(command.as_str()));
+                push_progress_log(
+                    &progress_sender,
+                    &None,
+                    &mut logs,
+                    format!("Validation planning: run `{command}`"),
+                );
+            }
+            EventMsg::ExecCommandEnd(done) => {
+                let command = strip_bash_lc_and_escape(&done.command);
+                let output = if done.exit_code == 0 {
+                    done.stdout.as_str()
+                } else {
+                    done.stderr.as_str()
+                };
+                let state = if done.exit_code == 0 {
+                    SecurityReviewCommandState::Matches
+                } else {
+                    SecurityReviewCommandState::Error
+                };
+                emit_command_result(
+                    &command_emitter,
+                    format!("Validation planning for {label}"),
+                    state,
+                    Some(command.as_str()),
+                    Some(output),
+                );
+                let duration = fmt_elapsed_compact(done.duration.as_secs());
+                if done.exit_code == 0 {
+                    push_progress_log(
+                        &progress_sender,
+                        &None,
+                        &mut logs,
+                        format!("Validation planning: ok ({duration}) · `{command}`"),
+                    );
+                } else {
+                    let summary = summarize_process_output(false, &done.stdout, &done.stderr);
+                    push_progress_log(
+                        &progress_sender,
+                        &None,
+                        &mut logs,
+                        format!(
+                            "Validation planning: `{command}` exited {} ({duration}) · {summary}",
+                            done.exit_code
+                        ),
+                    );
+                }
             }
             EventMsg::Warning(warn) => {
                 push_progress_log(&progress_sender, &None, &mut logs, warn.message);
@@ -21311,6 +22053,7 @@ async fn run_validation_plan_agent(
         }
     }
 
+    reasoning_accumulator.flush_remaining(&progress_sender, &None, &mut logs);
     let text = match last_agent_message.and_then(|s| {
         let trimmed = s.trim();
         if trimmed.is_empty() {
@@ -21388,6 +22131,12 @@ async fn run_validation_refine_agent(
     label: &str,
 ) -> Result<ValidationRefineAgentOutput, BugVerificationFailure> {
     let mut logs: Vec<String> = Vec::new();
+    let start = Instant::now();
+    let deadline = start + Duration::from_secs(POST_VALIDATION_REFINE_WORKER_TIMEOUT_SECS);
+    let remaining = || deadline.saturating_duration_since(Instant::now());
+    let command_emitter = CommandStatusEmitter::new(progress_sender.clone(), metrics.clone());
+    let mut reasoning_accumulator = ReasoningAccumulator::new();
+    let mut last_tool_log: Option<String> = None;
     push_progress_log(
         &progress_sender,
         &None,
@@ -21413,34 +22162,78 @@ async fn run_validation_refine_agent(
         )),
     );
 
-    let conversation = match manager.new_conversation(refine_config).await {
-        Ok(new_conversation) => new_conversation.conversation,
-        Err(err) => {
-            let message = format!("Failed to start validation refine agent for {label}: {err}");
+    let conversation =
+        match tokio::time::timeout(remaining(), manager.new_conversation(refine_config)).await {
+            Ok(Ok(new_conversation)) => new_conversation.conversation,
+            Ok(Err(err)) => {
+                let message = format!("Failed to start validation refine agent for {label}: {err}");
+                push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                return Err(BugVerificationFailure { message, logs });
+            }
+            Err(_) => {
+                let elapsed = fmt_elapsed_compact(start.elapsed().as_secs());
+                let message =
+                    format!("Validation PoC refinement timed out after {elapsed} for {label}.");
+                push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                return Err(BugVerificationFailure { message, logs });
+            }
+        };
+
+    match tokio::time::timeout(
+        remaining(),
+        conversation.submit(Op::UserInput {
+            items: vec![UserInput::Text { text: prompt }],
+        }),
+    )
+    .await
+    {
+        Ok(Ok(_)) => {}
+        Ok(Err(err)) => {
+            let message = format!("Failed to submit validation refine prompt for {label}: {err}");
             push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+            return Err(BugVerificationFailure { message, logs });
+        }
+        Err(_) => {
+            let elapsed = fmt_elapsed_compact(start.elapsed().as_secs());
+            let message = format!(
+                "Validation PoC refinement timed out submitting the prompt after {elapsed} for {label}."
+            );
+            push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+            let _ = tokio::time::timeout(Duration::from_secs(1), conversation.submit(Op::Shutdown))
+                .await;
             return Err(BugVerificationFailure { message, logs });
         }
     };
 
-    if let Err(err) = conversation
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text { text: prompt }],
-        })
-        .await
-    {
-        let message = format!("Failed to submit validation refine prompt for {label}: {err}");
-        push_progress_log(&progress_sender, &None, &mut logs, message.clone());
-        return Err(BugVerificationFailure { message, logs });
-    }
-
     let mut last_agent_message: Option<String> = None;
     loop {
-        let event = match conversation.next_event().await {
-            Ok(event) => event,
-            Err(err) => {
+        let remaining = remaining();
+        if remaining.is_zero() {
+            let elapsed = fmt_elapsed_compact(start.elapsed().as_secs());
+            let message =
+                format!("Validation PoC refinement timed out after {elapsed} for {label}.");
+            push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+            let _ = tokio::time::timeout(Duration::from_secs(1), conversation.submit(Op::Shutdown))
+                .await;
+            return Err(BugVerificationFailure { message, logs });
+        }
+
+        let event = match tokio::time::timeout(remaining, conversation.next_event()).await {
+            Ok(Ok(event)) => event,
+            Ok(Err(err)) => {
                 let message =
                     format!("Validation refine agent terminated unexpectedly for {label}: {err}");
                 push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                return Err(BugVerificationFailure { message, logs });
+            }
+            Err(_) => {
+                let elapsed = fmt_elapsed_compact(start.elapsed().as_secs());
+                let message =
+                    format!("Validation PoC refinement timed out after {elapsed} for {label}.");
+                push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                let _ =
+                    tokio::time::timeout(Duration::from_secs(1), conversation.submit(Op::Shutdown))
+                        .await;
                 return Err(BugVerificationFailure { message, logs });
             }
         };
@@ -21458,7 +22251,78 @@ async fn run_validation_refine_agent(
                 last_agent_message = Some(msg.message.clone());
             }
             EventMsg::AgentReasoning(reason) => {
-                log_model_reasoning(&reason.text, &progress_sender, &None, &mut logs);
+                reasoning_accumulator.push_full(&reason.text, &progress_sender, &None, &mut logs);
+            }
+            EventMsg::AgentReasoningRawContent(reason) => {
+                reasoning_accumulator.push_full(&reason.text, &progress_sender, &None, &mut logs);
+            }
+            EventMsg::AgentReasoningDelta(delta) => {
+                reasoning_accumulator.push_delta(&delta.delta, &progress_sender, &None, &mut logs);
+            }
+            EventMsg::AgentReasoningRawContentDelta(delta) => {
+                reasoning_accumulator.push_delta(&delta.delta, &progress_sender, &None, &mut logs);
+            }
+            EventMsg::AgentReasoningSectionBreak(_) => {
+                reasoning_accumulator.flush_remaining(&progress_sender, &None, &mut logs);
+            }
+            EventMsg::McpToolCallBegin(begin) => {
+                let tool = begin.invocation.tool.clone();
+                let message = format!("Validation refine: tool → {tool}");
+                if last_tool_log.as_deref() != Some(message.as_str()) {
+                    push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                    last_tool_log = Some(message);
+                }
+            }
+            EventMsg::ExecCommandBegin(begin) => {
+                let command = strip_bash_lc_and_escape(&begin.command);
+                let summary = format!("Validation refine for {label}");
+                emit_command_start(&command_emitter, summary, Some(command.as_str()));
+                push_progress_log(
+                    &progress_sender,
+                    &None,
+                    &mut logs,
+                    format!("Validation refine: run `{command}`"),
+                );
+            }
+            EventMsg::ExecCommandEnd(done) => {
+                let command = strip_bash_lc_and_escape(&done.command);
+                let output = if done.exit_code == 0 {
+                    done.stdout.as_str()
+                } else {
+                    done.stderr.as_str()
+                };
+                let state = if done.exit_code == 0 {
+                    SecurityReviewCommandState::Matches
+                } else {
+                    SecurityReviewCommandState::Error
+                };
+                emit_command_result(
+                    &command_emitter,
+                    format!("Validation refine for {label}"),
+                    state,
+                    Some(command.as_str()),
+                    Some(output),
+                );
+                let duration = fmt_elapsed_compact(done.duration.as_secs());
+                if done.exit_code == 0 {
+                    push_progress_log(
+                        &progress_sender,
+                        &None,
+                        &mut logs,
+                        format!("Validation refine: ok ({duration}) · `{command}`"),
+                    );
+                } else {
+                    let summary = summarize_process_output(false, &done.stdout, &done.stderr);
+                    push_progress_log(
+                        &progress_sender,
+                        &None,
+                        &mut logs,
+                        format!(
+                            "Validation refine: `{command}` exited {} ({duration}) · {summary}",
+                            done.exit_code
+                        ),
+                    );
+                }
             }
             EventMsg::Warning(warn) => {
                 push_progress_log(&progress_sender, &None, &mut logs, warn.message);
@@ -21486,6 +22350,7 @@ async fn run_validation_refine_agent(
         }
     }
 
+    reasoning_accumulator.flush_remaining(&progress_sender, &None, &mut logs);
     let text = match last_agent_message.and_then(|s| {
         let trimmed = s.trim();
         if trimmed.is_empty() {
@@ -21796,6 +22661,7 @@ async fn run_asan_validation(
     web_creds_path: Option<PathBuf>,
 ) -> Result<(), BugVerificationFailure> {
     let mut logs: Vec<String> = Vec::new();
+    let command_emitter = CommandStatusEmitter::new(progress_sender.clone(), metrics.clone());
 
     let bytes = match tokio_fs::read(&snapshot_path).await {
         Ok(bytes) => bytes,
@@ -21832,7 +22698,7 @@ async fn run_asan_validation(
     ));
     if let Some(tx) = progress_sender.as_ref() {
         tx.send(AppEvent::SecurityReviewLog(format!(
-            "Planning validation for high-risk findings... (model: {model}, reasoning: {reasoning_label}).",
+            "Planning validation for findings... (model: {model}, reasoning: {reasoning_label}).",
             model = model.as_str()
         )));
     }
@@ -22066,6 +22932,14 @@ async fn run_asan_validation(
                     .filter(|s| !s.trim().is_empty())
                 {
                     testing_md_additions.insert(id, additions.to_string());
+                }
+                if let Some(reason) = parsed
+                    .reason
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    log_model_reasoning(reason, &progress_sender, &None, &mut logs);
                 }
                 let Some(tool_raw) = parsed
                     .tool
@@ -22309,7 +23183,7 @@ async fn run_asan_validation(
                 "Executing validation checks...".to_string(),
             ));
         }
-        match verify_bugs(batch.clone()).await {
+        match verify_bugs(batch.clone(), command_emitter.clone()).await {
             Ok(outcome) => {
                 for line in outcome.logs {
                     if let Some(tx) = progress_sender.as_ref() {
