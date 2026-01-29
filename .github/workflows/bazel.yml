@@ -10,11 +10,6 @@ on:
       - main
   workflow_dispatch:
 
-concurrency:
-  # Cancel previous actions from the same PR or branch except 'main' branch.
-  # See https://docs.github.com/en/actions/using-jobs/using-concurrency and https://docs.github.com/en/actions/learn-github-actions/contexts for more info.
-  group: concurrency-group::${{ github.workflow }}::${{ github.event.pull_request.number > 0 && format('pr-{0}', github.event.pull_request.number) || github.ref_name }}${{ github.ref_name == 'main' && format('::{0}', github.run_id) || ''}}
-  cancel-in-progress: ${{ github.ref_name != 'main' }}
 jobs:
   test:
     strategy:
@@ -36,9 +31,10 @@ jobs:
             target: aarch64-unknown-linux-musl
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-musl
-          # TODO: Enable Windows once we fix the toolchain issues there.
-          #- os: windows-latest
-          #  target: x86_64-pc-windows-gnullvm
+
+          # Windows
+          - os: windows-latest
+            target: x86_64-pc-windows-gnullvm
     runs-on: ${{ matrix.os }}
 
     # Configure a human readable name for each job
@@ -95,7 +91,7 @@ jobs:
         shell: pwsh
         run: |
           # Use a very short path to reduce argv/path length issues.
-          "BAZEL_STARTUP_ARGS=--output_user_root=C:\" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "BAZEL_STARTUP_ARGS=--output_user_root=D:\" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: bazel test //...
         env:

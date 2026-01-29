@@ -192,7 +192,21 @@ fn get_powershell_shell(path: Option<&PathBuf>) -> Option<Shell> {
         "pwsh",
         vec!["/usr/local/bin/pwsh"],
     )
-    .or_else(|| get_shell_path(ShellType::PowerShell, path, "powershell", vec![]));
+    .or_else(|| get_shell_path(ShellType::PowerShell, path, "powershell", vec![]))
+    .or_else(|| {
+        if cfg!(windows) {
+            std::env::var_os("SystemRoot").and_then(|root| {
+                let candidate = PathBuf::from(root)
+                    .join("System32")
+                    .join("WindowsPowerShell")
+                    .join("v1.0")
+                    .join("powershell.exe");
+                file_exists(&candidate)
+            })
+        } else {
+            None
+        }
+    });
 
     shell_path.map(|shell_path| Shell {
         shell_type: ShellType::PowerShell,
