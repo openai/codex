@@ -49,6 +49,10 @@ struct Args {
     #[arg(long)]
     file: Option<String>,
 
+    /// Match a specific thread id.
+    #[arg(long)]
+    thread_id: Option<String>,
+
     /// Number of matching rows to show before tailing.
     #[arg(long, default_value_t = 200)]
     backfill: usize,
@@ -65,6 +69,7 @@ struct LogRow {
     ts_nanos: i64,
     level: String,
     message: Option<String>,
+    thread_id: Option<String>,
     file: Option<String>,
     line: Option<i64>,
 }
@@ -76,6 +81,7 @@ struct LogFilter {
     to_ts: Option<i64>,
     module_like: Option<String>,
     file_like: Option<String>,
+    thread_id: Option<String>,
 }
 
 #[tokio::main]
@@ -139,6 +145,7 @@ fn build_filter(args: &Args) -> anyhow::Result<LogFilter> {
         to_ts,
         module_like: args.module.clone(),
         file_like: args.file.clone(),
+        thread_id: args.thread_id.clone(),
     })
 }
 
@@ -236,7 +243,7 @@ async fn fetch_max_id(pool: &SqlitePool, filter: &LogFilter) -> anyhow::Result<i
 
 fn base_select_builder<'a>() -> QueryBuilder<'a, Sqlite> {
     QueryBuilder::<Sqlite>::new(
-        "SELECT id, ts, ts_nanos, level, message, file, line FROM logs WHERE 1 = 1",
+        "SELECT id, ts, ts_nanos, level, message, thread_id, file, line FROM logs WHERE 1 = 1",
     )
 }
 
@@ -264,6 +271,11 @@ fn push_filters<'a>(builder: &mut QueryBuilder<'a, Sqlite>, filter: &'a LogFilte
             .push_bind(file_like.as_str())
             .push(" || '%'");
     }
+    if let Some(thread_id) = filter.thread_id.as_ref() {
+        builder
+            .push(" AND thread_id = ")
+            .push_bind(thread_id.as_str());
+    }
 }
 
 fn format_row(row: &LogRow) -> String {
@@ -277,9 +289,13 @@ fn format_row(row: &LogRow) -> String {
     let message = row.message.as_deref().unwrap_or("");
     let level_colored = color_level(level);
     let timestamp_colored = timestamp.dimmed().to_string();
+    let thread_id = row.thread_id.as_deref().unwrap_or("-");
+    let thread_id_colored = thread_id.yellow().to_string();
     let location_colored = location.dimmed().to_string();
     let message_colored = message.bold().to_string();
-    format!("{timestamp_colored} {level_colored} {location_colored} - {message_colored}")
+    format!(
+        "{timestamp_colored} {level_colored} [{thread_id_colored}] {location_colored} - {message_colored}"
+    )
 }
 
 fn color_level(level: &str) -> String {

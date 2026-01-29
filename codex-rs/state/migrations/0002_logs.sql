@@ -5,9 +5,11 @@ CREATE TABLE logs (
     level TEXT NOT NULL,
     target TEXT NOT NULL,
     message TEXT,
+    thread_id TEXT,
     module_path TEXT,
     file TEXT,
     line INTEGER
 );
 
 CREATE INDEX idx_logs_ts ON logs(ts DESC, ts_nanos DESC, id DESC);
+CREATE INDEX idx_logs_thread_id ON logs(thread_id);

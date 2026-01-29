@@ -84,6 +84,7 @@ use tracing::debug;
 use tracing::error;
 use tracing::field;
 use tracing::info;
+use tracing::info_span;
 use tracing::instrument;
 use tracing::trace_span;
 use tracing::warn;
@@ -353,6 +354,7 @@ impl Codex {
         let session_source_clone = session_configuration.session_source.clone();
         let (agent_status_tx, agent_status_rx) = watch::channel(AgentStatus::PendingInit);
 
+        let session_init_span = info_span!("session_init");
         let session = Session::new(
             session_configuration,
             config.clone(),
@@ -366,6 +368,7 @@ impl Codex {
             skills_manager,
             agent_control,
         )
+        .instrument(session_init_span)
         .await
         .map_err(|e| {
             error!("Failed to create session: {e:#}");
@@ -374,7 +377,10 @@ impl Codex {
         let thread_id = session.conversation_id;
 
         // This task will run until Op::Shutdown is received.
-        tokio::spawn(submission_loop(Arc::clone(&session), config, rx_sub));
+        let session_loop_span = info_span!("session_loop", thread_id = %thread_id);
+        tokio::spawn(
+            submission_loop(Arc::clone(&session), config, rx_sub).instrument(session_loop_span),
+        );
         let codex = Codex {
             next_id: AtomicU64::new(0),
             tx_sub,

@@ -214,7 +214,7 @@ FROM threads
         }
 
         let mut builder = QueryBuilder::<Sqlite>::new(
-            "INSERT INTO logs (ts, ts_nanos, level, target, message, module_path, file, line) ",
+            "INSERT INTO logs (ts, ts_nanos, level, target, message, thread_id, module_path, file, line) ",
         );
         builder.push_values(entries, |mut row, entry| {
             row.push_bind(entry.ts)
@@ -222,6 +222,7 @@ FROM threads
                 .push_bind(&entry.level)
                 .push_bind(&entry.target)
                 .push_bind(&entry.message)
+                .push_bind(&entry.thread_id)
                 .push_bind(&entry.module_path)
                 .push_bind(&entry.file)
                 .push_bind(entry.line);

@@ -7,6 +7,7 @@ pub struct LogEntry {
     pub level: String,
     pub target: String,
     pub message: Option<String>,
+    pub thread_id: Option<String>,
     pub module_path: Option<String>,
     pub file: Option<String>,
     pub line: Option<i64>,
