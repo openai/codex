@@ -180,6 +180,9 @@
             "include_apply_patch_tool": {
               "type": "boolean"
             },
+            "personality": {
+              "type": "boolean"
+            },
             "powershell_utf8": {
               "type": "boolean"
             },
@@ -1179,6 +1182,9 @@
           "type": "boolean"
         },
         "include_apply_patch_tool": {
+          "type": "boolean"
+        },
+        "personality": {
           "type": "boolean"
         },
         "powershell_utf8": {
