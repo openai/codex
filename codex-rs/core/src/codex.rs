@@ -2261,36 +2261,29 @@ impl Session {
         }
     }
 
+    pub async fn take_pending_user_input_items(&self) -> Vec<ResponseInputItem> {
+        let mut state = self.state.lock().await;
+        state.take_pending_user_input_items()
+    }
+
+    #[cfg(test)]
+    pub async fn has_pending_user_input_items(&self) -> bool {
+        let state = self.state.lock().await;
+        state.has_pending_user_input_items()
+    }
+
     pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
-        let pending_turn_input = {
-            let mut active = self.active_turn.lock().await;
-            match active.as_mut() {
-                Some(at) => {
-                    let mut ts = at.turn_state.lock().await;
-                    ts.take_pending_input()
-                }
-                None => Vec::with_capacity(0),
+        let mut active = self.active_turn.lock().await;
+        match active.as_mut() {
+            Some(at) => {
+                let mut ts = at.turn_state.lock().await;
+                ts.take_pending_input()
             }
-        };
-
-        let pending_user_input_items = {
-            let mut state = self.state.lock().await;
-            state.take_pending_user_input_items()
-        };
-
-        let mut pending = pending_user_input_items;
-        pending.extend(pending_turn_input);
-        pending
+            None => Vec::with_capacity(0),
+        }
     }
 
     pub async fn has_pending_input(&self) -> bool {
-        {
-            let state = self.state.lock().await;
-            if state.has_pending_user_input_items() {
-                return true;
-            }
-        }
-
         let active = self.active_turn.lock().await;
         match active.as_ref() {
             Some(at) => {
@@ -3471,6 +3464,17 @@ pub(crate) async fn run_turn(
 
     for message in skill_warnings {
         sess.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))
+            .await;
+    }
+
+    // Replay interrupted request_user_input outputs before the new user prompt.
+    let pending_user_input_items = sess.take_pending_user_input_items().await;
+    if !pending_user_input_items.is_empty() {
+        let pending_response_items = pending_user_input_items
+            .into_iter()
+            .map(ResponseItem::from)
+            .collect::<Vec<ResponseItem>>();
+        sess.record_conversation_items(&turn_context, &pending_response_items)
             .await;
     }
 
