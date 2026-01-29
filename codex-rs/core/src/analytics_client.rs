@@ -93,14 +93,9 @@ pub(crate) async fn track_skill_invocations(
         };
         let skill_id = skill_id_for_local_skill(
             repo_url.as_deref(),
-            repo_root.as_ref().map(PathBuf::as_path),
+            repo_root.as_deref(),
             invocation.skill_path.as_path(),
             invocation.skill_name.as_str(),
-        );
-        let skill_id_path = skill_id_path_for_local_skill(
-            repo_url.as_deref(),
-            repo_root.as_ref().map(PathBuf::as_path),
-            invocation.skill_path.as_path(),
         );
         events.push(TrackEvent {
             event_type: "skill_invocation",

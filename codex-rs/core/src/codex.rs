@@ -183,7 +183,6 @@ use crate::unified_exec::UnifiedExecProcessManager;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
-use codex_app_server_protocol::AuthMode;
 use codex_async_utils::OrCancelExt;
 use codex_otel::OtelManager;
 use codex_protocol::config_types::CollaborationMode;
