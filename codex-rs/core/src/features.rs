@@ -553,7 +553,7 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "Choose a communication style for Codex.",
             announcement: "NEW! Update codex's communication style with /personality. Enable in /experimental!",
         },
-        default_enabled: true,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ResponsesWebsockets,
