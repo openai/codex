@@ -9,6 +9,11 @@
 - **Sessions / Notices**
   - `Thread started` の de-dupe を backend-aware にし、opencode と codez/codex の表示が混ざらないように修正
 
+## 0.2.7
+
+- **Meta**
+  - Marketplace 公開のバージョン整合のため、0.2.6 と同内容で再Publish
+
 ## 0.2.6
 
 - **Models / Defaults**
