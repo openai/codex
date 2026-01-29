@@ -2,7 +2,6 @@
 
 use indexmap::IndexMap;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
@@ -11,7 +10,6 @@ use tokio_util::task::AbortOnDropHandle;
 
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::models::ResponseInputItem;
-use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use tokio::sync::oneshot;
 
@@ -72,54 +70,9 @@ impl ActiveTurn {
 #[derive(Default)]
 pub(crate) struct TurnState {
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
-    pending_user_input: HashMap<String, PendingUserInput>,
+    pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
     pending_input: Vec<ResponseInputItem>,
-}
-
-pub(crate) struct PendingUserInput {
-    call_id: String,
-    question_ids: HashSet<String>,
-    answers: HashMap<String, RequestUserInputAnswer>,
-    tx: oneshot::Sender<RequestUserInputResponse>,
-}
-
-pub(crate) struct PendingUserInputUpdate {
-    pub(crate) merged: RequestUserInputResponse,
-    pub(crate) is_complete: bool,
-    pub(crate) tx: Option<oneshot::Sender<RequestUserInputResponse>>,
-}
-
-impl PendingUserInput {
-    pub(crate) fn new(
-        call_id: String,
-        question_ids: HashSet<String>,
-        tx: oneshot::Sender<RequestUserInputResponse>,
-    ) -> Self {
-        Self {
-            call_id,
-            question_ids,
-            answers: HashMap::new(),
-            tx,
-        }
-    }
-
-    pub(crate) fn apply_update(
-        &mut self,
-        update: RequestUserInputResponse,
-    ) -> RequestUserInputResponse {
-        let RequestUserInputResponse { answers } = update;
-        self.answers.extend(answers);
-        RequestUserInputResponse {
-            answers: self.answers.clone(),
-        }
-    }
-
-    pub(crate) fn is_complete(&self, response: &RequestUserInputResponse) -> bool {
-        self.question_ids
-            .iter()
-            .all(|id| response.answers.contains_key(id))
-    }
 }
 
 impl TurnState {
@@ -148,38 +101,16 @@ impl TurnState {
     pub(crate) fn insert_pending_user_input(
         &mut self,
         key: String,
-        pending: PendingUserInput,
-    ) -> Option<PendingUserInput> {
-        self.pending_user_input.insert(key, pending)
+        tx: oneshot::Sender<RequestUserInputResponse>,
+    ) -> Option<oneshot::Sender<RequestUserInputResponse>> {
+        self.pending_user_input.insert(key, tx)
     }
 
-    pub(crate) fn update_pending_user_input(
+    pub(crate) fn remove_pending_user_input(
         &mut self,
         key: &str,
-        update: RequestUserInputResponse,
-    ) -> Option<PendingUserInputUpdate> {
-        let pending = self.pending_user_input.get_mut(key)?;
-        let merged = pending.apply_update(update);
-        let is_complete = pending.is_complete(&merged);
-        if !is_complete {
-            return Some(PendingUserInputUpdate {
-                merged,
-                is_complete,
-                tx: None,
-            });
-        }
-        let pending = self.pending_user_input.remove(key)?;
-        Some(PendingUserInputUpdate {
-            merged,
-            is_complete,
-            tx: Some(pending.tx),
-        })
-    }
-
-    pub(crate) fn cancel_pending_user_input(&mut self, key: &str) -> Option<String> {
-        self.pending_user_input
-            .remove(key)
-            .map(|pending| pending.call_id)
+    ) -> Option<oneshot::Sender<RequestUserInputResponse>> {
+        self.pending_user_input.remove(key)
     }
 
     pub(crate) fn insert_pending_dynamic_tool(
