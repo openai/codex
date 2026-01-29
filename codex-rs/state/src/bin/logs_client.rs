@@ -65,8 +65,6 @@ struct LogRow {
     ts_nanos: i64,
     level: String,
     message: Option<String>,
-    fields_json: String,
-    module_path: Option<String>,
     file: Option<String>,
     line: Option<i64>,
 }
@@ -238,7 +236,7 @@ async fn fetch_max_id(pool: &SqlitePool, filter: &LogFilter) -> anyhow::Result<i
 
 fn base_select_builder<'a>() -> QueryBuilder<'a, Sqlite> {
     QueryBuilder::<Sqlite>::new(
-        "SELECT id, ts, ts_nanos, level, message, fields_json, module_path, file, line FROM logs WHERE 1 = 1",
+        "SELECT id, ts, ts_nanos, level, message, file, line FROM logs WHERE 1 = 1",
     )
 }
 
@@ -276,24 +274,12 @@ fn format_row(row: &LogRow) -> String {
         (Some(file), None) => file.clone(),
         _ => "-".to_string(),
     };
-    let module = row.module_path.as_deref().unwrap_or("-");
     let message = row.message.as_deref().unwrap_or("");
-    let fields = row.fields_json.as_str();
     let level_colored = color_level(level);
     let timestamp_colored = timestamp.dimmed().to_string();
-    let module_colored = module.cyan().to_string();
     let location_colored = location.dimmed().to_string();
     let message_colored = message.bold().to_string();
-    let fields_colored = fields.magenta().to_string();
-
-    if fields == "{}" || fields.is_empty() {
-        return format!(
-            "{timestamp_colored} {level_colored} [{module_colored}] {location_colored} - {message_colored}"
-        );
-    }
-    format!(
-        "{timestamp_colored} {level_colored} [{module_colored}] {location_colored} - {message_colored} {fields_colored}"
-    )
+    format!("{timestamp_colored} {level_colored} {location_colored} - {message_colored}")
 }
 
 fn color_level(level: &str) -> String {
