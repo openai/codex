@@ -254,14 +254,19 @@ jobs:
             if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-musl" ]] && [[ -f /etc/os-release ]]; then
               . /etc/os-release
               if [[ "${ID-}" == "ubuntu" ]]; then
-                codename="${VERSION_CODENAME:-}"
-                if [[ -n "$codename" ]]; then
-                  printf '%s\n' \
-                    "deb http://ports.ubuntu.com/ubuntu-ports ${codename} main" \
-                    "deb http://ports.ubuntu.com/ubuntu-ports ${codename}-updates main" \
-                    "deb http://ports.ubuntu.com/ubuntu-ports ${codename}-backports main" \
-                    "deb http://ports.ubuntu.com/ubuntu-ports ${codename}-security main" \
-                    >/etc/apt/sources.list
+                if [[ -f /etc/apt/sources.list.d/ubuntu.sources ]]; then
+                  # Ubuntu 24.04+ uses deb822 sources; trim components to main.
+                  sed -i -E 's/^Components:.*/Components: main/' /etc/apt/sources.list.d/ubuntu.sources
+                else
+                  codename="${VERSION_CODENAME:-}"
+                  if [[ -n "$codename" ]]; then
+                    printf '%s\n' \
+                      "deb http://ports.ubuntu.com/ubuntu-ports ${codename} main" \
+                      "deb http://ports.ubuntu.com/ubuntu-ports ${codename}-updates main" \
+                      "deb http://ports.ubuntu.com/ubuntu-ports ${codename}-backports main" \
+                      "deb http://ports.ubuntu.com/ubuntu-ports ${codename}-security main" \
+                      >/etc/apt/sources.list
+                  fi
                 fi
               fi
             fi
