@@ -1851,8 +1851,10 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "clap",
  "codex-otel",
  "codex-protocol",
+ "dirs",
  "pretty_assertions",
  "serde",
  "serde_json",

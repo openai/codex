@@ -7,8 +7,10 @@ license.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 chrono = { workspace = true }
+clap = { workspace = true, features = ["derive", "env"] }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
+dirs = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sqlx = { workspace = true }
