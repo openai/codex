@@ -230,6 +230,14 @@ FROM threads
         Ok(())
     }
 
+    pub(crate) async fn delete_logs_before(&self, cutoff_ts: i64) -> anyhow::Result<u64> {
+        let result = sqlx::query("DELETE FROM logs WHERE ts < ?")
+            .bind(cutoff_ts)
+            .execute(self.pool.as_ref())
+            .await?;
+        Ok(result.rows_affected())
+    }
+
     /// List thread ids using the underlying database (no rollout scanning).
     pub async fn list_thread_ids(
         &self,
