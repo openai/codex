@@ -90,6 +90,10 @@ use tracing::instrument;
 use tracing::trace_span;
 use tracing::warn;
 
+const LEGACY_UPDATE_PLAN_NOTE: &str = "Note: this session history may include the legacy tool name `update_plan`. \
+That tool was renamed to `todo_write` and had nothing to do with Plan mode. \
+Do not call `update_plan`; use `todo_write`.";
+
 use crate::ModelProviderInfo;
 use crate::WireApi;
 use crate::client::ModelClient;
@@ -258,6 +262,50 @@ fn maybe_push_chat_wire_api_deprecation(
     });
 }
 
+fn append_legacy_update_plan_note(
+    developer_instructions: Option<String>,
+    conversation_history: &InitialHistory,
+) -> Option<String> {
+    if !resumed_history_has_update_plan(conversation_history) {
+        return developer_instructions;
+    }
+
+    match developer_instructions {
+        Some(instructions) if instructions.trim().is_empty() => {
+            Some(LEGACY_UPDATE_PLAN_NOTE.to_string())
+        }
+        Some(instructions) => Some(format!("{instructions}\n\n{LEGACY_UPDATE_PLAN_NOTE}")),
+        None => Some(LEGACY_UPDATE_PLAN_NOTE.to_string()),
+    }
+}
+
+fn resumed_history_has_update_plan(conversation_history: &InitialHistory) -> bool {
+    let InitialHistory::Resumed(resumed) = conversation_history else {
+        return false;
+    };
+
+    resumed.history.iter().any(rollout_item_has_update_plan)
+}
+
+fn rollout_item_has_update_plan(item: &RolloutItem) -> bool {
+    match item {
+        RolloutItem::ResponseItem(response_item) => response_item_has_update_plan(response_item),
+        RolloutItem::EventMsg(EventMsg::RawResponseItem(RawResponseItemEvent { item })) => {
+            response_item_has_update_plan(item)
+        }
+        _ => false,
+    }
+}
+
+fn response_item_has_update_plan(item: &ResponseItem) -> bool {
+    match item {
+        ResponseItem::FunctionCall { name, .. } | ResponseItem::CustomToolCall { name, .. } => {
+            name == "update_plan"
+        }
+        _ => false,
+    }
+}
+
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
     #[allow(clippy::too_many_arguments)]
@@ -322,6 +370,10 @@ impl Codex {
             .clone()
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
             .unwrap_or_else(|| model_info.get_model_instructions(config.model_personality));
+        let developer_instructions = append_legacy_update_plan_note(
+            config.developer_instructions.clone(),
+            &conversation_history,
+        );
 
         // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.collaboration_mode
         // to avoid extracting these fields separately and constructing CollaborationMode here.
@@ -337,7 +389,7 @@ impl Codex {
             provider: config.model_provider.clone(),
             collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
-            developer_instructions: config.developer_instructions.clone(),
+            developer_instructions,
             user_instructions,
             personality: config.model_personality,
             base_instructions,
@@ -4092,6 +4144,36 @@ mod tests {
             .await;
 
         assert_eq!(expected, reconstructed);
+    }
+
+    #[test]
+    fn append_legacy_update_plan_note_appends_for_resumed_history() {
+        let rollout_items = vec![RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+            id: None,
+            name: "update_plan".to_string(),
+            arguments: "{}".to_string(),
+            call_id: "call-1".to_string(),
+        })];
+        let history = InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: rollout_items,
+            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+        });
+        let existing = "Existing instructions".to_string();
+        let updated = append_legacy_update_plan_note(Some(existing.clone()), &history);
+
+        assert_eq!(
+            updated,
+            Some(format!("{existing}\n\n{LEGACY_UPDATE_PLAN_NOTE}"))
+        );
+    }
+
+    #[test]
+    fn append_legacy_update_plan_note_skips_for_new_history() {
+        let existing = "Existing instructions".to_string();
+        let updated = append_legacy_update_plan_note(Some(existing.clone()), &InitialHistory::New);
+
+        assert_eq!(updated, Some(existing));
     }
 
     #[tokio::test]
