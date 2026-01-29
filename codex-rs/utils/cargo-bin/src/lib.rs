@@ -1,3 +1,4 @@
+use path_absolutize::Absolutize;
 use std::env;
 use std::ffi;
 use std::ffi::OsString;
@@ -121,6 +122,12 @@ fn cargo_target_dir() -> Result<PathBuf, CargoBinError> {
         path.pop();
     }
     Ok(path)
+}
+
+fn absolutize_from_buck_or_cwd(path: PathBuf) -> Result<PathBuf, CargoBinError> {
+    path.absolutize()
+        .map(|abs| abs.into_owned())
+        .map_err(|source| CargoBinError::CurrentDir { source })
 }
 
 /// Macro that derives the path to a test resource at runtime, the value of
