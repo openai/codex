@@ -1,3 +1,6 @@
+use std::ffi::OsStr;
+use std::ffi::OsString;
+use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -201,6 +204,7 @@ pub async fn download_rollout_if_available(
 ) -> anyhow::Result<Option<PathBuf>> {
     let store = SessionObjectStore::new(base_url).await?;
     let key = object_key(session_id);
+    let meta_key = meta_key(session_id);
     let Some(data) = store.get_object_bytes(&key).await? else {
         return Ok(None);
     };
@@ -214,6 +218,21 @@ pub async fn download_rollout_if_available(
     tokio::fs::write(&path, data)
         .await
         .with_context(|| format!("failed to write rollout file {}", path.display()))?;
+    let meta_path = share_meta_path_for_rollout_path(&path);
+    match fetch_meta(&store, &meta_key).await? {
+        Some(meta) => {
+            let payload =
+                serde_json::to_vec(&meta).with_context(|| "failed to serialize metadata")?;
+            tokio::fs::write(&meta_path, payload)
+                .await
+                .with_context(|| {
+                    format!("failed to write share metadata {}", meta_path.display())
+                })?;
+        }
+        None => {
+            let _ = tokio::fs::remove_file(&meta_path).await;
+        }
+    }
     Ok(Some(path))
 }
 
@@ -223,6 +242,21 @@ fn object_key(id: ThreadId) -> String {
 
 fn meta_key(id: ThreadId) -> String {
     format!("{SHARE_OBJECT_PREFIX}/{id}{SHARE_META_SUFFIX}")
+}
+
+pub fn local_share_owner(rollout_path: &Path) -> anyhow::Result<Option<String>> {
+    let meta_path = share_meta_path_for_rollout_path(rollout_path);
+    let bytes = match std::fs::read(&meta_path) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(err)
+                .with_context(|| format!("failed to read share metadata {}", meta_path.display()));
+        }
+    };
+    let meta: SessionShareMeta =
+        serde_json::from_slice(&bytes).with_context(|| "failed to parse session share metadata")?;
+    Ok(Some(meta.owner))
 }
 
 async fn fetch_meta(
@@ -262,6 +296,13 @@ fn build_rollout_download_path(codex_home: &Path, session_id: ThreadId) -> anyho
     dir.push(format!("{:02}", timestamp.day()));
     let filename = format!("rollout-{date_str}-{session_id}.jsonl");
     Ok(dir.join(filename))
+}
+
+fn share_meta_path_for_rollout_path(path: &Path) -> PathBuf {
+    let file_name = path.file_name().unwrap_or_else(|| OsStr::new("session"));
+    let mut name = OsString::from(file_name);
+    name.push(".share-meta.json");
+    path.with_file_name(name)
 }
 
 impl HttpObjectStore {

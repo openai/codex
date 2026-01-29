@@ -33,6 +33,7 @@ use codex_core::path_utils;
 use codex_core::protocol::AskForApproval;
 use codex_core::read_session_meta_line;
 use codex_core::session_share::download_rollout_if_available;
+use codex_core::session_share::local_share_owner;
 use codex_core::terminal::Multiplexer;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_protocol::ThreadId;
@@ -697,6 +698,36 @@ async fn run_ratatui_app(
         resume_picker::SessionSelection::StartFresh
     };
 
+    if let resume_picker::SessionSelection::Resume(path) = &session_selection {
+        match local_share_owner(path) {
+            Ok(Some(owner)) => {
+                let current_owner = auth_manager
+                    .auth_cached()
+                    .and_then(|auth| auth.get_account_email());
+                if current_owner.as_deref() != Some(owner.as_str()) {
+                    let session_id = read_session_meta_line(path)
+                        .await
+                        .ok()
+                        .map(|meta| meta.meta.id.to_string());
+                    let (id_display, fork_hint) = match session_id {
+                        Some(id) => (id.clone(), format!("Use `codex fork {id}` instead.")),
+                        None => (
+                            "this session".to_string(),
+                            "Use `codex fork` to select it instead.".to_string(),
+                        ),
+                    };
+                    return fatal_exit(format!(
+                        "Cannot resume shared session {id_display} owned by {owner}. {fork_hint}"
+                    ));
+                }
+            }
+            Ok(None) => {}
+            Err(err) => {
+                return fatal_exit(format!("Failed to read shared session metadata: {err}"));
+            }
+        }
+    }
+
     let current_cwd = config.cwd.clone();
     let allow_prompt = cli.cwd.is_none();
     let action_and_path_if_resume_or_fork = match &session_selection {
@@ -836,6 +867,9 @@ pub(crate) async fn resolve_cwd_for_resume_or_fork(
     let Some(history_cwd) = read_session_cwd(path).await else {
         return Ok(None);
     };
+    if action == CwdPromptAction::Fork && !history_cwd.exists() {
+        return Ok(Some(current_cwd.to_path_buf()));
+    }
     if allow_prompt && cwds_differ(current_cwd, &history_cwd) {
         let selection =
             cwd_prompt::run_cwd_selection_prompt(tui, action, current_cwd, &history_cwd).await?;
