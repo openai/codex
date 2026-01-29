@@ -1826,7 +1826,7 @@ impl Session {
 
             let hint = cwd.file_name().and_then(|name| name.to_str()).map_or_else(
                 || cwd.to_string_lossy().into_owned(),
-                |name| name.to_string(),
+                std::string::ToString::to_string,
             );
 
             let mut workspaces = BTreeMap::new();
