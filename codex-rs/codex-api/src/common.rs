@@ -13,7 +13,7 @@ use std::task::Context;
 use std::task::Poll;
 use tokio::sync::mpsc;
 
-/// Canonical prompt input for Chat and Responses endpoints.
+/// Canonical prompt input for Responses endpoints.
 #[derive(Debug, Clone)]
 pub struct Prompt {
     /// Fully-resolved system instructions for this turn.

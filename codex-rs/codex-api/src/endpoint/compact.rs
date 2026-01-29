@@ -36,12 +36,9 @@ impl<T: HttpTransport, A: AuthProvider> CompactClient<T, A> {
         self
     }
 
-    fn path(&self) -> Result<&'static str, ApiError> {
+    fn path(&self) -> &'static str {
         match self.provider.wire {
-            WireApi::Compact | WireApi::Responses => Ok("responses/compact"),
-            WireApi::Chat => Err(ApiError::Stream(
-                "compact endpoint requires responses wire api".to_string(),
-            )),
+            WireApi::Compact | WireApi::Responses => "responses/compact",
         }
     }
 
@@ -50,7 +47,7 @@ impl<T: HttpTransport, A: AuthProvider> CompactClient<T, A> {
         body: serde_json::Value,
         extra_headers: HeaderMap,
     ) -> Result<Vec<ResponseItem>, ApiError> {
-        let path = self.path()?;
+        let path = self.path();
         let builder = || {
             let mut req = self.provider.build_request(Method::POST, path);
             req.headers.extend(extra_headers.clone());
@@ -139,24 +136,14 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn errors_when_wire_is_chat() {
-        let client = CompactClient::new(DummyTransport, provider(WireApi::Chat), DummyAuth);
-        let input = CompactionInput {
-            model: "gpt-test",
-            input: &[],
-            instructions: "inst",
-        };
-        let err = client
-            .compact_input(&input, HeaderMap::new())
-            .await
-            .expect_err("expected wire mismatch to fail");
+    #[test]
+    fn path_is_responses_compact_for_supported_wire_apis() {
+        let responses_client =
+            CompactClient::new(DummyTransport, provider(WireApi::Responses), DummyAuth);
+        assert_eq!(responses_client.path(), "responses/compact");
 
-        match err {
-            ApiError::Stream(msg) => {
-                assert_eq!(msg, "compact endpoint requires responses wire api");
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
+        let compact_client =
+            CompactClient::new(DummyTransport, provider(WireApi::Compact), DummyAuth);
+        assert_eq!(compact_client.path(), "responses/compact");
     }
 }
