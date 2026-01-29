@@ -290,6 +290,124 @@ export class BackendManager implements vscode.Disposable {
           activeStepIdByMessageId,
           sessionStatusById,
         });
+
+        const cwd = folder.uri.fsPath;
+        const lines: string[] = [];
+        lines.push(`Server: ${baseUrl.toString()}`);
+        lines.push(`Working directory: \`${cwd}\``);
+
+        const results = await Promise.allSettled([
+          this.withTimeout(
+            "opencode /global/health",
+            client.getHealth(),
+            5_000,
+          ),
+          this.withTimeout("opencode /config", client.getConfig(), 5_000),
+          this.withTimeout("opencode /provider", client.listProviders(), 5_000),
+          this.withTimeout(
+            "opencode /skill",
+            client.listSkills(cwd),
+            5_000,
+          ),
+        ]);
+
+        const [healthRes, configRes, providerRes, skillsRes] = results;
+
+        if (healthRes.status === "fulfilled") {
+          lines.push(`Version: \`${healthRes.value.version}\``);
+        } else {
+          lines.push(
+            `Health: error: ${String(healthRes.reason instanceof Error ? healthRes.reason.message : healthRes.reason)}`,
+          );
+        }
+
+        const cfgObj =
+          configRes.status === "fulfilled" ? configRes.value : null;
+        const providerObj =
+          providerRes.status === "fulfilled" ? providerRes.value : null;
+
+        if (providerObj) {
+          const connected = Array.isArray(providerObj.connected)
+            ? providerObj.connected.map((p) => String(p ?? "")).filter(Boolean)
+            : [];
+          const all = Array.isArray(providerObj.all) ? providerObj.all : [];
+          const defaultByProvider =
+            typeof providerObj.default === "object" && providerObj.default !== null
+              ? providerObj.default
+              : {};
+
+          if (connected.length === 0) {
+            lines.push("Providers: (connected: none)");
+          } else {
+            lines.push("Providers:");
+            const byId = new Map(
+              all.map((p) => [String((p as any)?.id ?? ""), p]),
+            );
+            for (const providerId of connected) {
+              const p = byId.get(providerId) as any;
+              const name =
+                typeof p?.name === "string" && p.name.trim()
+                  ? String(p.name).trim()
+                  : providerId;
+              const modelCount = Array.isArray(p?.models)
+                ? p.models.length
+                : typeof p?.models === "object" && p.models !== null
+                  ? Object.keys(p.models).length
+                  : 0;
+              const defaultModel =
+                typeof (defaultByProvider as any)[providerId] === "string"
+                  ? String((defaultByProvider as any)[providerId]).trim()
+                  : "";
+              lines.push(
+                `- ✓ ${name} (${providerId}) models=${String(modelCount)}${defaultModel ? ` default=${defaultModel}` : ""}`,
+              );
+            }
+          }
+
+        } else if (providerRes.status === "rejected") {
+          lines.push(
+            `Providers: error: ${String(providerRes.reason instanceof Error ? providerRes.reason.message : providerRes.reason)}`,
+          );
+        }
+
+        if (cfgObj) {
+          const keys = Object.keys(cfgObj).filter(Boolean).sort();
+          const listed = keys.slice(0, 24);
+          const suffix = keys.length > listed.length ? ", …" : "";
+          lines.push(
+            `Config keys: ${listed.length > 0 ? listed.join(", ") : "(none)"}${suffix}`,
+          );
+        } else if (configRes.status === "rejected") {
+          lines.push(
+            `Config: error: ${String(configRes.reason instanceof Error ? configRes.reason.message : configRes.reason)}`,
+          );
+        }
+
+        if (skillsRes.status === "fulfilled") {
+          const entries = Array.isArray(skillsRes.value)
+            ? skillsRes.value.flatMap((e) => e.skills ?? [])
+            : [];
+          const names = entries
+            .map((s) => String((s as any)?.name ?? "").trim())
+            .filter(Boolean);
+          const preview = names.slice(0, 10);
+          lines.push(
+            `Skills: ${String(names.length)}${preview.length > 0 ? ` (${preview.join(", ")}${names.length > preview.length ? ", …" : ""})` : ""}`,
+          );
+        } else {
+          lines.push(
+            `Skills: error: ${String(skillsRes.reason instanceof Error ? skillsRes.reason.message : skillsRes.reason)}`,
+          );
+        }
+
+        this.onServerEvent?.(backendKey, null, {
+          method: "opencode/started",
+          params: {
+            cwd,
+            text: lines.join("\n"),
+          },
+        });
+
         server.onDidExit(({ code, signal }) => {
           // Backend died unexpectedly (e.g. killed from outside VS Code).
           const current = this.opencode.get(backendKey);

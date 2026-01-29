@@ -5614,7 +5614,7 @@ function applyGlobalNotification(
       // De-dupe: `New` creates a new thread and emits `thread/started` again, but for the same cwd we only
       // want one "Thread started" notice.
       const globalId = cwd
-        ? `global:threadStarted:cwd:${cwd}`
+        ? `global:threadStarted:backend:${backendId}:cwd:${cwd}`
         : `global:threadStarted:thread:${id}`;
       removeGlobalWhere(
         (b) =>
@@ -5634,6 +5634,27 @@ function applyGlobalNotification(
         void refreshMcpConfiguredServersForBackend(effectiveBackendKey);
       }
 
+      chatView?.refresh();
+      return;
+    }
+    case "opencode/started": {
+      const p = (n as any).params as { cwd?: unknown; text?: unknown };
+      const cwd = typeof p?.cwd === "string" ? p.cwd : null;
+      const text = typeof p?.text === "string" ? p.text : null;
+      if (!cwd || !text) {
+        appendUnhandledGlobalEvent(
+          `Unhandled global event: ${n.method}`,
+          (n as any).params,
+        );
+        chatView?.refresh();
+        return;
+      }
+      upsertGlobal({
+        id: `global:opencodeStarted:cwd:${cwd}`,
+        type: "info",
+        title: "OpenCode started",
+        text,
+      });
       chatView?.refresh();
       return;
     }
@@ -5887,11 +5908,35 @@ function updateThreadStartedBlocks(): void {
     const b = globalRuntime.blocks[i];
     if (!b) continue;
     if (b.type !== "info" || b.title !== "Thread started") continue;
-    const cwdPrefix = "global:threadStarted:cwd:";
-    const cwd = b.id.startsWith(cwdPrefix)
-      ? b.id.slice(cwdPrefix.length)
+    const backendPrefix = "global:threadStarted:backend:";
+    const legacyCwdPrefix = "global:threadStarted:cwd:";
+    const parsed = (() => {
+      if (b.id.startsWith(backendPrefix)) {
+        const rest = b.id.slice(backendPrefix.length);
+        const idx = rest.indexOf(":cwd:");
+        if (idx <= 0) return null;
+        const backendId = rest.slice(0, idx);
+        const cwd = rest.slice(idx + ":cwd:".length);
+        if (
+          backendId !== "codex" &&
+          backendId !== "codez" &&
+          backendId !== "opencode"
+        ) {
+          return null;
+        }
+        if (!cwd) return null;
+        return { cwd, backendId: backendId as BackendId };
+      }
+      if (b.id.startsWith(legacyCwdPrefix)) {
+        // Legacy blocks (pre backend-aware id). Do not try to attach MCP summary, as we can’t
+        // reliably infer which backend it came from.
+        return null;
+      }
+      return null;
+    })();
+    const backendKey = parsed
+      ? backendKeyForCwdAndBackendId(parsed.cwd, parsed.backendId)
       : null;
-    const backendKey = cwd ? backendKeyForCwdAndBackendId(cwd, "codez") : null;
     const summary = backendKey ? formatMcpStatusSummary(backendKey) : null;
     const lines = b.text
       .split("\n")
