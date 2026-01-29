@@ -661,23 +661,21 @@ The JSON-RPC auth/account surface exposes request/response methods plus server-i
 
 ### Authentication modes
 
-Codex supports three authentication modes. The current mode is surfaced in `account/updated` (`authMode`) and can be inferred from `account/read`.
+Codex supports these authentication modes. The current mode is surfaced in `account/updated` (`authMode`) and can be inferred from `account/read`.
 
 - **API key (`apiKey`)**: Caller supplies an OpenAI API key via `account/login/start` with `type: "apiKey"`. The API key is saved and used for API requests.
 - **ChatGPT managed (`chatgpt`)** (recommended): Codex owns the ChatGPT OAuth flow and refresh tokens. Start via `account/login/start` with `type: "chatgpt"`; Codex persists tokens to disk and refreshes them automatically.
-- **ChatGPT external (`chatgptAuthTokens`)** (for OpenAI internal use only): The client supplies existing ChatGPT auth tokens (`idToken` and `accessToken`) via `account/login/start` with `type: "chatgptAuthTokens"`. Codex uses the access token for API calls, parses the ID token for account metadata, stores the tokens only in memory, and requests refresh via `account/chatgptAuthTokens/refresh` when needed. This mode is useful when using Codex as an embedded agent within an application that already manages ChatGPT auth tokens. The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.
 
 ### API Overview
 
 - `account/read` — fetch current account info; optionally refresh tokens.
-- `account/login/start` — begin login (`apiKey`, `chatgpt`, or `chatgptAuthTokens`).
+- `account/login/start` — begin login (`apiKey`, `chatgpt`).
 - `account/login/completed` (notify) — emitted when a login attempt finishes (success or error).
 - `account/login/cancel` — cancel a pending ChatGPT login by `loginId`.
 - `account/logout` — sign out; triggers `account/updated`.
-- `account/updated` (notify) — emitted whenever auth mode changes (`authMode`: `apikey`, `chatgpt`, `chatgptAuthTokens` or `null`).
+- `account/updated` (notify) — emitted whenever auth mode changes (`authMode`: `apikey`, `chatgpt`, or `null`).
 - `account/rateLimits/read` — fetch ChatGPT rate limits; updates arrive via `account/rateLimits/updated` (notify).
 - `account/rateLimits/updated` (notify) — emitted whenever a user's ChatGPT rate limits change.
-- `account/chatgptAuthTokens/refresh` (server request) — emitted when external auth is active and the server encounters `401 Unauthorized`; the client must respond with fresh tokens (`accessToken` + `idToken`).
 - `mcpServer/oauthLogin/completed` (notify) — emitted after a `mcpServer/oauth/login` flow finishes for a server; payload includes `{ name, success, error? }`.
 
 ### 1) Check auth state
@@ -701,28 +699,6 @@ Field notes:
 
 - `refreshToken` (bool): set `true` to force a token refresh. Ignored when using external ChatGPT auth mode.
 - `requiresOpenaiAuth` reflects the active provider; when `false`, Codex can run without OpenAI credentials.
-
-External auth tokens:
-
-```json
-{
-  "method": "account/login/start",
-  "id": 9,
-  "params": {
-    "type": "chatgptAuthTokens",
-    "accessToken": "access-token-jwt",
-    "idToken": "id-token-jwt"
-  }
-}
-```
-
-Response + notifications:
-
-```json
-{ "id": 9, "result": { "type": "chatgptAuthTokens" } }
-{ "method": "account/login/completed", "params": { "loginId": null, "success": true, "error": null } }
-{ "method": "account/updated", "params": { "authMode": "chatgptAuthTokens" } }
-```
 
 ### 2) Log in with an API key
 
