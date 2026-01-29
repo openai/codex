@@ -62,6 +62,7 @@ impl StatusLineRunner {
             .tui_status_line_timeout_ms
             .map(Duration::from_millis)
             .unwrap_or(DEFAULT_STATUS_LINE_TIMEOUT);
+        let config = self.config.clone();
         let state = self.state.clone();
         let app_tx = self.app_tx.clone();
         let run = async move {
@@ -76,6 +77,7 @@ impl StatusLineRunner {
                 let request = StatusLineRequest {
                     command: command.clone(),
                     payload,
+                    cwd: config.cwd.clone(),
                     timeout,
                 };
                 let result = run_request(&request).await;
@@ -167,6 +169,7 @@ const DEFAULT_STATUS_LINE_TIMEOUT: Duration = Duration::from_millis(500);
 pub(crate) struct StatusLineRequest {
     pub command: Vec<String>,
     pub payload: String,
+    pub cwd: std::path::PathBuf,
     pub timeout: Duration,
 }
 
@@ -211,6 +214,7 @@ async fn run_request(request: &StatusLineRequest) -> Result<String, String> {
     if request.command.len() > 1 {
         cmd.args(&request.command[1..]);
     }
+    cmd.current_dir(&request.cwd);
     cmd.stdin(Stdio::piped());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
@@ -252,6 +256,7 @@ mod tests {
         StatusLineRequest {
             command: command.iter().map(|v| (*v).to_string()).collect(),
             payload: payload.to_string(),
+            cwd: std::env::current_dir().expect("cwd"),
             timeout: Duration::from_millis(200),
         }
     }
