@@ -1816,7 +1816,7 @@ impl Session {
         fn build_workspace_configuration(
             cwd: &Path,
             git_info: Option<&codex_protocol::protocol::GitInfo>,
-            remote_urls: Option<&Vec<String>>,
+            remote_urls: Option<&BTreeMap<String, String>>,
         ) -> Option<WorkspaceConfiguration> {
             let latest_git_commit_hash = git_info.and_then(|info| info.commit_hash.clone());
             let associated_remote_urls = remote_urls.cloned();

@@ -72,7 +72,7 @@ pub(crate) struct WorkspaceConfiguration {
 pub(crate) struct WorkspaceEntry {
     pub hint: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub associated_remote_urls: Option<Vec<String>>,
+    pub associated_remote_urls: Option<BTreeMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_git_commit_hash: Option<String>,
 }
@@ -97,12 +97,31 @@ impl EnvironmentContext {
         let shell_name = self.shell.name();
         lines.push(format!("  <shell>{shell_name}</shell>"));
 
-        if let Some(workspace_configuration) = self.workspace_configuration
-            && let Ok(json) = serde_json::to_string_pretty(&workspace_configuration)
-        {
+        if let Some(workspace_configuration) = self.workspace_configuration {
             lines.push("  <workspace_configuration>".to_string());
-            for line in json.lines() {
-                lines.push(format!("    {line}"));
+            for (path, workspace) in workspace_configuration.workspaces {
+                lines.push(format!(
+                    "    <workspace path=\"{path}\" hint=\"{}\">",
+                    workspace.hint
+                ));
+
+                if let Some(latest_git_commit_hash) = workspace.latest_git_commit_hash {
+                    lines.push(format!(
+                        "      <latest_git_commit_hash>{latest_git_commit_hash}</latest_git_commit_hash>"
+                    ));
+                }
+
+                if let Some(associated_remote_urls) = workspace.associated_remote_urls
+                    && !associated_remote_urls.is_empty()
+                {
+                    lines.push("      <associated_remote_urls>".to_string());
+                    for (name, url) in associated_remote_urls {
+                        lines.push(format!("        <remote name=\"{name}\">{url}</remote>"));
+                    }
+                    lines.push("      </associated_remote_urls>".to_string());
+                }
+
+                lines.push("    </workspace>".to_string());
             }
             lines.push("  </workspace_configuration>".to_string());
         }
@@ -257,9 +276,10 @@ mod tests {
             cwd.to_string_lossy().to_string(),
             WorkspaceEntry {
                 hint: "repo".to_string(),
-                associated_remote_urls: Some(vec![
-                    "origin: https://example.com/repo.git".to_string(),
-                ]),
+                associated_remote_urls: Some(BTreeMap::from([(
+                    "origin".to_string(),
+                    "https://example.com/repo.git".to_string(),
+                )])),
                 latest_git_commit_hash: Some("abc123".to_string()),
             },
         );
@@ -274,17 +294,12 @@ mod tests {
   <cwd>/repo</cwd>
   <shell>bash</shell>
   <workspace_configuration>
-    {
-      "workspaces": {
-        "/repo": {
-          "hint": "repo",
-          "associated_remote_urls": [
-            "origin: https://example.com/repo.git"
-          ],
-          "latest_git_commit_hash": "abc123"
-        }
-      }
-    }
+    <workspace path="/repo" hint="repo">
+      <latest_git_commit_hash>abc123</latest_git_commit_hash>
+      <associated_remote_urls>
+        <remote name="origin">https://example.com/repo.git</remote>
+      </associated_remote_urls>
+    </workspace>
   </workspace_configuration>
 </environment_context>"#;
 

@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
@@ -110,8 +110,8 @@ pub async fn collect_git_info(cwd: &Path) -> Option<GitInfo> {
     Some(git_info)
 }
 
-/// Collect fetch remotes in a multi-root-friendly format: ["origin: https://..."].
-pub async fn get_git_remote_urls(cwd: &Path) -> Option<Vec<String>> {
+/// Collect fetch remotes in a multi-root-friendly format: {"origin": "https://..."}.
+pub async fn get_git_remote_urls(cwd: &Path) -> Option<BTreeMap<String, String>> {
     let is_git_repo = run_git_command_with_timeout(&["rev-parse", "--git-dir"], cwd)
         .await?
         .status
@@ -126,21 +126,21 @@ pub async fn get_git_remote_urls(cwd: &Path) -> Option<Vec<String>> {
     }
 
     let stdout = String::from_utf8(output.stdout).ok()?;
-    let mut remotes = BTreeSet::new();
+    let mut remotes = BTreeMap::new();
     for line in stdout.lines() {
         if !line.contains("(fetch)") {
             continue;
         }
         let mut parts = line.split_whitespace();
         if let (Some(name), Some(url)) = (parts.next(), parts.next()) {
-            remotes.insert(format!("{name}: {url}"));
+            remotes.insert(name.to_string(), url.to_string());
         }
     }
 
     if remotes.is_empty() {
         None
     } else {
-        Some(remotes.into_iter().collect())
+        Some(remotes)
     }
 }
 
