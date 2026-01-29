@@ -166,7 +166,7 @@ async fn todo_write_tool_emits_todo_update_event() -> anyhow::Result<()> {
 
     let mut saw_todo_update = false;
     wait_for_event(&codex, |event| match event {
-        EventMsg::PlanUpdate(update) => {
+        EventMsg::TodoUpdate(update) => {
             saw_todo_update = true;
             assert_eq!(update.explanation.as_deref(), Some("Tool harness check"));
             let todo_items = update.todo_items();
@@ -182,7 +182,10 @@ async fn todo_write_tool_emits_todo_update_event() -> anyhow::Result<()> {
     })
     .await;
 
-    assert!(saw_todo_update, "expected PlanUpdate (todo list) event");
+    assert!(
+        saw_todo_update,
+        "expected todo_update event (plan_update legacy alias)"
+    );
 
     let req = second_mock.single_request();
     let (output_text, _success_flag) = call_output(&req, call_id);
@@ -246,7 +249,7 @@ async fn todo_write_tool_rejects_malformed_payload() -> anyhow::Result<()> {
 
     let mut saw_todo_update = false;
     wait_for_event(&codex, |event| match event {
-        EventMsg::PlanUpdate(_) => {
+        EventMsg::TodoUpdate(_) => {
             saw_todo_update = true;
             false
         }
@@ -257,7 +260,7 @@ async fn todo_write_tool_rejects_malformed_payload() -> anyhow::Result<()> {
 
     assert!(
         !saw_todo_update,
-        "did not expect PlanUpdate (todo list) event for malformed payload"
+        "did not expect todo_update event for malformed payload"
     );
 
     let req = second_mock.single_request();

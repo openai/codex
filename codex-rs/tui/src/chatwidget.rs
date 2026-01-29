@@ -3099,7 +3099,7 @@ impl ChatWidget {
                     self.on_interrupted_turn(ev.reason);
                 }
             },
-            EventMsg::PlanUpdate(update) => self.on_todo_update(update),
+            EventMsg::TodoUpdate(update) => self.on_todo_update(update),
             EventMsg::ExecApprovalRequest(ev) => {
                 // For replayed events, synthesize an empty id (these should not occur).
                 self.on_exec_approval_request(id.unwrap_or_default(), ev)

@@ -223,10 +223,10 @@ fn web_search_begin_then_end_reuses_item_id() {
 fn todo_update_emits_todo_list_started_updated_and_completed() {
     let mut ep = EventProcessorWithJsonOutput::new(None);
 
-    // First todo_write update (PlanUpdate event) => item.started (todo_list)
+    // First todo_write update (todo_update; plan_update legacy alias) => item.started (todo_list)
     let first = event(
         "p1",
-        EventMsg::PlanUpdate(UpdateTodoArgs::new(
+        EventMsg::TodoUpdate(UpdateTodoArgs::new(
             None,
             vec![
                 TodoItemArg {
@@ -262,10 +262,10 @@ fn todo_update_emits_todo_list_started_updated_and_completed() {
         })]
     );
 
-    // Second todo_write update (PlanUpdate event) => item.updated (same id)
+    // Second todo_write update (todo_update; plan_update legacy alias) => item.updated (same id)
     let second = event(
         "p2",
-        EventMsg::PlanUpdate(UpdateTodoArgs::new(
+        EventMsg::TodoUpdate(UpdateTodoArgs::new(
             None,
             vec![
                 TodoItemArg {
@@ -666,7 +666,7 @@ fn todo_update_after_complete_starts_new_todo_list_with_new_id() {
     // First turn: start + complete
     let start = event(
         "t1",
-        EventMsg::PlanUpdate(UpdateTodoArgs::new(
+        EventMsg::TodoUpdate(UpdateTodoArgs::new(
             None,
             vec![TodoItemArg {
                 step: "only".to_string(),
@@ -686,7 +686,7 @@ fn todo_update_after_complete_starts_new_todo_list_with_new_id() {
     // Second turn: a new todo list should have a new id
     let start_again = event(
         "t3",
-        EventMsg::PlanUpdate(UpdateTodoArgs::new(
+        EventMsg::TodoUpdate(UpdateTodoArgs::new(
             None,
             vec![TodoItemArg {
                 step: "again".to_string(),

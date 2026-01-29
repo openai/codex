@@ -537,7 +537,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 ts_msg!(self, "model: {}", model);
                 eprintln!();
             }
-            EventMsg::PlanUpdate(todo_update_event) => {
+            EventMsg::TodoUpdate(todo_update_event) => {
                 let (explanation, todo_items) = todo_update_event.into_parts();
 
                 // Header

@@ -64,8 +64,8 @@ use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnDiffUpdatedNotification;
 use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptResponse;
-use codex_app_server_protocol::TurnPlanStep;
-use codex_app_server_protocol::TurnPlanUpdatedNotification;
+use codex_app_server_protocol::TurnPlanStep as TurnTodoStep;
+use codex_app_server_protocol::TurnPlanUpdatedNotification as TurnTodoUpdatedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::build_turns_from_event_msgs;
 use codex_core::CodexThread;
@@ -1106,7 +1106,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             )
             .await;
         }
-        EventMsg::PlanUpdate(todo_update_event) => {
+        EventMsg::TodoUpdate(todo_update_event) => {
             handle_turn_todo_update(
                 conversation_id,
                 &event_turn_id,
@@ -1150,8 +1150,8 @@ async fn handle_turn_todo_update(
     if let ApiVersion::V2 = api_version {
         // NOTE: The protocol keeps plan-named fields/events for compatibility; this is the todo list update.
         let (explanation, todo_items) = todo_update_event.into_parts();
-        let steps: Vec<TurnPlanStep> = todo_items.into_iter().map(TurnPlanStep::from).collect();
-        let notification = TurnPlanUpdatedNotification {
+        let steps: Vec<TurnTodoStep> = todo_items.into_iter().map(TurnTodoStep::from).collect();
+        let notification = TurnTodoUpdatedNotification {
             thread_id: conversation_id.to_string(),
             turn_id: event_turn_id.to_string(),
             explanation,
@@ -1805,7 +1805,7 @@ mod tests {
     use anyhow::Result;
     use anyhow::anyhow;
     use anyhow::bail;
-    use codex_app_server_protocol::TurnPlanStepStatus;
+    use codex_app_server_protocol::TurnPlanStepStatus as TurnTodoStepStatus;
     use codex_core::protocol::CreditsSnapshot;
     use codex_core::protocol::McpInvocation;
     use codex_core::protocol::RateLimitSnapshot;
@@ -2025,12 +2025,12 @@ mod tests {
                 assert_eq!(n.thread_id, conversation_id.to_string());
                 assert_eq!(n.turn_id, "turn-123");
                 assert_eq!(n.explanation.as_deref(), Some("need todo list"));
-                assert_eq!(n.todo, n.plan);
-                assert_eq!(n.plan.len(), 2);
-                assert_eq!(n.plan[0].step, "first");
-                assert_eq!(n.plan[0].status, TurnPlanStepStatus::Pending);
-                assert_eq!(n.plan[1].step, "second");
-                assert_eq!(n.plan[1].status, TurnPlanStepStatus::Completed);
+                assert_eq!(n.todo, n.plan, "legacy plan alias should mirror todo");
+                assert_eq!(n.todo.len(), 2);
+                assert_eq!(n.todo[0].step, "first");
+                assert_eq!(n.todo[0].status, TurnTodoStepStatus::Pending);
+                assert_eq!(n.todo[1].step, "second");
+                assert_eq!(n.todo[1].status, TurnTodoStepStatus::Completed);
             }
             other => bail!("unexpected message: {other:?}"),
         }

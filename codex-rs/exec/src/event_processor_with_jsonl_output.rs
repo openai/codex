@@ -176,7 +176,7 @@ impl EventProcessorWithJsonOutput {
                 };
                 vec![ThreadEvent::Error(ThreadErrorEvent { message })]
             }
-            protocol::EventMsg::PlanUpdate(ev) => self.handle_todo_update(ev),
+            protocol::EventMsg::TodoUpdate(ev) => self.handle_todo_update(ev),
             _ => Vec::new(),
         }
     }

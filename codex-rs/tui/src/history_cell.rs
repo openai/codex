@@ -2890,7 +2890,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_update_with_note_and_wrapping_snapshot() {
+    fn todo_update_with_note_and_wrapping_snapshot() {
         // Long explanation forces wrapping; include long step text to verify step wrapping and alignment.
         let update = UpdateTodoArgs::new(
             Some(
@@ -2921,7 +2921,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_update_without_note_snapshot() {
+    fn todo_update_without_note_snapshot() {
         let update = UpdateTodoArgs::new(
             None,
             vec![

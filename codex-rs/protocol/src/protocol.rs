@@ -810,10 +810,10 @@ pub enum EventMsg {
     /// Notification that skill data may have been updated and clients may want to reload.
     SkillsUpdateAvailable,
 
-    /// Todo list update from the todo_write tool. Payload uses `todo` (preferred)
-    /// and also emits `plan` as a legacy alias.
-    #[serde(alias = "todo_update")]
-    PlanUpdate(UpdateTodoArgs),
+    /// Todo list update from the todo_write tool. Primary event name is
+    /// `todo_update`; `plan_update` remains a legacy alias.
+    #[serde(alias = "plan_update")]
+    TodoUpdate(UpdateTodoArgs),
 
     TurnAborted(TurnAbortedEvent),
 

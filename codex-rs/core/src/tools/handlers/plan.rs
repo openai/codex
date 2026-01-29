@@ -109,7 +109,7 @@ pub(crate) async fn handle_todo_write(
 ) -> Result<String, FunctionCallError> {
     let args = parse_todo_write_arguments(&arguments)?;
     session
-        .send_event(turn_context, EventMsg::PlanUpdate(args))
+        .send_event(turn_context, EventMsg::TodoUpdate(args))
         .await;
     Ok("Todo list updated".to_string())
 }
