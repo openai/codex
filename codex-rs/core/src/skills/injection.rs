@@ -144,17 +144,26 @@ pub(crate) enum ToolMentionKind {
 const APP_PATH_PREFIX: &str = "app://";
 const MCP_PATH_PREFIX: &str = "mcp://";
 const SKILL_PATH_PREFIX: &str = "skill://";
+const SKILL_FILENAME: &str = "SKILL.md";
 
 pub(crate) fn tool_kind_for_path(path: &str) -> ToolMentionKind {
     if path.starts_with(APP_PATH_PREFIX) {
         ToolMentionKind::App
     } else if path.starts_with(MCP_PATH_PREFIX) {
         ToolMentionKind::Mcp
-    } else if path.starts_with(SKILL_PATH_PREFIX) || path.ends_with("SKILL.md") {
+    } else if path.starts_with(SKILL_PATH_PREFIX) || is_skill_filename(path) {
         ToolMentionKind::Skill
     } else {
         ToolMentionKind::Other
     }
+}
+
+fn is_skill_filename(path: &str) -> bool {
+    let file_name = path
+        .rsplit(|ch| ch == '/' || ch == '\\')
+        .next()
+        .unwrap_or(path);
+    file_name.eq_ignore_ascii_case(SKILL_FILENAME)
 }
 
 pub(crate) fn app_id_from_path(path: &str) -> Option<&str> {
