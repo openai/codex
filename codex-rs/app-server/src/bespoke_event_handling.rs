@@ -9,6 +9,7 @@ use crate::codex_message_processor::summary_to_thread;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::outgoing_message::OutgoingNotification;
 use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
@@ -1156,9 +1157,24 @@ async fn handle_turn_todo_update(
             explanation,
             todo: steps,
         };
+        let legacy_params = match serde_json::to_value(&notification) {
+            Ok(params) => Some(params),
+            Err(err) => {
+                error!("failed to serialize legacy todo update notification: {err}");
+                None
+            }
+        };
         outgoing
             .send_server_notification(ServerNotification::TurnTodosUpdated(notification))
             .await;
+        if let Some(params) = legacy_params {
+            outgoing
+                .send_notification(OutgoingNotification {
+                    method: "turn/plan/updated".to_string(),
+                    params: Some(params),
+                })
+                .await;
+        }
     }
 }
 
@@ -2018,7 +2034,7 @@ mod tests {
         let msg = rx
             .recv()
             .await
-            .ok_or_else(|| anyhow!("should send one notification"))?;
+            .ok_or_else(|| anyhow!("should send a notification"))?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnTodosUpdated(n)) => {
                 assert_eq!(n.thread_id, conversation_id.to_string());
@@ -2037,6 +2053,24 @@ mod tests {
                 assert_eq!(n.todo[1].status, TurnTodoStepStatus::Completed);
             }
             other => bail!("unexpected message: {other:?}"),
+        }
+        let legacy_msg = rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow!("should send legacy notification"))?;
+        match legacy_msg {
+            OutgoingMessage::Notification(notification) => {
+                assert_eq!(notification.method, "turn/plan/updated");
+                let params = notification
+                    .params
+                    .ok_or_else(|| anyhow!("legacy notification missing params"))?;
+                assert_eq!(
+                    params.get("todo"),
+                    params.get("plan"),
+                    "legacy plan alias should mirror todo"
+                );
+            }
+            other => bail!("unexpected legacy message: {other:?}"),
         }
         assert!(rx.try_recv().is_err(), "no extra messages expected");
         Ok(())
