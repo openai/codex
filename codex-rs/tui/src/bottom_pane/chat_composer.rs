@@ -2491,6 +2491,7 @@ if matches!(mode, PrepareMode::ForSubmit)
 
         match self.footer_mode {
             FooterMode::EscHint => FooterMode::EscHint,
+            FooterMode::CantUnstashHint => FooterMode::CantUnstashHint,
             FooterMode::ShortcutOverlay => FooterMode::ShortcutOverlay,
             FooterMode::QuitShortcutReminder if self.quit_shortcut_hint_visible() => {
                 FooterMode::QuitShortcutReminder
@@ -2962,6 +2963,7 @@ impl ChatComposer {
                     FooterMode::QuitShortcutReminder
                     | FooterMode::ShortcutOverlay
                     | FooterMode::EscHint
+                    | FooterMode::CantUnstashHint
                     | FooterMode::ComposerHasDraft => false,
                 };
                 let show_queue_hint = match footer_props.mode {
@@ -2971,6 +2973,7 @@ impl ChatComposer {
                     FooterMode::QuitShortcutReminder
                     | FooterMode::ComposerEmpty
                     | FooterMode::ShortcutOverlay
+                    | FooterMode::CantUnstashHint
                     | FooterMode::EscHint => false,
                 };
                 let context_line = context_window_line(
@@ -3032,6 +3035,7 @@ impl ChatComposer {
                         }
                         FooterMode::EscHint
                         | FooterMode::QuitShortcutReminder
+                        | FooterMode::CantUnstashHint
                         | FooterMode::ShortcutOverlay => None,
                     }
                 };
@@ -3039,6 +3043,7 @@ impl ChatComposer {
                     footer_props.mode,
                     FooterMode::EscHint
                         | FooterMode::QuitShortcutReminder
+                        | FooterMode::CantUnstashHint
                         | FooterMode::ShortcutOverlay
                 ) {
                     false

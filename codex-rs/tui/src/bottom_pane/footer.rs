@@ -182,6 +182,7 @@ pub(crate) fn footer_height(props: FooterProps) -> u16 {
         FooterMode::QuitShortcutReminder
         | FooterMode::ShortcutOverlay
         | FooterMode::EscHint
+        | FooterMode::CantUnstashHint
         | FooterMode::ComposerHasDraft => false,
     };
     let show_queue_hint = match props.mode {
@@ -189,6 +190,7 @@ pub(crate) fn footer_height(props: FooterProps) -> u16 {
         FooterMode::QuitShortcutReminder
         | FooterMode::ComposerEmpty
         | FooterMode::ShortcutOverlay
+        | FooterMode::CantUnstashHint
         | FooterMode::EscHint => false,
     };
     footer_from_props_lines(props, None, false, show_shortcuts_hint, show_queue_hint).len() as u16
@@ -1003,6 +1005,7 @@ mod tests {
                     FooterMode::QuitShortcutReminder
                     | FooterMode::ShortcutOverlay
                     | FooterMode::EscHint
+                    | FooterMode::CantUnstashHint
                     | FooterMode::ComposerHasDraft => false,
                 };
                 let show_queue_hint = match props.mode {
@@ -1010,6 +1013,7 @@ mod tests {
                     FooterMode::QuitShortcutReminder
                     | FooterMode::ComposerEmpty
                     | FooterMode::ShortcutOverlay
+                    | FooterMode::CantUnstashHint
                     | FooterMode::EscHint => false,
                 };
                 let left_width = footer_line_width(
