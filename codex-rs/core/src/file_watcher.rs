@@ -35,6 +35,7 @@ struct WatchState {
     skills_roots: HashSet<PathBuf>,
     agents_enabled: bool,
     skills_enabled: bool,
+    agents_fallback_filenames: HashSet<String>,
 }
 
 struct FileWatcherInner {
@@ -64,6 +65,7 @@ impl FileWatcher {
             skills_roots: HashSet::new(),
             agents_enabled: false,
             skills_enabled: false,
+            agents_fallback_filenames: HashSet::new(),
         }));
         let file_watcher = Self {
             inner: Some(Mutex::new(inner)),
@@ -82,6 +84,7 @@ impl FileWatcher {
                 skills_roots: HashSet::new(),
                 agents_enabled: false,
                 skills_enabled: false,
+                agents_fallback_filenames: HashSet::new(),
             })),
             tx,
         }
@@ -102,6 +105,12 @@ impl FileWatcher {
             };
             state.agents_enabled = agents_enabled;
             state.skills_enabled = skills_enabled;
+            state.agents_fallback_filenames = config
+                .project_doc_fallback_filenames
+                .iter()
+                .filter(|name| !name.is_empty())
+                .cloned()
+                .collect();
             if !skills_enabled {
                 state.skills_roots.clear();
             }
@@ -214,24 +223,27 @@ impl FileWatcher {
 fn classify_event(event: &Event, state: &RwLock<WatchState>) -> (Vec<PathBuf>, Vec<PathBuf>) {
     let mut agents_paths = Vec::new();
     let mut skills_paths = Vec::new();
-    let (agents_enabled, skills_enabled, skills_roots) = match state.read() {
-        Ok(state) => (
-            state.agents_enabled,
-            state.skills_enabled,
-            state.skills_roots.clone(),
-        ),
-        Err(err) => {
-            let state = err.into_inner();
-            (
+    let (agents_enabled, skills_enabled, skills_roots, agents_fallback_filenames) =
+        match state.read() {
+            Ok(state) => (
                 state.agents_enabled,
                 state.skills_enabled,
                 state.skills_roots.clone(),
-            )
-        }
-    };
+                state.agents_fallback_filenames.clone(),
+            ),
+            Err(err) => {
+                let state = err.into_inner();
+                (
+                    state.agents_enabled,
+                    state.skills_enabled,
+                    state.skills_roots.clone(),
+                    state.agents_fallback_filenames.clone(),
+                )
+            }
+        };
 
     for path in &event.paths {
-        if agents_enabled && is_agents_path(path) {
+        if agents_enabled && is_agents_path(path, &agents_fallback_filenames) {
             agents_paths.push(path.clone());
         }
         if skills_enabled && is_skills_path(path, &skills_roots) {
@@ -242,11 +254,13 @@ fn classify_event(event: &Event, state: &RwLock<WatchState>) -> (Vec<PathBuf>, V
     (agents_paths, skills_paths)
 }
 
-fn is_agents_path(path: &Path) -> bool {
+fn is_agents_path(path: &Path, fallbacks: &HashSet<String>) -> bool {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return false;
     };
-    name == DEFAULT_PROJECT_DOC_FILENAME || name == LOCAL_PROJECT_DOC_FILENAME
+    name == DEFAULT_PROJECT_DOC_FILENAME
+        || name == LOCAL_PROJECT_DOC_FILENAME
+        || fallbacks.contains(name)
 }
 
 fn is_skills_path(path: &Path, roots: &HashSet<PathBuf>) -> bool {
