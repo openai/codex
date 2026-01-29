@@ -1532,6 +1532,7 @@ impl ChatWidget {
         self.bottom_pane.set_unified_exec_processes(processes);
     }
 
+    /// Record recent stdout/stderr lines for the unified exec footer.
     fn track_unified_exec_output_chunk(&mut self, call_id: &str, chunk: &[u8]) {
         let Some(process) = self
             .unified_exec_processes
