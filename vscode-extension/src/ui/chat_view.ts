@@ -143,6 +143,9 @@ export type ChatViewState = {
   latestDiff: string | null;
   sending: boolean;
   reloading: boolean;
+  hydrationBlockedText?: string | null;
+  opencodeDefaultModelKey?: string | null;
+  cliDefaultModelState?: ModelState | null;
   statusText?: string | null;
   statusTooltip?: string | null;
   modelState?: ModelState | null;
@@ -183,6 +186,10 @@ const modelStateBySessionId = new Map<string, ModelState>();
 export function getSessionModelState(sessionId: string | null): ModelState {
   if (!sessionId) return sessionModelState;
   return modelStateBySessionId.get(sessionId) ?? sessionModelState;
+}
+
+export function hasSessionModelState(sessionId: string): boolean {
+  return modelStateBySessionId.has(sessionId);
 }
 
 export function setSessionModelState(
@@ -667,6 +674,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const sessionId = anyMsg["sessionId"];
       if (typeof sessionId !== "string") return;
       await vscode.commands.executeCommand("codez.selectSession", {
+        sessionId,
+      });
+      return;
+    }
+
+    if (type === "loadSessionHistory") {
+      const sessionId = anyMsg["sessionId"];
+      if (typeof sessionId !== "string") return;
+      await vscode.commands.executeCommand("codez._internal.loadHistoryForSession", {
         sessionId,
       });
       return;
@@ -1500,6 +1516,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .tab.unread { background: rgba(255, 185, 0, 0.14); }
       .tab.running { background: rgba(0, 120, 212, 0.12); }
       .log { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 12px; }
+      .hydrateBanner { margin: 0 12px 12px; border: 1px solid rgba(127,127,127,0.25); border-radius: 12px; padding: 10px 12px; background: rgba(255, 185, 0, 0.10); display: none; align-items: center; justify-content: space-between; gap: 10px; }
+      .hydrateBannerText { flex: 1 1 auto; min-width: 0; white-space: pre-wrap; opacity: 0.9; }
+      .hydrateBannerActions { display: flex; gap: 8px; flex: 0 0 auto; }
+      .hydrateBannerBtn { padding: 6px 10px; border-radius: 8px; border: 1px solid rgba(127,127,127,0.35); background: transparent; color: inherit; cursor: pointer; }
+      .hydrateBannerBtn.primary { background: var(--vscode-button-background, rgba(0,120,212,0.18)); border-color: var(--vscode-button-border, rgba(0,120,212,0.45)); color: var(--vscode-button-foreground, inherit); }
+      .hydrateBannerBtn:disabled { opacity: 0.5; cursor: default; }
       .approvals { padding: 12px; border-bottom: 1px solid rgba(127,127,127,0.25); display: flex; flex-direction: column; gap: 10px; }
       .approval { border: 1px solid rgba(127,127,127,0.25); border-radius: 10px; padding: 10px 12px; background: rgba(255, 120, 0, 0.10); }
       .approvalTitle { font-weight: 600; margin-bottom: 6px; }
@@ -1703,6 +1725,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         </div>
       </div>
 	    <div id="log" class="log"></div>
+      <div id="hydrateBanner" class="hydrateBanner" style="display:none"></div>
 		    <div id="composer" class="composer">
 	      <div id="editBanner" class="editBanner" style="display:none"></div>
 	      <div id="askUserQuestion" class="askUserQuestion"></div>

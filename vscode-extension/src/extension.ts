@@ -32,6 +32,7 @@ import {
 import {
   ChatViewProvider,
   getSessionModelState,
+  hasSessionModelState,
   setDefaultModelState,
   setSessionModelState,
   type ChatBlock,
@@ -439,6 +440,7 @@ let customPrompts: CustomPromptSummary[] = [];
 const pendingModelFetchByBackend = new Map<string, Promise<void>>();
 const PROMPTS_CMD_PREFIX = "prompts";
 const loggedAgentScanErrors = new Set<string>();
+const UNHANDLED_DEBUG_MAX_CHARS = 100_000;
 
 export function activate(context: vscode.ExtensionContext): void {
   extensionContext = context;
@@ -2288,6 +2290,49 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand(
+      "codez._internal.loadHistoryForSession",
+      async (args?: unknown) => {
+        if (!backendManager)
+          throw new Error("backendManager is not initialized");
+        if (!sessions) throw new Error("sessions is not initialized");
+        if (!chatView) throw new Error("chatView is not initialized");
+
+        const session = parseSessionArg(args, sessions);
+        if (!session) {
+          void vscode.window.showErrorMessage("Session not found.");
+          return;
+        }
+
+        const anyRunning = [...runtimeBySessionId.values()].some(
+          (r) =>
+            r.sending ||
+            r.activeTurnId !== null ||
+            r.streamingAssistantItemIds.size > 0 ||
+            r.pendingApprovals.size > 0,
+        );
+        if (anyRunning) {
+          const rt = ensureRuntime(session.id);
+          rt.uiHydrationBlockedText =
+            "他のセッションが実行中のため、このセッションの履歴を読み込めません。\nStop してから Load history を実行してください。";
+          chatView.refresh();
+          chatView.toast("info", "他のセッションが実行中です。Stop してから実行してください。");
+          return;
+        }
+
+        const res = await backendManager.resumeSession(session);
+        void ensureModelsFetched(session);
+        hydrateRuntimeFromThread(session.id, res.thread);
+        const rt = ensureRuntime(session.id);
+        rt.uiHydrationBlockedText = null;
+        setActiveSession(session.id);
+        refreshCustomPromptsFromDisk();
+        await showCodezViewContainer();
+      },
+    ),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
       "codez.openSessionPanel",
       async (args?: unknown) => {
         if (!backendManager)
@@ -2358,54 +2403,20 @@ export function activate(context: vscode.ExtensionContext): void {
           return;
         }
 
-        // Session switching should be a pure UI operation. However, after a reload the UI may not
-        // have hydrated blocks for a session yet. In that case, treat the click as an explicit
-        // "open" and resume once (only if nothing is currently running).
+        // Session switching should be a pure UI operation.
+        // If history hasn't been loaded yet (e.g. after extension host reload), do NOT auto-resume:
+        // doing network calls on tab-click can interrupt or confuse in-progress turns.
         setActiveSession(session.id, { markRead: false });
         await showCodezViewContainer();
 
         const rt = ensureRuntime(session.id);
         if (hasConversationBlocks(rt)) {
           rt.uiHydrationBlockedText = null;
-          setActiveSession(session.id);
-          return;
-        }
-
-        const anyRunning = [...runtimeBySessionId.values()].some(
-          (r) =>
-            r.sending ||
-            r.activeTurnId !== null ||
-            r.streamingAssistantItemIds.size > 0 ||
-            r.pendingApprovals.size > 0,
-        );
-        if (anyRunning) {
+        } else {
           rt.uiHydrationBlockedText =
-            "This session has not been loaded in the UI yet. Wait for the running session to finish, then use Reload/Resume to load history.";
-          setActiveSession(session.id);
-          return;
+            "このセッションの履歴はまだ UI に読み込まれていません。\nLoad history を押すか、SESSIONS から開いてください。";
         }
-
-        try {
-          const res = await backendManager.resumeSession(session);
-          void ensureModelsFetched(session);
-          hydrateRuntimeFromThread(session.id, res.thread);
-          rt.uiHydrationBlockedText = null;
-          setActiveSession(session.id);
-        } catch (err) {
-          outputChannel?.appendLine(
-            `[selectSession] Failed to hydrate sessionId=${session.id}: ${
-              err instanceof Error ? (err.stack ?? err.message) : String(err)
-            }`,
-          );
-          upsertBlock(session.id, {
-            id: newLocalId("error"),
-            type: "error",
-            title: "Failed to load session",
-            text: String(err),
-          });
-          chatView?.refresh();
-          setActiveSession(session.id);
-        }
+        setActiveSession(session.id);
       },
     ),
   );
@@ -3644,8 +3655,9 @@ function hasConversationBlocks(rt: SessionRuntime): boolean {
       case "mcp":
       case "webSearch":
       case "reasoning":
-      case "plan":
-      case "divider":
+      case "step":
+      case "image":
+      case "imageGallery":
         return true;
       default:
         return false;
@@ -3660,6 +3672,16 @@ function setActiveSession(
   const markRead = opts?.markRead ?? true;
   activeSessionId = sessionId;
   ensureRuntime(sessionId);
+  const s = sessions ? sessions.getById(sessionId) : null;
+  if (s?.backendId === "opencode" && !hasSessionModelState(sessionId)) {
+    // NOTE: opencode sessions must not inherit codex/codez defaults from ~/.codex/config.toml.
+    // Use "default (opencode config)" unless the user explicitly selects a model.
+    setSessionModelState(sessionId, {
+      model: null,
+      provider: null,
+      reasoning: null,
+    });
+  }
   if (markRead) unreadSessionIds.delete(sessionId);
   if (extensionContext) {
     void extensionContext.workspaceState.update(
@@ -3671,7 +3693,6 @@ function setActiveSession(
   if (hiddenTabSessionIds.delete(sessionId)) {
     if (extensionContext) saveHiddenTabSessions(extensionContext);
   }
-  const s = sessions ? sessions.getById(sessionId) : null;
   if (s) void ensureModelsFetched(s);
   chatView?.refresh();
   chatView?.syncBlocksForActiveSession();
@@ -4096,6 +4117,7 @@ function buildChatState(): ChatViewState {
         .filter(Boolean)
         .join(" • "),
       statusTooltip: globalRateLimitStatusTooltip,
+      cliDefaultModelState: getSessionModelState(null),
       modelState: getSessionModelState(null),
       models: null,
       approvals: [],
@@ -4122,10 +4144,13 @@ function buildChatState(): ChatViewState {
       latestDiff: null,
       sending: false,
       reloading: false,
+      hydrationBlockedText: null,
+      opencodeDefaultModelKey: null,
       statusText: [globalStatusText, globalRateLimitStatusText]
         .filter(Boolean)
         .join(" • "),
       statusTooltip: globalRateLimitStatusTooltip,
+      cliDefaultModelState: getSessionModelState(null),
       modelState: getSessionModelState(null),
       approvals: [],
       customPrompts: promptSummaries,
@@ -4168,10 +4193,13 @@ function buildChatState(): ChatViewState {
     latestDiff: rt.latestDiff,
     sending: rt.sending,
     reloading: rt.reloading,
+    hydrationBlockedText,
+    opencodeDefaultModelKey: backendManager?.getOpencodeDefaultModelKey(activeRaw) ?? null,
     statusText:
       statusText ??
       [globalStatusText, globalRateLimitStatusText].filter(Boolean).join(" • "),
     statusTooltip: statusTooltipParts || null,
+    cliDefaultModelState: getSessionModelState(null),
     modelState: getSessionModelState(activeRaw.id),
     models: getModelOptionsForSession(activeRaw),
     approvals: [...rt.pendingApprovals.entries()].map(([requestKey, v]) => ({
@@ -5857,7 +5885,11 @@ function appendUnhandledGlobalEvent(title: string, params: unknown): void {
   const existing = globalRuntime.blocks.find((b) => b.id === id);
   const line = `${title}\n${formatParamsForDisplay(params)}\n`;
   if (existing && existing.type === "system") {
-    existing.text = `${existing.text}\n${line}`.trim();
+    existing.text = appendTextWithLimit(existing.text, line, {
+      limitChars: UNHANDLED_DEBUG_MAX_CHARS,
+      notice:
+        "…(truncated; showing only the most recent debug events; enable RPC payload logging if needed)…\n",
+    });
     upsertGlobal(existing);
     return;
   }
@@ -5966,8 +5998,38 @@ function appendUnhandledEvent(
     text: "",
   }));
   if (block.type !== "system") return;
-  block.text =
-    `${block.text}\n${title}\n${formatParamsForDisplay(params)}\n`.trim();
+  block.text = appendTextWithLimit(
+    block.text,
+    `${title}\n${formatParamsForDisplay(params)}\n`,
+    {
+      limitChars: UNHANDLED_DEBUG_MAX_CHARS,
+      notice:
+        "…(truncated; showing only the most recent debug events; enable RPC payload logging if needed)…\n",
+    },
+  );
+}
+
+function appendTextWithLimit(
+  prev: string,
+  addition: string,
+  opts: { limitChars: number; notice: string },
+): string {
+  const limit = Math.trunc(opts.limitChars);
+  if (!Number.isFinite(limit) || limit <= 0) {
+    throw new Error(`Invalid debug text limit: ${String(opts.limitChars)}`);
+  }
+  const next = `${prev}\n${addition}`.trim();
+  if (next.length <= limit) return next;
+
+  const notice = String(opts.notice ?? "");
+  if (notice.length >= limit) {
+    // Keep behavior explicit; if we misconfigure the notice, fail loudly.
+    throw new Error(
+      `Debug truncation notice is too long: noticeChars=${notice.length} limitChars=${limit}`,
+    );
+  }
+  const keep = limit - notice.length;
+  return `${notice}${next.slice(Math.max(0, next.length - keep))}`.trim();
 }
 
 function applyGlobalCodexEvent(

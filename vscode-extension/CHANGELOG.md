@@ -9,6 +9,20 @@
 - **Sessions / Notices**
   - `Thread started` の de-dupe を backend-aware にし、opencode と codez/codex の表示が混ざらないように修正
 
+## 0.2.6
+
+- **Models / Defaults**
+  - `default` のラベルに、CLI の既定（`CODEX_HOME/config.toml` の provider/model）を表示（codex/codez）
+  - opencode セッションの `default` が `opencode config` 由来か、OpenCode の provider 既定由来かを区別して表示
+- **OpenCode**
+  - `/provider` の `default` を反映して、モデル一覧で provider 既定を `isDefault` としてマーク
+  - `/config.model` が未設定（自動選択）の場合でも、`connected` provider と `default` から既定モデルを推定して表示
+- **Sessions / Reload**
+  - Reload 後など履歴未ロード時に、タブクリックで自動 Resume せず「Load history」で明示的に復元できるように
+- **Performance / Debug**
+  - Webview のセッション別ブロックキャッシュを LRU で上限化（メモリ肥大を抑制）
+  - Output の debug ログ（Unhandled events）を上限でトリム（無制限に増えない）
+
 ## 0.2.5
 
 - **Docs**

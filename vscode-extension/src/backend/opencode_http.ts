@@ -71,6 +71,14 @@ export type OpencodeEvent =
 export class OpencodeHttpClient {
   public constructor(private readonly opts: OpencodeHttpOptions) {}
 
+  public async getConfig(): Promise<Record<string, unknown>> {
+    const res = await this.getJson(`/config`, { directory: this.opts.directory });
+    if (typeof res !== "object" || res === null) {
+      throw new Error("Unexpected /config response (not an object)");
+    }
+    return res as Record<string, unknown>;
+  }
+
   public async getHealth(): Promise<{ healthy: true; version: string }> {
     const res = await this.getJson(`/global/health`);
     if (typeof res !== "object" || res === null) {
@@ -205,10 +213,20 @@ export class OpencodeHttpClient {
   }
 
   public async listModels(): Promise<Model[]> {
-    const res = (await this.getJson(`/provider`, {
+    const res = await this.listProviders();
+    return this.modelsFromProviders(res);
+  }
+
+  public async listProviders(): Promise<OpencodeProviderListResponse> {
+    return (await this.getJson(`/provider`, {
       directory: this.opts.directory,
     })) as OpencodeProviderListResponse;
+  }
+
+  public modelsFromProviders(res: OpencodeProviderListResponse): Model[] {
     const providers = Array.isArray(res?.all) ? res.all : [];
+    const defaultByProvider =
+      typeof res?.default === "object" && res.default !== null ? res.default : {};
     const out: Model[] = [];
     for (const p of providers) {
       const providerID = String(p.id ?? "");
@@ -236,6 +254,11 @@ export class OpencodeHttpClient {
         }
       }
 
+      const defaultModelID =
+        typeof (defaultByProvider as any)[providerID] === "string"
+          ? String((defaultByProvider as any)[providerID])
+          : null;
+
       for (const m of modelEntries) {
         if (!providerID || !m.id) continue;
         const key = `${providerID}:${m.id}`;
@@ -248,17 +271,11 @@ export class OpencodeHttpClient {
           description: "",
           supportedReasoningEfforts: [],
           defaultReasoningEffort: "none",
-          isDefault: false,
+          isDefault: defaultModelID ? defaultModelID === m.id : false,
         });
       }
     }
     return out;
-  }
-
-  public async listProviders(): Promise<OpencodeProviderListResponse> {
-    return (await this.getJson(`/provider`, {
-      directory: this.opts.directory,
-    })) as OpencodeProviderListResponse;
   }
 
   public async listProviderAuthMethods(): Promise<OpencodeProviderAuthMethodsResponse> {

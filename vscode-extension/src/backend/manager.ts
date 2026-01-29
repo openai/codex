@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { randomUUID } from "node:crypto";
+import { pathToFileURL } from "node:url";
 import { BackendProcess, type BackendExitInfo } from "./process";
 import { OpencodeServerProcess } from "./opencode_process";
 import {
@@ -54,6 +55,30 @@ type ModelSettings = {
   reasoning: string | null;
 };
 
+function imageMimeFromPath(filePath: string): string | null {
+  const ext = filePath.trim().toLowerCase().split(".").pop() ?? "";
+  switch (ext) {
+    case "png":
+      return "image/png";
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    case "gif":
+      return "image/gif";
+    case "webp":
+      return "image/webp";
+    case "bmp":
+      return "image/bmp";
+    case "svg":
+      return "image/svg+xml";
+    case "tif":
+    case "tiff":
+      return "image/tiff";
+    default:
+      return null;
+  }
+}
+
 export type BackendTermination = {
   reason: "exit" | "stop";
   code: number | null;
@@ -82,6 +107,7 @@ export class BackendManager implements vscode.Disposable {
   >();
   private readonly latestDiffByThreadId = new Map<string, string>();
   private readonly modelsByBackendKey = new Map<string, Model[]>();
+  private readonly opencodeDefaultModelKeyByBackendKey = new Map<string, string>();
   private readonly itemsByThreadId = new Map<string, Map<string, ThreadItem>>();
 
   public onSessionAdded: ((session: Session) => void) | null = null;
@@ -578,6 +604,11 @@ export class BackendManager implements vscode.Disposable {
     return this.modelsByBackendKey.get(session.backendKey) ?? null;
   }
 
+  public getOpencodeDefaultModelKey(session: Session): string | null {
+    if (session.backendId !== "opencode") return null;
+    return this.opencodeDefaultModelKeyByBackendKey.get(session.backendKey) ?? null;
+  }
+
   public async listSkillsForSession(
     session: Session,
   ): Promise<SkillsListEntry[]> {
@@ -648,9 +679,62 @@ export class BackendManager implements vscode.Disposable {
     const oc = this.opencode.get(session.backendKey);
     if (oc) {
       const cached = this.modelsByBackendKey.get(session.backendKey);
-      if (cached) return cached;
-      const models = await oc.client.listModels();
+      if (cached) {
+        if (!this.opencodeDefaultModelKeyByBackendKey.has(session.backendKey)) {
+          try {
+            const [providers, cfg] = await Promise.all([
+              oc.client.listProviders(),
+              oc.client.getConfig().catch((err) => {
+                this.output.appendLine(
+                  `[opencode] Failed to read /config for default model: ${String((err as Error)?.message ?? err)}`,
+                );
+                return null;
+              }),
+            ]);
+            const defaultKey = resolveOpencodeDefaultModelKey(cfg, providers);
+            if (defaultKey && defaultKey.trim()) {
+              this.opencodeDefaultModelKeyByBackendKey.set(
+                session.backendKey,
+                defaultKey,
+              );
+            }
+          } catch (err) {
+            this.output.appendLine(
+              `[opencode] Failed to resolve default model from /provider,/config: ${String((err as Error)?.message ?? err)}`,
+            );
+          }
+        }
+        return cached;
+      }
+
+      let providers: OpencodeProviderListResponse;
+      try {
+        providers = await oc.client.listProviders();
+      } catch (err) {
+        throw new Error(
+          `opencode /provider failed: ${String((err as Error)?.message ?? err)}`,
+        );
+      }
+      const models = oc.client.modelsFromProviders(providers);
+
+      let cfg: Record<string, unknown> | null = null;
+      try {
+        cfg = await oc.client.getConfig();
+      } catch (err) {
+        this.output.appendLine(
+          `[opencode] Failed to read /config for default model: ${String((err as Error)?.message ?? err)}`,
+        );
+      }
       this.modelsByBackendKey.set(session.backendKey, models);
+      const defaultKey = resolveOpencodeDefaultModelKey(cfg, providers);
+      if (defaultKey) {
+        this.opencodeDefaultModelKeyByBackendKey.set(
+          session.backendKey,
+          defaultKey,
+        );
+      } else {
+        this.opencodeDefaultModelKeyByBackendKey.delete(session.backendKey);
+      }
       return models;
     }
     const proc = this.processes.get(session.backendKey);
@@ -1087,9 +1171,6 @@ export class BackendManager implements vscode.Disposable {
 
     const oc = this.opencode.get(session.backendKey);
     if (oc) {
-      if (images.length > 0) {
-        throw new Error("opencode backend does not support image inputs yet.");
-      }
       const trimmed = text.trim();
       if (!trimmed) {
         throw new Error("Message must include text");
@@ -1120,6 +1201,48 @@ export class BackendManager implements vscode.Disposable {
       const parts: Array<Record<string, unknown>> = [
         { type: "text", text: trimmed },
       ];
+      for (const img of images) {
+        if (img.kind === "localImage") {
+          const mime = imageMimeFromPath(img.path);
+          if (!mime) {
+            throw new Error(
+              `Unsupported image extension for opencode: ${img.path} (expected png/jpg/jpeg/gif/webp/bmp/svg/tiff)`,
+            );
+          }
+          parts.push({
+            type: "file",
+            mime,
+            filename: img.path.split(/[\\/]/).pop() ?? "image",
+            url: pathToFileURL(img.path).toString(),
+          });
+          continue;
+        }
+        if (img.kind === "imageUrl") {
+          const raw = String(img.url ?? "").trim();
+          // Avoid guessing MIME types for remote URLs; require a data URL if we can't infer.
+          const m = /^data:([^;]+);base64,/.exec(raw);
+          if (!m) {
+            throw new Error(
+              "opencode imageUrl input requires a data:...;base64,... URL (remote URLs are not supported by this UI yet).",
+            );
+          }
+          const mime = m[1] ?? "";
+          if (!mime.startsWith("image/")) {
+            throw new Error(
+              `opencode imageUrl input must be an image/* data URL (got ${mime || "unknown"})`,
+            );
+          }
+          parts.push({
+            type: "file",
+            mime,
+            filename: "image",
+            url: raw,
+          });
+          continue;
+        }
+        const _exhaustive: never = img;
+        void _exhaustive;
+      }
 
       this.output.appendLine(`\n>> (${session.title}) ${trimmed}`);
       this.output.append(`<< (${session.title}) `);
@@ -1769,6 +1892,7 @@ export class BackendManager implements vscode.Disposable {
 
   private cleanupBackendCaches(backendKey: string): void {
     this.modelsByBackendKey.delete(backendKey);
+    this.opencodeDefaultModelKeyByBackendKey.delete(backendKey);
     const sessions = this.sessions.list(backendKey);
     for (const s of sessions) {
       this.itemsByThreadId.delete(s.threadId);
@@ -2317,6 +2441,74 @@ type V2AskUserQuestionRequest = Extract<
     method: "user/askQuestion";
   }
 >;
+
+function parseOpencodeDefaultModelKey(
+  cfg: Record<string, unknown> | null,
+): string | null {
+  if (!cfg) return null;
+  const raw = typeof cfg["model"] === "string" ? String(cfg["model"]).trim() : "";
+  if (!raw) return null;
+
+  // opencode config commonly uses `provider/modelID` (e.g. "openai/gpt-5.2").
+  const slash = raw.indexOf("/");
+  if (slash > 0 && slash < raw.length - 1) {
+    const providerID = raw.slice(0, slash).trim();
+    const modelID = raw.slice(slash + 1).trim();
+    if (providerID && modelID) return `${providerID}:${modelID}`;
+  }
+
+  // Some surfaces may already use `provider:modelID`.
+  const colon = raw.indexOf(":");
+  if (colon > 0 && colon < raw.length - 1) {
+    const providerID = raw.slice(0, colon).trim();
+    const modelID = raw.slice(colon + 1).trim();
+    if (providerID && modelID) return `${providerID}:${modelID}`;
+  }
+
+  return null;
+}
+
+function resolveOpencodeDefaultModelKey(
+  cfg: Record<string, unknown> | null,
+  providers: OpencodeProviderListResponse,
+): string | null {
+  const fromConfig = parseOpencodeDefaultModelKey(cfg);
+  if (fromConfig) return fromConfig;
+
+  const providerAllowlist = (() => {
+    if (!cfg) return null;
+    const raw = cfg["provider"];
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    return new Set(Object.keys(raw as Record<string, unknown>).filter(Boolean));
+  })();
+
+  const connected = Array.isArray(providers?.connected) ? providers.connected : [];
+  const all = Array.isArray(providers?.all) ? providers.all : [];
+  const defaultByProvider =
+    typeof providers?.default === "object" && providers.default !== null
+      ? providers.default
+      : {};
+
+  const hasProvider = (providerID: string): boolean => {
+    if (!providerID) return false;
+    if (providerAllowlist && !providerAllowlist.has(providerID)) return false;
+    return all.some((p) => String((p as any)?.id ?? "") === providerID);
+  };
+
+  const providerID =
+    connected.find(hasProvider) ??
+    all.map((p) => String((p as any)?.id ?? "")).find(hasProvider) ??
+    null;
+  if (!providerID) return null;
+
+  const modelID =
+    typeof (defaultByProvider as any)[providerID] === "string"
+      ? String((defaultByProvider as any)[providerID]).trim()
+      : "";
+  if (!modelID) return null;
+
+  return `${providerID}:${modelID}`;
+}
 
 function summarizeItem(
   phase: "started" | "completed",

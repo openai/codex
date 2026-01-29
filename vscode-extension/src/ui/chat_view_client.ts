@@ -159,6 +159,9 @@ type ChatViewState = {
   hasLatestDiff: boolean;
   sending: boolean;
   reloading: boolean;
+  hydrationBlockedText?: string | null;
+  opencodeDefaultModelKey?: string | null;
+  cliDefaultModelState?: ModelState | null;
   statusText?: string | null;
   statusTooltip?: string | null;
   modelState?: ModelState | null;
@@ -260,6 +263,7 @@ function main(): void {
 
   const titleEl = mustGet("title");
   const statusTextEl = mustGet("statusText");
+  const hydrateBannerEl = mustGet<HTMLDivElement>("hydrateBanner");
   const logEl = mustGet("log");
   const approvalsEl = mustGet("approvals");
   const askUserQuestionEl = mustGet("askUserQuestion");
@@ -901,6 +905,37 @@ function main(): void {
       o.value = opt;
       o.textContent = opt === "default" ? "default (CLI config)" : opt;
       if (opt === v) o.selected = true;
+      el.appendChild(o);
+    }
+  };
+
+  const populateSelectWithLabels = (
+    el: HTMLSelectElement,
+    options: Array<{ value: string; label: string }>,
+    value: string | null | undefined,
+    opts?: { defaultLabel?: string | null },
+  ): void => {
+    const v = (value && value.trim()) || "default";
+    const wanted = options.some((o) => o.value === v)
+      ? options
+      : [{ value: v, label: v }, ...options];
+    const sig =
+      v +
+      "\n" +
+      wanted.map((o) => `${o.value}\t${o.label}`).join("\n") +
+      "\n" +
+      String(opts?.defaultLabel ?? "");
+    if (el.dataset.sig === sig) return;
+    el.dataset.sig = sig;
+    el.innerHTML = "";
+    for (const opt of wanted) {
+      const o = document.createElement("option");
+      o.value = opt.value;
+      o.textContent =
+        opt.value === "default"
+          ? opts?.defaultLabel ?? "default (CLI config)"
+          : opt.label;
+      if (opt.value === v) o.selected = true;
       el.appendChild(o);
     }
   };
@@ -2521,6 +2556,45 @@ function main(): void {
   } = null;
   const pendingBlocksBySessionId = new Map<string, ChatBlock[]>();
   const blocksBySessionId = new Map<string, ChatBlock[]>();
+  const BLOCK_CACHE_MAX_SESSIONS = 3;
+  const blockCacheTouchOrder = new Map<string, number>();
+  let blockCacheTouchClock = 0;
+
+  function touchBlockCache(sessionId: string): void {
+    if (!sessionId) return;
+    blockCacheTouchClock += 1;
+    blockCacheTouchOrder.set(sessionId, blockCacheTouchClock);
+    pruneBlockCaches();
+  }
+
+  function pruneBlockCaches(): void {
+    const activeId = state.activeSession?.id ?? null;
+    const ids = new Set<string>();
+    for (const k of pendingBlocksBySessionId.keys()) ids.add(k);
+    for (const k of blocksBySessionId.keys()) ids.add(k);
+    for (const k of blockCacheTouchOrder.keys()) ids.add(k);
+    if (ids.size <= BLOCK_CACHE_MAX_SESSIONS) return;
+
+    const entries = [...ids].map((id) => ({
+      id,
+      t: blockCacheTouchOrder.get(id) ?? 0,
+      active: id === activeId,
+    }));
+    entries.sort((a, b) => {
+      if (a.active !== b.active) return a.active ? 1 : -1;
+      return a.t - b.t;
+    });
+
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i]!;
+      const remaining = entries.length - i;
+      if (remaining <= BLOCK_CACHE_MAX_SESSIONS) break;
+      if (e.active) continue;
+      pendingBlocksBySessionId.delete(e.id);
+      blocksBySessionId.delete(e.id);
+      blockCacheTouchOrder.delete(e.id);
+    }
+  }
 
   function isOpen(key: string, defaultOpen: boolean): boolean {
     const v = detailsState[key];
@@ -3510,8 +3584,50 @@ function main(): void {
       reasoning: null,
     };
     const models = s.models ?? [];
-    const modelOptions = ["default", ...models.map((m) => m.model || m.id)];
-    populateSelect(modelSelect, modelOptions, ms.model);
+    const backendId = s.activeSession?.backendId ?? null;
+    const opencodeDefaultKey =
+      backendId === "opencode" ? String(s.opencodeDefaultModelKey || "") : "";
+    const opencodeDefaultDisplay = (() => {
+      if (backendId !== "opencode") return null;
+      if (!opencodeDefaultKey) return "default (opencode config)";
+      const match = models.find(
+        (m) => (m.model || m.id) === opencodeDefaultKey,
+      );
+      const label = match?.displayName ? match.displayName : opencodeDefaultKey;
+      return `default (opencode: ${label})`;
+    })();
+    const cliDefaultDisplay = (() => {
+      if (backendId === "opencode") return null;
+      const d = s.cliDefaultModelState || {
+        model: null,
+        provider: null,
+        reasoning: null,
+      };
+      const provider = d.provider ? String(d.provider).trim() : "";
+      const model = d.model ? String(d.model).trim() : "";
+      if (provider && model) return `default (CLI config: ${provider} / ${model})`;
+      if (provider) return `default (CLI config: ${provider} / default)`;
+      if (model) return `default (CLI config: ${model})`;
+      const backendDefault = models.find((m) => Boolean(m.isDefault));
+      if (backendDefault) {
+        const label = String(
+          backendDefault.displayName || backendDefault.model || backendDefault.id,
+        );
+        return `default (${backendId || "backend"}: ${label})`;
+      }
+      return "default (CLI config)";
+    })();
+    const modelOptions = [
+      { value: "default", label: "default" },
+      ...models.map((m) => ({
+        value: String(m.model || m.id),
+        label: String(m.displayName || m.model || m.id),
+      })),
+    ];
+    populateSelectWithLabels(modelSelect, modelOptions, ms.model, {
+      defaultLabel:
+        backendId === "opencode" ? opencodeDefaultDisplay : cliDefaultDisplay,
+    });
 
     const effortOptions = (() => {
       if (!ms.model || models.length === 0)
@@ -3603,7 +3719,6 @@ function main(): void {
     if (statusBtn) statusBtn.disabled = !s.activeSession || s.sending;
     resumeBtn.disabled = s.sending;
     attachBtn.disabled = !s.activeSession;
-    const backendId = s.activeSession?.backendId ?? null;
     reloadBtn.disabled =
       !s.activeSession || s.sending || s.reloading || backendId !== "codez";
     reloadBtn.title =
@@ -3620,6 +3735,37 @@ function main(): void {
     // Sending is still guarded by sendBtn.disabled and sendCurrentInput().
     if (!askUserQuestionState) inputEl.disabled = false;
     updateInputPlaceholder();
+
+    const hydrationText = String(s.hydrationBlockedText || "").trim();
+    if (hydrationText && s.activeSession) {
+      hydrateBannerEl.replaceChildren();
+      const text = document.createElement("div");
+      text.className = "hydrateBannerText";
+      text.textContent = hydrationText;
+      hydrateBannerEl.appendChild(text);
+
+      const actions = document.createElement("div");
+      actions.className = "hydrateBannerActions";
+
+      const loadBtn = document.createElement("button");
+      loadBtn.className = "hydrateBannerBtn primary";
+      loadBtn.textContent = "Load history";
+      loadBtn.disabled = Boolean(s.sending || s.reloading);
+      loadBtn.addEventListener("click", () => {
+        const sessionId = s.activeSession?.id ?? null;
+        if (!sessionId) return;
+        vscode.postMessage({ type: "loadSessionHistory", sessionId });
+      });
+      actions.appendChild(loadBtn);
+
+      hydrateBannerEl.appendChild(actions);
+      hydrateBannerEl.style.display = "flex";
+    } else {
+      if (hydrateBannerEl.style.display !== "none")
+        hydrateBannerEl.style.display = "none";
+      if (hydrateBannerEl.childNodes.length > 0)
+        hydrateBannerEl.replaceChildren();
+    }
 
     const sessionsList = s.sessions || [];
     const unread = new Set<string>(s.unreadSessionIds || []);
@@ -3759,6 +3905,7 @@ function main(): void {
         if (cached) {
           pendingBlocksBySessionId.delete(domSessionId);
           blocksBySessionId.set(domSessionId, cached);
+          touchBlockCache(domSessionId);
           state = { ...(state as any), blocks: cached } as ChatViewState;
           pendingBlocksState = state;
           scheduleBlocksRender();
@@ -5189,12 +5336,14 @@ function main(): void {
         if (pendingBlocks) {
           pendingBlocksBySessionId.delete(activeId);
           blocksBySessionId.set(activeId, pendingBlocks);
+          touchBlockCache(activeId);
           state = { ...(state as any), blocks: pendingBlocks } as ChatViewState;
           pendingBlocksState = state;
           scheduleBlocksRender();
         } else {
           const cachedBlocks = blocksBySessionId.get(activeId);
           if (cachedBlocks) {
+            touchBlockCache(activeId);
             state = {
               ...(state as any),
               blocks: cachedBlocks,
@@ -5224,9 +5373,11 @@ function main(): void {
       const blocks = Array.isArray(anyMsg.blocks)
         ? (anyMsg.blocks as ChatBlock[])
         : [];
+      touchBlockCache(sessionId);
       blocksBySessionId.set(sessionId, blocks);
       if (!state.activeSession || state.activeSession.id !== sessionId) {
         pendingBlocksBySessionId.set(sessionId, blocks);
+        touchBlockCache(sessionId);
         return;
       }
       state = { ...(state as any), blocks } as ChatViewState;
@@ -5266,6 +5417,7 @@ function main(): void {
       if (idx >= 0) blocks[idx] = block;
       else blocks.push(block);
       blocksBySessionId.set(sessionId, blocks);
+      touchBlockCache(sessionId);
       state = { ...(state as any), blocks } as ChatViewState;
       pendingBlocksState = state;
       scheduleBlocksRender();
@@ -5292,6 +5444,7 @@ function main(): void {
         b.text += delta;
         if (streaming !== null) (b as any).streaming = streaming;
         blocksBySessionId.set(sessionId, state.blocks || []);
+        touchBlockCache(sessionId);
 
         // Fast path: update the visible <pre> without a full render.
         const key = "b:" + blockId;
@@ -5317,6 +5470,7 @@ function main(): void {
       if (field === "commandOutput" && b.type === "command") {
         b.output += delta;
         blocksBySessionId.set(sessionId, state.blocks || []);
+        touchBlockCache(sessionId);
 
         const id = "command:" + blockId;
         const det = blockElByKey.get(id);
@@ -5337,6 +5491,7 @@ function main(): void {
       if (field === "fileChangeDetail" && b.type === "fileChange") {
         b.detail += delta;
         blocksBySessionId.set(sessionId, state.blocks || []);
+        touchBlockCache(sessionId);
 
         const id = "fileChange:" + blockId;
         const det = blockElByKey.get(id);
