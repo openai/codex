@@ -103,6 +103,7 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Settings;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
@@ -3106,10 +3107,29 @@ impl ChatWidget {
         if from_replay {
             return;
         }
-        let TurnItem::ContextCompaction(item) = event.item else {
-            return;
+        match event.item {
+            TurnItem::ContextCompaction(item) => self.on_context_compaction_started(item),
+            TurnItem::UserMessage(_)
+            | TurnItem::AgentMessage(_)
+            | TurnItem::Reasoning(_)
+            | TurnItem::WebSearch(_) => {}
         };
+    }
 
+    fn on_item_completed(&mut self, event: ItemCompletedEvent, from_replay: bool) {
+        if from_replay {
+            return;
+        }
+        match event.item {
+            TurnItem::ContextCompaction(item) => self.on_context_compaction_completed(item),
+            TurnItem::UserMessage(_)
+            | TurnItem::AgentMessage(_)
+            | TurnItem::Reasoning(_)
+            | TurnItem::WebSearch(_) => {}
+        };
+    }
+
+    fn on_context_compaction_started(&mut self, item: ContextCompactionItem) {
         self.flush_answer_stream_with_separator();
         if let Some(cell) = self.active_cell.as_mut().and_then(|cell| {
             cell.as_any_mut()
@@ -3130,14 +3150,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_item_completed(&mut self, event: ItemCompletedEvent, from_replay: bool) {
-        if from_replay {
-            return;
-        }
-        let TurnItem::ContextCompaction(item) = event.item else {
-            return;
-        };
-
+    fn on_context_compaction_completed(&mut self, item: ContextCompactionItem) {
         self.flush_answer_stream_with_separator();
         if let Some(cell) = self.active_cell.as_mut().and_then(|cell| {
             cell.as_any_mut()
