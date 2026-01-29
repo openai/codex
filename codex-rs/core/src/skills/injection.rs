@@ -159,10 +159,7 @@ pub(crate) fn tool_kind_for_path(path: &str) -> ToolMentionKind {
 }
 
 fn is_skill_filename(path: &str) -> bool {
-    let file_name = path
-        .rsplit(|ch| ch == '/' || ch == '\\')
-        .next()
-        .unwrap_or(path);
+    let file_name = path.rsplit(['/', '\\']).next().unwrap_or(path);
     file_name.eq_ignore_ascii_case(SKILL_FILENAME)
 }
 
