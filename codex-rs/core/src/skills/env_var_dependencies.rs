@@ -10,13 +10,15 @@ use tracing::warn;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::skills::SkillMetadata;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SkillDependencyInfo {
     pub(crate) skill_name: String,
     pub(crate) name: String,
     pub(crate) description: Option<String>,
 }
-use crate::skills::SkillMetadata;
+
 /// Resolve required dependency values (session cache, then env vars),
 /// and prompt the UI for any missing ones.
 pub(crate) async fn resolve_skill_dependencies_for_turn(
@@ -141,10 +143,10 @@ pub(crate) async fn request_skill_dependencies(
     for (name, answer) in response.answers {
         let mut user_note = None;
         for entry in &answer.answers {
-            if let Some(note) = entry.strip_prefix("user_note: ") {
-                if !note.trim().is_empty() {
-                    user_note = Some(note.trim().to_string());
-                }
+            if let Some(note) = entry.strip_prefix("user_note: ")
+                && !note.trim().is_empty()
+            {
+                user_note = Some(note.trim().to_string());
             }
         }
         if let Some(value) = user_note {

@@ -2532,6 +2532,8 @@ pub struct ToolRequestUserInputQuestion {
     pub question: String,
     #[serde(default)]
     pub is_other: bool,
+    #[serde(default)]
+    pub is_secret: bool,
     pub options: Option<Vec<ToolRequestUserInputOption>>,
 }
 
