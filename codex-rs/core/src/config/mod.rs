@@ -13,6 +13,7 @@ use crate::config::types::OtelConfig;
 use crate::config::types::OtelConfigToml;
 use crate::config::types::OtelExporterKind;
 use crate::config::types::SandboxWorkspaceWrite;
+use crate::config::types::SecretsConfigToml;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
 use crate::config::types::SkillsConfig;
@@ -42,6 +43,7 @@ use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+use crate::secrets::SecretsBackendKind;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
@@ -234,6 +236,9 @@ pub struct Config {
     /// keyring: Use an OS-specific keyring service.
     /// auto: Use the OS-specific keyring service if available, otherwise use a file.
     pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
+
+    /// Active secrets backend. Defaults to the local encrypted file backend.
+    pub secrets_backend: SecretsBackendKind,
 
     /// Definition for MCP servers that Codex can reach out to for tool calls.
     pub mcp_servers: Constrained<HashMap<String, McpServerConfig>>,
@@ -853,6 +858,10 @@ pub struct ConfigToml {
     /// auto: Use the keyring if available, otherwise use a file.
     #[serde(default)]
     pub cli_auth_credentials_store: Option<AuthCredentialsStoreMode>,
+
+    /// Secrets configuration. Defaults to a local encrypted file backend.
+    #[serde(default)]
+    pub secrets: Option<SecretsConfigToml>,
 
     /// Definition for MCP servers that Codex can reach out to for tool calls.
     #[serde(default)]
@@ -1482,6 +1491,11 @@ impl Config {
             });
 
         let forced_login_method = cfg.forced_login_method;
+        let secrets_backend = cfg
+            .secrets
+            .as_ref()
+            .and_then(|secrets| secrets.backend)
+            .unwrap_or_default();
 
         let model = model.or(config_profile.model).or(cfg.model);
 
@@ -1571,6 +1585,7 @@ impl Config {
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
             cli_auth_credentials_store_mode: cfg.cli_auth_credentials_store.unwrap_or_default(),
+            secrets_backend,
             mcp_servers,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
@@ -3797,6 +3812,7 @@ model_verbosity = "high"
                 notify: None,
                 cwd: fixture.cwd(),
                 cli_auth_credentials_store_mode: Default::default(),
+                secrets_backend: SecretsBackendKind::Local,
                 mcp_servers: Constrained::allow_any(HashMap::new()),
                 mcp_oauth_credentials_store_mode: Default::default(),
                 mcp_oauth_callback_port: None,
@@ -3882,6 +3898,7 @@ model_verbosity = "high"
             notify: None,
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
+            secrets_backend: SecretsBackendKind::Local,
             mcp_servers: Constrained::allow_any(HashMap::new()),
             mcp_oauth_credentials_store_mode: Default::default(),
             mcp_oauth_callback_port: None,
@@ -3982,6 +3999,7 @@ model_verbosity = "high"
             notify: None,
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
+            secrets_backend: SecretsBackendKind::Local,
             mcp_servers: Constrained::allow_any(HashMap::new()),
             mcp_oauth_credentials_store_mode: Default::default(),
             mcp_oauth_callback_port: None,
@@ -4068,6 +4086,7 @@ model_verbosity = "high"
             notify: None,
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
+            secrets_backend: SecretsBackendKind::Local,
             mcp_servers: Constrained::allow_any(HashMap::new()),
             mcp_oauth_credentials_store_mode: Default::default(),
             mcp_oauth_callback_port: None,

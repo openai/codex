@@ -1508,6 +1508,7 @@ dependencies = [
  "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
+ "codex-secrets",
  "codex-state",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
