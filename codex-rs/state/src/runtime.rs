@@ -1,4 +1,7 @@
 use crate::DB_ERROR_METRIC;
+use crate::LogEntry;
+use crate::LogQuery;
+use crate::LogRow;
 use crate::SortKey;
 use crate::ThreadMetadata;
 use crate::ThreadMetadataBuilder;
@@ -201,6 +204,75 @@ FROM threads
         })
     }
 
+    /// Insert one log entry into the logs table.
+    pub async fn insert_log(&self, entry: &LogEntry) -> anyhow::Result<()> {
+        self.insert_logs(std::slice::from_ref(entry)).await
+    }
+
+    /// Insert a batch of log entries into the logs table.
+    pub async fn insert_logs(&self, entries: &[LogEntry]) -> anyhow::Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        let mut builder = QueryBuilder::<Sqlite>::new(
+            "INSERT INTO logs (ts, ts_nanos, level, target, message, thread_id, module_path, file, line) ",
+        );
+        builder.push_values(entries, |mut row, entry| {
+            row.push_bind(entry.ts)
+                .push_bind(entry.ts_nanos)
+                .push_bind(&entry.level)
+                .push_bind(&entry.target)
+                .push_bind(&entry.message)
+                .push_bind(&entry.thread_id)
+                .push_bind(&entry.module_path)
+                .push_bind(&entry.file)
+                .push_bind(entry.line);
+        });
+        builder.build().execute(self.pool.as_ref()).await?;
+        Ok(())
+    }
+
+    pub(crate) async fn delete_logs_before(&self, cutoff_ts: i64) -> anyhow::Result<u64> {
+        let result = sqlx::query("DELETE FROM logs WHERE ts < ?")
+            .bind(cutoff_ts)
+            .execute(self.pool.as_ref())
+            .await?;
+        Ok(result.rows_affected())
+    }
+
+    /// Query logs with optional filters.
+    pub async fn query_logs(&self, query: &LogQuery) -> anyhow::Result<Vec<LogRow>> {
+        let mut builder = QueryBuilder::<Sqlite>::new(
+            "SELECT id, ts, ts_nanos, level, target, message, thread_id, file, line FROM logs WHERE 1 = 1",
+        );
+        push_log_filters(&mut builder, query);
+        if query.descending {
+            builder.push(" ORDER BY id DESC");
+        } else {
+            builder.push(" ORDER BY id ASC");
+        }
+        if let Some(limit) = query.limit {
+            builder.push(" LIMIT ").push_bind(limit as i64);
+        }
+
+        let rows = builder
+            .build_query_as::<LogRow>()
+            .fetch_all(self.pool.as_ref())
+            .await?;
+        Ok(rows)
+    }
+
+    /// Return the max log id matching optional filters.
+    pub async fn max_log_id(&self, query: &LogQuery) -> anyhow::Result<i64> {
+        let mut builder =
+            QueryBuilder::<Sqlite>::new("SELECT MAX(id) AS max_id FROM logs WHERE 1 = 1");
+        push_log_filters(&mut builder, query);
+        let row = builder.build().fetch_one(self.pool.as_ref()).await?;
+        let max_id: Option<i64> = row.try_get("max_id")?;
+        Ok(max_id.unwrap_or(0))
+    }
+
     /// List thread ids using the underlying database (no rollout scanning).
     pub async fn list_thread_ids(
         &self,
@@ -370,6 +442,40 @@ ON CONFLICT(id) DO UPDATE SET
             );
         }
         self.upsert_thread(&metadata).await
+    }
+}
+
+fn push_log_filters<'a>(builder: &mut QueryBuilder<'a, Sqlite>, query: &'a LogQuery) {
+    if let Some(level_upper) = query.level_upper.as_ref() {
+        builder
+            .push(" AND UPPER(level) = ")
+            .push_bind(level_upper.as_str());
+    }
+    if let Some(from_ts) = query.from_ts {
+        builder.push(" AND ts >= ").push_bind(from_ts);
+    }
+    if let Some(to_ts) = query.to_ts {
+        builder.push(" AND ts <= ").push_bind(to_ts);
+    }
+    if let Some(module_like) = query.module_like.as_ref() {
+        builder
+            .push(" AND module_path LIKE '%' || ")
+            .push_bind(module_like.as_str())
+            .push(" || '%'");
+    }
+    if let Some(file_like) = query.file_like.as_ref() {
+        builder
+            .push(" AND file LIKE '%' || ")
+            .push_bind(file_like.as_str())
+            .push(" || '%'");
+    }
+    if let Some(thread_id) = query.thread_id.as_ref() {
+        builder
+            .push(" AND thread_id = ")
+            .push_bind(thread_id.as_str());
+    }
+    if let Some(after_id) = query.after_id {
+        builder.push(" AND id > ").push_bind(after_id);
     }
 }
 

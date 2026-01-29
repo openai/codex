@@ -1851,14 +1851,18 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "clap",
  "codex-otel",
  "codex-protocol",
+ "dirs",
+ "owo-colors",
  "pretty_assertions",
  "serde",
  "serde_json",
  "sqlx",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 
@@ -1897,6 +1901,7 @@ dependencies = [
  "codex-login",
  "codex-otel",
  "codex-protocol",
+ "codex-state",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-utils-pty",
