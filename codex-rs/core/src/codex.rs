@@ -3478,7 +3478,7 @@ async fn run_sampling_request(
             sess.send_event(
                 &turn_context,
                 EventMsg::Warning(WarningEvent {
-                    message: "Connection was unstable; switching to HTTP transport.".to_string(),
+                    message: format!("Falling back from WebSockets to HTTPS transport. {err:#}"),
                 }),
             )
             .await;
