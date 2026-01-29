@@ -192,6 +192,14 @@ mod tests {
     async fn ignores_session_prefix_messages_when_truncating_rollout_from_start() {
         let (session, turn_context) = make_session_and_context().await;
         let mut items = session.build_initial_context(&turn_context).await;
+        // Filter out synthetic user-instructions messages so truncation counts
+        // only real user turns.
+        items.retain(|item| match item {
+            ResponseItem::Message { role, content, .. } if role == "user" => {
+                !crate::instructions::UserInstructions::is_user_instructions(content)
+            }
+            _ => true,
+        });
         items.push(user_msg("feature request"));
         items.push(assistant_msg("ack"));
         items.push(user_msg("second question"));
