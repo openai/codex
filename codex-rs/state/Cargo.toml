@@ -14,6 +14,7 @@ serde_json = { workspace = true }
 sqlx = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt-multi-thread", "sync", "time"] }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]

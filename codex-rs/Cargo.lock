@@ -1220,10 +1220,12 @@ dependencies = [
  "codex-core",
  "codex-git",
  "codex-utils-cargo-bin",
+ "pretty_assertions",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
+ "urlencoding",
 ]
 
 [[package]]
@@ -1572,11 +1574,13 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "crossbeam-channel",
  "ignore",
- "nucleo-matcher",
+ "nucleo",
  "pretty_assertions",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 
@@ -1855,6 +1859,7 @@ dependencies = [
  "sqlx",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 
@@ -1884,6 +1889,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-arg0",
  "codex-backend-client",
+ "codex-chatgpt",
  "codex-cli",
  "codex-common",
  "codex-core",
@@ -1892,6 +1898,7 @@ dependencies = [
  "codex-login",
  "codex-otel",
  "codex-protocol",
+ "codex-state",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-utils-pty",
@@ -1973,7 +1980,7 @@ name = "codex-utils-cargo-bin"
 version = "0.0.0"
 dependencies = [
  "assert_cmd",
- "path-absolutize",
+ "runfiles",
  "thiserror 2.0.17",
 ]
 
@@ -2234,6 +2241,7 @@ dependencies = [
  "tokio-tungstenite",
  "walkdir",
  "wiremock",
+ "zstd",
 ]
 
 [[package]]
@@ -4900,10 +4908,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "nucleo"
+version = "0.5.0"
+source = "git+https://github.com/helix-editor/nucleo.git?rev=4253de9faabb4e5c6d81d946a5e35a90f87347ee#4253de9faabb4e5c6d81d946a5e35a90f87347ee"
+dependencies = [
+ "nucleo-matcher",
+ "parking_lot",
+ "rayon",
+]
+
+[[package]]
 name = "nucleo-matcher"
 version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf33f538733d1a5a3494b836ba913207f14d9d4a1d3cd67030c5061bdd2cac85"
+source = "git+https://github.com/helix-editor/nucleo.git?rev=4253de9faabb4e5c6d81d946a5e35a90f87347ee#4253de9faabb4e5c6d81d946a5e35a90f87347ee"
 dependencies = [
  "memchr",
  "unicode-segmentation",
@@ -6332,6 +6349,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "rayon"
+version = "1.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "368f01d005bf8fd9b1206fb6fa653e6c4a81ceb1466406b81792d87c5677a58f"
+dependencies = [
+ "either",
+ "rayon-core",
+]
+
+[[package]]
+name = "rayon-core"
+version = "1.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
+dependencies = [
+ "crossbeam-deque",
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6559,6 +6596,11 @@ dependencies = [
  "subtle",
  "zeroize",
 ]
+
+[[package]]
+name = "runfiles"
+version = "0.1.0"
+source = "git+https://github.com/dzbarsky/rules_rust?rev=b56cbaa8465e74127f1ea216f813cd377295ad81#b56cbaa8465e74127f1ea216f813cd377295ad81"
 
 [[package]]
 name = "rustc-demangle"

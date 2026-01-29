@@ -1,0 +1,13 @@
+---
+source: tui/src/bottom_pane/request_user_input/mod.rs
+expression: "render_snapshot(&overlay, area)"
+---
+                                                                                
+  Question 1/1 (1 unanswered)                                                   
+  What would you like to do next?                                               
+                                                                                
+    2. Run tests      Pick a crate and run its tests.                           
+    3. Review a diff  Summarize or review current changes.                      
+  › 4. Refactor       Tighten structure and remove dead code.                   
+                                                                                
+  option 4/5 | tab to add notes | enter to submit answer | esc to interrupt

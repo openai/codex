@@ -211,6 +211,9 @@ impl OnboardingScreen {
 
 impl KeyboardHandler for OnboardingScreen {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
+        if !matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+            return;
+        }
         let is_api_key_entry_active = self.is_api_key_entry_active();
         let should_quit = match key_event {
             KeyEvent {

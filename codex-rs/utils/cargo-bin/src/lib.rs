@@ -1,7 +1,12 @@
 use std::ffi::OsString;
+use std::io;
+use std::path::Path;
 use std::path::PathBuf;
 
-pub use path_absolutize;
+pub use runfiles;
+
+/// Bazel sets this when runfiles directories are disabled, which we do on all platforms for consistency.
+const RUNFILES_MANIFEST_ONLY_ENV: &str = "RUNFILES_MANIFEST_ONLY";
 
 #[derive(Debug, thiserror::Error)]
 pub enum CargoBinError {
@@ -27,10 +32,9 @@ pub enum CargoBinError {
 
 /// Returns an absolute path to a binary target built for the current test run.
 ///
-/// In `cargo test`, `CARGO_BIN_EXE_*` env vars are absolute, but Buck2 may set
-/// them to project-relative paths (e.g. `buck-out/...`). Those paths break if a
-/// test later changes its working directory. This helper makes the path
-/// absolute up-front so callers can safely `chdir` afterwards.
+/// In `cargo test`, `CARGO_BIN_EXE_*` env vars are absolute.
+/// In `bazel test`, `CARGO_BIN_EXE_*` env vars are rlocationpaths, intended to be consumed by `rlocation`.
+/// This helper allows callers to transparently support both.
 pub fn cargo_bin(name: &str) -> Result<PathBuf, CargoBinError> {
     let env_keys = cargo_bin_env_keys(name);
     for key in &env_keys {
@@ -38,16 +42,20 @@ pub fn cargo_bin(name: &str) -> Result<PathBuf, CargoBinError> {
             return resolve_bin_from_env(key, value);
         }
     }
-
     match assert_cmd::Command::cargo_bin(name) {
         Ok(cmd) => {
-            let abs = absolutize_from_buck_or_cwd(PathBuf::from(cmd.get_program()))?;
-            if abs.exists() {
-                Ok(abs)
+            let mut path = PathBuf::from(cmd.get_program());
+            if !path.is_absolute() {
+                path = std::env::current_dir()
+                    .map_err(|source| CargoBinError::CurrentDir { source })?
+                    .join(path);
+            }
+            if path.exists() {
+                Ok(path)
             } else {
                 Err(CargoBinError::ResolvedPathDoesNotExist {
                     key: "assert_cmd::Command::cargo_bin".to_owned(),
-                    path: abs,
+                    path,
                 })
             }
         }
@@ -72,6 +80,31 @@ fn cargo_bin_env_keys(name: &str) -> Vec<String> {
     keys
 }
 
+pub fn runfiles_available() -> bool {
+    std::env::var_os(RUNFILES_MANIFEST_ONLY_ENV).is_some()
+}
+
+fn resolve_bin_from_env(key: &str, value: OsString) -> Result<PathBuf, CargoBinError> {
+    let raw = PathBuf::from(&value);
+    if runfiles_available() {
+        let runfiles = runfiles::Runfiles::create().map_err(|err| CargoBinError::CurrentExe {
+            source: std::io::Error::other(err),
+        })?;
+        if let Some(resolved) = runfiles::rlocation!(runfiles, &raw)
+            && resolved.exists()
+        {
+            return Ok(resolved);
+        }
+    } else if raw.is_absolute() && raw.exists() {
+        return Ok(raw);
+    }
+
+    Err(CargoBinError::ResolvedPathDoesNotExist {
+        key: key.to_owned(),
+        path: raw,
+    })
+}
+
 /// Macro that derives the path to a test resource at runtime, the value of
 /// which depends on whether Cargo or Bazel is being used to build and run a
 /// test. Note the return value may be a relative or absolute path.
@@ -84,97 +117,109 @@ fn cargo_bin_env_keys(name: &str) -> Vec<String> {
 #[macro_export]
 macro_rules! find_resource {
     ($resource:expr) => {{
-        // When this code is built and run with Bazel:
-        // - we inject `BAZEL_PACKAGE` as a compile-time environment variable
-        //   that points to native.package_name()
-        // - at runtime, Bazel will set `RUNFILES_DIR` to the runfiles directory
-        //
-        // Therefore, the compile-time value of `BAZEL_PACKAGE` will always be
-        // included in the compiled binary (even if it is built with Cargo), but
-        // we only check it at runtime if `RUNFILES_DIR` is set.
         let resource = std::path::Path::new(&$resource);
-        match std::env::var("RUNFILES_DIR") {
-            Ok(bazel_runtime_files) => match option_env!("BAZEL_PACKAGE") {
-                Some(bazel_package) => {
-                    use $crate::path_absolutize::Absolutize;
-
-                    let manifest_dir = std::path::PathBuf::from(bazel_runtime_files)
-                        .join("_main")
-                        .join(bazel_package)
-                        .join(resource);
-                    // Note we also have to normalize (but not canonicalize!)
-                    // the path for _Bazel_ because the original value ends with
-                    // `codex-rs/exec-server/tests/common/../suite/bash`, but
-                    // the `tests/common` folder will not exist at runtime under
-                    // Bazel. As such, we have to normalize it before passing it
-                    // to `dotslash fetch`.
-                    manifest_dir.absolutize().map(|p| p.to_path_buf())
-                }
-                None => Err(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    "BAZEL_PACKAGE not set in Bazel build",
-                )),
-            },
-            Err(_) => {
-                let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-                Ok(manifest_dir.join(resource))
-            }
+        if $crate::runfiles_available() {
+            // When this code is built and run with Bazel:
+            // - we inject `BAZEL_PACKAGE` as a compile-time environment variable
+            //   that points to native.package_name()
+            // - at runtime, Bazel will set runfiles-related env vars
+            $crate::resolve_bazel_runfile(option_env!("BAZEL_PACKAGE"), resource)
+        } else {
+            let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+            Ok(manifest_dir.join(resource))
         }
     }};
 }
 
-fn resolve_bin_from_env(key: &str, value: OsString) -> Result<PathBuf, CargoBinError> {
-    let abs = absolutize_from_buck_or_cwd(PathBuf::from(value))?;
-
-    if abs.exists() {
-        Ok(abs)
-    } else {
-        Err(CargoBinError::ResolvedPathDoesNotExist {
-            key: key.to_owned(),
-            path: abs,
-        })
-    }
-}
-
-fn absolutize_from_buck_or_cwd(path: PathBuf) -> Result<PathBuf, CargoBinError> {
-    if path.is_absolute() {
-        return Ok(path);
-    }
-
-    if let Some(root) =
-        buck_project_root().map_err(|source| CargoBinError::CurrentExe { source })?
+pub fn resolve_bazel_runfile(
+    bazel_package: Option<&str>,
+    resource: &Path,
+) -> std::io::Result<PathBuf> {
+    let runfiles = runfiles::Runfiles::create()
+        .map_err(|err| std::io::Error::other(format!("failed to create runfiles: {err}")))?;
+    let runfile_path = match bazel_package {
+        Some(bazel_package) => PathBuf::from("_main").join(bazel_package).join(resource),
+        None => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "BAZEL_PACKAGE was not set at compile time",
+            ));
+        }
+    };
+    let runfile_path = normalize_runfile_path(&runfile_path);
+    if let Some(resolved) = runfiles::rlocation!(runfiles, &runfile_path)
+        && resolved.exists()
     {
-        return Ok(root.join(path));
+        return Ok(resolved);
     }
-
-    Ok(std::env::current_dir()
-        .map_err(|source| CargoBinError::CurrentDir { source })?
-        .join(path))
+    let runfile_path_display = runfile_path.display();
+    Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        format!("runfile does not exist at: {runfile_path_display}"),
+    ))
 }
 
-/// Best-effort attempt to find the Buck project root for the currently running
-/// process.
-///
-/// Prefer this over `env!("CARGO_MANIFEST_DIR")` when running under Buck2: our
-/// Buck generator sets `CARGO_MANIFEST_DIR="."` for compilation, which makes
-/// `env!("CARGO_MANIFEST_DIR")` unusable for locating workspace files.
-pub fn buck_project_root() -> Result<Option<PathBuf>, std::io::Error> {
-    if let Some(root) = std::env::var_os("BUCK_PROJECT_ROOT") {
-        let root = PathBuf::from(root);
-        if root.is_absolute() {
-            return Ok(Some(root));
+pub fn resolve_cargo_runfile(resource: &Path) -> std::io::Result<PathBuf> {
+    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    Ok(manifest_dir.join(resource))
+}
+
+pub fn repo_root() -> io::Result<PathBuf> {
+    let marker = if runfiles_available() {
+        let runfiles = runfiles::Runfiles::create()
+            .map_err(|err| io::Error::other(format!("failed to create runfiles: {err}")))?;
+        let marker_path = option_env!("CODEX_REPO_ROOT_MARKER")
+            .map(PathBuf::from)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "CODEX_REPO_ROOT_MARKER was not set at compile time",
+                )
+            })?;
+        runfiles::rlocation!(runfiles, &marker_path).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "repo_root.marker not available in runfiles",
+            )
+        })?
+    } else {
+        resolve_cargo_runfile(Path::new("repo_root.marker"))?
+    };
+    let mut root = marker;
+    for _ in 0..4 {
+        root = root
+            .parent()
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "repo_root.marker did not have expected parent depth",
+                )
+            })?
+            .to_path_buf();
+    }
+    Ok(root)
+}
+
+fn normalize_runfile_path(path: &Path) -> PathBuf {
+    let mut components = Vec::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if matches!(components.last(), Some(std::path::Component::Normal(_))) {
+                    components.pop();
+                } else {
+                    components.push(component);
+                }
+            }
+            _ => components.push(component),
         }
     }
 
-    // Fall back to deriving the project root from the location of the test
-    // runner executable:
-    //   <project>/buck-out/v2/gen/.../__tests__/test-binary
-    let exe = std::env::current_exe()?;
-    for ancestor in exe.ancestors() {
-        if ancestor.file_name().is_some_and(|name| name == "buck-out") {
-            return Ok(ancestor.parent().map(PathBuf::from));
-        }
-    }
-
-    Ok(None)
+    components
+        .into_iter()
+        .fold(PathBuf::new(), |mut acc, component| {
+            acc.push(component.as_os_str());
+            acc
+        })
 }

@@ -26,10 +26,6 @@ pub(crate) fn truncate_skill_name(name: &str) -> String {
     truncate_text(name, SKILL_NAME_TRUNCATE_LEN)
 }
 
-pub(crate) fn truncated_skill_display_name(skill: &SkillMetadata) -> String {
-    truncate_skill_name(skill_display_name(skill))
-}
-
 pub(crate) fn match_skill(
     filter: &str,
     display_name: &str,

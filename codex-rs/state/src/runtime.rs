@@ -1,4 +1,5 @@
 use crate::DB_ERROR_METRIC;
+use crate::LogEntry;
 use crate::SortKey;
 use crate::ThreadMetadata;
 use crate::ThreadMetadataBuilder;
@@ -199,6 +200,35 @@ FROM threads
             next_anchor,
             num_scanned_rows,
         })
+    }
+
+    /// Insert one log entry into the logs table.
+    pub async fn insert_log(&self, entry: &LogEntry) -> anyhow::Result<()> {
+        self.insert_logs(std::slice::from_ref(entry)).await
+    }
+
+    /// Insert a batch of log entries into the logs table.
+    pub async fn insert_logs(&self, entries: &[LogEntry]) -> anyhow::Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        let mut builder = QueryBuilder::<Sqlite>::new(
+            "INSERT INTO logs (ts, ts_nanos, level, target, message, fields_json, module_path, file, line) ",
+        );
+        builder.push_values(entries, |mut row, entry| {
+            row.push_bind(entry.ts)
+                .push_bind(entry.ts_nanos)
+                .push_bind(&entry.level)
+                .push_bind(&entry.target)
+                .push_bind(&entry.message)
+                .push_bind(&entry.fields_json)
+                .push_bind(&entry.module_path)
+                .push_bind(&entry.file)
+                .push_bind(entry.line);
+        });
+        builder.build().execute(self.pool.as_ref()).await?;
+        Ok(())
     }
 
     /// List thread ids using the underlying database (no rollout scanning).

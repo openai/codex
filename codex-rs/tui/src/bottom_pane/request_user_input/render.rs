@@ -5,21 +5,64 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
+use std::borrow::Cow;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
+use crate::bottom_pane::popup_consts::standard_popup_hint_line;
+use crate::bottom_pane::scroll_state::ScrollState;
+use crate::bottom_pane::selection_popup_common::measure_rows_height;
 use crate::bottom_pane::selection_popup_common::menu_surface_inset;
 use crate::bottom_pane::selection_popup_common::menu_surface_padding_height;
 use crate::bottom_pane::selection_popup_common::render_menu_surface;
 use crate::bottom_pane::selection_popup_common::render_rows;
+use crate::bottom_pane::selection_popup_common::wrap_styled_line;
 use crate::render::renderable::Renderable;
 
-use super::DESIRED_SPACERS_WHEN_NOTES_HIDDEN;
+use super::DESIRED_SPACERS_BETWEEN_SECTIONS;
 use super::RequestUserInputOverlay;
 use super::TIP_SEPARATOR;
 
+const MIN_OVERLAY_HEIGHT: usize = 8;
+const PROGRESS_ROW_HEIGHT: usize = 1;
+const SPACER_ROWS_WITH_NOTES: usize = 1;
+const SPACER_ROWS_NO_OPTIONS: usize = 0;
+
+struct UnansweredConfirmationData {
+    title_line: Line<'static>,
+    subtitle_line: Line<'static>,
+    hint_line: Line<'static>,
+    rows: Vec<crate::bottom_pane::selection_popup_common::GenericDisplayRow>,
+    state: ScrollState,
+}
+
+struct UnansweredConfirmationLayout {
+    header_lines: Vec<Line<'static>>,
+    hint_lines: Vec<Line<'static>>,
+    rows: Vec<crate::bottom_pane::selection_popup_common::GenericDisplayRow>,
+    state: ScrollState,
+}
+
+fn line_to_owned(line: Line<'_>) -> Line<'static> {
+    Line {
+        style: line.style,
+        alignment: line.alignment,
+        spans: line
+            .spans
+            .into_iter()
+            .map(|span| Span {
+                style: span.style,
+                content: Cow::Owned(span.content.into_owned()),
+            })
+            .collect(),
+    }
+}
+
 impl Renderable for RequestUserInputOverlay {
     fn desired_height(&self, width: u16) -> u16 {
+        if self.confirm_unanswered_active() {
+            return self.unanswered_confirmation_height(width);
+        }
         let outer = Rect::new(0, 0, width, u16::MAX);
         let inner = menu_surface_inset(outer);
         let inner_width = inner.width.max(1);
@@ -36,26 +79,29 @@ impl Renderable for RequestUserInputOverlay {
         } else {
             0
         };
-        let spacer_rows = if has_options && !notes_visible {
-            DESIRED_SPACERS_WHEN_NOTES_HIDDEN as usize
+        // When notes are visible, the composer already separates options from the footer.
+        // Without notes, we keep extra spacing so the footer hints don't crowd the options.
+        let spacer_rows = if has_options {
+            if notes_visible {
+                SPACER_ROWS_WITH_NOTES
+            } else {
+                DESIRED_SPACERS_BETWEEN_SECTIONS as usize
+            }
         } else {
-            0
+            SPACER_ROWS_NO_OPTIONS
         };
         let footer_height = self.footer_required_height(inner_width) as usize;
 
-        // Tight minimum height: progress + header + question + (optional) titles/options
+        // Tight minimum height: progress + question + (optional) titles/options
         // + notes composer + footer + menu padding.
         let mut height = question_height
             .saturating_add(options_height)
             .saturating_add(spacer_rows)
             .saturating_add(notes_height)
             .saturating_add(footer_height)
-            .saturating_add(2); // progress + header
-        if has_options && notes_visible {
-            height = height.saturating_add(1); // notes title
-        }
+            .saturating_add(PROGRESS_ROW_HEIGHT); // progress
         height = height.saturating_add(menu_surface_padding_height() as usize);
-        height.max(8) as u16
+        height.max(MIN_OVERLAY_HEIGHT) as u16
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
@@ -68,9 +114,143 @@ impl Renderable for RequestUserInputOverlay {
 }
 
 impl RequestUserInputOverlay {
+    fn unanswered_confirmation_data(&self) -> UnansweredConfirmationData {
+        let unanswered = self.unanswered_question_count();
+        let subtitle = format!(
+            "{unanswered} unanswered question{}",
+            if unanswered == 1 { "" } else { "s" }
+        );
+        UnansweredConfirmationData {
+            title_line: Line::from(super::UNANSWERED_CONFIRM_TITLE.bold()),
+            subtitle_line: Line::from(subtitle.dim()),
+            hint_line: standard_popup_hint_line(),
+            rows: self.unanswered_confirmation_rows(),
+            state: self.confirm_unanswered.unwrap_or_default(),
+        }
+    }
+
+    fn unanswered_confirmation_layout(&self, width: u16) -> UnansweredConfirmationLayout {
+        let data = self.unanswered_confirmation_data();
+        let content_width = width.max(1);
+        let mut header_lines = wrap_styled_line(&data.title_line, content_width);
+        let mut subtitle_lines = wrap_styled_line(&data.subtitle_line, content_width);
+        header_lines.append(&mut subtitle_lines);
+        let header_lines = header_lines.into_iter().map(line_to_owned).collect();
+        let hint_lines = wrap_styled_line(&data.hint_line, content_width)
+            .into_iter()
+            .map(line_to_owned)
+            .collect();
+        UnansweredConfirmationLayout {
+            header_lines,
+            hint_lines,
+            rows: data.rows,
+            state: data.state,
+        }
+    }
+
+    fn unanswered_confirmation_height(&self, width: u16) -> u16 {
+        let outer = Rect::new(0, 0, width, u16::MAX);
+        let inner = menu_surface_inset(outer);
+        let inner_width = inner.width.max(1);
+        let layout = self.unanswered_confirmation_layout(inner_width);
+        let rows_height = measure_rows_height(
+            &layout.rows,
+            &layout.state,
+            layout.rows.len().max(1),
+            inner_width.max(1),
+        );
+        let height = layout.header_lines.len() as u16
+            + 1
+            + rows_height
+            + 1
+            + layout.hint_lines.len() as u16
+            + menu_surface_padding_height();
+        height.max(MIN_OVERLAY_HEIGHT as u16)
+    }
+
+    fn render_unanswered_confirmation(&self, area: Rect, buf: &mut Buffer) {
+        let content_area = render_menu_surface(area, buf);
+        if content_area.width == 0 || content_area.height == 0 {
+            return;
+        }
+        let width = content_area.width.max(1);
+        let layout = self.unanswered_confirmation_layout(width);
+
+        let mut cursor_y = content_area.y;
+        for line in layout.header_lines {
+            if cursor_y >= content_area.y + content_area.height {
+                return;
+            }
+            Paragraph::new(line).render(
+                Rect {
+                    x: content_area.x,
+                    y: cursor_y,
+                    width: content_area.width,
+                    height: 1,
+                },
+                buf,
+            );
+            cursor_y = cursor_y.saturating_add(1);
+        }
+
+        if cursor_y < content_area.y + content_area.height {
+            cursor_y = cursor_y.saturating_add(1);
+        }
+
+        let remaining = content_area
+            .height
+            .saturating_sub(cursor_y.saturating_sub(content_area.y));
+        if remaining == 0 {
+            return;
+        }
+
+        let hint_height = layout.hint_lines.len() as u16;
+        let spacer_before_hint = u16::from(remaining > hint_height);
+        let rows_height = remaining.saturating_sub(hint_height + spacer_before_hint);
+
+        let rows_area = Rect {
+            x: content_area.x,
+            y: cursor_y,
+            width: content_area.width,
+            height: rows_height,
+        };
+        render_rows(
+            rows_area,
+            buf,
+            &layout.rows,
+            &layout.state,
+            layout.rows.len().max(1),
+            "No choices",
+        );
+
+        cursor_y = cursor_y.saturating_add(rows_height);
+        if spacer_before_hint > 0 {
+            cursor_y = cursor_y.saturating_add(1);
+        }
+        for (offset, line) in layout.hint_lines.into_iter().enumerate() {
+            let y = cursor_y.saturating_add(offset as u16);
+            if y >= content_area.y + content_area.height {
+                break;
+            }
+            Paragraph::new(line).render(
+                Rect {
+                    x: content_area.x,
+                    y,
+                    width: content_area.width,
+                    height: 1,
+                },
+                buf,
+            );
+        }
+    }
+
     /// Render the full request-user-input overlay.
     pub(super) fn render_ui(&self, area: Rect, buf: &mut Buffer) {
         if area.width == 0 || area.height == 0 {
+            return;
+        }
+        if self.confirm_unanswered_active() {
+            self.render_unanswered_confirmation(area, buf);
             return;
         }
         // Paint the same menu surface used by other bottom-pane overlays and
@@ -98,28 +278,22 @@ impl RequestUserInputOverlay {
         };
         Paragraph::new(progress_line).render(sections.progress_area, buf);
 
-        // Question title and wrapped prompt text.
-        let question_header = self.current_question().map(|q| q.header.clone());
-        let answered = self.current_question_answered();
-        let header_line = if let Some(header) = question_header {
-            if answered {
-                Line::from(header.bold())
-            } else {
-                Line::from(header.cyan().bold())
-            }
-        } else {
-            Line::from("No questions".dim())
-        };
-        Paragraph::new(header_line).render(sections.header_area, buf);
-
+        // Question prompt text.
         let question_y = sections.question_area.y;
+        let answered =
+            self.is_question_answered(self.current_index(), &self.composer.current_text());
         for (offset, line) in sections.question_lines.iter().enumerate() {
             if question_y.saturating_add(offset as u16)
                 >= sections.question_area.y + sections.question_area.height
             {
                 break;
             }
-            Paragraph::new(Line::from(line.clone())).render(
+            let question_line = if answered {
+                Line::from(line.clone())
+            } else {
+                Line::from(line.clone()).cyan()
+            };
+            Paragraph::new(question_line).render(
                 Rect {
                     x: sections.question_area.x,
                     y: question_y.saturating_add(offset as u16),
@@ -134,46 +308,23 @@ impl RequestUserInputOverlay {
         let option_rows = self.option_rows();
 
         if self.has_options() {
-            let mut options_ui_state = self
+            let mut options_state = self
                 .current_answer()
-                .map(|answer| answer.options_ui_state)
+                .map(|answer| answer.options_state)
                 .unwrap_or_default();
             if sections.options_area.height > 0 {
                 // Ensure the selected option is visible in the scroll window.
-                options_ui_state
+                options_state
                     .ensure_visible(option_rows.len(), sections.options_area.height as usize);
                 render_rows(
                     sections.options_area,
                     buf,
                     &option_rows,
-                    &options_ui_state,
+                    &options_state,
                     option_rows.len().max(1),
                     "No options",
                 );
             }
-        }
-
-        if notes_visible && sections.notes_title_area.height > 0 {
-            let notes_label = if self.has_options()
-                && self
-                    .current_answer()
-                    .is_some_and(|answer| answer.committed_option_idx.is_some())
-            {
-                if let Some(label) = self.current_option_label() {
-                    format!("Notes for {label}")
-                } else {
-                    "Notes".to_string()
-                }
-            } else {
-                "Notes".to_string()
-            };
-            let notes_active = self.focus_is_notes();
-            let notes_title = if notes_active {
-                notes_label.as_str().cyan().bold()
-            } else {
-                notes_label.as_str().dim()
-            };
-            Paragraph::new(Line::from(notes_title)).render(sections.notes_title_area, buf);
         }
 
         if notes_visible && sections.notes_area.height > 0 {
@@ -193,7 +344,17 @@ impl RequestUserInputOverlay {
         if footer_area.height == 0 {
             return;
         }
-        let tip_lines = self.footer_tip_lines(footer_area.width);
+        let options_hidden = self.has_options()
+            && sections.options_area.height > 0
+            && self.options_required_height(content_area.width) > sections.options_area.height;
+        let option_tip = if options_hidden {
+            let selected = self.selected_option_index().unwrap_or(0).saturating_add(1);
+            let total = self.options_len();
+            Some(super::FooterTip::new(format!("option {selected}/{total}")))
+        } else {
+            None
+        };
+        let tip_lines = self.footer_tip_lines_with_prefix(footer_area.width, option_tip);
         for (row_idx, tips) in tip_lines
             .into_iter()
             .take(footer_area.height as usize)
@@ -224,6 +385,9 @@ impl RequestUserInputOverlay {
 
     /// Return the cursor position when editing notes, if visible.
     pub(super) fn cursor_pos_impl(&self, area: Rect) -> Option<(u16, u16)> {
+        if self.confirm_unanswered_active() {
+            return None;
+        }
         let has_options = self.has_options();
         let notes_visible = self.notes_ui_visible();
 
