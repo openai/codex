@@ -16,6 +16,7 @@ members = [
     "cli",
     "common",
     "core",
+    "secrets",
     "exec",
     "exec-server",
     "execpolicy",
@@ -76,6 +77,7 @@ codex-cli = { path = "cli"}
 codex-client = { path = "codex-client" }
 codex-common = { path = "common" }
 codex-core = { path = "core" }
+codex-secrets = { path = "secrets" }
 codex-exec = { path = "exec" }
 codex-execpolicy = { path = "execpolicy" }
 codex-feedback = { path = "feedback" }
@@ -110,6 +112,7 @@ mcp-types = { path = "mcp-types" }
 mcp_test_support = { path = "mcp-server/tests/common" }
 
 # External
+age = "0.11.1"
 allocative = "0.3.3"
 ansi-to-tui = "7.0.0"
 anyhow = "1"
