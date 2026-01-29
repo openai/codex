@@ -255,9 +255,10 @@ impl Session {
             .abort(session_ctx, Arc::clone(&task.turn_context))
             .await;
 
-        let pending_user_input_items = self.take_pending_user_input_items().await;
-        if !pending_user_input_items.is_empty() {
-            let pending_response_items = pending_user_input_items
+        let pending_request_user_input_answers =
+            self.take_pending_request_user_input_answers().await;
+        if !pending_request_user_input_answers.is_empty() {
+            let pending_response_items = pending_request_user_input_answers
                 .into_iter()
                 .map(ResponseItem::from)
                 .collect::<Vec<ResponseItem>>();

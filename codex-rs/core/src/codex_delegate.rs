@@ -556,11 +556,11 @@ mod tests {
             .notify_user_input_response(&ctx.sub_id, RequestUserInputResponse { answers })
             .await;
 
-        assert!(session.has_pending_user_input_items().await);
+        assert!(session.has_pending_request_user_input_answers().await);
 
         session.cancel_pending_user_input(&ctx.sub_id).await;
 
-        assert!(!session.has_pending_user_input_items().await);
+        assert!(!session.has_pending_request_user_input_answers().await);
 
         assert!(rx.await.is_err(), "sender should be dropped on cancel");
     }
