@@ -251,7 +251,8 @@ mod tests {
     use codex_core::config::ConfigBuilder;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
-    use tokio::{sync::mpsc::unbounded_channel, time::timeout};
+    use tokio::sync::mpsc::unbounded_channel;
+    use tokio::time::timeout;
 
     fn request(command: &[&str], payload: &str) -> StatusLineRequest {
         StatusLineRequest {
