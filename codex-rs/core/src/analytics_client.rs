@@ -101,6 +101,7 @@ pub(crate) async fn track_skill_invocations(
         );
         events.push(TrackEvent {
             event_type: "skill_invocation",
+            //TODO: add skill_name_encrypted
             event_params: TrackEventParams {
                 skill_id,
                 skill_scope: skill_scope.to_string(),
