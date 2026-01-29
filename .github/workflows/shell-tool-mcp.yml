@@ -351,6 +351,15 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Activate pnpm from package.json
+        run: corepack prepare --activate
+
+      - name: Verify pnpm version
+        run: pnpm --version
+
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
 
@@ -448,8 +457,14 @@ jobs:
           registry-url: https://registry.npmjs.org
           scope: "@openai"
 
-      - name: Update npm
-        run: npm install -g npm@latest
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Activate pnpm from package.json
+        run: corepack prepare --activate
+
+      - name: Verify pnpm version
+        run: pnpm --version
 
       - name: Download npm tarball
         uses: actions/download-artifact@v7
