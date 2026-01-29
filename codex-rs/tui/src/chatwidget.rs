@@ -2970,6 +2970,7 @@ impl ChatWidget {
         let personality = self
             .config
             .model_personality
+            .filter(|_| self.config.features.enabled(Feature::Personality))
             .filter(|_| self.current_model_supports_personality());
         let op = Op::UserTurn {
             items,
@@ -3555,19 +3556,23 @@ impl ChatWidget {
             );
             return;
         }
+        if !self.current_model_supports_personality() {
+            let current_model = self.current_model();
+            self.add_error_message(format!(
+                "Current model ({current_model}) doesn't support personalities. Try /model to pick a different model."
+            ));
+            return;
+        }
         self.open_personality_popup_for_current_model();
     }
 
     fn open_personality_popup_for_current_model(&mut self) {
-        let current_model = self.current_model();
-        let current_personality = self.config.model_personality;
+        let current_personality = self
+            .config
+            .model_personality
+            .unwrap_or(Personality::Friendly);
         let personalities = [Personality::Friendly, Personality::Pragmatic];
         let supports_personality = self.current_model_supports_personality();
-        let disabled_message = (!supports_personality).then(|| {
-            format!(
-                "Current model ({current_model}) doesn't support personalities. Try /model to switch to a newer model."
-            )
-        });
 
         let items: Vec<SelectionItem> = personalities
             .into_iter()
@@ -3592,7 +3597,7 @@ impl ChatWidget {
                 SelectionItem {
                     name,
                     description,
-                    is_current: current_personality == Some(personality),
+                    is_current: current_personality == personality,
                     is_disabled: !supports_personality,
                     actions,
                     dismiss_on_select: true,
@@ -3604,11 +3609,8 @@ impl ChatWidget {
         let mut header = ColumnRenderable::new();
         header.push(Line::from("Select Personality".bold()));
         header.push(Line::from(
-            "Choose a communication style for future responses.".dim(),
+            "Choose a communication style for Codex. Disable in /experimental.".dim(),
         ));
-        if let Some(message) = disabled_message {
-            header.push(Line::from(message.red()));
-        }
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             header: Box::new(header),
@@ -4814,6 +4816,9 @@ impl ChatWidget {
             self.refresh_model_display();
             self.request_redraw();
         }
+        if feature == Feature::Personality {
+            self.sync_personality_command_enabled();
+        }
         #[cfg(target_os = "windows")]
         if matches!(
             feature,
@@ -4880,7 +4885,6 @@ impl ChatWidget {
             mask.model = Some(model.to_string());
         }
         self.refresh_model_display();
-        self.sync_personality_command_enabled();
     }
 
     pub(crate) fn current_model(&self) -> &str {
@@ -4895,7 +4899,7 @@ impl ChatWidget {
 
     fn sync_personality_command_enabled(&mut self) {
         self.bottom_pane
-            .set_personality_command_enabled(self.current_model_supports_personality());
+            .set_personality_command_enabled(self.config.features.enabled(Feature::Personality));
     }
 
     fn current_model_supports_personality(&self) -> bool {
