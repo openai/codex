@@ -2408,6 +2408,7 @@ async fn collab_mode_enabling_keeps_custom_until_selected() {
 #[tokio::test]
 async fn user_turn_includes_personality_from_config() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("bengalfox")).await;
+    chat.set_feature_enabled(Feature::Personality, true);
     chat.thread_id = Some(ThreadId::new());
     chat.set_model("bengalfox");
     chat.set_personality(Personality::Friendly);
