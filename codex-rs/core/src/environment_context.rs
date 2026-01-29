@@ -100,10 +100,8 @@ impl EnvironmentContext {
         if let Some(workspace_configuration) = self.workspace_configuration {
             lines.push("  <workspace_configuration>".to_string());
             for (path, workspace) in workspace_configuration.workspaces {
-                lines.push(format!(
-                    "    <workspace path=\"{path}\" hint=\"{}\">",
-                    workspace.hint
-                ));
+                let hint = workspace.hint;
+                lines.push(format!("    <workspace path=\"{path}\" hint=\"{hint}\">"));
 
                 if let Some(latest_git_commit_hash) = workspace.latest_git_commit_hash {
                     lines.push(format!(
