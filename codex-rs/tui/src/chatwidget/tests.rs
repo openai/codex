@@ -29,6 +29,7 @@ use codex_core::protocol::AgentReasoningDeltaEvent;
 use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::BackgroundEventEvent;
+use codex_core::protocol::ContextCompactedEvent;
 use codex_core::protocol::CreditsSnapshot;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -39,6 +40,8 @@ use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::ExecPolicyAmendment;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::FileChange;
+use codex_core::protocol::ItemCompletedEvent;
+use codex_core::protocol::ItemStartedEvent;
 use codex_core::protocol::McpStartupCompleteEvent;
 use codex_core::protocol::McpStartupStatus;
 use codex_core::protocol::McpStartupUpdateEvent;
@@ -67,6 +70,8 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Settings;
+use codex_protocol::items::ContextCompactionItem;
+use codex_protocol::items::TurnItem;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::parse_command::ParsedCommand;
@@ -4477,6 +4482,58 @@ async fn warning_event_adds_warning_history_cell() {
     assert!(
         rendered.contains("test warning message"),
         "warning cell missing content: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn compaction_items_drive_history_and_context_compacted_is_ignored() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let thread_id = ThreadId::new();
+    let compaction_item = ContextCompactionItem::new();
+    let turn_id = "turn-1".to_string();
+
+    chat.handle_codex_event(Event {
+        id: "item-start".into(),
+        msg: EventMsg::ItemStarted(ItemStartedEvent {
+            thread_id,
+            turn_id: turn_id.clone(),
+            item: TurnItem::ContextCompaction(compaction_item.clone()),
+        }),
+    });
+    let started_cells = drain_insert_history(&mut rx);
+    assert!(
+        started_cells.is_empty(),
+        "compaction start should keep an active cell instead of flushing history"
+    );
+    chat.handle_codex_event(Event {
+        id: "context-compacted".into(),
+        msg: EventMsg::ContextCompacted(ContextCompactedEvent {}),
+    });
+    let compacted_cells = drain_insert_history(&mut rx);
+    assert!(
+        compacted_cells.is_empty(),
+        "ContextCompacted should not emit history cells"
+    );
+    chat.handle_codex_event(Event {
+        id: "item-end".into(),
+        msg: EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id,
+            turn_id,
+            item: TurnItem::ContextCompaction(compaction_item),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected a single finalized compaction cell"
+    );
+
+    let completed = lines_to_single_string(&cells[0]);
+    assert!(
+        completed.contains("Context compacted."),
+        "compaction completion message missing: {completed}"
     );
 }
 

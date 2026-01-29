@@ -1429,6 +1429,76 @@ pub(crate) fn new_web_search_call(
     cell
 }
 
+fn context_compaction_header(completed: bool) -> &'static str {
+    if completed {
+        "Context compacted."
+    } else {
+        "Compacting context"
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct ContextCompactionCell {
+    item_id: String,
+    start_time: Instant,
+    completed: bool,
+    animations_enabled: bool,
+}
+
+impl ContextCompactionCell {
+    pub(crate) fn new(item_id: String, animations_enabled: bool) -> Self {
+        Self {
+            item_id,
+            start_time: Instant::now(),
+            completed: false,
+            animations_enabled,
+        }
+    }
+
+    pub(crate) fn item_id(&self) -> &str {
+        &self.item_id
+    }
+
+    pub(crate) fn complete(&mut self) {
+        self.completed = true;
+    }
+}
+
+impl HistoryCell for ContextCompactionCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let bullet = if self.completed {
+            Line::from(vec!["• ".dim()])
+        } else {
+            Line::from(vec![
+                spinner(Some(self.start_time), self.animations_enabled),
+                " ".into(),
+            ])
+        };
+        let header = context_compaction_header(self.completed);
+        PrefixedWrappedHistoryCell::new(header.bold(), bullet, "  ").display_lines(width)
+    }
+
+    fn transcript_animation_tick(&self) -> Option<u64> {
+        if !self.animations_enabled || self.completed {
+            return None;
+        }
+        Some((self.start_time.elapsed().as_millis() / 50) as u64)
+    }
+}
+
+pub(crate) fn new_active_context_compaction(
+    item_id: String,
+    animations_enabled: bool,
+) -> ContextCompactionCell {
+    ContextCompactionCell::new(item_id, animations_enabled)
+}
+
+pub(crate) fn new_context_compaction_completed(item_id: String) -> ContextCompactionCell {
+    let mut cell = ContextCompactionCell::new(item_id, false);
+    cell.complete();
+    cell
+}
+
 /// Returns an additional history cell if an MCP tool result includes a decodable image.
 ///
 /// This intentionally returns at most one cell: the first image in `CallToolResult.content` that
