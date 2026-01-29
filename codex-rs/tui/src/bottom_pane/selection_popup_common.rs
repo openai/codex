@@ -78,7 +78,7 @@ fn line_width(line: &Line<'_>) -> usize {
         .sum()
 }
 
-fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> Line<'static> {
+pub(crate) fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> Line<'static> {
     if max_width == 0 {
         return Line::from(Vec::<Span<'static>>::new());
     }
@@ -126,7 +126,10 @@ fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> Line<'static
     Line::from(spans_out)
 }
 
-fn truncate_line_with_ellipsis_if_overflow(line: Line<'static>, max_width: usize) -> Line<'static> {
+pub(crate) fn truncate_line_with_ellipsis_if_overflow(
+    line: Line<'static>,
+    max_width: usize,
+) -> Line<'static> {
     if max_width == 0 {
         return Line::from(Vec::<Span<'static>>::new());
     }
