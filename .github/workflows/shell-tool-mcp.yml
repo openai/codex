@@ -248,37 +248,8 @@ jobs:
         run: |
           set -euo pipefail
           if command -v apt-get >/dev/null 2>&1; then
-            # On Ubuntu ARM containers, apt metadata for universe/multiverse is large and
-            # can make `apt-get update` very slow. We only need packages from `main`, so
-            # trim sources to `main` for faster, more reliable updates.
-            if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-musl" ]] && [[ -f /etc/os-release ]]; then
-              . /etc/os-release
-              if [[ "${ID-}" == "ubuntu" ]]; then
-                if [[ -f /etc/apt/sources.list.d/ubuntu.sources ]]; then
-                  # Ubuntu 24.04+ uses deb822 sources; trim components to main.
-                  sed -i -E 's/^Components:.*/Components: main/' /etc/apt/sources.list.d/ubuntu.sources
-                else
-                  codename="${VERSION_CODENAME:-}"
-                  if [[ -n "$codename" ]]; then
-                    printf '%s\n' \
-                      "deb http://ports.ubuntu.com/ubuntu-ports ${codename} main" \
-                      "deb http://ports.ubuntu.com/ubuntu-ports ${codename}-updates main" \
-                      "deb http://ports.ubuntu.com/ubuntu-ports ${codename}-backports main" \
-                      "deb http://ports.ubuntu.com/ubuntu-ports ${codename}-security main" \
-                      >/etc/apt/sources.list
-                  fi
-                fi
-              fi
-            fi
-
-            apt_opts=(
-              -o Acquire::Retries=3
-              -o Acquire::http::Timeout=30
-              -o Acquire::https::Timeout=30
-              -o Acquire::Languages=none
-            )
-            apt-get "${apt_opts[@]}" update
-            DEBIAN_FRONTEND=noninteractive apt-get "${apt_opts[@]}" install -y git build-essential bison autoconf gettext
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential bison autoconf gettext
           elif command -v dnf >/dev/null 2>&1; then
             dnf install -y git gcc gcc-c++ make bison autoconf gettext
           elif command -v yum >/dev/null 2>&1; then
@@ -479,10 +450,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           registry-url: https://registry.npmjs.org
           scope: "@openai"
-
-      # Trusted publishing requires npm CLI version 11.5.1 or later.
-      - name: Update npm
-        run: npm install -g npm@latest
 
       - name: Download npm tarball
         uses: actions/download-artifact@v7

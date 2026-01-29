@@ -58,18 +58,6 @@ struct Args {
     poll_ms: u64,
 }
 
-#[derive(Debug, Clone, sqlx::FromRow)]
-struct LogRow {
-    id: i64,
-    ts: i64,
-    ts_nanos: i64,
-    level: String,
-    message: Option<String>,
-    thread_id: Option<String>,
-    file: Option<String>,
-    line: Option<i64>,
-}
-
 #[derive(Debug, Clone)]
 struct LogFilter {
     level_upper: Option<String>,
@@ -208,15 +196,7 @@ async fn fetch_max_id(runtime: &StateRuntime, filter: &LogFilter) -> anyhow::Res
     runtime
         .max_log_id(&query)
         .await
-        .context("failed to fetch max log id")?;
-    let max_id: Option<i64> = row.try_get("max_id")?;
-    Ok(max_id.unwrap_or(0))
-}
-
-fn base_select_builder<'a>() -> QueryBuilder<'a, Sqlite> {
-    QueryBuilder::<Sqlite>::new(
-        "SELECT id, ts, ts_nanos, level, message, thread_id, file, line FROM logs WHERE 1 = 1",
-    )
+        .context("failed to fetch max log id")
 }
 
 fn to_log_query(
@@ -235,11 +215,6 @@ fn to_log_query(
         after_id,
         limit,
         descending,
-    }
-    if let Some(thread_id) = filter.thread_id.as_ref() {
-        builder
-            .push(" AND thread_id = ")
-            .push_bind(thread_id.as_str());
     }
 }
 
