@@ -168,7 +168,7 @@ use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::rollout_date_parts;
 use codex_core::sandboxing::SandboxPermissions;
-use codex_core::state_db::{self};
+use codex_core::state_db::get_state_db;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;
@@ -1702,7 +1702,7 @@ impl CodexMessageProcessor {
 
         let rollout_path_display = archived_path.display().to_string();
         let fallback_provider = self.config.model_provider_id.clone();
-        let state_db_ctx = state_db::init_if_enabled(&self.config, None).await;
+        let state_db_ctx = get_state_db(&self.config, None).await;
         let archived_folder = self
             .config
             .codex_home
@@ -3571,7 +3571,7 @@ impl CodexMessageProcessor {
         }
 
         if state_db_ctx.is_none() {
-            state_db_ctx = state_db::init_if_enabled(&self.config, None).await;
+            state_db_ctx = get_state_db(&self.config, None).await;
         }
 
         // Move the rollout file to archived.
