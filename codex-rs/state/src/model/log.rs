@@ -20,6 +20,7 @@ pub struct LogRow {
     pub ts: i64,
     pub ts_nanos: i64,
     pub level: String,
+    pub target: String,
     pub message: Option<String>,
     pub thread_id: Option<String>,
     pub file: Option<String>,

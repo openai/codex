@@ -244,7 +244,7 @@ FROM threads
     /// Query logs with optional filters.
     pub async fn query_logs(&self, query: &LogQuery) -> anyhow::Result<Vec<LogRow>> {
         let mut builder = QueryBuilder::<Sqlite>::new(
-            "SELECT id, ts, ts_nanos, level, message, thread_id, file, line FROM logs WHERE 1 = 1",
+            "SELECT id, ts, ts_nanos, level, target, message, thread_id, file, line FROM logs WHERE 1 = 1",
         );
         push_log_filters(&mut builder, query);
         if query.descending {

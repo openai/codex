@@ -221,20 +221,16 @@ fn to_log_query(
 fn format_row(row: &LogRow) -> String {
     let timestamp = format_timestamp(row.ts, row.ts_nanos);
     let level = row.level.as_str();
-    let location = match (&row.file, row.line) {
-        (Some(file), Some(line)) => format!("{file}:{line}"),
-        (Some(file), None) => file.clone(),
-        _ => "-".to_string(),
-    };
+    let target = row.target.as_str();
     let message = row.message.as_deref().unwrap_or("");
     let level_colored = color_level(level);
     let timestamp_colored = timestamp.dimmed().to_string();
     let thread_id = row.thread_id.as_deref().unwrap_or("-");
     let thread_id_colored = thread_id.blue().dimmed().to_string();
-    let location_colored = location.dimmed().to_string();
+    let target_colored = target.dimmed().to_string();
     let message_colored = message.bold().to_string();
     format!(
-        "{timestamp_colored} {level_colored} [{thread_id_colored}] {location_colored} - {message_colored}"
+        "{timestamp_colored} {level_colored} [{thread_id_colored}] {target_colored} - {message_colored}"
     )
 }
 
