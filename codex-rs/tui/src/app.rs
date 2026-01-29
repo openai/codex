@@ -930,6 +930,7 @@ impl App {
         let app_event_tx = AppEventSender::new(app_event_tx);
         emit_deprecation_notice(&app_event_tx, ollama_chat_support_notice);
         emit_project_config_warnings(&app_event_tx, &config);
+        tui.set_notification_method(config.tui_notification_method);
 
         let harness_overrides =
             normalize_harness_overrides_for_cwd(harness_overrides, &config.cwd)?;
@@ -1348,6 +1349,7 @@ impl App {
                             Ok(resumed) => {
                                 self.shutdown_current_thread().await;
                                 self.config = resume_config;
+                                tui.set_notification_method(self.config.tui_notification_method);
                                 self.file_search = FileSearchManager::new(
                                     self.config.cwd.clone(),
                                     self.app_event_tx.clone(),
@@ -1521,16 +1523,32 @@ impl App {
                 ));
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::OpenAppLink {
+                title,
+                description,
+                instructions,
+                url,
+                is_installed,
+            } => {
+                self.chat_widget.open_app_link_view(
+                    title,
+                    description,
+                    instructions,
+                    url,
+                    is_installed,
+                );
+            }
             AppEvent::StartFileSearch(query) => {
-                if !query.is_empty() {
-                    self.file_search.on_user_query(query);
-                }
+                self.file_search.on_user_query(query);
             }
             AppEvent::FileSearchResult { query, matches } => {
                 self.chat_widget.apply_file_search_result(query, matches);
             }
             AppEvent::RateLimitSnapshotFetched(snapshot) => {
                 self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
+            }
+            AppEvent::ConnectorsLoaded(result) => {
+                self.chat_widget.on_connectors_loaded(result);
             }
             AppEvent::UpdateReasoningEffort(effort) => {
                 self.on_update_reasoning_effort(effort);
@@ -1702,23 +1720,29 @@ impl App {
                     let feature_key = Feature::WindowsSandbox.key();
                     let elevated_key = Feature::WindowsSandboxElevated.key();
                     let elevated_enabled = matches!(mode, WindowsSandboxEnableMode::Elevated);
-                    match ConfigEditsBuilder::new(&self.config.codex_home)
-                        .with_profile(profile)
-                        .set_feature_enabled(feature_key, true)
-                        .set_feature_enabled(elevated_key, elevated_enabled)
-                        .apply()
-                        .await
-                    {
+                    let mut builder =
+                        ConfigEditsBuilder::new(&self.config.codex_home).with_profile(profile);
+                    if elevated_enabled {
+                        builder = builder.set_feature_enabled(elevated_key, true);
+                    } else {
+                        builder = builder
+                            .set_feature_enabled(feature_key, true)
+                            .set_feature_enabled(elevated_key, false);
+                    }
+                    match builder.apply().await {
                         Ok(()) => {
-                            self.config.set_windows_sandbox_globally(true);
-                            self.config
-                                .set_windows_elevated_sandbox_globally(elevated_enabled);
-                            self.chat_widget
-                                .set_feature_enabled(Feature::WindowsSandbox, true);
-                            self.chat_widget.set_feature_enabled(
-                                Feature::WindowsSandboxElevated,
-                                elevated_enabled,
-                            );
+                            if elevated_enabled {
+                                self.config.set_windows_elevated_sandbox_enabled(true);
+                                self.chat_widget
+                                    .set_feature_enabled(Feature::WindowsSandboxElevated, true);
+                            } else {
+                                self.config.set_windows_sandbox_enabled(true);
+                                self.config.set_windows_elevated_sandbox_enabled(false);
+                                self.chat_widget
+                                    .set_feature_enabled(Feature::WindowsSandbox, true);
+                                self.chat_widget
+                                    .set_feature_enabled(Feature::WindowsSandboxElevated, false);
+                            }
                             self.chat_widget.clear_forced_auto_mode_downgrade();
                             let windows_sandbox_level =
                                 WindowsSandboxLevel::from_config(&self.config);

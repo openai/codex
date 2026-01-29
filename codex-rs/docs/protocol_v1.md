@@ -82,6 +82,15 @@ For complete documentation of the `Op` and `EventMsg` variants, refer to [protoc
   - `EventMsg::TurnComplete` – Contains a `response_id` bookmark for last `response_id` executed by the turn. This can be used to continue the turn at a later point in time, perhaps with additional user input.
   - `EventMsg::ListSkillsResponse` – Response payload with per-cwd skill entries (`cwd`, `skills`, `errors`)
 
+### UserInput items
+
+`Op::UserTurn` content items can include:
+
+- `text` – Plain text plus optional UI text elements.
+- `image` / `local_image` – Image inputs.
+- `skill` – Explicit skill selection (`name`, `path` to `SKILL.md`).
+- `mention` – Explicit app/connector selection (`name`, `path` in `app://{connector_id}` form).
+
 Note: For v1 wire compatibility, `EventMsg::TurnStarted` and `EventMsg::TurnComplete` serialize as `task_started` / `task_complete`. The deserializer accepts both `task_*` and `turn_*` tags.
 
 The `response_id` returned from each turn matches the OpenAI `response_id` stored in the API's `/responses` endpoint. It can be stored and used in future `Sessions` to resume threads of work.

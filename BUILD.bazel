@@ -1,3 +1,7 @@
+load("@apple_support//xcode:xcode_config.bzl", "xcode_config")
+
+xcode_config(name = "disable_xcode")
+
 # We mark the local platform as glibc-compatible so that rust can grab a toolchain for us.
 # TODO(zbarsky): Upstream a better libc constraint into rules_rust.
 # We only enable this on linux though for sanity, and because it breaks remote execution.

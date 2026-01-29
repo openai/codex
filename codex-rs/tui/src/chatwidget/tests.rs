@@ -358,6 +358,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
             path: first_images[0].clone(),
         }],
         text_elements: first_elements,
+        mention_paths: HashMap::new(),
     });
     chat.queued_user_messages.push_back(UserMessage {
         text: second_text,
@@ -366,6 +367,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
             path: second_images[0].clone(),
         }],
         text_elements: second_elements,
+        mention_paths: HashMap::new(),
     });
     chat.refresh_queued_user_messages();
 
@@ -445,6 +447,7 @@ async fn remap_placeholders_uses_attachment_labels() {
         text,
         text_elements: elements,
         local_images: attachments,
+        mention_paths: HashMap::new(),
     };
     let mut next_label = 3usize;
     let remapped = remap_placeholders_for_message(message, &mut next_label);
@@ -505,6 +508,7 @@ async fn remap_placeholders_uses_byte_ranges_when_placeholder_missing() {
         text,
         text_elements: elements,
         local_images: attachments,
+        mention_paths: HashMap::new(),
     };
     let mut next_label = 3usize;
     let remapped = remap_placeholders_for_message(message, &mut next_label);
@@ -813,6 +817,7 @@ async fn make_chatwidget_manual(
         unified_exec_processes: Vec::new(),
         agent_turn_running: false,
         mcp_startup_status: None,
+        connectors_cache: ConnectorsCacheState::default(),
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
@@ -2412,6 +2417,7 @@ async fn collab_mode_enabling_keeps_custom_until_selected() {
 #[tokio::test]
 async fn user_turn_includes_personality_from_config() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("bengalfox")).await;
+    chat.set_feature_enabled(Feature::Personality, true);
     chat.thread_id = Some(ThreadId::new());
     chat.set_model("bengalfox");
     chat.set_personality(Personality::Friendly);

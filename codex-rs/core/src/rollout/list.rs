@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use std::cmp::Reverse;
 use std::ffi::OsStr;
 use std::io::{self};
@@ -7,8 +8,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-
-use async_trait::async_trait;
 use time::OffsetDateTime;
 use time::PrimitiveDateTime;
 use time::format_description::FormatItem;
