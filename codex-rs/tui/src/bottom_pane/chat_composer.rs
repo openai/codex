@@ -6113,6 +6113,50 @@ mod tests {
     }
 
     #[test]
+    fn numeric_prompt_auto_submit_resets_large_paste_numbering() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "Echo: $1".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        let paste = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 5);
+        let base = format!("[Pasted Content {} chars]", paste.chars().count());
+        let second = format!("{base} #2");
+
+        composer.handle_paste(paste.clone());
+        composer.handle_paste(paste.clone());
+        assert_eq!(composer.textarea.text(), format!("{base}{second}"));
+
+        composer
+            .textarea
+            .set_text_clearing_elements("/prompts:my-prompt ");
+        composer.textarea.set_cursor(composer.textarea.text().len());
+        composer.handle_paste(paste.clone());
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(result, InputResult::Submitted { .. }));
+        assert_eq!(composer.textarea.text(), "");
+
+        composer.handle_paste(paste);
+        assert_eq!(composer.textarea.text(), base);
+    }
+
+    #[test]
     fn queued_prompt_submission_prunes_unused_image_attachments() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
