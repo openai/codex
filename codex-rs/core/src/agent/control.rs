@@ -92,6 +92,11 @@ impl AgentControl {
         result
     }
 
+    pub(crate) async fn reset_conversation(&self, agent_id: ThreadId) -> CodexResult<String> {
+        let state = self.upgrade()?;
+        state.send_op(agent_id, Op::ResetConversation).await
+    }
+
     /// Interrupt the current task for an existing agent thread.
     pub(crate) async fn interrupt_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
         let state = self.upgrade()?;

@@ -281,6 +281,12 @@ pub enum Op {
     /// responsible for undoing any edits on disk.
     ThreadRollback { num_turns: u32 },
 
+    /// Reset the in-memory conversation context back to the initial session prefix.
+    ///
+    /// This clears prior user/assistant turns without changing the session configuration.
+    /// Useful for reusing agents as stateless workers across many independent tasks.
+    ResetConversation,
+
     /// Request a code review from the agent.
     Review { review_request: ReviewRequest },
 

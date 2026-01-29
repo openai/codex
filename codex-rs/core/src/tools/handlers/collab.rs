@@ -201,6 +201,8 @@ mod send_input {
         message: String,
         #[serde(default)]
         interrupt: bool,
+        #[serde(default)]
+        fresh_context: bool,
     }
 
     #[derive(Debug, Serialize)]
@@ -221,6 +223,30 @@ mod send_input {
             return Err(FunctionCallError::RespondToModel(
                 "Empty message can't be sent to an agent".to_string(),
             ));
+        }
+        if args.interrupt && args.fresh_context {
+            return Err(FunctionCallError::RespondToModel(
+                "fresh_context cannot be combined with interrupt; interrupt first, wait, then retry".to_string(),
+            ));
+        }
+        if args.fresh_context {
+            let status = session
+                .services
+                .agent_control
+                .get_status(receiver_thread_id)
+                .await;
+            if matches!(status, AgentStatus::Running) {
+                return Err(FunctionCallError::RespondToModel(
+                    "agent must not be running to reset context; wait for completion then retry"
+                        .to_string(),
+                ));
+            }
+            session
+                .services
+                .agent_control
+                .reset_conversation(receiver_thread_id)
+                .await
+                .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
         }
         if args.interrupt {
             session
@@ -889,6 +915,45 @@ mod tests {
             .collect();
         assert_eq!(ops_for_agent.len(), 2);
         assert!(matches!(ops_for_agent[0], Op::Interrupt));
+        assert!(matches!(ops_for_agent[1], Op::UserInput { .. }));
+
+        let _ = thread
+            .thread
+            .submit(Op::Shutdown {})
+            .await
+            .expect("shutdown should submit");
+    }
+
+    #[tokio::test]
+    async fn send_input_resets_before_prompt_when_fresh_context_set() {
+        let (mut session, turn) = make_session_and_context().await;
+        let manager = thread_manager();
+        session.services.agent_control = manager.agent_control();
+        let config = turn.client.config().as_ref().clone();
+        let thread = manager.start_thread(config).await.expect("start thread");
+        let agent_id = thread.thread_id;
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "send_input",
+            function_payload(json!({
+                "id": agent_id.to_string(),
+                "message": "hi",
+                "fresh_context": true
+            })),
+        );
+        CollabHandler
+            .handle(invocation)
+            .await
+            .expect("send_input should succeed");
+
+        let ops = manager.captured_ops();
+        let ops_for_agent: Vec<&Op> = ops
+            .iter()
+            .filter_map(|(id, op)| (*id == agent_id).then_some(op))
+            .collect();
+        assert_eq!(ops_for_agent.len(), 2);
+        assert!(matches!(ops_for_agent[0], Op::ResetConversation));
         assert!(matches!(ops_for_agent[1], Op::UserInput { .. }));
 
         let _ = thread

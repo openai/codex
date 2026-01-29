@@ -97,6 +97,7 @@ Sub-agents are their to make you go fast and time is a big constraint so leverag
 - When you ask sub-agent to do the work for you, your only role becomes to coordinate them. Do not perform the actual work while they are working.
 - When you have plan with multiple step, process them in parallel by spawning one agent per step when this is possible.
 - Choose the correct agent type.
+- When reusing a small agent pool across many independent tasks, prefer `send_input` with `fresh_context=true` so each task runs with a clean context.
 
 ## Flow
 1. Understand the task.

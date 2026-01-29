@@ -503,6 +503,15 @@ fn create_send_input_tool() -> ToolSpec {
             ),
         },
     );
+    properties.insert(
+        "fresh_context".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "When true, clear the agent's in-memory context before sending this message."
+                    .to_string(),
+            ),
+        },
+    );
 
     ToolSpec::Function(ResponsesApiTool {
         name: "send_input".to_string(),

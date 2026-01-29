@@ -2381,6 +2381,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::ThreadRollback { num_turns } => {
                 handlers::thread_rollback(&sess, sub.id.clone(), num_turns).await;
             }
+            Op::ResetConversation => {
+                handlers::reset_conversation(&sess, sub.id.clone()).await;
+            }
             Op::RunUserShellCommand { command } => {
                 handlers::run_user_shell_command(
                     &sess,
@@ -2891,6 +2894,29 @@ mod handlers {
             msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns }),
         })
         .await;
+    }
+
+    pub async fn reset_conversation(sess: &Arc<Session>, sub_id: String) {
+        let has_active_turn = { sess.active_turn.lock().await.is_some() };
+        if has_active_turn {
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::Warning(WarningEvent {
+                    message: "Cannot reset conversation while a turn is in progress.".to_string(),
+                }),
+            })
+            .await;
+            return;
+        }
+
+        let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
+        let initial_context = sess.build_initial_context(&turn_context).await;
+        sess.replace_history(initial_context).await;
+        {
+            let mut state = sess.state.lock().await;
+            state.initial_context_seeded = true;
+        }
+        sess.recompute_token_usage(turn_context.as_ref()).await;
     }
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
