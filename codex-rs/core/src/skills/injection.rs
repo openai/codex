@@ -607,7 +607,7 @@ mod tests {
     fn collect_explicit_skill_mentions_skips_ambiguous_name() {
         let alpha = make_skill("demo-skill", "/tmp/alpha");
         let beta = make_skill("demo-skill", "/tmp/beta");
-        let skills = vec![alpha, beta];
+        let skills = vec![alpha, beta.clone()];
         let inputs = vec![UserInput::Text {
             text: "use $demo-skill and again $demo-skill".to_string(),
             text_elements: Vec::new(),
@@ -623,7 +623,7 @@ mod tests {
     fn collect_explicit_skill_mentions_prefers_linked_path_over_name() {
         let alpha = make_skill("demo-skill", "/tmp/alpha");
         let beta = make_skill("demo-skill", "/tmp/beta");
-        let skills = vec![alpha, beta.clone()];
+        let skills = vec![alpha, beta];
         let inputs = vec![UserInput::Text {
             text: "use $demo-skill and [$demo-skill](/tmp/beta)".to_string(),
             text_elements: Vec::new(),
@@ -669,7 +669,7 @@ mod tests {
     fn collect_explicit_skill_mentions_skips_when_linked_path_disabled() {
         let alpha = make_skill("demo-skill", "/tmp/alpha");
         let beta = make_skill("demo-skill", "/tmp/beta");
-        let skills = vec![alpha, beta.clone()];
+        let skills = vec![alpha, beta];
         let inputs = vec![UserInput::Text {
             text: "use [$demo-skill](/tmp/alpha)".to_string(),
             text_elements: Vec::new(),
