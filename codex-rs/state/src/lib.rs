@@ -12,6 +12,8 @@ mod paths;
 mod runtime;
 
 pub use model::LogEntry;
+pub use model::LogQuery;
+pub use model::LogRow;
 /// Preferred entrypoint: owns configuration and metrics.
 pub use runtime::StateRuntime;
 
