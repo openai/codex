@@ -174,11 +174,15 @@ fn normalize_path_for_skill_id(
     let resolved_path =
         std::fs::canonicalize(skill_path).unwrap_or_else(|_| skill_path.to_path_buf());
     match (repo_url, repo_root) {
-        (Some(_), Some(root)) => resolved_path
-            .strip_prefix(root)
-            .unwrap_or(resolved_path.as_path())
-            .to_string_lossy()
-            .replace('\\', "/"),
+        (Some(_), Some(root)) => {
+            let resolved_root =
+                std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+            resolved_path
+                .strip_prefix(&resolved_root)
+                .unwrap_or(resolved_path.as_path())
+                .to_string_lossy()
+                .replace('\\', "/")
+        }
         _ => resolved_path.to_string_lossy().replace('\\', "/"),
     }
 }
