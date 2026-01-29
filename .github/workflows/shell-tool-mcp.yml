@@ -278,11 +278,11 @@ jobs:
               -o Acquire::Languages=none
             )
             apt-get "${apt_opts[@]}" update
-            DEBIAN_FRONTEND=noninteractive apt-get "${apt_opts[@]}" install -y git build-essential bison autoconf gettext
+            DEBIAN_FRONTEND=noninteractive apt-get "${apt_opts[@]}" install -y curl patch build-essential bison autoconf gettext
           elif command -v dnf >/dev/null 2>&1; then
-            dnf install -y git gcc gcc-c++ make bison autoconf gettext
+            dnf install -y curl patch gcc gcc-c++ make bison autoconf gettext
           elif command -v yum >/dev/null 2>&1; then
-            yum install -y git gcc gcc-c++ make bison autoconf gettext
+            yum install -y curl patch gcc gcc-c++ make bison autoconf gettext
           else
             echo "Unsupported package manager in container"
             exit 1
@@ -295,11 +295,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --depth 1 https://github.com/bolinfest/bash /tmp/bash
+          commit=a8a1c2fac029404d3f42cd39f5a20f24b6e4fe4b
+          rm -rf /tmp/bash /tmp/bash.tar.gz
+          curl -fsSL "https://codeload.github.com/bolinfest/bash/tar.gz/${commit}" -o /tmp/bash.tar.gz
+          mkdir -p /tmp/bash
+          tar -xzf /tmp/bash.tar.gz -C /tmp/bash --strip-components=1
           cd /tmp/bash
-          git fetch --depth 1 origin a8a1c2fac029404d3f42cd39f5a20f24b6e4fe4b
-          git checkout a8a1c2fac029404d3f42cd39f5a20f24b6e4fe4b
-          git apply "${GITHUB_WORKSPACE}/shell-tool-mcp/patches/bash-exec-wrapper.patch"
+          patch -p1 < "${GITHUB_WORKSPACE}/shell-tool-mcp/patches/bash-exec-wrapper.patch"
           ./configure --without-bash-malloc
           cores="$(command -v nproc >/dev/null 2>&1 && nproc || getconf _NPROCESSORS_ONLN)"
           make -j"${cores}"
@@ -337,11 +339,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --depth 1 https://github.com/bolinfest/bash /tmp/bash
+          commit=a8a1c2fac029404d3f42cd39f5a20f24b6e4fe4b
+          rm -rf /tmp/bash /tmp/bash.tar.gz
+          curl -fsSL "https://codeload.github.com/bolinfest/bash/tar.gz/${commit}" -o /tmp/bash.tar.gz
+          mkdir -p /tmp/bash
+          tar -xzf /tmp/bash.tar.gz -C /tmp/bash --strip-components=1
           cd /tmp/bash
-          git fetch --depth 1 origin a8a1c2fac029404d3f42cd39f5a20f24b6e4fe4b
-          git checkout a8a1c2fac029404d3f42cd39f5a20f24b6e4fe4b
-          git apply "${GITHUB_WORKSPACE}/shell-tool-mcp/patches/bash-exec-wrapper.patch"
+          patch -p1 < "${GITHUB_WORKSPACE}/shell-tool-mcp/patches/bash-exec-wrapper.patch"
           ./configure --without-bash-malloc
           cores="$(getconf _NPROCESSORS_ONLN)"
           make -j"${cores}"
