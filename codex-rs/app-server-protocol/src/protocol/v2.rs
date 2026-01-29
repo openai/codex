@@ -2304,11 +2304,23 @@ impl<'de> Deserialize<'de> for TurnTodosUpdatedNotification {
     where
         D: Deserializer<'de>,
     {
-        let wire = TurnTodosUpdatedNotificationWire::deserialize(deserializer)?;
-        let todo = if wire.todo.is_empty() {
-            wire.plan
-        } else {
-            wire.todo
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct WireIn {
+            thread_id: String,
+            turn_id: String,
+            explanation: Option<String>,
+            #[serde(default)]
+            todo: Option<Vec<TurnTodoStep>>,
+            #[serde(default)]
+            plan: Option<Vec<TurnTodoStep>>,
+        }
+
+        let wire = WireIn::deserialize(deserializer)?;
+        let todo = match wire.todo {
+            // `todo` is authoritative when present, even if it's an empty list.
+            Some(todo) => todo,
+            None => wire.plan.unwrap_or_default(),
         };
         Ok(Self {
             thread_id: wire.thread_id,
@@ -2927,5 +2939,18 @@ mod tests {
                 }
             })
         );
+    }
+
+    #[test]
+    fn turn_todos_updated_deserialize_prefers_todo_even_when_empty() {
+        let value = json!({
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "todo": [],
+            "plan": [{ "step": "stale", "status": "pending" }],
+        });
+
+        let notification: TurnTodosUpdatedNotification = serde_json::from_value(value).unwrap();
+        assert_eq!(notification.todo, Vec::<TurnTodoStep>::new());
     }
 }
