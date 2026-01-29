@@ -317,6 +317,7 @@ mod tests {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_sandbox_modes: None,
                 mcp_servers: None,
+                rules: None,
             })
         );
     }
