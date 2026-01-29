@@ -9,6 +9,7 @@ use chrono::Utc;
 use clap::Parser;
 use codex_state::STATE_DB_FILENAME;
 use dirs::home_dir;
+use owo_colors::OwoColorize;
 use sqlx::QueryBuilder;
 use sqlx::Row;
 use sqlx::Sqlite;
@@ -64,8 +65,6 @@ struct LogRow {
     ts_nanos: i64,
     level: String,
     message: Option<String>,
-    fields_json: String,
-    module_path: Option<String>,
     file: Option<String>,
     line: Option<i64>,
 }
@@ -237,7 +236,7 @@ async fn fetch_max_id(pool: &SqlitePool, filter: &LogFilter) -> anyhow::Result<i
 
 fn base_select_builder<'a>() -> QueryBuilder<'a, Sqlite> {
     QueryBuilder::<Sqlite>::new(
-        "SELECT id, ts, ts_nanos, level, message, fields_json, module_path, file, line FROM logs WHERE 1 = 1",
+        "SELECT id, ts, ts_nanos, level, message, file, line FROM logs WHERE 1 = 1",
     )
 }
 
@@ -269,19 +268,38 @@ fn push_filters<'a>(builder: &mut QueryBuilder<'a, Sqlite>, filter: &'a LogFilte
 
 fn format_row(row: &LogRow) -> String {
     let timestamp = format_timestamp(row.ts, row.ts_nanos);
+    let level = row.level.as_str();
     let location = match (&row.file, row.line) {
         (Some(file), Some(line)) => format!("{file}:{line}"),
         (Some(file), None) => file.clone(),
         _ => "-".to_string(),
     };
-    let module = row.module_path.as_deref().unwrap_or("-");
     let message = row.message.as_deref().unwrap_or("");
-    let fields = row.fields_json.as_str();
-    let level = row.level.as_str();
-    if fields == "{}" || fields.is_empty() {
-        return format!("{timestamp} {level:<5} [{module}] {location} - {message}");
+    let level_colored = color_level(level);
+    let timestamp_colored = timestamp.dimmed().to_string();
+    let location_colored = location.dimmed().to_string();
+    let message_colored = message.bold().to_string();
+    format!("{timestamp_colored} {level_colored} {location_colored} - {message_colored}")
+}
+
+fn color_level(level: &str) -> String {
+    let padded = format!("{level:<5}");
+    if level.eq_ignore_ascii_case("error") {
+        return padded.red().bold().to_string();
     }
-    format!("{timestamp} {level:<5} [{module}] {location} - {message} {fields}")
+    if level.eq_ignore_ascii_case("warn") {
+        return padded.yellow().bold().to_string();
+    }
+    if level.eq_ignore_ascii_case("info") {
+        return padded.green().bold().to_string();
+    }
+    if level.eq_ignore_ascii_case("debug") {
+        return padded.blue().bold().to_string();
+    }
+    if level.eq_ignore_ascii_case("trace") {
+        return padded.magenta().bold().to_string();
+    }
+    padded.bold().to_string()
 }
 
 fn format_timestamp(ts: i64, ts_nanos: i64) -> String {

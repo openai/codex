@@ -5,7 +5,6 @@ CREATE TABLE logs (
     level TEXT NOT NULL,
     target TEXT NOT NULL,
     message TEXT,
-    fields_json TEXT NOT NULL,
     module_path TEXT,
     file TEXT,
     line INTEGER

@@ -22,7 +22,6 @@ use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-use serde_json::Value;
 use tokio::sync::mpsc;
 use tracing::Event;
 use tracing::field::Field;
@@ -54,7 +53,7 @@ where
 {
     fn on_event(&self, event: &Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
         let metadata = event.metadata();
-        let mut visitor = JsonVisitor::default();
+        let mut visitor = MessageVisitor::default();
         event.record(&mut visitor);
 
         let now = SystemTime::now()
@@ -66,7 +65,6 @@ where
             level: metadata.level().as_str().to_string(),
             target: metadata.target().to_string(),
             message: visitor.message,
-            fields_json: Value::Object(visitor.fields).to_string(),
             module_path: metadata.module_path().map(ToString::to_string),
             file: metadata.file().map(ToString::to_string),
             line: metadata.line().map(|line| line as i64),
@@ -114,49 +112,44 @@ async fn flush(state_db: &std::sync::Arc<StateRuntime>, buffer: &mut Vec<LogEntr
 }
 
 #[derive(Default)]
-struct JsonVisitor {
-    fields: serde_json::Map<String, Value>,
+struct MessageVisitor {
     message: Option<String>,
 }
 
-impl JsonVisitor {
-    fn record_value(&mut self, field: &Field, value: Value) {
+impl MessageVisitor {
+    fn record_message(&mut self, field: &Field, value: String) {
         if field.name() == "message" && self.message.is_none() {
-            self.message = Some(match &value {
-                Value::String(message) => message.clone(),
-                _ => value.to_string(),
-            });
+            self.message = Some(value);
         }
-        self.fields.insert(field.name().to_string(), value);
     }
 }
 
-impl Visit for JsonVisitor {
+impl Visit for MessageVisitor {
     fn record_i64(&mut self, field: &Field, value: i64) {
-        self.record_value(field, Value::from(value));
+        self.record_message(field, value.to_string());
     }
 
     fn record_u64(&mut self, field: &Field, value: u64) {
-        self.record_value(field, Value::from(value));
+        self.record_message(field, value.to_string());
     }
 
     fn record_bool(&mut self, field: &Field, value: bool) {
-        self.record_value(field, Value::from(value));
+        self.record_message(field, value.to_string());
     }
 
     fn record_f64(&mut self, field: &Field, value: f64) {
-        self.record_value(field, Value::from(value));
+        self.record_message(field, value.to_string());
     }
 
     fn record_str(&mut self, field: &Field, value: &str) {
-        self.record_value(field, Value::from(value));
+        self.record_message(field, value.to_string());
     }
 
     fn record_error(&mut self, field: &Field, value: &(dyn std::error::Error + 'static)) {
-        self.record_value(field, Value::from(value.to_string()));
+        self.record_message(field, value.to_string());
     }
 
     fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-        self.record_value(field, Value::from(format!("{value:?}")));
+        self.record_message(field, format!("{value:?}"));
     }
 }
