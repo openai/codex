@@ -13,6 +13,8 @@ use tokio::select;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
+use tracing::Instrument;
+use tracing::info_span;
 use tracing::trace;
 use tracing::warn;
 
@@ -130,25 +132,30 @@ impl Session {
             let ctx = Arc::clone(&turn_context);
             let task_for_run = Arc::clone(&task);
             let task_cancellation_token = cancellation_token.child_token();
-            tokio::spawn(async move {
-                let ctx_for_finish = Arc::clone(&ctx);
-                let last_agent_message = task_for_run
-                    .run(
-                        Arc::clone(&session_ctx),
-                        ctx,
-                        input,
-                        task_cancellation_token.child_token(),
-                    )
-                    .await;
-                session_ctx.clone_session().flush_rollout().await;
-                if !task_cancellation_token.is_cancelled() {
-                    // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
-                    let sess = session_ctx.clone_session();
-                    sess.on_task_finished(ctx_for_finish, last_agent_message)
+            let thread_id = self.conversation_id;
+            let session_span = info_span!("session_task", thread_id = %thread_id);
+            tokio::spawn(
+                async move {
+                    let ctx_for_finish = Arc::clone(&ctx);
+                    let last_agent_message = task_for_run
+                        .run(
+                            Arc::clone(&session_ctx),
+                            ctx,
+                            input,
+                            task_cancellation_token.child_token(),
+                        )
                         .await;
+                    session_ctx.clone_session().flush_rollout().await;
+                    if !task_cancellation_token.is_cancelled() {
+                        // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
+                        let sess = session_ctx.clone_session();
+                        sess.on_task_finished(ctx_for_finish, last_agent_message)
+                            .await;
+                    }
+                    done_clone.notify_waiters();
                 }
-                done_clone.notify_waiters();
-            })
+                .instrument(session_span),
+            )
         };
 
         let timer = turn_context

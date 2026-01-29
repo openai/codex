@@ -42,6 +42,15 @@ impl IdTokenInfo {
             PlanType::Unknown(s) => s.clone(),
         })
     }
+
+    pub fn is_workspace_account(&self) -> bool {
+        matches!(
+            self.chatgpt_plan_type,
+            Some(PlanType::Known(
+                KnownPlan::Team | KnownPlan::Business | KnownPlan::Enterprise | KnownPlan::Edu
+            ))
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,6 +149,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
     use serde::Serialize;
 
     #[test]
@@ -199,5 +209,20 @@ mod tests {
         let info = parse_id_token(&fake_jwt).expect("should parse");
         assert!(info.email.is_none());
         assert!(info.get_chatgpt_plan_type().is_none());
+    }
+
+    #[test]
+    fn workspace_account_detection_matches_workspace_plans() {
+        let workspace = IdTokenInfo {
+            chatgpt_plan_type: Some(PlanType::Known(KnownPlan::Business)),
+            ..IdTokenInfo::default()
+        };
+        assert_eq!(workspace.is_workspace_account(), true);
+
+        let personal = IdTokenInfo {
+            chatgpt_plan_type: Some(PlanType::Known(KnownPlan::Pro)),
+            ..IdTokenInfo::default()
+        };
+        assert_eq!(personal.is_workspace_account(), false);
     }
 }
