@@ -57,6 +57,9 @@ pub(crate) async fn track_skill_invocations(
     tracking: Option<&TrackEventsContext>,
     invocations: Vec<SkillInvocation>,
 ) {
+    if config.analytics_enabled == Some(false) {
+        return;
+    }
     let Some(tracking) = tracking else {
         return;
     };
