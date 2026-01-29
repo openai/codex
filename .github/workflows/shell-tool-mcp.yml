@@ -451,6 +451,10 @@ jobs:
           registry-url: https://registry.npmjs.org
           scope: "@openai"
 
+      # Trusted publishing requires npm CLI version 11.5.1 or later.
+      - name: Update npm
+        run: npm install -g npm@latest
+
       - name: Download npm tarball
         uses: actions/download-artifact@v7
         with:
