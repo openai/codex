@@ -697,7 +697,7 @@ Response examples:
 
 Field notes:
 
-- `refreshToken` (bool): set `true` to force a token refresh. Ignored when using external ChatGPT auth mode.
+- `refreshToken` (bool): set `true` to force a token refresh.
 - `requiresOpenaiAuth` reflects the active provider; when `false`, Codex can run without OpenAI credentials.
 
 ### 2) Log in with an API key
