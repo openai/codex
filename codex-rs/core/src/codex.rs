@@ -3475,6 +3475,13 @@ async fn run_sampling_request(
         // Use the configured provider-specific stream retry budget.
         let max_retries = turn_context.client.get_provider().stream_max_retries();
         if retries >= max_retries && client_session.try_switch_fallback_transport() {
+            sess.send_event(
+                &turn_context,
+                EventMsg::Warning(WarningEvent {
+                    message: "Connection was unstable; switching to HTTP transport.".to_string(),
+                }),
+            )
+            .await;
             retries = 0;
             continue;
         }

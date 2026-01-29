@@ -290,6 +290,11 @@ impl ModelClientSession {
             .activate_http_fallback(self.state.provider.wire_api);
         if activated {
             warn!("falling back to HTTP");
+            self.state.otel_manager.counter(
+                "codex.transport.fallback_to_http",
+                1,
+                &[("from_wire_api", "responses_websocket")],
+            );
 
             self.connection = None;
             self.websocket_last_items.clear();
