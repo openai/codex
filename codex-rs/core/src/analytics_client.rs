@@ -116,7 +116,13 @@ pub(crate) async fn track_skill_invocations(
     }
 
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
-    let url = format!("{base_url}/api/codex/analytics-events/track-events");
+    let url = if base_url.ends_with("/backend-api/codex") {
+        format!("{base_url}/analytics-events/track-events")
+    } else if base_url.ends_with("/backend-api") {
+        format!("{base_url}/codex/analytics-events/track-events")
+    } else {
+        format!("{base_url}/api/codex/analytics-events/track-events")
+    };
     let payload = TrackEventsRequest { events };
 
     let response = create_client()
