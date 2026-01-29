@@ -92,6 +92,6 @@ pub fn workspace_cap_sid_for_cwd(codex_home: &Path, cwd: &Path) -> Result<String
     }
     let sid = make_random_cap_sid_string();
     caps.workspace_by_cwd.insert(key, sid.clone());
-    let _ = persist_caps(&path, &caps);
+    persist_caps(&path, &caps)?;
     Ok(sid)
 }
