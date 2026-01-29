@@ -19,10 +19,13 @@ use crate::config::types::Tui;
 use crate::config::types::UriBasedFileOpener;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigRequirements;
+use crate::config_loader::EnvProvider;
 use crate::config_loader::LoaderOverrides;
 use crate::config_loader::McpServerIdentity;
 use crate::config_loader::McpServerRequirement;
+use crate::config_loader::RealEnv;
 use crate::config_loader::Sourced;
+use crate::config_loader::expand_key_for_matching_with_env;
 use crate::config_loader::load_config_layers_state;
 use crate::features::Feature;
 use crate::features::FeatureOverrides;
@@ -59,7 +62,6 @@ use dirs::home_dir;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
-use similar::DiffableStr;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::io::ErrorKind;
@@ -647,6 +649,15 @@ pub(crate) fn set_project_trust_level_inner(
     project_path: &Path,
     trust_level: TrustLevel,
 ) -> anyhow::Result<()> {
+    set_project_trust_level_inner_with_env(doc, project_path, trust_level, &RealEnv)
+}
+
+fn set_project_trust_level_inner_with_env(
+    doc: &mut DocumentMut,
+    project_path: &Path,
+    trust_level: TrustLevel,
+    env: &impl EnvProvider,
+) -> anyhow::Result<()> {
     // Ensure we render a human-friendly structure:
     //
     // [projects]
@@ -657,7 +668,8 @@ pub(crate) fn set_project_trust_level_inner(
     //
     // [projects]
     // "/path/to/project" = { trust_level = "trusted" }
-    let project_key = project_path.to_string_lossy().to_string();
+    let target_key = project_path.to_string_lossy().to_string();
+    let normalized_target_key = normalize_path_for_matching(&target_key);
 
     // Ensure top-level `projects` exists as a non-inline, explicit table. If it
     // exists but was previously represented as a non-table (e.g., inline),
@@ -690,6 +702,25 @@ pub(crate) fn set_project_trust_level_inner(
         ));
     };
 
+    let mut matched_symbolic_key: Option<String> = None;
+    let mut matched_non_symbolic_key: Option<String> = None;
+    for existing_key in projects_tbl.iter().map(|(key, _)| key.to_string()) {
+        let expanded = expand_key_for_matching_with_env(&existing_key, env);
+        if normalize_path_for_matching(&expanded) != normalized_target_key {
+            continue;
+        }
+        if is_symbolic_project_key(&existing_key) {
+            if matched_symbolic_key.is_none() {
+                matched_symbolic_key = Some(existing_key);
+            }
+        } else if matched_non_symbolic_key.is_none() {
+            matched_non_symbolic_key = Some(existing_key);
+        }
+    }
+    let project_key = matched_symbolic_key
+        .or(matched_non_symbolic_key)
+        .unwrap_or_else(|| target_key.clone());
+
     // Ensure the per-project entry is its own explicit table. If it exists but
     // is not a table (e.g., an inline table), replace it with an explicit table.
     let needs_proj_table = !projects_tbl.contains_key(project_key.as_str())
@@ -708,7 +739,94 @@ pub(crate) fn set_project_trust_level_inner(
     };
     proj_tbl.set_implicit(false);
     proj_tbl["trust_level"] = toml_edit::value(trust_level.to_string());
+
+    let symbolic_match_exists = projects_tbl.iter().any(|(key, _)| {
+        if key == target_key.as_str() || !is_symbolic_project_key(key) {
+            return false;
+        }
+        let expanded = expand_key_for_matching_with_env(key, env);
+        normalize_path_for_matching(&expanded) == normalized_target_key
+    });
+    let should_remove_absolute = project_key != target_key
+        && symbolic_match_exists
+        && projects_tbl
+            .get(target_key.as_str())
+            .is_some_and(is_trust_level_only_table);
+    if should_remove_absolute {
+        projects_tbl.remove(target_key.as_str());
+    }
     Ok(())
+}
+
+fn find_matching_project_config(
+    projects: &HashMap<String, ProjectConfig>,
+    normalized_target_key: &str,
+    env: &impl EnvProvider,
+) -> Option<ProjectConfig> {
+    let mut best: Option<(String, ProjectConfig)> = None;
+    for (key, project_config) in projects {
+        let expanded_key = expand_key_for_matching_with_env(key, env);
+        let normalized_key = normalize_path_for_matching(&expanded_key);
+        if normalized_key != normalized_target_key {
+            continue;
+        }
+        let candidate = (key.clone(), project_config.clone());
+        if best.as_ref().is_none_or(|(best_key, best_config)| {
+            is_better_project_match(
+                best_key.as_str(),
+                best_config,
+                candidate.0.as_str(),
+                &candidate.1,
+            )
+        }) {
+            best = Some(candidate);
+        }
+    }
+    best.map(|(_, config)| config)
+}
+
+fn is_better_project_match(
+    existing_key: &str,
+    existing_config: &ProjectConfig,
+    candidate_key: &str,
+    candidate_config: &ProjectConfig,
+) -> bool {
+    let existing_rank = project_trust_rank(existing_config.trust_level);
+    let candidate_rank = project_trust_rank(candidate_config.trust_level);
+    if existing_rank != candidate_rank {
+        return candidate_rank > existing_rank;
+    }
+    let existing_symbolic = is_symbolic_project_key(existing_key);
+    let candidate_symbolic = is_symbolic_project_key(candidate_key);
+    if existing_symbolic != candidate_symbolic {
+        return candidate_symbolic;
+    }
+    candidate_key < existing_key
+}
+
+fn project_trust_rank(level: Option<TrustLevel>) -> u8 {
+    match level {
+        Some(TrustLevel::Untrusted) => 2,
+        Some(TrustLevel::Trusted) => 1,
+        None => 0,
+    }
+}
+
+fn is_symbolic_project_key(key: &str) -> bool {
+    key.starts_with('~') || key.contains('$')
+}
+
+fn is_trust_level_only_table(item: &toml_edit::Item) -> bool {
+    item.as_table()
+        .is_some_and(|table| table.len() == 1 && table.contains_key("trust_level"))
+}
+
+fn normalize_path_for_matching(path: &str) -> String {
+    let path_buf = PathBuf::from(path);
+    std::fs::canonicalize(&path_buf)
+        .unwrap_or(path_buf)
+        .to_string_lossy()
+        .to_string()
 }
 
 /// Patch `CODEX_HOME/config.toml` project state to set trust level.
@@ -1111,20 +1229,38 @@ impl ConfigToml {
     /// Resolves the cwd to an existing project, or returns None if ConfigToml
     /// does not contain a project corresponding to cwd or a git repo for cwd
     pub fn get_active_project(&self, resolved_cwd: &Path) -> Option<ProjectConfig> {
-        let projects = self.projects.clone().unwrap_or_default();
+        self.get_active_project_with_env(resolved_cwd, &RealEnv)
+    }
 
-        if let Some(project_config) = projects.get(&resolved_cwd.to_string_lossy().to_string()) {
-            return Some(project_config.clone());
+    fn get_active_project_with_env(
+        &self,
+        resolved_cwd: &Path,
+        env: &impl EnvProvider,
+    ) -> Option<ProjectConfig> {
+        let projects = self.projects.clone().unwrap_or_default();
+        if projects.is_empty() {
+            return None;
+        }
+
+        let resolved_cwd_key = resolved_cwd.to_string_lossy().to_string();
+        let normalized_cwd_key = normalize_path_for_matching(&resolved_cwd_key);
+        if let Some(project_config) =
+            find_matching_project_config(&projects, &normalized_cwd_key, env)
+        {
+            return Some(project_config);
         }
 
         // If cwd lives inside a git repo/worktree, check whether the root git project
         // (the primary repository working directory) is trusted. This lets
         // worktrees inherit trust from the main project.
-        if let Some(repo_root) = resolve_root_git_project_for_trust(resolved_cwd)
-            && let Some(project_config_for_root) =
-                projects.get(&repo_root.to_string_lossy().to_string_lossy().to_string())
-        {
-            return Some(project_config_for_root.clone());
+        if let Some(repo_root) = resolve_root_git_project_for_trust(resolved_cwd) {
+            let repo_root_key = repo_root.to_string_lossy().to_string();
+            let normalized_repo_root_key = normalize_path_for_matching(&repo_root_key);
+            if let Some(project_config_for_root) =
+                find_matching_project_config(&projects, &normalized_repo_root_key, env)
+            {
+                return Some(project_config_for_root);
+            }
         }
 
         None
@@ -1757,6 +1893,7 @@ mod tests {
     use crate::config::types::HistoryPersistence;
     use crate::config::types::McpServerTransportConfig;
     use crate::config::types::Notifications;
+    use crate::config_loader::FakeEnv;
     use crate::config_loader::RequirementSource;
     use crate::features::Feature;
 
@@ -4154,6 +4291,191 @@ trust_level = "trusted"
         );
         assert_eq!(contents, expected);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_set_project_trust_level_updates_symbolic_tilde_key() -> anyhow::Result<()> {
+        let mut doc = r#"[projects."~"]
+trust_level = "untrusted"
+"#
+        .parse::<DocumentMut>()?;
+        let env = FakeEnv::new([("HOME", "/Users/tester")]);
+        let project_dir = Path::new("/Users/tester");
+
+        set_project_trust_level_inner_with_env(&mut doc, project_dir, TrustLevel::Trusted, &env)?;
+
+        let expected = r#"[projects."~"]
+trust_level = "trusted"
+"#;
+        assert_eq!(doc.to_string(), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_set_project_trust_level_updates_symbolic_home_key() -> anyhow::Result<()> {
+        let mut doc = r#"[projects."$HOME"]
+trust_level = "untrusted"
+"#
+        .parse::<DocumentMut>()?;
+        let env = FakeEnv::new([("HOME", "/Users/tester")]);
+        let project_dir = Path::new("/Users/tester");
+
+        set_project_trust_level_inner_with_env(&mut doc, project_dir, TrustLevel::Trusted, &env)?;
+
+        let expected = r#"[projects."$HOME"]
+trust_level = "trusted"
+"#;
+        assert_eq!(doc.to_string(), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_active_project_matches_symbolic_tilde_key() {
+        let env = FakeEnv::new([("HOME", "/Users/tester")]);
+        let cfg = ConfigToml {
+            projects: Some(HashMap::from([(
+                "~".to_string(),
+                ProjectConfig {
+                    trust_level: Some(TrustLevel::Trusted),
+                },
+            )])),
+            ..Default::default()
+        };
+
+        let active = cfg.get_active_project_with_env(Path::new("/Users/tester"), &env);
+        assert_eq!(
+            active,
+            Some(ProjectConfig {
+                trust_level: Some(TrustLevel::Trusted),
+            })
+        );
+    }
+
+    #[test]
+    fn test_get_active_project_matches_symbolic_home_key() {
+        let env = FakeEnv::new([("HOME", "/Users/tester")]);
+        let cfg = ConfigToml {
+            projects: Some(HashMap::from([(
+                "$HOME".to_string(),
+                ProjectConfig {
+                    trust_level: Some(TrustLevel::Untrusted),
+                },
+            )])),
+            ..Default::default()
+        };
+
+        let active = cfg.get_active_project_with_env(Path::new("/Users/tester"), &env);
+        assert_eq!(
+            active,
+            Some(ProjectConfig {
+                trust_level: Some(TrustLevel::Untrusted),
+            })
+        );
+    }
+
+    #[test]
+    fn test_set_project_trust_level_removes_absolute_duplicate_when_symbolic_exists()
+    -> anyhow::Result<()> {
+        let mut doc = r#"[projects."~"]
+trust_level = "trusted"
+
+[projects."/Users/tester"]
+trust_level = "trusted"
+"#
+        .parse::<DocumentMut>()?;
+        let env = FakeEnv::new([("HOME", "/Users/tester")]);
+        let project_dir = Path::new("/Users/tester");
+
+        set_project_trust_level_inner_with_env(&mut doc, project_dir, TrustLevel::Trusted, &env)?;
+
+        let actual: toml::Value = toml::from_str(&doc.to_string())?;
+        let expected: toml::Value = toml::from_str(
+            r#"[projects."~"]
+trust_level = "trusted"
+"#,
+        )?;
+        assert_eq!(actual, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_set_project_trust_level_prefers_symbolic_key_when_absolute_appears_first()
+    -> anyhow::Result<()> {
+        let mut doc = r#"[projects."/Users/tester"]
+trust_level = "trusted"
+
+[projects."~"]
+trust_level = "untrusted"
+"#
+        .parse::<DocumentMut>()?;
+        let env = FakeEnv::new([("HOME", "/Users/tester")]);
+        let project_dir = Path::new("/Users/tester");
+
+        set_project_trust_level_inner_with_env(&mut doc, project_dir, TrustLevel::Trusted, &env)?;
+
+        let actual: toml::Value = toml::from_str(&doc.to_string())?;
+        let expected: toml::Value = toml::from_str(
+            r#"[projects."~"]
+trust_level = "trusted"
+"#,
+        )?;
+        assert_eq!(actual, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_set_project_trust_level_keeps_absolute_entry_when_it_has_extra_fields()
+    -> anyhow::Result<()> {
+        let mut doc = r#"[projects."/Users/tester"]
+trust_level = "trusted"
+note = "keep me"
+
+[projects."~"]
+trust_level = "untrusted"
+"#
+        .parse::<DocumentMut>()?;
+        let env = FakeEnv::new([("HOME", "/Users/tester")]);
+        let project_dir = Path::new("/Users/tester");
+
+        set_project_trust_level_inner_with_env(&mut doc, project_dir, TrustLevel::Trusted, &env)?;
+
+        let actual: toml::Value = toml::from_str(&doc.to_string())?;
+        let expected: toml::Value = toml::from_str(
+            r#"[projects."/Users/tester"]
+trust_level = "trusted"
+note = "keep me"
+
+[projects."~"]
+trust_level = "trusted"
+"#,
+        )?;
+        assert_eq!(actual, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_set_project_trust_level_prefers_symbolic_home_key_when_absolute_appears_first()
+    -> anyhow::Result<()> {
+        let mut doc = r#"[projects."/Users/tester"]
+trust_level = "trusted"
+
+[projects."$HOME"]
+trust_level = "untrusted"
+"#
+        .parse::<DocumentMut>()?;
+        let env = FakeEnv::new([("HOME", "/Users/tester")]);
+        let project_dir = Path::new("/Users/tester");
+
+        set_project_trust_level_inner_with_env(&mut doc, project_dir, TrustLevel::Trusted, &env)?;
+
+        let actual: toml::Value = toml::from_str(&doc.to_string())?;
+        let expected: toml::Value = toml::from_str(
+            r#"[projects."$HOME"]
+trust_level = "trusted"
+"#,
+        )?;
+        assert_eq!(actual, expected);
         Ok(())
     }
 

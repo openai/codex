@@ -30,6 +30,7 @@ use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::resolve_oss_provider;
 use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::format_config_error_with_source;
+use codex_core::config_loader::format_expansion_warnings;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::protocol::AskForApproval;
@@ -235,6 +236,14 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     let config =
         Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides).await?;
+
+    #[allow(clippy::print_stderr)]
+    {
+        let warnings = config.config_layer_stack.expansion_warnings();
+        if !warnings.is_empty() {
+            eprintln!("⚠ {}", format_expansion_warnings(&warnings));
+        }
+    }
 
     if let Err(err) = enforce_login_restrictions(&config) {
         eprintln!("{err}");

@@ -42,6 +42,7 @@ use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config_loader::ConfigLayerStackOrdering;
+use codex_core::config_loader::format_expansion_warnings;
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
@@ -226,6 +227,17 @@ fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) 
 
     app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
         history_cell::new_warning_event(message),
+    )));
+}
+
+fn emit_expansion_warnings(app_event_tx: &AppEventSender, config: &Config) {
+    let warnings = config.config_layer_stack.expansion_warnings();
+    if warnings.is_empty() {
+        return;
+    }
+
+    app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+        history_cell::new_warning_event(format_expansion_warnings(&warnings)),
     )));
 }
 
@@ -922,6 +934,7 @@ impl App {
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
         emit_deprecation_notice(&app_event_tx, ollama_chat_support_notice);
+        emit_expansion_warnings(&app_event_tx, &config);
         emit_project_config_warnings(&app_event_tx, &config);
 
         let harness_overrides =

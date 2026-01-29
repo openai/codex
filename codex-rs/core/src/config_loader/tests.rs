@@ -1,11 +1,18 @@
 use super::LoaderOverrides;
+use super::expand_config_toml_with_env;
+use super::expansion::FakeEnv;
+use super::expansion::KEY_COLLISION_SENTINEL;
+use super::format_expansion_warnings;
 use super::load_config_layers_state;
+use super::load_config_layers_state_with_env_for_tests;
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigBuilder;
 use crate::config::ConfigOverrides;
 use crate::config::ConfigToml;
 use crate::config::ProjectConfig;
+use crate::config_loader::ConfigExpansionWarningInfo;
 use crate::config_loader::ConfigLayerEntry;
+use crate::config_loader::ConfigLayerSource;
 use crate::config_loader::ConfigLoadError;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::config_requirements::ConfigRequirementsWithSources;
@@ -233,6 +240,7 @@ async fn returns_empty_when_all_layers_missing() {
             config: TomlValue::Table(toml::map::Map::new()),
             version: version_for_toml(&TomlValue::Table(toml::map::Map::new())),
             disabled_reason: None,
+            expansion_warnings: Vec::new(),
         },
         user_layer,
     );
@@ -386,6 +394,196 @@ allowed_sandbox_modes = ["read-only"]
     );
 
     Ok(())
+}
+
+#[test]
+fn expands_env_vars_in_keys_and_values() {
+    let config: TomlValue = toml::from_str(
+        r#"[projects."$PROJECTS/gpt5test"]
+trust_level = "trusted"
+notes = "path=$PROJECTS/gpt5test model=${MODEL} $$MODEL"
+"#,
+    )
+    .expect("parse toml");
+
+    let env = FakeEnv::new([("PROJECTS", "/Users/tester/projects"), ("MODEL", "gpt-5")]);
+    let result = expand_config_toml_with_env(config, &env);
+    assert_eq!(result.warnings, Vec::new());
+
+    let expected: TomlValue = toml::from_str(
+        r#"[projects."/Users/tester/projects/gpt5test"]
+trust_level = "trusted"
+notes = "path=/Users/tester/projects/gpt5test model=gpt-5 $MODEL"
+"#,
+    )
+    .expect("parse toml");
+    assert_eq!(result.value, expected);
+}
+
+#[test]
+fn expands_tilde_prefix_only_at_start() {
+    let config: TomlValue = toml::from_str(
+        r#"
+path = "~/skills/skill.md"
+no_expand = "docs/~user/skill.md"
+"#,
+    )
+    .expect("parse toml");
+
+    let env = if cfg!(windows) {
+        FakeEnv::new([("USERPROFILE", "C:\\Users\\tester")])
+    } else {
+        FakeEnv::new([("HOME", "/Users/tester")])
+    };
+    let result = expand_config_toml_with_env(config, &env);
+    assert_eq!(result.warnings, Vec::new());
+
+    let expected_path = if cfg!(windows) {
+        "C:\\Users\\tester\\skills\\skill.md"
+    } else {
+        "/Users/tester/skills/skill.md"
+    };
+    let expected: TomlValue = toml::from_str(&format!(
+        r#"
+path = "{expected_path}"
+no_expand = "docs/~user/skill.md"
+"#
+    ))
+    .expect("parse toml");
+    assert_eq!(result.value, expected);
+}
+
+#[test]
+fn warns_when_env_var_missing() {
+    let config: TomlValue = toml::from_str(
+        r#"
+path = "$MISSING/bin"
+[projects."$PROJECTS/demo"]
+trust_level = "trusted"
+"#,
+    )
+    .expect("parse toml");
+
+    let env = FakeEnv::new([("PROJECTS", "/Users/tester/projects")]);
+    let result = expand_config_toml_with_env(config, &env);
+
+    assert_eq!(
+        result.warnings,
+        vec![super::ConfigExpansionWarning::new("MISSING", "path")]
+    );
+
+    let expected: TomlValue = toml::from_str(
+        r#"
+path = "$MISSING/bin"
+[projects."/Users/tester/projects/demo"]
+trust_level = "trusted"
+"#,
+    )
+    .expect("parse toml");
+    assert_eq!(result.value, expected);
+}
+
+#[test]
+fn warns_when_env_var_missing_in_key() {
+    let config: TomlValue = toml::from_str(
+        r#"[projects."$PROJECTS/demo"]
+trust_level = "trusted"
+"#,
+    )
+    .expect("parse toml");
+
+    let env = FakeEnv::new(Vec::<(String, String)>::new());
+    let result = expand_config_toml_with_env(config, &env);
+
+    assert_eq!(
+        result.warnings,
+        vec![super::ConfigExpansionWarning::new(
+            "PROJECTS",
+            "projects[\"$PROJECTS/demo\"]"
+        )]
+    );
+}
+
+#[test]
+fn warns_when_home_missing_for_tilde() {
+    let config: TomlValue = toml::from_str(
+        r#"
+path = "~/skills/skill.md"
+"#,
+    )
+    .expect("parse toml");
+
+    let env = FakeEnv::new(Vec::<(String, String)>::new());
+    let result = expand_config_toml_with_env(config, &env);
+
+    let expected_var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    assert_eq!(
+        result.warnings,
+        vec![super::ConfigExpansionWarning::new(expected_var, "path")]
+    );
+
+    let expected: TomlValue = toml::from_str(
+        r#"
+path = "~/skills/skill.md"
+"#,
+    )
+    .expect("parse toml");
+    assert_eq!(result.value, expected);
+}
+
+#[test]
+fn warns_on_duplicate_keys_after_expansion_and_keeps_first() {
+    let config: TomlValue = toml::from_str(
+        r#"
+[projects."$ROOT/demo"]
+trust_level = "trusted"
+[projects."${ROOT}/demo"]
+trust_level = "untrusted"
+"#,
+    )
+    .expect("parse toml");
+
+    let env = FakeEnv::new([("ROOT", "/tmp/root")]);
+    let result = expand_config_toml_with_env(config, &env);
+
+    assert_eq!(result.warnings.len(), 1);
+    assert_eq!(result.warnings[0].var, KEY_COLLISION_SENTINEL);
+
+    let expected: TomlValue = toml::from_str(
+        r#"
+[projects."/tmp/root/demo"]
+trust_level = "trusted"
+"#,
+    )
+    .expect("parse toml");
+    assert_eq!(result.value, expected);
+}
+
+#[test]
+fn formats_duplicate_key_collision_warnings() {
+    let config: TomlValue = toml::from_str(
+        r#"
+[projects."$ROOT/demo"]
+trust_level = "trusted"
+[projects."${ROOT}/demo"]
+trust_level = "untrusted"
+"#,
+    )
+    .expect("parse toml");
+
+    let env = FakeEnv::new([("ROOT", "/tmp/root")]);
+    let result = expand_config_toml_with_env(config, &env);
+    assert_eq!(result.warnings.len(), 1);
+
+    let warnings = vec![ConfigExpansionWarningInfo {
+        source: ConfigLayerSource::SessionFlags,
+        warning: result.warnings[0].clone(),
+    }];
+    let formatted = format_expansion_warnings(&warnings);
+    assert!(formatted.contains("duplicate keys after expansion"));
+    assert!(formatted.contains("\"$ROOT/demo\" and \"${ROOT}/demo\""));
+    assert!(formatted.contains("\"/tmp/root/demo\""));
+    assert!(formatted.contains("session flags: projects"));
 }
 
 #[cfg(target_os = "macos")]
@@ -648,6 +846,7 @@ async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> s
             config: TomlValue::Table(toml::map::Map::new()),
             version: version_for_toml(&TomlValue::Table(toml::map::Map::new())),
             disabled_reason: None,
+            expansion_warnings: Vec::new(),
         }],
         project_layers
     );
@@ -750,6 +949,59 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
     assert_eq!(
         layers_unknown.effective_config().get("foo"),
         Some(&TomlValue::String("user".to_string()))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn project_layers_enabled_when_trusted_via_symbolic_tilde_key() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+
+    let home_dir = tmp.path().join("home");
+    let project_root = home_dir.clone();
+    let nested = project_root.join("child");
+    tokio::fs::create_dir_all(project_root.join(".git")).await?;
+    tokio::fs::create_dir_all(project_root.join(".codex")).await?;
+    tokio::fs::create_dir_all(&nested).await?;
+    tokio::fs::write(
+        project_root.join(".codex").join(CONFIG_TOML_FILE),
+        "foo = \"project\"\n",
+    )
+    .await?;
+
+    let codex_home = tmp.path().join("codex_home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        "[projects.\"~\"]\ntrust_level = \"trusted\"\n",
+    )
+    .await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
+    let env = FakeEnv::new([("HOME", home_dir.to_string_lossy().to_string())]);
+    let layers = load_config_layers_state_with_env_for_tests(
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        &env,
+    )
+    .await?;
+
+    let project_layers: Vec<_> = layers
+        .get_layers(
+            super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
+            true,
+        )
+        .into_iter()
+        .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
+        .collect();
+    assert_eq!(project_layers.len(), 1);
+    assert_eq!(project_layers[0].disabled_reason, None);
+    assert_eq!(
+        layers.effective_config().get("foo"),
+        Some(&TomlValue::String("project".to_string()))
     );
 
     Ok(())

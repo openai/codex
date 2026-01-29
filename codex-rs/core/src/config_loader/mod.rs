@@ -1,5 +1,6 @@
 mod config_requirements;
 mod diagnostics;
+mod expansion;
 mod fingerprint;
 mod layer_io;
 #[cfg(target_os = "macos")]
@@ -24,8 +25,10 @@ use codex_protocol::protocol::AskForApproval;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::io;
 use std::path::Path;
+use std::path::PathBuf;
 use toml::Value as TomlValue;
 
 pub use config_requirements::ConfigRequirements;
@@ -45,8 +48,19 @@ pub(crate) use diagnostics::first_layer_config_error_from_entries;
 pub use diagnostics::format_config_error;
 pub use diagnostics::format_config_error_with_source;
 pub(crate) use diagnostics::io_error_from_config_error;
+pub use expansion::ConfigExpansionWarning;
+pub(crate) use expansion::EnvProvider;
+#[cfg(test)]
+pub(crate) use expansion::FakeEnv;
+use expansion::KEY_COLLISION_SENTINEL;
+pub(crate) use expansion::RealEnv;
+pub(crate) use expansion::expand_config_toml;
+#[cfg(test)]
+pub(crate) use expansion::expand_config_toml_with_env;
+pub(crate) use expansion::expand_key_for_matching_with_env;
 pub use merge::merge_toml_values;
 pub(crate) use overrides::build_cli_overrides_layer;
+pub use state::ConfigExpansionWarningInfo;
 pub use state::ConfigLayerEntry;
 pub use state::ConfigLayerStack;
 pub use state::ConfigLayerStackOrdering;
@@ -61,6 +75,78 @@ const DEFAULT_REQUIREMENTS_TOML_FILE_UNIX: &str = "/etc/codex/requirements.toml"
 pub const SYSTEM_CONFIG_TOML_FILE_UNIX: &str = "/etc/codex/config.toml";
 
 const DEFAULT_PROJECT_ROOT_MARKERS: &[&str] = &[".git"];
+
+pub fn config_layer_source_display(source: &ConfigLayerSource) -> String {
+    match source {
+        ConfigLayerSource::System { file } => file.as_path().display().to_string(),
+        ConfigLayerSource::User { file } => file.as_path().display().to_string(),
+        ConfigLayerSource::Project { dot_codex_folder } => dot_codex_folder
+            .as_path()
+            .join(CONFIG_TOML_FILE)
+            .display()
+            .to_string(),
+        ConfigLayerSource::LegacyManagedConfigTomlFromFile { file } => {
+            file.as_path().display().to_string()
+        }
+        ConfigLayerSource::Mdm { domain, key } => format!("MDM {domain}:{key}"),
+        ConfigLayerSource::LegacyManagedConfigTomlFromMdm => "MDM managed_config.toml".to_string(),
+        ConfigLayerSource::SessionFlags => "session flags".to_string(),
+    }
+}
+
+pub fn format_expansion_warnings(warnings: &[ConfigExpansionWarningInfo]) -> String {
+    let mut message =
+        "Some config values could not expand environment variables and were left unchanged.\n"
+            .to_string();
+    for (index, warning) in warnings.iter().enumerate() {
+        let display_index = index + 1;
+        let source = config_layer_source_display(&warning.source);
+        if warning.warning.var == KEY_COLLISION_SENTINEL {
+            message.push_str(&format_collision_warning(
+                display_index,
+                source.as_str(),
+                warning.warning.path.as_str(),
+            ));
+            continue;
+        }
+        let path = warning.warning.path.as_str();
+        let var = warning.warning.var.as_str();
+        message.push_str(&format!(
+            "    {display_index}. {source}: {path} references ${var} which is not set\n"
+        ));
+    }
+    message
+}
+
+fn format_collision_warning(display_index: usize, source: &str, path: &str) -> String {
+    let parsed = serde_json::from_str::<serde_json::Value>(path);
+    if let Ok(value) = parsed {
+        let parent_path = value
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("<unknown>");
+        let expanded_key = value
+            .get("expanded_key")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("<unknown>");
+        let original_keys = value
+            .get("original_keys")
+            .and_then(serde_json::Value::as_array)
+            .map(|keys| {
+                keys.iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(|key| format!("\"{key}\""))
+                    .collect::<Vec<_>>()
+                    .join(" and ")
+            })
+            .filter(|keys| !keys.is_empty())
+            .unwrap_or_else(|| "\"<unknown>\"".to_string());
+        return format!(
+            "    {display_index}. {source}: {parent_path} has duplicate keys after expansion: {original_keys} both expand to \"{expanded_key}\" (kept first)\n"
+        );
+    }
+    format!("    {display_index}. {source}: duplicate keys after expansion (details unavailable)\n")
+}
 
 /// To build up the set of admin-enforced constraints, we build up from multiple
 /// configuration layers in the following order, but a constraint defined in an
@@ -96,6 +182,16 @@ pub async fn load_config_layers_state(
     cwd: Option<AbsolutePathBuf>,
     cli_overrides: &[(String, TomlValue)],
     overrides: LoaderOverrides,
+) -> io::Result<ConfigLayerStack> {
+    load_config_layers_state_with_env(codex_home, cwd, cli_overrides, overrides, &RealEnv).await
+}
+
+async fn load_config_layers_state_with_env(
+    codex_home: &Path,
+    cwd: Option<AbsolutePathBuf>,
+    cli_overrides: &[(String, TomlValue)],
+    overrides: LoaderOverrides,
+    env: &impl EnvProvider,
 ) -> io::Result<ConfigLayerStack> {
     let mut config_requirements_toml = ConfigRequirementsWithSources::default();
 
@@ -201,6 +297,7 @@ pub async fn load_config_layers_state(
             &project_root_markers,
             codex_home,
             &user_file,
+            env,
         )
         .await
         {
@@ -231,10 +328,13 @@ pub async fn load_config_layers_state(
 
     // Add a layer for runtime overrides from the CLI or UI, if any exist.
     if let Some(cli_overrides_layer) = cli_overrides_layer {
-        layers.push(ConfigLayerEntry::new(
+        let expanded = expand_config_toml(cli_overrides_layer);
+        let entry = ConfigLayerEntry::new_with_warnings(
             ConfigLayerSource::SessionFlags,
-            cli_overrides_layer,
-        ));
+            expanded.value,
+            expanded.warnings,
+        );
+        layers.push(entry);
     }
 
     // Make a best-effort to support the legacy `managed_config.toml` as a
@@ -256,18 +356,23 @@ pub async fn load_config_layers_state(
                 ),
             )
         })?;
-        let managed_config =
-            resolve_relative_paths_in_config_toml(config.managed_config, managed_parent)?;
-        layers.push(ConfigLayerEntry::new(
+        let expanded = expand_config_toml(config.managed_config);
+        let managed_config = resolve_relative_paths_in_config_toml(expanded.value, managed_parent)?;
+        let entry = ConfigLayerEntry::new_with_warnings(
             ConfigLayerSource::LegacyManagedConfigTomlFromFile { file: config.file },
             managed_config,
-        ));
+            expanded.warnings,
+        );
+        layers.push(entry);
     }
     if let Some(config) = managed_config_from_mdm {
-        layers.push(ConfigLayerEntry::new(
+        let expanded = expand_config_toml(config);
+        let entry = ConfigLayerEntry::new_with_warnings(
             ConfigLayerSource::LegacyManagedConfigTomlFromMdm,
-            config,
-        ));
+            expanded.value,
+            expanded.warnings,
+        );
+        layers.push(entry);
     }
 
     ConfigLayerStack::new(
@@ -275,6 +380,17 @@ pub async fn load_config_layers_state(
         config_requirements_toml.clone().try_into()?,
         config_requirements_toml.into_toml(),
     )
+}
+
+#[cfg(test)]
+pub(crate) async fn load_config_layers_state_with_env_for_tests(
+    codex_home: &Path,
+    cwd: Option<AbsolutePathBuf>,
+    cli_overrides: &[(String, TomlValue)],
+    overrides: LoaderOverrides,
+    env: &impl EnvProvider,
+) -> io::Result<ConfigLayerStack> {
+    load_config_layers_state_with_env(codex_home, cwd, cli_overrides, overrides, env).await
 }
 
 /// Attempts to load a config.toml file from `config_toml`.
@@ -289,7 +405,7 @@ async fn load_config_toml_for_required_layer(
     create_entry: impl FnOnce(TomlValue) -> ConfigLayerEntry,
 ) -> io::Result<ConfigLayerEntry> {
     let toml_file = config_toml.as_ref();
-    let toml_value = match tokio::fs::read_to_string(toml_file).await {
+    let (toml_value, warnings) = match tokio::fs::read_to_string(toml_file).await {
         Ok(contents) => {
             let config: TomlValue = toml::from_str(&contents).map_err(|err| {
                 let config_error = config_error_from_toml(toml_file, &contents, err.clone());
@@ -304,21 +420,24 @@ async fn load_config_toml_for_required_layer(
                     ),
                 )
             })?;
-            resolve_relative_paths_in_config_toml(config, config_parent)
+            let expanded = expand_config_toml(config);
+            let resolved = resolve_relative_paths_in_config_toml(expanded.value, config_parent)?;
+            (resolved, expanded.warnings)
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            (TomlValue::Table(toml::map::Map::new()), Vec::new())
         }
         Err(e) => {
-            if e.kind() == io::ErrorKind::NotFound {
-                Ok(TomlValue::Table(toml::map::Map::new()))
-            } else {
-                Err(io::Error::new(
-                    e.kind(),
-                    format!("Failed to read config file {}: {e}", toml_file.display()),
-                ))
-            }
+            return Err(io::Error::new(
+                e.kind(),
+                format!("Failed to read config file {}: {e}", toml_file.display()),
+            ));
         }
-    }?;
+    };
 
-    Ok(create_entry(toml_value))
+    let mut entry = create_entry(toml_value);
+    entry.expansion_warnings = warnings;
+    Ok(entry)
 }
 
 /// If available, apply requirements from `/etc/codex/requirements.toml` to
@@ -451,9 +570,55 @@ fn default_project_root_markers() -> Vec<String> {
 struct ProjectTrustContext {
     project_root: AbsolutePathBuf,
     project_root_key: String,
+    project_root_display_key: String,
     repo_root_key: Option<String>,
-    projects_trust: std::collections::HashMap<String, TrustLevel>,
+    repo_root_display_key: Option<String>,
+    projects_trust: HashMap<String, TrustLevel>,
+    trust_key_by_normalized: HashMap<String, String>,
     user_config_file: AbsolutePathBuf,
+}
+
+#[derive(Clone)]
+struct TrustEntry {
+    trust_level: TrustLevel,
+    original_key: String,
+    is_symbolic: bool,
+}
+
+fn is_symbolic_project_key(key: &str) -> bool {
+    key.starts_with('~') || key.contains('$')
+}
+
+fn normalize_path_for_matching(path: &str) -> String {
+    let path_buf = PathBuf::from(path);
+    std::fs::canonicalize(&path_buf)
+        .unwrap_or(path_buf)
+        .to_string_lossy()
+        .to_string()
+}
+
+fn expand_and_normalize_project_key(key: &str, env: &impl EnvProvider) -> String {
+    let expanded = expand_key_for_matching_with_env(key, env);
+    normalize_path_for_matching(&expanded)
+}
+
+fn trust_rank(level: TrustLevel) -> u8 {
+    match level {
+        TrustLevel::Untrusted => 2,
+        TrustLevel::Trusted => 1,
+    }
+}
+
+fn should_replace_trust_entry(existing: &TrustEntry, candidate: &TrustEntry) -> bool {
+    let existing_rank = trust_rank(existing.trust_level);
+    let candidate_rank = trust_rank(candidate.trust_level);
+    if existing_rank != candidate_rank {
+        return candidate_rank > existing_rank;
+    }
+    if existing.is_symbolic != candidate.is_symbolic {
+        return candidate.is_symbolic;
+    }
+    candidate.original_key < existing.original_key
 }
 
 struct ProjectTrustDecision {
@@ -469,36 +634,53 @@ impl ProjectTrustDecision {
 
 impl ProjectTrustContext {
     fn decision_for_dir(&self, dir: &AbsolutePathBuf) -> ProjectTrustDecision {
-        let dir_key = dir.as_path().to_string_lossy().to_string();
+        let dir_display_key = dir.as_path().to_string_lossy().to_string();
+        let dir_key = normalize_path_for_matching(&dir_display_key);
         if let Some(trust_level) = self.projects_trust.get(&dir_key).copied() {
+            let trust_key = self
+                .trust_key_by_normalized
+                .get(&dir_key)
+                .cloned()
+                .unwrap_or(dir_display_key);
             return ProjectTrustDecision {
                 trust_level: Some(trust_level),
-                trust_key: dir_key,
+                trust_key,
             };
         }
 
         if let Some(trust_level) = self.projects_trust.get(&self.project_root_key).copied() {
+            let trust_key = self
+                .trust_key_by_normalized
+                .get(&self.project_root_key)
+                .cloned()
+                .unwrap_or_else(|| self.project_root_display_key.clone());
             return ProjectTrustDecision {
                 trust_level: Some(trust_level),
-                trust_key: self.project_root_key.clone(),
+                trust_key,
             };
         }
 
         if let Some(repo_root_key) = self.repo_root_key.as_ref()
             && let Some(trust_level) = self.projects_trust.get(repo_root_key).copied()
         {
+            let trust_key = self
+                .trust_key_by_normalized
+                .get(repo_root_key)
+                .cloned()
+                .or_else(|| self.repo_root_display_key.clone())
+                .unwrap_or_else(|| repo_root_key.clone());
             return ProjectTrustDecision {
                 trust_level: Some(trust_level),
-                trust_key: repo_root_key.clone(),
+                trust_key,
             };
         }
 
         ProjectTrustDecision {
             trust_level: None,
             trust_key: self
-                .repo_root_key
+                .repo_root_display_key
                 .clone()
-                .unwrap_or_else(|| self.project_root_key.clone()),
+                .unwrap_or_else(|| self.project_root_display_key.clone()),
         }
     }
 
@@ -545,28 +727,59 @@ async fn project_trust_context(
     project_root_markers: &[String],
     config_base_dir: &Path,
     user_config_file: &AbsolutePathBuf,
+    env: &impl EnvProvider,
 ) -> io::Result<ProjectTrustContext> {
     let config_toml = deserialize_config_toml_with_base(merged_config.clone(), config_base_dir)?;
 
     let project_root = find_project_root(cwd, project_root_markers).await?;
     let projects = config_toml.projects.unwrap_or_default();
 
-    let project_root_key = project_root.as_path().to_string_lossy().to_string();
+    let project_root_display_key = project_root.as_path().to_string_lossy().to_string();
+    let project_root_key = normalize_path_for_matching(&project_root_display_key);
     let repo_root = resolve_root_git_project_for_trust(cwd.as_path());
-    let repo_root_key = repo_root
+    let repo_root_display_key = repo_root
         .as_ref()
         .map(|root| root.to_string_lossy().to_string());
+    let repo_root_key = repo_root_display_key
+        .as_deref()
+        .map(normalize_path_for_matching);
 
-    let projects_trust = projects
-        .into_iter()
-        .filter_map(|(key, project)| project.trust_level.map(|trust_level| (key, trust_level)))
-        .collect();
+    let mut trust_entries: HashMap<String, TrustEntry> = HashMap::new();
+    for (key, project) in projects {
+        let Some(trust_level) = project.trust_level else {
+            continue;
+        };
+        let normalized_key = expand_and_normalize_project_key(&key, env);
+        let candidate = TrustEntry {
+            trust_level,
+            original_key: key.clone(),
+            is_symbolic: is_symbolic_project_key(&key),
+        };
+        trust_entries
+            .entry(normalized_key)
+            .and_modify(|existing| {
+                if should_replace_trust_entry(existing, &candidate) {
+                    *existing = candidate.clone();
+                }
+            })
+            .or_insert(candidate);
+    }
+
+    let mut projects_trust = HashMap::new();
+    let mut trust_key_by_normalized = HashMap::new();
+    for (normalized_key, entry) in trust_entries {
+        projects_trust.insert(normalized_key.clone(), entry.trust_level);
+        trust_key_by_normalized.insert(normalized_key, entry.original_key);
+    }
 
     Ok(ProjectTrustContext {
         project_root,
         project_root_key,
+        project_root_display_key,
         repo_root_key,
+        repo_root_display_key,
         projects_trust,
+        trust_key_by_normalized,
         user_config_file: user_config_file.clone(),
     })
 }
@@ -715,10 +928,12 @@ async fn load_project_layers(
                         continue;
                     }
                 };
+                let expanded = expand_config_toml(config);
                 let config =
-                    resolve_relative_paths_in_config_toml(config, dot_codex_abs.as_path())?;
-                let entry =
+                    resolve_relative_paths_in_config_toml(expanded.value, dot_codex_abs.as_path())?;
+                let mut entry =
                     project_layer_entry(trust_context, &dot_codex_abs, &layer_dir, config, true);
+                entry.expansion_warnings = expanded.warnings;
                 layers.push(entry);
             }
             Err(err) => {

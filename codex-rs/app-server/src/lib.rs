@@ -21,6 +21,7 @@ use codex_core::ExecPolicyError;
 use codex_core::check_execpolicy_for_warnings;
 use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::TextRange as CoreTextRange;
+use codex_core::config_loader::format_expansion_warnings;
 use codex_feedback::CodexFeedback;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
@@ -163,6 +164,20 @@ fn project_config_warning(config: &Config) -> Option<ConfigWarningNotification> 
     })
 }
 
+fn expansion_warning(config: &Config) -> Option<ConfigWarningNotification> {
+    let warnings = config.config_layer_stack.expansion_warnings();
+    if warnings.is_empty() {
+        return None;
+    }
+
+    Some(ConfigWarningNotification {
+        summary: format_expansion_warnings(&warnings),
+        details: None,
+        path: None,
+        range: None,
+    })
+}
+
 pub async fn run_main(
     codex_linux_sandbox_exe: Option<PathBuf>,
     cli_config_overrides: CliConfigOverrides,
@@ -239,6 +254,9 @@ pub async fn run_main(
     }
 
     if let Some(warning) = project_config_warning(&config) {
+        config_warnings.push(warning);
+    }
+    if let Some(warning) = expansion_warning(&config) {
         config_warnings.push(warning);
     }
 
