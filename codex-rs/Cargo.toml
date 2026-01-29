@@ -2,6 +2,7 @@
 members = [
     "backend-client",
     "ansi-escape",
+    "auth",
     "async-utils",
     "app-server",
     "app-server-protocol",
@@ -36,6 +37,7 @@ members = [
     "stdio-to-uds",
     "otel",
     "tui",
+    "user-agent",
     "utils/absolute-path",
     "utils/cargo-bin",
     "utils/git",
@@ -70,6 +72,7 @@ codex-app-server-protocol = { path = "app-server-protocol" }
 codex-apply-patch = { path = "apply-patch" }
 codex-arg0 = { path = "arg0" }
 codex-async-utils = { path = "async-utils" }
+codex-auth = { path = "auth" }
 codex-backend-client = { path = "backend-client" }
 codex-chatgpt = { path = "chatgpt" }
 codex-cli = { path = "cli"}
@@ -104,6 +107,7 @@ codex-utils-pty = { path = "utils/pty" }
 codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-string = { path = "utils/string" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }
+codex-user-agent = { path = "user-agent" }
 core_test_support = { path = "core/tests/common" }
 exec_server_test_support = { path = "exec-server/tests/common" }
 mcp-types = { path = "mcp-types" }

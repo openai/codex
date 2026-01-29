@@ -1,0 +1,48 @@
+[package]
+name = "codex-auth"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+test-support = []
+
+[dependencies]
+base64 = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+codex-app-server-protocol = { workspace = true }
+codex-client = { workspace = true }
+codex-keyring-store = { workspace = true }
+codex-protocol = { workspace = true }
+codex-user-agent = { workspace = true }
+keyring = { workspace = true, features = ["crypto-rust"] }
+reqwest = { workspace = true, features = ["json", "stream"] }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { workspace = true, features = ["linux-native-async-persistent"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { workspace = true, features = ["apple-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { workspace = true, features = ["windows-native"] }
+
+[target.'cfg(any(target_os = "freebsd", target_os = "openbsd"))'.dependencies]
+keyring = { workspace = true, features = ["sync-secret-service"] }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+base64 = { workspace = true }
+pretty_assertions = { workspace = true }
+serial_test = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }

@@ -1,0 +1,7 @@
+load("//:defs.bzl", "codex_rust_crate")
+
+codex_rust_crate(
+    name = "auth",
+    crate_name = "codex_auth",
+    crate_features = ["test-support"],
+)

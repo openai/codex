@@ -8,6 +8,8 @@ use chrono::Datelike;
 use chrono::Local;
 use chrono::Utc;
 use codex_async_utils::CancelErr;
+pub use codex_auth::RefreshTokenFailedError;
+pub use codex_auth::RefreshTokenFailedReason;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
@@ -251,30 +253,6 @@ impl std::fmt::Display for ResponseStreamFailed {
                 .unwrap_or_default()
         )
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-#[error("{message}")]
-pub struct RefreshTokenFailedError {
-    pub reason: RefreshTokenFailedReason,
-    pub message: String,
-}
-
-impl RefreshTokenFailedError {
-    pub fn new(reason: RefreshTokenFailedReason, message: impl Into<String>) -> Self {
-        Self {
-            reason,
-            message: message.into(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RefreshTokenFailedReason {
-    Expired,
-    Exhausted,
-    Revoked,
-    Other,
 }
 
 #[derive(Debug)]

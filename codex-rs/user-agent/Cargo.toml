@@ -1,0 +1,21 @@
+[package]
+name = "codex-user-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-client = { workspace = true }
+os_info = { workspace = true }
+reqwest = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+core_test_support = { workspace = true }
+pretty_assertions = { workspace = true }
+regex-lite = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
+wiremock = { workspace = true }

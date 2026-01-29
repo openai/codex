@@ -1,4 +1,5 @@
 mod storage;
+pub mod token_data;
 
 use chrono::Utc;
 use reqwest::StatusCode;
@@ -12,26 +13,24 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::RwLock;
 
 use codex_app_server_protocol::AuthMode;
+use codex_client::CodexHttpClient;
+use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::config_types::ForcedLoginMethod;
+use serde_json::Value;
+use thiserror::Error;
+use tracing::debug;
 
-pub use crate::auth::storage::AuthCredentialsStoreMode;
-pub use crate::auth::storage::AuthDotJson;
-use crate::auth::storage::AuthStorageBackend;
-use crate::auth::storage::create_auth_storage;
-use crate::config::Config;
-use crate::error::RefreshTokenFailedError;
-use crate::error::RefreshTokenFailedReason;
+pub use crate::storage::AuthCredentialsStoreMode;
+pub use crate::storage::AuthDotJson;
+use crate::storage::AuthStorageBackend;
+use crate::storage::create_auth_storage;
 use crate::token_data::KnownPlan as InternalKnownPlan;
 use crate::token_data::PlanType as InternalPlanType;
 use crate::token_data::TokenData;
 use crate::token_data::parse_id_token;
-use crate::util::try_parse_error_message;
-use codex_client::CodexHttpClient;
-use codex_protocol::account::PlanType as AccountPlanType;
-use serde_json::Value;
-use thiserror::Error;
 
 #[derive(Debug, Clone)]
 pub struct CodexAuth {
@@ -66,6 +65,30 @@ pub enum RefreshTokenError {
     Permanent(#[from] RefreshTokenFailedError),
     #[error(transparent)]
     Transient(#[from] std::io::Error),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{message}")]
+pub struct RefreshTokenFailedError {
+    pub reason: RefreshTokenFailedReason,
+    pub message: String,
+}
+
+impl RefreshTokenFailedError {
+    pub fn new(reason: RefreshTokenFailedReason, message: impl Into<String>) -> Self {
+        Self {
+            reason,
+            message: message.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefreshTokenFailedReason {
+    Expired,
+    Exhausted,
+    Revoked,
+    Other,
 }
 
 impl RefreshTokenError {
@@ -176,7 +199,7 @@ impl CodexAuth {
             mode: AuthMode::ChatGPT,
             storage: create_auth_storage(PathBuf::new(), AuthCredentialsStoreMode::File),
             auth_dot_json,
-            client: crate::default_client::create_client(),
+            client: codex_user_agent::create_client(),
         }
     }
 
@@ -191,7 +214,7 @@ impl CodexAuth {
     }
 
     pub fn from_api_key(api_key: &str) -> Self {
-        Self::from_api_key_with_client(api_key, crate::default_client::create_client())
+        Self::from_api_key_with_client(api_key, codex_user_agent::create_client())
     }
 }
 
@@ -259,17 +282,25 @@ pub fn load_auth_dot_json(
     storage.load()
 }
 
-pub fn enforce_login_restrictions(config: &Config) -> std::io::Result<()> {
+#[derive(Debug, Clone)]
+pub struct LoginRestrictions {
+    pub codex_home: PathBuf,
+    pub forced_login_method: Option<ForcedLoginMethod>,
+    pub forced_chatgpt_workspace_id: Option<String>,
+    pub auth_credentials_store_mode: AuthCredentialsStoreMode,
+}
+
+pub fn enforce_login_restrictions(restrictions: &LoginRestrictions) -> std::io::Result<()> {
     let Some(auth) = load_auth(
-        &config.codex_home,
+        &restrictions.codex_home,
         true,
-        config.cli_auth_credentials_store_mode,
+        restrictions.auth_credentials_store_mode,
     )?
     else {
         return Ok(());
     };
 
-    if let Some(required_method) = config.forced_login_method {
+    if let Some(required_method) = restrictions.forced_login_method {
         let method_violation = match (required_method, auth.mode) {
             (ForcedLoginMethod::Api, AuthMode::ApiKey) => None,
             (ForcedLoginMethod::Chatgpt, AuthMode::ChatGPT) => None,
@@ -285,14 +316,14 @@ pub fn enforce_login_restrictions(config: &Config) -> std::io::Result<()> {
 
         if let Some(message) = method_violation {
             return logout_with_message(
-                &config.codex_home,
+                &restrictions.codex_home,
                 message,
-                config.cli_auth_credentials_store_mode,
+                restrictions.auth_credentials_store_mode,
             );
         }
     }
 
-    if let Some(expected_account_id) = config.forced_chatgpt_workspace_id.as_deref() {
+    if let Some(expected_account_id) = restrictions.forced_chatgpt_workspace_id.as_deref() {
         if auth.mode != AuthMode::ChatGPT {
             return Ok(());
         }
@@ -301,11 +332,11 @@ pub fn enforce_login_restrictions(config: &Config) -> std::io::Result<()> {
             Ok(data) => data,
             Err(err) => {
                 return logout_with_message(
-                    &config.codex_home,
+                    &restrictions.codex_home,
                     format!(
                         "Failed to load ChatGPT credentials while enforcing workspace restrictions: {err}. Logging out."
                     ),
-                    config.cli_auth_credentials_store_mode,
+                    restrictions.auth_credentials_store_mode,
                 );
             }
         };
@@ -322,9 +353,9 @@ pub fn enforce_login_restrictions(config: &Config) -> std::io::Result<()> {
                 ),
             };
             return logout_with_message(
-                &config.codex_home,
+                &restrictions.codex_home,
                 message,
-                config.cli_auth_credentials_store_mode,
+                restrictions.auth_credentials_store_mode,
             );
         }
     }
@@ -351,7 +382,7 @@ fn load_auth(
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<Option<CodexAuth>> {
     if enable_codex_api_key_env && let Some(api_key) = read_codex_api_key_from_env() {
-        let client = crate::default_client::create_client();
+        let client = codex_user_agent::create_client();
         return Ok(Some(CodexAuth::from_api_key_with_client(
             api_key.as_str(),
             client,
@@ -360,7 +391,7 @@ fn load_auth(
 
     let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
 
-    let client = crate::default_client::create_client();
+    let client = codex_user_agent::create_client();
     let auth_dot_json = match storage.load()? {
         Some(auth) => auth,
         None => return Ok(None),
@@ -459,6 +490,21 @@ async fn try_refresh_token(
     }
 }
 
+fn try_parse_error_message(text: &str) -> String {
+    debug!("Parsing server error response: {text}");
+    let json = serde_json::from_str::<serde_json::Value>(text).unwrap_or_default();
+    if let Some(error) = json.get("error")
+        && let Some(message) = error.get("message")
+        && let Some(message_str) = message.as_str()
+    {
+        return message_str.to_string();
+    }
+    if text.is_empty() {
+        return "Unknown error".to_string();
+    }
+    text.to_string()
+}
+
 fn classify_refresh_token_failure(body: &str) -> RefreshTokenFailedError {
     let code = extract_refresh_token_error_code(body);
 
@@ -536,8 +582,6 @@ fn refresh_token_endpoint() -> String {
     std::env::var(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR)
         .unwrap_or_else(|_| REFRESH_TOKEN_URL.to_string())
 }
-
-use std::sync::RwLock;
 
 /// Internal cached auth state.
 #[derive(Clone, Debug)]
@@ -813,7 +857,7 @@ impl AuthManager {
     /// reloads the in‑memory auth cache so callers immediately observe the
     /// unauthenticated state.
     pub fn logout(&self) -> std::io::Result<bool> {
-        let removed = super::auth::logout(&self.codex_home, self.auth_credentials_store_mode)?;
+        let removed = logout(&self.codex_home, self.auth_credentials_store_mode)?;
         // Always reload to clear any cached auth (even if file absent).
         self.reload();
         Ok(removed)
@@ -871,10 +915,8 @@ impl AuthManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::auth::storage::FileAuthStorage;
-    use crate::auth::storage::get_auth_file;
-    use crate::config::Config;
-    use crate::config::ConfigBuilder;
+    use crate::storage::FileAuthStorage;
+    use crate::storage::get_auth_file;
     use crate::token_data::IdTokenInfo;
     use crate::token_data::KnownPlan as InternalKnownPlan;
     use crate::token_data::PlanType as InternalPlanType;
@@ -955,6 +997,30 @@ mod tests {
         let auth = CodexAuth::from_auth_storage(dir.path(), AuthCredentialsStoreMode::File)
             .expect("call should succeed");
         assert_eq!(auth, None);
+    }
+
+    #[test]
+    fn test_try_parse_error_message() {
+        let text = r#"{
+  "error": {
+    "message": "Your refresh token has already been used to generate a new access token. Please try signing in again.",
+    "type": "invalid_request_error",
+    "param": null,
+    "code": "refresh_token_reused"
+  }
+}"#;
+        let message = try_parse_error_message(text);
+        assert_eq!(
+            message,
+            "Your refresh token has already been used to generate a new access token. Please try signing in again."
+        );
+    }
+
+    #[test]
+    fn test_try_parse_error_message_no_error() {
+        let text = r#"{"message": "test"}"#;
+        let message = try_parse_error_message(text);
+        assert_eq!(message, r#"{"message": "test"}"#);
     }
 
     #[tokio::test]
@@ -1100,19 +1166,17 @@ mod tests {
         Ok(fake_jwt)
     }
 
-    async fn build_config(
+    fn build_restrictions(
         codex_home: &Path,
         forced_login_method: Option<ForcedLoginMethod>,
         forced_chatgpt_workspace_id: Option<String>,
-    ) -> Config {
-        let mut config = ConfigBuilder::default()
-            .codex_home(codex_home.to_path_buf())
-            .build()
-            .await
-            .expect("config should load");
-        config.forced_login_method = forced_login_method;
-        config.forced_chatgpt_workspace_id = forced_chatgpt_workspace_id;
-        config
+    ) -> LoginRestrictions {
+        LoginRestrictions {
+            codex_home: codex_home.to_path_buf(),
+            forced_login_method,
+            forced_chatgpt_workspace_id,
+            auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+        }
     }
 
     /// Use sparingly.
@@ -1146,15 +1210,16 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn enforce_login_restrictions_logs_out_for_method_mismatch() {
+    #[test]
+    fn enforce_login_restrictions_logs_out_for_method_mismatch() {
         let codex_home = tempdir().unwrap();
         login_with_api_key(codex_home.path(), "sk-test", AuthCredentialsStoreMode::File)
             .expect("seed api key");
 
-        let config = build_config(codex_home.path(), Some(ForcedLoginMethod::Chatgpt), None).await;
+        let restrictions =
+            build_restrictions(codex_home.path(), Some(ForcedLoginMethod::Chatgpt), None);
 
-        let err = super::enforce_login_restrictions(&config)
+        let err = super::enforce_login_restrictions(&restrictions)
             .expect_err("expected method mismatch to error");
         assert!(err.to_string().contains("ChatGPT login is required"));
         assert!(
@@ -1163,9 +1228,9 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[test]
     #[serial(codex_api_key)]
-    async fn enforce_login_restrictions_logs_out_for_workspace_mismatch() {
+    fn enforce_login_restrictions_logs_out_for_workspace_mismatch() {
         let codex_home = tempdir().unwrap();
         let _jwt = write_auth_file(
             AuthFileParams {
@@ -1177,9 +1242,10 @@ mod tests {
         )
         .expect("failed to write auth file");
 
-        let config = build_config(codex_home.path(), None, Some("org_mine".to_string())).await;
+        let restrictions =
+            build_restrictions(codex_home.path(), None, Some("org_mine".to_string()));
 
-        let err = super::enforce_login_restrictions(&config)
+        let err = super::enforce_login_restrictions(&restrictions)
             .expect_err("expected workspace mismatch to error");
         assert!(err.to_string().contains("workspace org_mine"));
         assert!(
@@ -1188,9 +1254,9 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[test]
     #[serial(codex_api_key)]
-    async fn enforce_login_restrictions_allows_matching_workspace() {
+    fn enforce_login_restrictions_allows_matching_workspace() {
         let codex_home = tempdir().unwrap();
         let _jwt = write_auth_file(
             AuthFileParams {
@@ -1202,40 +1268,45 @@ mod tests {
         )
         .expect("failed to write auth file");
 
-        let config = build_config(codex_home.path(), None, Some("org_mine".to_string())).await;
+        let restrictions =
+            build_restrictions(codex_home.path(), None, Some("org_mine".to_string()));
 
-        super::enforce_login_restrictions(&config).expect("matching workspace should succeed");
+        super::enforce_login_restrictions(&restrictions)
+            .expect("matching workspace should succeed");
         assert!(
             codex_home.path().join("auth.json").exists(),
             "auth.json should remain when restrictions pass"
         );
     }
 
-    #[tokio::test]
-    async fn enforce_login_restrictions_allows_api_key_if_login_method_not_set_but_forced_chatgpt_workspace_id_is_set()
+    #[test]
+    fn enforce_login_restrictions_allows_api_key_if_login_method_not_set_but_forced_chatgpt_workspace_id_is_set()
      {
         let codex_home = tempdir().unwrap();
         login_with_api_key(codex_home.path(), "sk-test", AuthCredentialsStoreMode::File)
             .expect("seed api key");
 
-        let config = build_config(codex_home.path(), None, Some("org_mine".to_string())).await;
+        let restrictions =
+            build_restrictions(codex_home.path(), None, Some("org_mine".to_string()));
 
-        super::enforce_login_restrictions(&config).expect("matching workspace should succeed");
+        super::enforce_login_restrictions(&restrictions)
+            .expect("matching workspace should succeed");
         assert!(
             codex_home.path().join("auth.json").exists(),
             "auth.json should remain when restrictions pass"
         );
     }
 
-    #[tokio::test]
+    #[test]
     #[serial(codex_api_key)]
-    async fn enforce_login_restrictions_blocks_env_api_key_when_chatgpt_required() {
+    fn enforce_login_restrictions_blocks_env_api_key_when_chatgpt_required() {
         let _guard = EnvVarGuard::set(CODEX_API_KEY_ENV_VAR, "sk-env");
         let codex_home = tempdir().unwrap();
 
-        let config = build_config(codex_home.path(), Some(ForcedLoginMethod::Chatgpt), None).await;
+        let restrictions =
+            build_restrictions(codex_home.path(), Some(ForcedLoginMethod::Chatgpt), None);
 
-        let err = super::enforce_login_restrictions(&config)
+        let err = super::enforce_login_restrictions(&restrictions)
             .expect_err("environment API key should not satisfy forced ChatGPT login");
         assert!(
             err.to_string()

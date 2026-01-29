@@ -1188,13 +1188,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-auth"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "chrono",
+ "codex-app-server-protocol",
+ "codex-client",
+ "codex-keyring-store",
+ "codex-protocol",
+ "codex-user-agent",
+ "keyring",
+ "pretty_assertions",
+ "reqwest",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "codex-backend-client"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "codex-auth",
  "codex-backend-openapi-models",
- "codex-core",
  "codex-protocol",
+ "codex-user-agent",
  "pretty_assertions",
  "reqwest",
  "serde",
@@ -1369,16 +1396,16 @@ dependencies = [
  "codex-apply-patch",
  "codex-arg0",
  "codex-async-utils",
- "codex-client",
+ "codex-auth",
  "codex-core",
  "codex-execpolicy",
  "codex-file-search",
  "codex-git",
- "codex-keyring-store",
  "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
  "codex-state",
+ "codex-user-agent",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-utils-pty",
@@ -1399,7 +1426,6 @@ dependencies = [
  "include_dir",
  "indexmap 2.12.0",
  "indoc",
- "keyring",
  "landlock",
  "libc",
  "maplit",
@@ -1407,7 +1433,6 @@ dependencies = [
  "multimap",
  "once_cell",
  "openssl-sys",
- "os_info",
  "predicates",
  "pretty_assertions",
  "rand 0.9.2",
@@ -1953,6 +1978,21 @@ dependencies = [
  "which",
  "windows-sys 0.52.0",
  "winsplit",
+]
+
+[[package]]
+name = "codex-user-agent"
+version = "0.0.0"
+dependencies = [
+ "codex-client",
+ "core_test_support",
+ "os_info",
+ "pretty_assertions",
+ "regex-lite",
+ "reqwest",
+ "tokio",
+ "tracing",
+ "wiremock",
 ]
 
 [[package]]
