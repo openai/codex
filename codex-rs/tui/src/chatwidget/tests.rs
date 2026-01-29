@@ -8,6 +8,7 @@ use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
 use crate::app_event_sender::AppEventSender;
+use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::history_cell::UserHistoryCell;
 use crate::test_backend::VT100Backend;
@@ -716,6 +717,7 @@ async fn helpers_are_available_and_do_not_panic() {
         models_manager: thread_manager.get_models_manager(),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
+        feedback_audience: FeedbackAudience::External,
         model: Some(resolved_model),
         otel_manager,
     };
@@ -837,6 +839,7 @@ async fn make_chatwidget_manual(
         last_separator_elapsed_secs: None,
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
+        feedback_audience: FeedbackAudience::External,
         current_rollout_path: None,
         external_editor_state: ExternalEditorState::Closed,
     };
@@ -2296,6 +2299,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         models_manager: thread_manager.get_models_manager(),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
+        feedback_audience: FeedbackAudience::External,
         model: Some(resolved_model.clone()),
         otel_manager,
     };
@@ -2340,6 +2344,7 @@ async fn experimental_mode_plan_applies_on_startup() {
         models_manager: thread_manager.get_models_manager(),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
+        feedback_audience: FeedbackAudience::External,
         model: Some(resolved_model.clone()),
         otel_manager,
     };
