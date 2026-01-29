@@ -417,7 +417,14 @@ export class OpencodeHttpClient {
     query?: Record<string, string>,
   ): Promise<unknown> {
     const url = this.buildUrl(pathname, query);
-    const res = await fetch(url, { method: "GET" });
+    let res: Response;
+    try {
+      res = await fetch(url, { method: "GET" });
+    } catch (err) {
+      const e = new Error(`GET ${pathname} fetch failed: url=${url}`);
+      (e as any).cause = err;
+      throw e;
+    }
     if (!res.ok)
       throw new Error(
         `GET ${pathname} failed: ${res.status} ${res.statusText}`,
@@ -431,11 +438,18 @@ export class OpencodeHttpClient {
     query?: Record<string, string>,
   ): Promise<unknown> {
     const url = this.buildUrl(pathname, query);
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body ?? {}),
-    });
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body ?? {}),
+      });
+    } catch (err) {
+      const e = new Error(`POST ${pathname} fetch failed: url=${url}`);
+      (e as any).cause = err;
+      throw e;
+    }
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       throw new Error(
@@ -454,11 +468,18 @@ export class OpencodeHttpClient {
     query?: Record<string, string>,
   ): Promise<unknown> {
     const url = this.buildUrl(pathname, query);
-    const res = await fetch(url, {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body ?? {}),
-    });
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body ?? {}),
+      });
+    } catch (err) {
+      const e = new Error(`PUT ${pathname} fetch failed: url=${url}`);
+      (e as any).cause = err;
+      throw e;
+    }
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       throw new Error(

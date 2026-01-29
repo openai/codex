@@ -722,6 +722,12 @@ export function activate(context: vscode.ExtensionContext): void {
           );
           return;
         }
+        if (session.backendId === "opencode" && bm.isOpencodeSessionBusy(session)) {
+          void vscode.window.showErrorMessage(
+            "OpenCode セッションが busy のため Rewind できません。Stop してからやり直してください。",
+          );
+          return;
+        }
 
         const rewindBlockId = newLocalId("info");
 
@@ -2906,8 +2912,11 @@ async function sendUserInput(
       modelState,
     );
   } catch (err) {
+    const errText = formatUnknownError(err);
+    const cause = err instanceof Error ? (err as any).cause : null;
+    const causeText = cause ? `\ncaused by: ${formatUnknownError(cause)}` : "";
     outputChannel?.appendLine(
-      `[send] Failed: sessionId=${session.id} threadId=${session.threadId} err=${String(err)}`,
+      `[send] Failed: sessionId=${session.id} threadId=${session.threadId} err=${errText}${causeText}`,
     );
     rt.sending = false;
     rt.pendingInterrupt = false;
@@ -2915,7 +2924,7 @@ async function sendUserInput(
       id: newLocalId("error"),
       type: "error",
       title: "Send failed",
-      text: String(err),
+      text: errText + causeText,
     });
     chatView?.refresh();
     schedulePersistRuntime(session.id);

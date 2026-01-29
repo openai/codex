@@ -72,6 +72,7 @@ export class BackendManager implements vscode.Disposable {
       activeTurnIdBySession: Map<string, string>;
       partItemIdByKey: Map<string, string>;
       activeStepIdByMessageId: Map<string, string>;
+      sessionStatusById: Map<string, string>;
     }
   >();
   private readonly startInFlight = new Map<string, Promise<void>>();
@@ -257,6 +258,7 @@ export class BackendManager implements vscode.Disposable {
         const activeTurnIdBySession = new Map<string, string>();
         const partItemIdByKey = new Map<string, string>();
         const activeStepIdByMessageId = new Map<string, string>();
+        const sessionStatusById = new Map<string, string>();
 
         const sse = await client.connectEventStream(
           (evt) => {
@@ -267,6 +269,7 @@ export class BackendManager implements vscode.Disposable {
               activeTurnIdBySession,
               partItemIdByKey,
               activeStepIdByMessageId,
+              sessionStatusById,
               client,
             );
           },
@@ -285,6 +288,7 @@ export class BackendManager implements vscode.Disposable {
           activeTurnIdBySession,
           partItemIdByKey,
           activeStepIdByMessageId,
+          sessionStatusById,
         });
         server.onDidExit(({ code, signal }) => {
           // Backend died unexpectedly (e.g. killed from outside VS Code).
@@ -923,6 +927,16 @@ export class BackendManager implements vscode.Disposable {
     return this.itemsByThreadId.get(threadId)?.get(itemId) ?? null;
   }
 
+  public getOpencodeSessionStatus(session: Session): string | null {
+    const oc = this.opencode.get(session.backendKey);
+    if (!oc) return null;
+    return oc.sessionStatusById.get(session.threadId) ?? null;
+  }
+
+  public isOpencodeSessionBusy(session: Session): boolean {
+    return this.getOpencodeSessionStatus(session) === "busy";
+  }
+
   public async sendMessage(session: Session, text: string): Promise<void> {
     await this.sendMessageWithModelAndImages(session, text, [], null);
   }
@@ -1141,6 +1155,11 @@ export class BackendManager implements vscode.Disposable {
     await this.startForBackendId(folder, session.backendId);
     const oc = this.opencode.get(session.backendKey);
     if (oc) {
+      if (oc.sessionStatusById.get(session.threadId) === "busy") {
+        throw new Error(
+          "OpenCode session is busy. Stop the current turn before rewinding.",
+        );
+      }
       // Clear per-thread caches so the UI can rehydrate from the updated thread state.
       this.itemsByThreadId.delete(session.threadId);
       this.latestDiffByThreadId.delete(session.threadId);
@@ -1256,6 +1275,7 @@ export class BackendManager implements vscode.Disposable {
 	    activeTurnIdBySession: Map<string, string>,
 	    partItemIdByKey: Map<string, string>,
 	    activeStepIdByMessageId: Map<string, string>,
+	    sessionStatusById: Map<string, string>,
 	    client: OpencodeHttpClient,
 	  ): void {
     const evt = (raw as any)?.payload
@@ -1264,6 +1284,24 @@ export class BackendManager implements vscode.Disposable {
 	    const type = typeof evt?.type === "string" ? (evt.type as string) : "";
 	    const properties = evt?.properties as any;
 	    if (!type) return;
+
+	    if (type === "server.heartbeat" || type === "session.updated") {
+	      // Noise events: ignore by default (no UI updates).
+	      return;
+	    }
+
+	    if (type === "session.status") {
+	      const sessionID =
+	        typeof properties?.sessionID === "string"
+	          ? (properties.sessionID as string)
+	          : null;
+	      const statusType =
+	        typeof properties?.status?.type === "string"
+	          ? String(properties.status.type)
+	          : null;
+	      if (sessionID && statusType) sessionStatusById.set(sessionID, statusType);
+	      return;
+	    }
 
 	    if (type === "message.updated") {
 	      const info = properties?.info as any;
@@ -1351,11 +1389,14 @@ export class BackendManager implements vscode.Disposable {
       if (partType === "step-finish") {
         const snapshot =
           typeof part?.snapshot === "string" ? (part.snapshot as string) : null;
-        const stepId = opencodeStepItemId({
-          messageID,
-          snapshot,
-          partId: typeof part?.id === "string" ? (part.id as string) : null,
-        });
+        const activeStepId = activeStepIdByMessageId.get(messageID) ?? null;
+        const stepId =
+          activeStepId ??
+          opencodeStepItemId({
+            messageID,
+            snapshot,
+            partId: typeof part?.id === "string" ? (part.id as string) : null,
+          });
         const reason =
           typeof part?.reason === "string" ? (part.reason as string) : null;
         const cost =
@@ -1383,9 +1424,7 @@ export class BackendManager implements vscode.Disposable {
             },
           },
         });
-        if (activeStepIdByMessageId.get(messageID) === stepId) {
-          activeStepIdByMessageId.delete(messageID);
-        }
+        activeStepIdByMessageId.delete(messageID);
         return;
       }
 
@@ -1991,11 +2030,14 @@ function buildOpencodeItemsFromParts(
     if (type === "step-finish") {
       const snapshot =
         typeof (p as any).snapshot === "string" ? String((p as any).snapshot) : null;
-      const stepId = opencodeStepItemId({
-        messageID,
-        snapshot,
-        partId: typeof (p as any).id === "string" ? String((p as any).id) : null,
-      });
+      const stepId: string =
+        activeStepId ??
+        opencodeStepItemId({
+          messageID,
+          snapshot,
+          partId:
+            typeof (p as any).id === "string" ? String((p as any).id) : null,
+        });
       out.push({
         type: "opencodeStep",
         id: stepId,

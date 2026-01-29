@@ -6,6 +6,13 @@
 
 （なし）
 
+## 0.2.4
+
+- **OpenCode / WSL 安定性**
+  - `server.heartbeat` / `session.updated` / `session.status` を Unhandled として出さず黙って無視（Output のノイズ削減）
+  - `session.status`（busy/idle）を追跡し、busy 中は Rewind を抑止して「Stop してから」表示
+  - `fetch failed` 時に `err.cause` まで Output に出力し、WSL 環境での根因特定を容易化
+
 ## 0.2.3
 
 - **OpenCode 表示改善**
