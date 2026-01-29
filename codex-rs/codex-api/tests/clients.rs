@@ -6,7 +6,6 @@ use anyhow::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
 use codex_api::AuthProvider;
-use codex_api::ChatClient;
 use codex_api::Provider;
 use codex_api::ResponsesClient;
 use codex_api::ResponsesOptions;
@@ -196,34 +195,6 @@ data: {"id":"resp-1","output":[{"type":"message","role":"assistant","content":[{
 }
 
 #[tokio::test]
-async fn chat_client_uses_chat_completions_path_for_chat_wire() -> Result<()> {
-    let state = RecordingState::default();
-    let transport = RecordingTransport::new(state.clone());
-    let client = ChatClient::new(transport, provider("openai", WireApi::Chat), NoAuth);
-
-    let body = serde_json::json!({ "echo": true });
-    let _stream = client.stream(body, HeaderMap::new()).await?;
-
-    let requests = state.take_stream_requests();
-    assert_path_ends_with(&requests, "/chat/completions");
-    Ok(())
-}
-
-#[tokio::test]
-async fn chat_client_uses_responses_path_for_responses_wire() -> Result<()> {
-    let state = RecordingState::default();
-    let transport = RecordingTransport::new(state.clone());
-    let client = ChatClient::new(transport, provider("openai", WireApi::Responses), NoAuth);
-
-    let body = serde_json::json!({ "echo": true });
-    let _stream = client.stream(body, HeaderMap::new()).await?;
-
-    let requests = state.take_stream_requests();
-    assert_path_ends_with(&requests, "/responses");
-    Ok(())
-}
-
-#[tokio::test]
 async fn responses_client_uses_responses_path_for_responses_wire() -> Result<()> {
     let state = RecordingState::default();
     let transport = RecordingTransport::new(state.clone());
@@ -240,10 +211,10 @@ async fn responses_client_uses_responses_path_for_responses_wire() -> Result<()>
 }
 
 #[tokio::test]
-async fn responses_client_uses_chat_path_for_chat_wire() -> Result<()> {
+async fn responses_client_uses_responses_path_for_compact_wire() -> Result<()> {
     let state = RecordingState::default();
     let transport = RecordingTransport::new(state.clone());
-    let client = ResponsesClient::new(transport, provider("openai", WireApi::Chat), NoAuth);
+    let client = ResponsesClient::new(transport, provider("openai", WireApi::Compact), NoAuth);
 
     let body = serde_json::json!({ "echo": true });
     let _stream = client
@@ -251,7 +222,7 @@ async fn responses_client_uses_chat_path_for_chat_wire() -> Result<()> {
         .await?;
 
     let requests = state.take_stream_requests();
-    assert_path_ends_with(&requests, "/chat/completions");
+    assert_path_ends_with(&requests, "/responses");
     Ok(())
 }
 

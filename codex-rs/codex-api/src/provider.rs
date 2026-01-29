@@ -12,7 +12,6 @@ use url::Url;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WireApi {
     Responses,
-    Chat,
     Compact,
 }
 
