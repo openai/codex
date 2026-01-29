@@ -60,6 +60,7 @@ impl SecretScope {
     }
 
     pub fn canonical_key(&self, name: &SecretName) -> String {
+        // Stable, env-safe identifier used as the on-disk map key.
         match self {
             Self::Global => format!("global/{}", name.as_str()),
             Self::Environment(environment_id) => {
