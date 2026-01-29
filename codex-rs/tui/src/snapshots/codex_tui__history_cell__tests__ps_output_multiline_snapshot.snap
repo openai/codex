@@ -8,6 +8,6 @@ Background terminals
 
   • echo hello [...]
     ↳ hello
-    ↳ done
+      done
   • rg "foo" src
     ↳ src/main.rs:12:foo

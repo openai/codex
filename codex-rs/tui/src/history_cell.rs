@@ -635,9 +635,15 @@ impl HistoryCell for UnifiedExecProcessesCell {
                 out.push(vec![prefix.dim(), truncated.cyan()].into());
             }
 
-            let chunk_prefix = "    ↳ ";
-            let chunk_prefix_width = UnicodeWidthStr::width(chunk_prefix);
-            for chunk in &process.recent_chunks {
+            let chunk_prefix_first = "    ↳ ";
+            let chunk_prefix_next = "      ";
+            for (idx, chunk) in process.recent_chunks.iter().enumerate() {
+                let chunk_prefix = if idx == 0 {
+                    chunk_prefix_first
+                } else {
+                    chunk_prefix_next
+                };
+                let chunk_prefix_width = UnicodeWidthStr::width(chunk_prefix);
                 if wrap_width <= chunk_prefix_width {
                     out.push(Line::from(chunk_prefix.dim()));
                     continue;
