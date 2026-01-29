@@ -223,7 +223,9 @@ struct RunningCommand {
 
 struct UnifiedExecProcessSummary {
     key: String,
+    call_id: String,
     command_display: String,
+    recent_chunks: Vec<String>,
 }
 
 struct UnifiedExecWaitState {
@@ -1376,6 +1378,8 @@ impl ChatWidget {
     }
 
     fn on_exec_command_output_delta(&mut self, ev: ExecCommandOutputDeltaEvent) {
+        self.track_unified_exec_output_chunk(&ev.call_id, &ev.chunk);
+
         let Some(cell) = self
             .active_cell
             .as_mut()
@@ -1495,11 +1499,15 @@ impl ChatWidget {
             .iter_mut()
             .find(|process| process.key == key)
         {
+            existing.call_id = ev.call_id.clone();
             existing.command_display = command_display;
+            existing.recent_chunks.clear();
         } else {
             self.unified_exec_processes.push(UnifiedExecProcessSummary {
                 key,
+                call_id: ev.call_id.clone(),
                 command_display,
+                recent_chunks: Vec::new(),
             });
         }
         self.sync_unified_exec_footer();
@@ -1522,6 +1530,27 @@ impl ChatWidget {
             .map(|process| process.command_display.clone())
             .collect();
         self.bottom_pane.set_unified_exec_processes(processes);
+    }
+
+    fn track_unified_exec_output_chunk(&mut self, call_id: &str, chunk: &[u8]) {
+        let Some(process) = self
+            .unified_exec_processes
+            .iter_mut()
+            .find(|process| process.call_id == call_id)
+        else {
+            return;
+        };
+
+        let text = String::from_utf8_lossy(chunk);
+        for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+            process.recent_chunks.push(line.to_string());
+        }
+
+        const MAX_RECENT_CHUNKS: usize = 3;
+        if process.recent_chunks.len() > MAX_RECENT_CHUNKS {
+            let drop_count = process.recent_chunks.len() - MAX_RECENT_CHUNKS;
+            process.recent_chunks.drain(0..drop_count);
+        }
     }
 
     fn clear_unified_exec_processes(&mut self) {
@@ -3356,7 +3385,10 @@ impl ChatWidget {
         let processes = self
             .unified_exec_processes
             .iter()
-            .map(|process| process.command_display.clone())
+            .map(|process| history_cell::UnifiedExecProcessDetails {
+                command_display: process.command_display.clone(),
+                recent_chunks: process.recent_chunks.clone(),
+            })
             .collect();
         self.add_to_history(history_cell::new_unified_exec_processes_output(processes));
     }
