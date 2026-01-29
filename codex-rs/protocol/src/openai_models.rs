@@ -226,10 +226,13 @@ impl ModelInfo {
         if let Some(model_instructions_template) = &self.model_instructions_template
             && let Some(template) = &model_instructions_template.template
         {
-            let personality_message =
-                model_instructions_template.get_personality_message(personality);
-
-            template.replace(PERSONALITY_PLACEHOLDER, personality_message.as_str())
+            if let Some(personality_message) =
+                model_instructions_template.get_personality_message(personality)
+            {
+                template.replace(PERSONALITY_PLACEHOLDER, personality_message.as_str())
+            } else {
+                template.replace(PERSONALITY_PLACEHOLDER, "")
+            }
         } else if let Some(personality) = personality {
             warn!(
                 model = %self.slug,
@@ -268,12 +271,11 @@ impl ModelInstructionsTemplate {
                 .is_some_and(PersonalityVariable::is_complete)
     }
 
-    pub fn get_personality_message(&self, personality: Option<Personality>) -> String {
+    pub fn get_personality_message(&self, personality: Option<Personality>) -> Option<String> {
         self.variables
             .as_ref()
             .and_then(|variables| variables.personality.as_ref())
-            .map(|template| template.get_personality_message(personality))
-            .unwrap_or_default()
+            .and_then(|template| template.get_personality_message(personality))
     }
 }
 
@@ -297,14 +299,15 @@ impl PersonalityVariable {
         self.default.is_some() && self.friendly.is_some() && self.pragmatic.is_some()
     }
 
-    pub fn get_personality_message(&self, personality: Option<Personality>) -> String {
-        personality
-            .and_then(|personality| match personality {
+    pub fn get_personality_message(&self, personality: Option<Personality>) -> Option<String> {
+        if let Some(personality) = personality {
+            match personality {
                 Personality::Friendly => self.friendly.clone(),
                 Personality::Pragmatic => self.pragmatic.clone(),
-            })
-            .or_else(|| self.default.clone())
-            .unwrap_or("".to_string())
+            }
+        } else {
+            self.default.clone()
+        }
     }
 }
 
@@ -548,7 +551,7 @@ mod tests {
         let personality_template = personality_template();
         assert_eq!(
             personality_template.get_personality_message(None),
-            "default"
+            Some("default".to_string())
         );
     }
 
@@ -557,15 +560,15 @@ mod tests {
         let personality_template = personality_template();
         assert_eq!(
             personality_template.get_personality_message(Some(Personality::Friendly)),
-            "friendly"
+            Some("friendly".to_string())
         );
         assert_eq!(
             personality_template.get_personality_message(Some(Personality::Pragmatic)),
-            "pragmatic"
+            Some("pragmatic".to_string())
         );
         assert_eq!(
             personality_template.get_personality_message(None),
-            "default"
+            Some("default".to_string())
         );
 
         let personality_template = PersonalityVariable {
@@ -575,15 +578,15 @@ mod tests {
         };
         assert_eq!(
             personality_template.get_personality_message(Some(Personality::Friendly)),
-            ""
+            None
         );
         assert_eq!(
             personality_template.get_personality_message(Some(Personality::Pragmatic)),
-            ""
+            None
         );
         assert_eq!(
             personality_template.get_personality_message(None),
-            "default"
+            Some("default".to_string())
         );
 
         let personality_template = PersonalityVariable {
@@ -593,12 +596,12 @@ mod tests {
         };
         assert_eq!(
             personality_template.get_personality_message(Some(Personality::Friendly)),
-            "friendly"
+            Some("friendly".to_string())
         );
         assert_eq!(
             personality_template.get_personality_message(Some(Personality::Pragmatic)),
-            "pragmatic"
+            Some("pragmatic".to_string())
         );
-        assert_eq!(personality_template.get_personality_message(None), "");
+        assert_eq!(personality_template.get_personality_message(None), None);
     }
 }
