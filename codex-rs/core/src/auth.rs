@@ -132,6 +132,7 @@ impl CodexAuth {
     pub fn account_plan_type(&self) -> Option<AccountPlanType> {
         let map_known = |kp: &InternalKnownPlan| match kp {
             InternalKnownPlan::Free => AccountPlanType::Free,
+            InternalKnownPlan::Go => AccountPlanType::Go,
             InternalKnownPlan::Plus => AccountPlanType::Plus,
             InternalKnownPlan::Pro => AccountPlanType::Pro,
             InternalKnownPlan::Team => AccountPlanType::Team,

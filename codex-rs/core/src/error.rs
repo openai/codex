@@ -371,7 +371,7 @@ impl std::fmt::Display for UsageLimitReachedError {
                     retry_suffix_after_or(self.resets_at.as_ref())
                 )
             }
-            Some(PlanType::Known(KnownPlan::Free)) => {
+            Some(PlanType::Known(KnownPlan::Free | KnownPlan::Go)) => {
                 "You've hit your usage limit. Upgrade to Plus to continue using Codex (https://openai.com/chatgpt/pricing)."
                     .to_string()
             }
@@ -729,6 +729,19 @@ mod tests {
     fn usage_limit_reached_error_formats_free_plan() {
         let err = UsageLimitReachedError {
             plan_type: Some(PlanType::Known(KnownPlan::Free)),
+            resets_at: None,
+            rate_limits: Some(rate_limit_snapshot()),
+        };
+        assert_eq!(
+            err.to_string(),
+            "You've hit your usage limit. Upgrade to Plus to continue using Codex (https://openai.com/chatgpt/pricing)."
+        );
+    }
+
+    #[test]
+    fn usage_limit_reached_error_formats_go_plan() {
+        let err = UsageLimitReachedError {
+            plan_type: Some(PlanType::Known(KnownPlan::Go)),
             resets_at: None,
             rate_limits: Some(rate_limit_snapshot()),
         };
