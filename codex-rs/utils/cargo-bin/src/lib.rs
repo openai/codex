@@ -1,4 +1,7 @@
 use std::ffi::OsString;
+use std::io::BufRead;
+use std::io::BufReader;
+use std::path::Path;
 use std::path::PathBuf;
 
 pub use path_absolutize;
@@ -128,6 +131,8 @@ fn resolve_bin_from_env(key: &str, value: OsString) -> Result<PathBuf, CargoBinE
 
     if abs.exists() {
         Ok(abs)
+    } else if let Some(resolved) = resolve_from_runfiles_manifest(&abs) {
+        Ok(resolved)
     } else {
         Err(CargoBinError::ResolvedPathDoesNotExist {
             key: key.to_owned(),
@@ -150,6 +155,43 @@ fn absolutize_from_buck_or_cwd(path: PathBuf) -> Result<PathBuf, CargoBinError> 
     Ok(std::env::current_dir()
         .map_err(|source| CargoBinError::CurrentDir { source })?
         .join(path))
+}
+
+fn resolve_from_runfiles_manifest(path: &Path) -> Option<PathBuf> {
+    let manifest_path = std::env::var_os("RUNFILES_MANIFEST_FILE")?;
+    let key = runfiles_manifest_key(path)?;
+    let file = std::fs::File::open(manifest_path).ok()?;
+    let reader = BufReader::new(file);
+
+    for line in reader.lines().map_while(Result::ok) {
+        if line.is_empty() {
+            continue;
+        }
+        let (manifest_key, manifest_path) = line.split_once(' ')?;
+        if manifest_key == key {
+            return Some(PathBuf::from(manifest_path));
+        }
+    }
+
+    None
+}
+
+fn runfiles_manifest_key(path: &Path) -> Option<String> {
+    let raw = path.to_string_lossy();
+    let (prefix, idx) = if let Some(idx) = raw.rfind(".runfiles\\") {
+        (".runfiles\\", idx)
+    } else {
+        (".runfiles/", raw.rfind(".runfiles/")?)
+    };
+    let mut key = raw[idx + prefix.len()..].replace('\\', "/");
+    while key.starts_with('/') {
+        key.remove(0);
+    }
+    if key.is_empty() {
+        None
+    } else {
+        Some(key)
+    }
 }
 
 /// Best-effort attempt to find the Buck project root for the currently running
