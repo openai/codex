@@ -27,6 +27,8 @@ register_toolchains(
     "@toolchains_llvm_bootstrapped//toolchain:all",
 )
 
+# Needed to disable xcode...
+bazel_dep(name = "apple_support", version = "2.1.0")
 bazel_dep(name = "rules_cc", version = "0.2.16")
 bazel_dep(name = "rules_platform", version = "0.1.0")
 bazel_dep(name = "rules_rust", version = "0.68.1")
@@ -67,6 +69,11 @@ crate.from_cargo(
     cargo_toml = "//codex-rs:Cargo.toml",
     platform_triples = RUST_TRIPLES,
 )
+crate.annotation(
+    crate = "nucleo-matcher",
+    strip_prefix = "matcher",
+    version = "0.3.1",
+)
 
 bazel_dep(name = "openssl", version = "3.5.4.bcr.0")
 
@@ -84,6 +91,11 @@ crate.annotation(
 )
 
 inject_repo(crate, "openssl")
+
+crate.annotation(
+    crate = "runfiles",
+    workspace_cargo_toml = "rust/runfiles/Cargo.toml",
+)
 
 # Fix readme inclusions
 crate.annotation(

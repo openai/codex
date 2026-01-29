@@ -119,6 +119,8 @@ pub enum Feature {
     Steer,
     /// Enable collaboration modes (Plan, Code, Pair Programming, Execute).
     CollaborationModes,
+    /// Enable personality selection in the TUI.
+    Personality,
     /// Use the Responses API WebSocket transport for OpenAI by default.
     ResponsesWebsockets,
 }
@@ -506,8 +508,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::EnableRequestCompression,
         key: "enable_request_compression",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::Collab,
@@ -541,6 +543,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::CollaborationModes,
         key: "collaboration_modes",
         stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Personality,
+        key: "personality",
+        stage: Stage::Experimental {
+            name: "Personality",
+            menu_description: "Choose a communication style for Codex.",
+            announcement: "NEW! Update codex's communication style with /personality. Enable in /experimental!",
+        },
         default_enabled: false,
     },
     FeatureSpec {

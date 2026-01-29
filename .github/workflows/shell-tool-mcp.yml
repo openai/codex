@@ -344,13 +344,21 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 10.8.1
           run_install: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Activate pnpm from package.json
+        run: corepack prepare --activate
+
+      - name: Verify pnpm version
+        run: pnpm --version
 
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
@@ -440,7 +448,6 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 10.8.1
           run_install: false
 
       - name: Setup Node.js
@@ -450,8 +457,14 @@ jobs:
           registry-url: https://registry.npmjs.org
           scope: "@openai"
 
-      - name: Update npm
-        run: npm install -g npm@latest
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Activate pnpm from package.json
+        run: corepack prepare --activate
+
+      - name: Verify pnpm version
+        run: pnpm --version
 
       - name: Download npm tarball
         uses: actions/download-artifact@v7

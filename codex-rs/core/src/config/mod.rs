@@ -7,6 +7,7 @@ use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerDisabledReason;
 use crate::config::types::McpServerTransportConfig;
 use crate::config::types::Notice;
+use crate::config::types::NotificationMethod;
 use crate::config::types::Notifications;
 use crate::config::types::OtelConfig;
 use crate::config::types::OtelConfigToml;
@@ -192,9 +193,12 @@ pub struct Config {
     /// If unset the feature is disabled.
     pub notify: Option<Vec<String>>,
 
-    /// TUI notifications preference. When set, the TUI will send OSC 9 notifications on approvals
-    /// and turn completions when not focused.
+    /// TUI notifications preference. When set, the TUI will send terminal notifications on
+    /// approvals and turn completions when not focused.
     pub tui_notifications: Notifications,
+
+    /// Notification method for terminal notifications (osc9 or bel).
+    pub tui_notification_method: NotificationMethod,
 
     /// Enable ASCII animations and shimmer effects in the TUI.
     pub animations: bool,
@@ -1607,6 +1611,11 @@ impl Config {
                 .as_ref()
                 .map(|t| t.notifications.clone())
                 .unwrap_or_default(),
+            tui_notification_method: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.notification_method)
+                .unwrap_or_default(),
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
             show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
             experimental_mode: cfg.tui.as_ref().and_then(|t| t.experimental_mode),
@@ -1679,18 +1688,19 @@ impl Config {
         }
     }
 
-    pub fn set_windows_sandbox_globally(&mut self, value: bool) {
+    pub fn set_windows_sandbox_enabled(&mut self, value: bool) {
         if value {
             self.features.enable(Feature::WindowsSandbox);
+            self.forced_auto_mode_downgraded_on_windows = false;
         } else {
             self.features.disable(Feature::WindowsSandbox);
         }
-        self.forced_auto_mode_downgraded_on_windows = !value;
     }
 
-    pub fn set_windows_elevated_sandbox_globally(&mut self, value: bool) {
+    pub fn set_windows_elevated_sandbox_enabled(&mut self, value: bool) {
         if value {
             self.features.enable(Feature::WindowsSandboxElevated);
+            self.forced_auto_mode_downgraded_on_windows = false;
         } else {
             self.features.disable(Feature::WindowsSandboxElevated);
         }
@@ -1764,6 +1774,7 @@ mod tests {
     use crate::config::types::FeedbackConfigToml;
     use crate::config::types::HistoryPersistence;
     use crate::config::types::McpServerTransportConfig;
+    use crate::config::types::NotificationMethod;
     use crate::config::types::Notifications;
     use crate::config_loader::RequirementSource;
     use crate::features::Feature;
@@ -1860,6 +1871,7 @@ persistence = "none"
             tui,
             Tui {
                 notifications: Notifications::Enabled(true),
+                notification_method: NotificationMethod::Auto,
                 animations: true,
                 show_tooltips: true,
                 experimental_mode: None,
@@ -3788,6 +3800,7 @@ model_verbosity = "high"
                 check_for_update_on_startup: true,
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
+                tui_notification_method: Default::default(),
                 animations: true,
                 show_tooltips: true,
                 experimental_mode: None,
@@ -3871,6 +3884,7 @@ model_verbosity = "high"
             check_for_update_on_startup: true,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
             experimental_mode: None,
@@ -3969,6 +3983,7 @@ model_verbosity = "high"
             check_for_update_on_startup: true,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
             experimental_mode: None,
@@ -4053,6 +4068,7 @@ model_verbosity = "high"
             check_for_update_on_startup: true,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
             experimental_mode: None,
@@ -4410,13 +4426,17 @@ mcp_oauth_callback_port = 5678
 
 #[cfg(test)]
 mod notifications_tests {
+    use crate::config::types::NotificationMethod;
     use crate::config::types::Notifications;
     use assert_matches::assert_matches;
     use serde::Deserialize;
 
     #[derive(Deserialize, Debug, PartialEq)]
     struct TuiTomlTest {
+        #[serde(default)]
         notifications: Notifications,
+        #[serde(default)]
+        notification_method: NotificationMethod,
     }
 
     #[derive(Deserialize, Debug, PartialEq)]
@@ -4446,5 +4466,16 @@ mod notifications_tests {
             parsed.tui.notifications,
             Notifications::Custom(ref v) if v == &vec!["foo".to_string()]
         );
+    }
+
+    #[test]
+    fn test_tui_notification_method() {
+        let toml = r#"
+            [tui]
+            notification_method = "bel"
+        "#;
+        let parsed: RootTomlTest =
+            toml::from_str(toml).expect("deserialize notification_method=\"bel\"");
+        assert_eq!(parsed.tui.notification_method, NotificationMethod::Bel);
     }
 }
