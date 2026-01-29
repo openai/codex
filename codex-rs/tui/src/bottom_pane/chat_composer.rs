@@ -1060,6 +1060,7 @@ impl ChatComposer {
                         &expanded.text_elements,
                     );
                     self.pending_pastes.clear();
+                    self.large_paste_counters.clear();
                     self.textarea.set_text_clearing_elements("");
                     return (
                         InputResult::Submitted {
@@ -1839,6 +1840,7 @@ impl ChatComposer {
             });
         }
         self.pending_pastes.clear();
+        self.large_paste_counters.clear();
         Some((text, text_elements))
     }
 
@@ -4702,6 +4704,37 @@ mod tests {
         assert_eq!(composer.pending_pastes.len(), 2);
         assert_eq!(composer.pending_pastes[0].0, second);
         assert_eq!(composer.pending_pastes[1].0, third);
+    }
+
+    #[test]
+    fn large_paste_numbering_resets_after_submission() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let paste = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 4);
+        let base = format!("[Pasted Content {} chars]", paste.chars().count());
+        let second = format!("{base} #2");
+
+        composer.handle_paste(paste.clone());
+        composer.handle_paste(paste.clone());
+        assert_eq!(composer.textarea.text(), format!("{base}{second}"));
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(composer.textarea.text(), "");
+
+        composer.handle_paste(paste);
+        assert_eq!(composer.textarea.text(), base);
     }
 
     #[test]
