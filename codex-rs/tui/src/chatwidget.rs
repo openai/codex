@@ -3755,6 +3755,7 @@ impl ChatWidget {
                 id: SHARE_SCOPE_QUESTION_ID.to_string(),
                 header: "Share".to_string(),
                 question: "Who should be able to open this shared session?".to_string(),
+                is_other: false,
                 options: Some(vec![
                     RequestUserInputQuestionOption {
                         label: SHARE_SCOPE_EVERYONE_LABEL.to_string(),
@@ -3771,6 +3772,7 @@ impl ChatWidget {
                 header: "Emails".to_string(),
                 question: "If sharing with specific emails, list them (comma-separated)."
                     .to_string(),
+                is_other: false,
                 options: None,
             },
         ];
