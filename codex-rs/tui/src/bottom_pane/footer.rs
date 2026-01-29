@@ -977,6 +977,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bottom_pane::selection_popup_common::truncate_line_with_ellipsis_if_overflow;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::Terminal;
@@ -1017,8 +1018,50 @@ mod tests {
                 } else {
                     collaboration_mode_indicator
                 };
+                let available_width =
+                    area.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
+                let truncated_status_line = if props.status_line_enabled
+                    && matches!(
+                        props.mode,
+                        FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
+                    ) {
+                    props.status_line_value
+                        .as_ref()
+                        .map(StatusLineValue::as_line)
+                        .map(|line| truncate_line_with_ellipsis_if_overflow(line, available_width))
+                } else {
+                    None
+                };
+                let left_width = if props.status_line_enabled {
+                    truncated_status_line
+                        .as_ref()
+                        .map(|line| line.width() as u16)
+                        .unwrap_or(0)
+                } else {
+                    footer_line_width(
+                        props,
+                        left_mode_indicator,
+                        show_cycle_hint,
+                        show_shortcuts_hint,
+                        show_queue_hint,
+                    )
+                };
                 let right_line = if props.status_line_enabled {
-                    mode_indicator_line(collaboration_mode_indicator, show_cycle_hint)
+                    let full = mode_indicator_line(collaboration_mode_indicator, show_cycle_hint);
+                    let compact = mode_indicator_line(collaboration_mode_indicator, false);
+                    let mut chosen = full;
+                    let mut chosen_width =
+                        chosen.as_ref().map(|line| line.width() as u16).unwrap_or(0);
+                    if !can_show_left_with_context(area, left_width, chosen_width) {
+                        chosen = compact;
+                        chosen_width =
+                            chosen.as_ref().map(|line| line.width() as u16).unwrap_or(0);
+                    }
+                    if !can_show_left_with_context(area, left_width, chosen_width) {
+                        None
+                    } else {
+                        chosen
+                    }
                 } else {
                     Some(context_window_line(
                         props.context_window_percent,
@@ -1029,13 +1072,6 @@ mod tests {
                     .as_ref()
                     .map(|line| line.width() as u16)
                     .unwrap_or(0);
-                let left_width = footer_line_width(
-                    props,
-                    left_mode_indicator,
-                    show_cycle_hint,
-                    show_shortcuts_hint,
-                    show_queue_hint,
-                );
                 let can_show_left_and_context =
                     can_show_left_with_context(area, left_width, right_width);
                 if matches!(
@@ -1052,15 +1088,21 @@ mod tests {
                     );
                     match summary_left {
                         SummaryLeft::Default => {
-                            render_footer_from_props(
-                                area,
-                                f.buffer_mut(),
-                                props,
-                                left_mode_indicator,
-                                show_cycle_hint,
-                                show_shortcuts_hint,
-                                show_queue_hint,
-                            );
+                            if props.status_line_enabled {
+                                if let Some(line) = truncated_status_line.clone() {
+                                    render_footer_line(area, f.buffer_mut(), line);
+                                }
+                            } else {
+                                render_footer_from_props(
+                                    area,
+                                    f.buffer_mut(),
+                                    props,
+                                    left_mode_indicator,
+                                    show_cycle_hint,
+                                    show_shortcuts_hint,
+                                    show_queue_hint,
+                                );
+                            }
                         }
                         SummaryLeft::Custom(line) => {
                             render_footer_line(area, f.buffer_mut(), line);
