@@ -31,6 +31,7 @@ codex-app-server-protocol = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-backend-client = { workspace = true }
 codex-chatgpt = { workspace = true }
+codex-cloud-requirements = { workspace = true }
 codex-common = { workspace = true, features = [
     "cli",
     "elapsed",
