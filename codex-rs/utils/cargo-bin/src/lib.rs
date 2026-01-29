@@ -131,41 +131,30 @@ macro_rules! find_resource {
                         // the `tests/common` folder will not exist at runtime under
                         // Bazel. As such, we have to normalize it before passing it
                         // to `dotslash fetch`.
-                        return manifest_dir.absolutize().map(|p| p.to_path_buf());
-                    }
-                    if std::env::var_os("RUNFILES_MANIFEST_FILE").is_none() {
-                        return Err(std::io::Error::new(
+                        manifest_dir.absolutize().map(|p| p.to_path_buf())
+                    } else if std::env::var_os("RUNFILES_MANIFEST_FILE").is_none() {
+                        Err(std::io::Error::new(
                             std::io::ErrorKind::NotFound,
                             "RUNFILES_DIR set but resource missing",
-                        ));
-                    }
-                    match option_env!("BAZEL_PACKAGE") {
-                        Some(bazel_package) => {
-                            if resource == std::path::Path::new(".") {
-                                $crate::runfiles_package_root_from_manifest(bazel_package)
-                                    .ok_or_else(|| {
-                                        std::io::Error::new(
-                                            std::io::ErrorKind::NotFound,
-                                            "runfiles manifest missing package root entry",
-                                        )
-                                    })
-                            } else {
-                                let key = $crate::runfiles_manifest_key_for_resource(
-                                    bazel_package,
-                                    resource,
-                                );
-                                $crate::runfiles_manifest_lookup(&key).ok_or_else(|| {
-                                    std::io::Error::new(
-                                        std::io::ErrorKind::NotFound,
-                                        format!("runfiles manifest missing entry for {key}"),
-                                    )
-                                })
-                            }
-                        }
-                        None => Err(std::io::Error::new(
-                            std::io::ErrorKind::NotFound,
-                            "BAZEL_PACKAGE not set in Bazel build",
-                        )),
+                        ))
+                    } else if resource == std::path::Path::new(".") {
+                        $crate::runfiles_package_root_from_manifest(bazel_package).ok_or_else(
+                            || {
+                                std::io::Error::new(
+                                    std::io::ErrorKind::NotFound,
+                                    "runfiles manifest missing package root entry",
+                                )
+                            },
+                        )
+                    } else {
+                        let key =
+                            $crate::runfiles_manifest_key_for_resource(bazel_package, resource);
+                        $crate::runfiles_manifest_lookup(&key).ok_or_else(|| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::NotFound,
+                                format!("runfiles manifest missing entry for {key}"),
+                            )
+                        })
                     }
                 }
                 None => Err(std::io::Error::new(
