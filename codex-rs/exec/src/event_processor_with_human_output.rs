@@ -259,7 +259,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     "auto-cancelling (not supported in exec mode)".style(self.dimmed)
                 );
             }
-            EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message }) => {
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                last_agent_message, ..
+            }) => {
                 let last_message = last_agent_message.as_deref();
                 if let Some(output_file) = self.last_message_path.as_deref() {
                     handle_last_message(last_message, output_file);
@@ -771,6 +773,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
             | EventMsg::SkillsUpdateAvailable
+            | EventMsg::TurnTimingUpdate(_)
             | EventMsg::UndoCompleted(_)
             | EventMsg::UndoStarted(_)
             | EventMsg::ThreadRolledBack(_)

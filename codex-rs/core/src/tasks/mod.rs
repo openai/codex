@@ -200,7 +200,10 @@ impl Session {
         if should_close_processes {
             self.close_unified_exec_processes().await;
         }
-        let event = EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message });
+        let event = EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message,
+            timing: Some(turn_context.timing_snapshot()),
+        });
         self.send_event(turn_context.as_ref(), event).await;
     }
 

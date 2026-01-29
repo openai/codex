@@ -59,6 +59,8 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnStartedEvent;
+use codex_protocol::protocol::TurnTimingStats;
+use codex_protocol::protocol::TurnTimingUpdateEvent;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
@@ -461,6 +463,45 @@ pub(crate) struct Session {
     next_internal_sub_id: AtomicU64,
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct TurnTimingState {
+    tool_calls: AtomicU64,
+    tool_duration_nanos: AtomicU64,
+    inference_calls: AtomicU64,
+    response_wait_nanos: AtomicU64,
+}
+
+impl TurnTimingState {
+    pub(crate) fn record_tool_call(&self, duration: std::time::Duration) {
+        self.tool_calls.fetch_add(1, Ordering::Relaxed);
+        self.tool_duration_nanos
+            .fetch_add(duration_nanos(duration), Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_inference_wait(&self, duration: std::time::Duration) {
+        self.inference_calls.fetch_add(1, Ordering::Relaxed);
+        self.response_wait_nanos
+            .fetch_add(duration_nanos(duration), Ordering::Relaxed);
+    }
+
+    pub(crate) fn snapshot(&self) -> TurnTimingStats {
+        TurnTimingStats {
+            tool_calls: self.tool_calls.load(Ordering::Relaxed),
+            inference_calls: self.inference_calls.load(Ordering::Relaxed),
+            local_tool_duration: std::time::Duration::from_nanos(
+                self.tool_duration_nanos.load(Ordering::Relaxed),
+            ),
+            response_wait_duration: std::time::Duration::from_nanos(
+                self.response_wait_nanos.load(Ordering::Relaxed),
+            ),
+        }
+    }
+}
+
+fn duration_nanos(duration: std::time::Duration) -> u64 {
+    u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
+}
+
 /// The context needed for a single turn of the thread.
 #[derive(Debug)]
 pub(crate) struct TurnContext {
@@ -485,6 +526,7 @@ pub(crate) struct TurnContext {
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
     pub(crate) truncation_policy: TruncationPolicy,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
+    pub(crate) timing: TurnTimingState,
 }
 
 impl TurnContext {
@@ -498,6 +540,18 @@ impl TurnContext {
         self.compact_prompt
             .as_deref()
             .unwrap_or(compact::SUMMARIZATION_PROMPT)
+    }
+
+    pub(crate) fn record_local_tool_call(&self, duration: std::time::Duration) {
+        self.timing.record_tool_call(duration);
+    }
+
+    pub(crate) fn record_inference_wait(&self, duration: std::time::Duration) {
+        self.timing.record_inference_wait(duration);
+    }
+
+    pub(crate) fn timing_snapshot(&self) -> TurnTimingStats {
+        self.timing.snapshot()
     }
 }
 
@@ -672,6 +726,7 @@ impl Session {
             tool_call_gate: Arc::new(ReadinessFlag::new()),
             truncation_policy: model_info.truncation_policy.into(),
             dynamic_tools: session_configuration.dynamic_tools.clone(),
+            timing: TurnTimingState::default(),
         }
     }
 
@@ -1367,6 +1422,14 @@ impl Session {
             };
             self.send_event_raw(legacy_event).await;
         }
+    }
+
+    pub(crate) async fn emit_turn_timing_update(&self, turn_context: &TurnContext) {
+        let event = EventMsg::TurnTimingUpdate(TurnTimingUpdateEvent {
+            turn_id: turn_context.sub_id.clone(),
+            stats: turn_context.timing_snapshot(),
+        });
+        self.send_event(turn_context, event).await;
     }
 
     pub(crate) async fn send_event_raw(&self, event: Event) {
@@ -3081,6 +3144,7 @@ async fn spawn_review_thread(
         tool_call_gate: Arc::new(ReadinessFlag::new()),
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         truncation_policy: model_info.truncation_policy.into(),
+        timing: TurnTimingState::default(),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -3633,6 +3697,16 @@ struct SamplingRequestResult {
     last_agent_message: Option<String>,
 }
 
+fn response_wait_started(event: &ResponseEvent) -> bool {
+    !matches!(
+        event,
+        ResponseEvent::Created
+            | ResponseEvent::RateLimits(_)
+            | ResponseEvent::ModelsEtag(_)
+            | ResponseEvent::ServerReasoningIncluded(_)
+    )
+}
+
 async fn drain_in_flight(
     in_flight: &mut FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>>,
     sess: Arc<Session>,
@@ -3699,11 +3773,27 @@ async fn try_run_sampling_request(
     );
 
     sess.persist_rollout_items(&[rollout_item]).await;
-    let mut stream = client_session
+    let response_wait_start = std::time::Instant::now();
+    let mut stream = match client_session
         .stream(prompt)
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)
-        .await??;
+        .await
+    {
+        Ok(result) => match result {
+            Ok(stream) => stream,
+            Err(err) => {
+                turn_context.record_inference_wait(response_wait_start.elapsed());
+                sess.emit_turn_timing_update(&turn_context).await;
+                return Err(err);
+            }
+        },
+        Err(codex_async_utils::CancelErr::Cancelled) => {
+            turn_context.record_inference_wait(response_wait_start.elapsed());
+            sess.emit_turn_timing_update(&turn_context).await;
+            return Err(CodexErr::TurnAborted);
+        }
+    };
 
     let tool_runtime = ToolCallRuntime::new(
         Arc::clone(&router),
@@ -3718,6 +3808,7 @@ async fn try_run_sampling_request(
     let mut active_item: Option<TurnItem> = None;
     let mut should_emit_turn_diff = false;
     let receiving_span = trace_span!("receiving_stream");
+    let mut inference_wait_recorded = false;
     let outcome: CodexResult<SamplingRequestResult> = loop {
         let handle_responses = trace_span!(
             parent: &receiving_span,
@@ -3746,6 +3837,12 @@ async fn try_run_sampling_request(
                 ));
             }
         };
+
+        if !inference_wait_recorded && response_wait_started(&event) {
+            turn_context.record_inference_wait(response_wait_start.elapsed());
+            sess.emit_turn_timing_update(&turn_context).await;
+            inference_wait_recorded = true;
+        }
 
         sess.services
             .otel_manager
@@ -3876,6 +3973,11 @@ async fn try_run_sampling_request(
             }
         }
     };
+
+    if !inference_wait_recorded {
+        turn_context.record_inference_wait(response_wait_start.elapsed());
+        sess.emit_turn_timing_update(&turn_context).await;
+    }
 
     drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
 

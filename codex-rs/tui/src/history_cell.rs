@@ -36,6 +36,7 @@ use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
 use base64::Engine;
+use codex_common::elapsed::format_duration;
 use codex_common::format_env_display::format_env_display;
 use codex_core::config::Config;
 use codex_core::config::types::McpServerTransportConfig;
@@ -43,6 +44,7 @@ use codex_core::protocol::FileChange;
 use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SessionConfiguredEvent;
+use codex_core::protocol::TurnTimingStats;
 use codex_core::web_search::web_search_detail;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -1877,19 +1879,47 @@ pub(crate) fn new_reasoning_summary_block(full_reasoning_buffer: String) -> Box<
 /// divider.
 pub struct FinalMessageSeparator {
     elapsed_seconds: Option<u64>,
+    timing: Option<TurnTimingStats>,
 }
 impl FinalMessageSeparator {
     /// Creates a separator; `elapsed_seconds` typically comes from the status indicator timer.
-    pub(crate) fn new(elapsed_seconds: Option<u64>) -> Self {
-        Self { elapsed_seconds }
+    pub(crate) fn new(elapsed_seconds: Option<u64>, timing: Option<TurnTimingStats>) -> Self {
+        Self {
+            elapsed_seconds,
+            timing,
+        }
     }
 }
 impl HistoryCell for FinalMessageSeparator {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let elapsed_seconds = self
+        if let Some(timing) = &self.timing {
+            let tool_calls = timing.tool_calls;
+            let tool_label = if tool_calls == 1 { "call" } else { "calls" };
+            let tool_duration = format_duration(timing.local_tool_duration);
+
+            let inference_calls = timing.inference_calls;
+            let inference_label = if inference_calls == 1 {
+                "call"
+            } else {
+                "calls"
+            };
+            let response_wait = format_duration(timing.response_wait_duration);
+
+            let summary = format!(
+                "─ Local tools: {tool_calls} {tool_label}, {tool_duration} • Inference: {inference_calls} {inference_label}, {response_wait} wait ─"
+            );
+            let summary_width = summary.width();
+            vec![
+                Line::from_iter([
+                    summary,
+                    "─".repeat((width as usize).saturating_sub(summary_width)),
+                ])
+                .dim(),
+            ]
+        } else if let Some(elapsed_seconds) = self
             .elapsed_seconds
-            .map(super::status_indicator_widget::fmt_elapsed_compact);
-        if let Some(elapsed_seconds) = elapsed_seconds {
+            .map(super::status_indicator_widget::fmt_elapsed_compact)
+        {
             let worked_for = format!("─ Worked for {elapsed_seconds} ─");
             let worked_for_width = worked_for.width();
             vec![

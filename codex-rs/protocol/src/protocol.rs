@@ -704,6 +704,9 @@ pub enum EventMsg {
     #[serde(rename = "task_complete", alias = "turn_complete")]
     TurnComplete(TurnCompleteEvent),
 
+    /// Snapshot of timing statistics for the active turn.
+    TurnTimingUpdate(TurnTimingUpdateEvent),
+
     /// Usage update for the current session, including totals and last turn.
     /// Optional means unknown — UIs should not display when `None`.
     TokenCount(TokenCountEvent),
@@ -1088,12 +1091,30 @@ pub struct ContextCompactedEvent;
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TurnCompleteEvent {
     pub last_agent_message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timing: Option<TurnTimingStats>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TurnStartedEvent {
     // TODO(aibrahim): make this not optional
     pub model_context_window: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, JsonSchema, TS)]
+pub struct TurnTimingStats {
+    pub tool_calls: u64,
+    pub inference_calls: u64,
+    #[ts(type = "string")]
+    pub local_tool_duration: Duration,
+    #[ts(type = "string")]
+    pub response_wait_duration: Duration,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct TurnTimingUpdateEvent {
+    pub turn_id: String,
+    pub stats: TurnTimingStats,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, JsonSchema, TS)]

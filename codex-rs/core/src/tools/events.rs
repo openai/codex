@@ -273,8 +273,9 @@ impl ToolEmitter {
         ctx: ToolEventCtx<'_>,
         out: Result<ExecToolCallOutput, ToolError>,
     ) -> Result<String, FunctionCallError> {
-        let (event, result) = match out {
+        let (event, result, tool_duration) = match out {
             Ok(output) => {
+                let duration = output.duration;
                 let content = self.format_exec_output_for_model(&output, ctx);
                 let exit_code = output.exit_code;
                 let event = ToolEventStage::Success(output);
@@ -283,20 +284,21 @@ impl ToolEmitter {
                 } else {
                     Err(FunctionCallError::RespondToModel(content))
                 };
-                (event, result)
+                (event, result, duration)
             }
             Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output })))
             | Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output }))) => {
+                let duration = output.duration;
                 let response = self.format_exec_output_for_model(&output, ctx);
                 let event = ToolEventStage::Failure(ToolEventFailure::Output(*output));
                 let result = Err(FunctionCallError::RespondToModel(response));
-                (event, result)
+                (event, result, duration)
             }
             Err(ToolError::Codex(err)) => {
                 let message = format!("execution error: {err:?}");
                 let event = ToolEventStage::Failure(ToolEventFailure::Message(message.clone()));
                 let result = Err(FunctionCallError::RespondToModel(message));
-                (event, result)
+                (event, result, Duration::ZERO)
             }
             Err(ToolError::Rejected(msg)) => {
                 // Normalize common rejection messages for exec tools so tests and
@@ -313,10 +315,12 @@ impl ToolEmitter {
                 };
                 let event = ToolEventStage::Failure(ToolEventFailure::Message(normalized.clone()));
                 let result = Err(FunctionCallError::RespondToModel(normalized));
-                (event, result)
+                (event, result, Duration::ZERO)
             }
         };
         self.emit(ctx, event).await;
+        ctx.turn.record_local_tool_call(tool_duration);
+        ctx.session.emit_turn_timing_update(ctx.turn).await;
         result
     }
 }

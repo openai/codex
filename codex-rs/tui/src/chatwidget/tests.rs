@@ -835,6 +835,8 @@ async fn make_chatwidget_manual(
         had_work_activity: false,
         saw_plan_update_this_turn: false,
         last_separator_elapsed_secs: None,
+        current_turn_timing: None,
+        last_separator_timing: None,
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
         current_rollout_path: None,
@@ -1240,6 +1242,7 @@ async fn plan_implementation_popup_skips_replayed_turn_complete() {
 
     chat.replay_initial_messages(vec![EventMsg::TurnComplete(TurnCompleteEvent {
         last_agent_message: Some("Plan details".to_string()),
+        timing: None,
     })]);
 
     let popup = render_bottom_popup(&chat, 80);
@@ -1260,7 +1263,7 @@ async fn plan_implementation_popup_skips_when_messages_queued() {
     chat.bottom_pane.set_task_running(true);
     chat.queue_user_message("Queued message".into());
 
-    chat.on_task_complete(Some("Plan details".to_string()), false);
+    chat.on_task_complete(Some("Plan details".to_string()), None, false);
 
     let popup = render_bottom_popup(&chat, 80);
     assert!(
@@ -1286,7 +1289,7 @@ async fn plan_implementation_popup_shows_on_plan_update_without_message() {
             status: StepStatus::Pending,
         }],
     });
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(None, None, false);
 
     let popup = render_bottom_popup(&chat, 80);
     assert!(
@@ -1315,7 +1318,7 @@ async fn plan_implementation_popup_skips_when_rate_limit_prompt_pending() {
         }],
     });
     chat.on_rate_limit_snapshot(Some(snapshot(92.0)));
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(None, None, false);
 
     let popup = render_bottom_popup(&chat, 80);
     assert!(
@@ -1911,7 +1914,7 @@ async fn unified_exec_end_after_task_complete_is_suppressed() {
     );
     drain_insert_history(&mut rx);
 
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(None, None, false);
     end_exec(&mut chat, begin, "", "", 0);
 
     let cells = drain_insert_history(&mut rx);
@@ -1925,7 +1928,7 @@ async fn unified_exec_end_after_task_complete_is_suppressed() {
 async fn unified_exec_interaction_after_task_complete_is_suppressed() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.on_task_started();
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(None, None, false);
 
     chat.handle_codex_event(Event {
         id: "call-1".to_string(),
@@ -1966,6 +1969,7 @@ async fn unified_exec_wait_after_final_agent_message_snapshot() {
         id: "turn-1".into(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             last_agent_message: Some("Final response.".into()),
+            timing: None,
         }),
     });
 
@@ -2005,6 +2009,7 @@ async fn unified_exec_wait_before_streamed_agent_message_snapshot() {
         id: "turn-1".into(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             last_agent_message: None,
+            timing: None,
         }),
     });
 
@@ -2055,6 +2060,7 @@ async fn unified_exec_waiting_multiple_empty_snapshots() {
         id: "turn-wait-1".into(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             last_agent_message: None,
+            timing: None,
         }),
     });
 
@@ -2106,6 +2112,7 @@ async fn unified_exec_non_empty_then_empty_snapshots() {
         id: "turn-wait-3".into(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             last_agent_message: None,
+            timing: None,
         }),
     });
 
@@ -3768,6 +3775,7 @@ async fn turn_complete_clears_unified_exec_processes() {
         id: "turn-1".into(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             last_agent_message: None,
+            timing: None,
         }),
     });
 
@@ -4554,6 +4562,7 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
         id: "s1".into(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             last_agent_message: None,
+            timing: None,
         }),
     });
 
@@ -4842,6 +4851,7 @@ printf 'fenced within fenced\n'
         id: "t1".into(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             last_agent_message: None,
+            timing: None,
         }),
     });
     for lines in drain_insert_history(&mut rx) {

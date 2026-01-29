@@ -239,6 +239,7 @@ mod tests {
     async fn on_event_updates_status_from_task_complete() {
         let status = agent_status_from_event(&EventMsg::TurnComplete(TurnCompleteEvent {
             last_agent_message: Some("done".to_string()),
+            timing: None,
         }));
         let expected = AgentStatus::Completed(Some("done".to_string()));
         assert_eq!(status, Some(expected));

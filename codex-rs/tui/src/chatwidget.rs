@@ -81,6 +81,8 @@ use codex_core::protocol::TokenUsageInfo;
 use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnCompleteEvent;
 use codex_core::protocol::TurnDiffEvent;
+use codex_core::protocol::TurnTimingStats;
+use codex_core::protocol::TurnTimingUpdateEvent;
 use codex_core::protocol::UndoCompletedEvent;
 use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::UserMessageEvent;
@@ -526,6 +528,10 @@ pub(crate) struct ChatWidget {
     // This lets the separator show per-chunk work time (since the previous separator) rather than
     // the total task-running time reported by the status indicator.
     last_separator_elapsed_secs: Option<u64>,
+    // Latest timing snapshot for the active turn.
+    current_turn_timing: Option<TurnTimingStats>,
+    // Timing snapshot captured at the last emitted final-message separator.
+    last_separator_timing: Option<TurnTimingStats>,
 
     last_rendered_width: std::cell::Cell<Option<usize>>,
     // Feedback sink for /feedback
@@ -912,6 +918,8 @@ impl ChatWidget {
     fn on_task_started(&mut self) {
         self.agent_turn_running = true;
         self.saw_plan_update_this_turn = false;
+        self.current_turn_timing = None;
+        self.last_separator_timing = Some(TurnTimingStats::default());
         self.bottom_pane.clear_quit_shortcut_hint();
         self.quit_shortcut_expires_at = None;
         self.quit_shortcut_key = None;
@@ -924,12 +932,20 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
+    fn on_task_complete(
+        &mut self,
+        last_agent_message: Option<String>,
+        timing: Option<TurnTimingStats>,
+        from_replay: bool,
+    ) {
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
         self.flush_unified_exec_wait_streak();
         // Mark task stopped and request redraw now that all content is in history.
         self.agent_turn_running = false;
+        if let Some(timing) = timing {
+            self.current_turn_timing = Some(timing);
+        }
         self.update_task_running_state();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
@@ -949,6 +965,10 @@ impl ChatWidget {
         });
 
         self.maybe_show_pending_rate_limit_prompt();
+    }
+
+    fn on_turn_timing_update(&mut self, event: TurnTimingUpdateEvent) {
+        self.current_turn_timing = Some(event.stats);
     }
 
     fn maybe_prompt_plan_implementation(&mut self, last_agent_message: Option<&str>) {
@@ -1715,7 +1735,11 @@ impl ChatWidget {
                     .status_widget()
                     .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds)
                     .map(|current| self.worked_elapsed_from(current));
-                self.add_to_history(history_cell::FinalMessageSeparator::new(elapsed_seconds));
+                let timing = self.worked_timing_from();
+                self.add_to_history(history_cell::FinalMessageSeparator::new(
+                    elapsed_seconds,
+                    timing,
+                ));
                 self.needs_final_message_separator = false;
                 self.had_work_activity = false;
             } else if self.needs_final_message_separator {
@@ -1743,6 +1767,25 @@ impl ChatWidget {
         let elapsed = current_elapsed.saturating_sub(baseline);
         self.last_separator_elapsed_secs = Some(current_elapsed);
         elapsed
+    }
+
+    fn worked_timing_from(&mut self) -> Option<TurnTimingStats> {
+        let current = self.current_turn_timing.clone()?;
+        let baseline = self.last_separator_timing.clone().unwrap_or_default();
+        let delta = TurnTimingStats {
+            tool_calls: current.tool_calls.saturating_sub(baseline.tool_calls),
+            inference_calls: current
+                .inference_calls
+                .saturating_sub(baseline.inference_calls),
+            local_tool_duration: current
+                .local_tool_duration
+                .saturating_sub(baseline.local_tool_duration),
+            response_wait_duration: current
+                .response_wait_duration
+                .saturating_sub(baseline.response_wait_duration),
+        };
+        self.last_separator_timing = Some(current);
+        Some(delta)
     }
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
@@ -2095,6 +2138,8 @@ impl ChatWidget {
             had_work_activity: false,
             saw_plan_update_this_turn: false,
             last_separator_elapsed_secs: None,
+            current_turn_timing: None,
+            last_separator_timing: None,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
@@ -2233,6 +2278,8 @@ impl ChatWidget {
             needs_final_message_separator: false,
             had_work_activity: false,
             last_separator_elapsed_secs: None,
+            current_turn_timing: None,
+            last_separator_timing: None,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
@@ -2360,6 +2407,8 @@ impl ChatWidget {
             had_work_activity: false,
             saw_plan_update_this_turn: false,
             last_separator_elapsed_secs: None,
+            current_turn_timing: None,
+            last_separator_timing: None,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
@@ -3077,9 +3126,11 @@ impl ChatWidget {
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
             EventMsg::TurnStarted(_) => self.on_task_started(),
-            EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message }) => {
-                self.on_task_complete(last_agent_message, from_replay)
-            }
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                last_agent_message,
+                timing,
+            }) => self.on_task_complete(last_agent_message, timing, from_replay),
+            EventMsg::TurnTimingUpdate(ev) => self.on_turn_timing_update(ev),
             EventMsg::TokenCount(ev) => {
                 self.set_token_info(ev.info);
                 self.on_rate_limit_snapshot(ev.rate_limits);

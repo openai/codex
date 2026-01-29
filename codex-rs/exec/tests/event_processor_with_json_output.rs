@@ -306,6 +306,7 @@ fn plan_update_emits_todo_list_started_updated_and_completed() {
         "p3",
         EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
             last_agent_message: None,
+            timing: None,
         }),
     );
     let out_complete = ep.collect_thread_events(&complete);
@@ -679,6 +680,7 @@ fn plan_update_after_complete_starts_new_todo_list_with_new_id() {
         "t2",
         EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
             last_agent_message: None,
+            timing: None,
         }),
     );
     let _ = ep.collect_thread_events(&complete);
@@ -831,6 +833,7 @@ fn error_followed_by_task_complete_produces_turn_failed() {
         "e2",
         EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
             last_agent_message: None,
+            timing: None,
         }),
     );
     assert_eq!(
@@ -1278,6 +1281,7 @@ fn task_complete_produces_turn_completed_with_usage() {
         "e2",
         EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
             last_agent_message: Some("done".to_string()),
+            timing: None,
         }),
     );
     let out = ep.collect_thread_events(&complete_event);
