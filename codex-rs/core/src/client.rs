@@ -260,12 +260,18 @@ impl ModelClientSession {
     /// For Chat providers, the underlying stream is optionally aggregated
     /// based on the `show_raw_agent_reasoning` flag in the config.
     pub async fn stream(&mut self, prompt: &Prompt) -> Result<ResponseStream> {
-        let wire_api = self
-            .transport_manager
-            .effective_wire_api(self.state.provider.wire_api);
+        let wire_api = self.state.provider.wire_api;
         match wire_api {
-            WireApi::Responses => self.stream_responses_api(prompt).await,
-            WireApi::ResponsesWebsocket => self.stream_responses_websocket(prompt).await,
+            WireApi::Responses => {
+                let websocket_enabled = self.responses_websocket_enabled()
+                    && !self.transport_manager.disable_websockets();
+
+                if websocket_enabled {
+                    self.stream_responses_websocket(prompt).await
+                } else {
+                    self.stream_responses_api(prompt).await
+                }
+            }
             WireApi::Chat => {
                 let api_stream = self.stream_chat_completions(prompt).await?;
 
@@ -285,9 +291,10 @@ impl ModelClientSession {
     }
 
     pub(crate) fn try_switch_fallback_transport(&mut self) -> bool {
+        let websocket_enabled = self.responses_websocket_enabled();
         let activated = self
             .transport_manager
-            .activate_http_fallback(self.state.provider.wire_api);
+            .activate_http_fallback(websocket_enabled);
         if activated {
             warn!("falling back to HTTP");
             self.state.otel_manager.counter(
@@ -300,6 +307,15 @@ impl ModelClientSession {
             self.websocket_last_items.clear();
         }
         activated
+    }
+
+    fn responses_websocket_enabled(&self) -> bool {
+        self.state.provider.supports_websockets
+            && self
+                .state
+                .config
+                .features
+                .enabled(Feature::ResponsesWebsockets)
     }
 
     fn build_responses_request(&self, prompt: &Prompt) -> Result<ApiPrompt> {
