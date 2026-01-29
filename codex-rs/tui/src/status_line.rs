@@ -218,6 +218,7 @@ async fn run_request(request: &StatusLineRequest) -> Result<String, String> {
     cmd.stdin(Stdio::piped());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
+    cmd.kill_on_drop(true);
 
     let mut child = cmd
         .spawn()
