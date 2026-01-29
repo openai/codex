@@ -352,7 +352,7 @@ pub async fn run_main(
 
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
-    let log_db_layer = codex_core::state_db::init_if_enabled(&config, None)
+    let log_db_layer = codex_core::state_db::get_state_db(&config, None)
         .await
         .map(|db| log_db::start(db).with_filter(env_filter()));
 
