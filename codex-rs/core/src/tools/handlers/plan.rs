@@ -41,15 +41,12 @@ pub static TODO_WRITE_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
         "explanation".to_string(),
         JsonSchema::String { description: None },
     );
-    properties.insert("todo".to_string(), todo_items_schema.clone());
-    // NOTE: The "plan" field name is a deprecated legacy alias, unrelated to Plan mode.
-    properties.insert("plan".to_string(), todo_items_schema);
+    properties.insert("todo".to_string(), todo_items_schema);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "todo_write".to_string(),
         description: r#"Updates the task list.
 Provide an optional explanation and a list of todo items in `todo`, each with a step and status.
-The legacy `plan` field is still accepted.
 At most one step can be in_progress at a time.
 "#
         .to_string(),
