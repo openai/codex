@@ -1334,8 +1334,6 @@ pub(crate) fn build_specs(
 
     builder.push_spec(TODO_WRITE_TOOL.clone());
     builder.register_handler("todo_write", todo_handler.clone());
-    // TODO: Remove this backward-compat alias once clients migrate; it is the old tool name, not Plan mode.
-    builder.register_handler("update_plan", todo_handler);
 
     if config.collaboration_modes_tools {
         builder.push_spec(create_request_user_input_tool());
