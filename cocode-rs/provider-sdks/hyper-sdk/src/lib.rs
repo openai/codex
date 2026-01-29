@@ -7,7 +7,7 @@
 //! # Features
 //!
 //! - **Provider Agnostic**: Single API across all providers
-//! - **Capability Aware**: Support for LLM, VLM, and Embedding models
+//! - **Multi-Modal**: Support for LLM, VLM, and Embedding models
 //! - **Native Streaming**: First-class async streaming support
 //! - **Type Safe**: Strongly typed request/response types
 //! - **Extensible**: Easy to add new providers
@@ -114,7 +114,6 @@
 
 // Module declarations
 pub mod call_id;
-pub mod capability;
 pub mod client;
 pub mod compat;
 pub mod conversation;
@@ -142,10 +141,6 @@ pub mod tools;
 // Error types
 pub use error::HyperError;
 pub use error::Result;
-
-// Capabilities
-pub use capability::Capability;
-pub use capability::ModelInfo;
 
 // Messages
 pub use messages::ContentBlock;
@@ -265,8 +260,6 @@ pub use session::SessionConfig;
 
 /// Prelude module for convenient imports.
 pub mod prelude {
-    pub use crate::capability::Capability;
-    pub use crate::capability::ModelInfo;
     pub use crate::client::HyperClient;
     pub use crate::conversation::ConversationContext;
     pub use crate::embedding::EmbedRequest;

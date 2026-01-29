@@ -34,9 +34,14 @@
 
 use crate::json_config::LoggingConfig;
 use crate::types::ResolvedModelInfo;
+use cocode_protocol::AttachmentConfig;
+use cocode_protocol::CompactConfig;
 use cocode_protocol::Features;
+use cocode_protocol::PathConfig;
+use cocode_protocol::PlanModeConfig;
 use cocode_protocol::ProviderInfo;
 use cocode_protocol::SandboxMode;
+use cocode_protocol::ToolConfig;
 use cocode_protocol::model::ModelRole;
 use cocode_protocol::model::ModelRoles;
 use cocode_protocol::model::ModelSpec;
@@ -117,6 +122,36 @@ pub struct Config {
 
     /// Writable roots for sandbox (when WorkspaceWrite).
     pub writable_roots: Vec<PathBuf>,
+
+    // ============================================================
+    // 7. Tool Execution
+    // ============================================================
+    /// Tool execution configuration.
+    pub tool_config: ToolConfig,
+
+    // ============================================================
+    // 8. Compaction
+    // ============================================================
+    /// Compaction and session memory configuration.
+    pub compact_config: CompactConfig,
+
+    // ============================================================
+    // 9. Plan Mode
+    // ============================================================
+    /// Plan mode configuration.
+    pub plan_config: PlanModeConfig,
+
+    // ============================================================
+    // 11. Attachments
+    // ============================================================
+    /// Attachment configuration.
+    pub attachment_config: AttachmentConfig,
+
+    // ============================================================
+    // 12. Extended Paths
+    // ============================================================
+    /// Extended path configuration.
+    pub path_config: PathConfig,
 }
 
 impl Config {
@@ -223,6 +258,11 @@ impl Default for Config {
             ephemeral: false,
             sandbox_mode: SandboxMode::default(),
             writable_roots: Vec::new(),
+            tool_config: ToolConfig::default(),
+            compact_config: CompactConfig::default(),
+            plan_config: PlanModeConfig::default(),
+            attachment_config: AttachmentConfig::default(),
+            path_config: PathConfig::default(),
         }
     }
 }
@@ -253,6 +293,21 @@ pub struct ConfigOverrides {
 
     /// Override user instructions.
     pub user_instructions: Option<String>,
+
+    /// Override tool configuration.
+    pub tool_config: Option<ToolConfig>,
+
+    /// Override compaction configuration.
+    pub compact_config: Option<CompactConfig>,
+
+    /// Override plan mode configuration.
+    pub plan_config: Option<PlanModeConfig>,
+
+    /// Override attachment configuration.
+    pub attachment_config: Option<AttachmentConfig>,
+
+    /// Override path configuration.
+    pub path_config: Option<PathConfig>,
 }
 
 impl ConfigOverrides {
@@ -300,6 +355,36 @@ impl ConfigOverrides {
     /// Set user instructions.
     pub fn with_user_instructions(mut self, instructions: impl Into<String>) -> Self {
         self.user_instructions = Some(instructions.into());
+        self
+    }
+
+    /// Set tool configuration.
+    pub fn with_tool_config(mut self, config: ToolConfig) -> Self {
+        self.tool_config = Some(config);
+        self
+    }
+
+    /// Set compaction configuration.
+    pub fn with_compact_config(mut self, config: CompactConfig) -> Self {
+        self.compact_config = Some(config);
+        self
+    }
+
+    /// Set plan mode configuration.
+    pub fn with_plan_config(mut self, config: PlanModeConfig) -> Self {
+        self.plan_config = Some(config);
+        self
+    }
+
+    /// Set attachment configuration.
+    pub fn with_attachment_config(mut self, config: AttachmentConfig) -> Self {
+        self.attachment_config = Some(config);
+        self
+    }
+
+    /// Set path configuration.
+    pub fn with_path_config(mut self, config: PathConfig) -> Self {
+        self.path_config = Some(config);
         self
     }
 }
@@ -382,6 +467,36 @@ impl ConfigBuilder {
     /// Add a feature override.
     pub fn feature(mut self, key: impl Into<String>, enabled: bool) -> Self {
         self.overrides.features.insert(key.into(), enabled);
+        self
+    }
+
+    /// Set tool configuration.
+    pub fn tool_config(mut self, config: ToolConfig) -> Self {
+        self.overrides.tool_config = Some(config);
+        self
+    }
+
+    /// Set compaction configuration.
+    pub fn compact_config(mut self, config: CompactConfig) -> Self {
+        self.overrides.compact_config = Some(config);
+        self
+    }
+
+    /// Set plan mode configuration.
+    pub fn plan_config(mut self, config: PlanModeConfig) -> Self {
+        self.overrides.plan_config = Some(config);
+        self
+    }
+
+    /// Set attachment configuration.
+    pub fn attachment_config(mut self, config: AttachmentConfig) -> Self {
+        self.overrides.attachment_config = Some(config);
+        self
+    }
+
+    /// Set path configuration.
+    pub fn path_config(mut self, config: PathConfig) -> Self {
+        self.overrides.path_config = Some(config);
         self
     }
 
@@ -545,9 +660,8 @@ mod tests {
             top_p: None,
             auto_compact_token_limit: None,
             effective_context_window_percent: None,
-            default_reasoning_effort: None,
-            supported_reasoning_levels: None,
-            thinking_budget_default: None,
+            default_thinking_level: None,
+            supported_thinking_levels: None,
             include_thoughts: None,
             base_instructions: None,
         };
@@ -594,9 +708,8 @@ mod tests {
             top_p: None,
             auto_compact_token_limit: None,
             effective_context_window_percent: None,
-            default_reasoning_effort: None,
-            supported_reasoning_levels: None,
-            thinking_budget_default: None,
+            default_thinking_level: None,
+            supported_thinking_levels: None,
             include_thoughts: None,
             base_instructions: None,
         };
@@ -644,9 +757,8 @@ mod tests {
             top_p: None,
             auto_compact_token_limit: None,
             effective_context_window_percent: None,
-            default_reasoning_effort: None,
-            supported_reasoning_levels: None,
-            thinking_budget_default: None,
+            default_thinking_level: None,
+            supported_thinking_levels: None,
             include_thoughts: None,
             base_instructions: None,
         };

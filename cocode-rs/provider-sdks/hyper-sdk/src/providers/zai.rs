@@ -1,7 +1,5 @@
 //! Z.AI / ZhipuAI provider implementation.
 
-use crate::capability::Capability;
-use crate::capability::ModelInfo;
 use crate::error::HyperError;
 use crate::messages::ContentBlock;
 use crate::messages::ImageSource;
@@ -155,73 +153,6 @@ impl Provider for ZaiProvider {
             client: self.client.clone(),
         }))
     }
-
-    async fn list_models(&self) -> Result<Vec<ModelInfo>, HyperError> {
-        // Return commonly used models
-        Ok(vec![
-            ModelInfo::new("glm-4.7", "zhipuai")
-                .with_name("GLM-4.7")
-                .with_capabilities(vec![
-                    Capability::TextGeneration,
-                    Capability::Vision,
-                    Capability::ToolCalling,
-                ])
-                .with_context_window(128000)
-                .with_max_output_tokens(8192),
-            ModelInfo::new("glm-4-plus", "zhipuai")
-                .with_name("GLM-4 Plus")
-                .with_capabilities(vec![
-                    Capability::TextGeneration,
-                    Capability::Vision,
-                    Capability::ToolCalling,
-                ])
-                .with_context_window(128000)
-                .with_max_output_tokens(8192),
-            ModelInfo::new("glm-4-air", "zhipuai")
-                .with_name("GLM-4 Air")
-                .with_capabilities(vec![Capability::TextGeneration, Capability::ToolCalling])
-                .with_context_window(128000)
-                .with_max_output_tokens(8192),
-            ModelInfo::new("glm-4-flash", "zhipuai")
-                .with_name("GLM-4 Flash")
-                .with_capabilities(vec![Capability::TextGeneration, Capability::ToolCalling])
-                .with_context_window(128000)
-                .with_max_output_tokens(8192),
-            ModelInfo::new("glm-4-0520", "zhipuai")
-                .with_name("GLM-4 0520")
-                .with_capabilities(vec![
-                    Capability::TextGeneration,
-                    Capability::Vision,
-                    Capability::ToolCalling,
-                ])
-                .with_context_window(128000)
-                .with_max_output_tokens(4096),
-            ModelInfo::new("glm-z1-air", "zhipuai")
-                .with_name("GLM-Z1 Air")
-                .with_capabilities(vec![
-                    Capability::TextGeneration,
-                    Capability::ExtendedThinking,
-                ])
-                .with_context_window(32000)
-                .with_max_output_tokens(16384),
-            ModelInfo::new("glm-z1-airx", "zhipuai")
-                .with_name("GLM-Z1 AirX")
-                .with_capabilities(vec![
-                    Capability::TextGeneration,
-                    Capability::ExtendedThinking,
-                ])
-                .with_context_window(32000)
-                .with_max_output_tokens(16384),
-            ModelInfo::new("glm-z1-flash", "zhipuai")
-                .with_name("GLM-Z1 Flash")
-                .with_capabilities(vec![
-                    Capability::TextGeneration,
-                    Capability::ExtendedThinking,
-                ])
-                .with_context_window(32000)
-                .with_max_output_tokens(16384),
-        ])
-    }
 }
 
 /// Builder for Z.AI provider.
@@ -294,7 +225,7 @@ struct ZaiModel {
 
 #[async_trait]
 impl Model for ZaiModel {
-    fn model_id(&self) -> &str {
+    fn model_name(&self) -> &str {
         &self.model_id
     }
 
@@ -302,19 +233,9 @@ impl Model for ZaiModel {
         "zhipuai"
     }
 
-    fn capabilities(&self) -> &[Capability] {
-        static CAPS: &[Capability] = &[
-            Capability::TextGeneration,
-            Capability::Vision,
-            Capability::ToolCalling,
-            Capability::ExtendedThinking,
-        ];
-        CAPS
-    }
-
     async fn generate(&self, mut request: GenerateRequest) -> Result<GenerateResponse, HyperError> {
         // Built-in cross-provider sanitization: strip thinking signatures from other providers
-        request.sanitize_for_target(self.provider(), self.model_id());
+        request.sanitize_for_target(self.provider(), self.model_name());
 
         // Convert messages
         let mut messages = Vec::new();
@@ -433,7 +354,7 @@ impl Model for ZaiModel {
 
     async fn stream(&self, _request: GenerateRequest) -> Result<StreamResponse, HyperError> {
         // Z.AI SDK does not support streaming yet
-        Err(HyperError::UnsupportedCapability(Capability::Streaming))
+        Err(HyperError::UnsupportedCapability("streaming".to_string()))
     }
 }
 
@@ -634,17 +555,6 @@ mod tests {
     fn test_builder_missing_key() {
         let result = ZaiProvider::builder().build();
         assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_list_models() {
-        let provider = ZaiProvider::builder().api_key("zai-test").build().unwrap();
-
-        let models = provider.list_models().await.unwrap();
-        assert!(!models.is_empty());
-
-        let glm = models.iter().find(|m| m.id.contains("glm-4"));
-        assert!(glm.is_some());
     }
 
     #[test]

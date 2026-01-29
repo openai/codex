@@ -11,11 +11,13 @@
 //! Files are loaded in alphabetical order and merged. Duplicate slugs/names are an error.
 
 use crate::error::ConfigError;
+use crate::error::config_error::{IoSnafu, JsonParseSnafu};
 use crate::json_config::AppConfig;
 use crate::types::ModelsFile;
 use crate::types::ProviderConfig;
 use crate::types::ProvidersFile;
 use cocode_protocol::ModelInfo;
+use snafu::ResultExt;
 use std::path::Path;
 use std::path::PathBuf;
 use tracing::debug;
@@ -148,11 +150,11 @@ impl ConfigLoader {
     /// Ensure the config directory exists, creating it if necessary.
     pub fn ensure_dir(&self) -> Result<(), ConfigError> {
         if !self.config_dir.exists() {
-            std::fs::create_dir_all(&self.config_dir).map_err(|e| {
-                ConfigError::io(format!(
-                    "Failed to create config directory {}: {e}",
+            std::fs::create_dir_all(&self.config_dir).context(IoSnafu {
+                message: format!(
+                    "Failed to create config directory {}",
                     self.config_dir.display(),
-                ))
+                ),
             })?;
             debug!(path = %self.config_dir.display(), "Created config directory");
         }
@@ -246,8 +248,9 @@ impl ConfigLoader {
             return Ok(T::default());
         }
 
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| ConfigError::io(format!("Failed to read {}: {e}", path.display())))?;
+        let content = std::fs::read_to_string(path).context(IoSnafu {
+            message: format!("Failed to read {}", path.display()),
+        })?;
 
         // Handle empty files
         if content.trim().is_empty() {
@@ -255,8 +258,9 @@ impl ConfigLoader {
             return Ok(T::default());
         }
 
-        serde_json::from_str(&content)
-            .map_err(|e| ConfigError::config(path.display().to_string(), e.to_string()))
+        serde_json::from_str(&content).context(JsonParseSnafu {
+            file: path.display().to_string(),
+        })
     }
 
     /// Load all configuration files at once.
@@ -409,7 +413,7 @@ mod tests {
         let result = loader.load_models();
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(matches!(err, ConfigError::Config { .. }));
+        assert!(matches!(err, ConfigError::ConfigValidation { .. }));
         assert!(err.to_string().contains("duplicate model slug"));
     }
 
@@ -472,7 +476,7 @@ mod tests {
         let result = loader.load_providers();
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(matches!(err, ConfigError::Config { .. }));
+        assert!(matches!(err, ConfigError::ConfigValidation { .. }));
         assert!(err.to_string().contains("duplicate provider name"));
     }
 
@@ -541,7 +545,7 @@ mod tests {
         let result = loader.load_models();
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(matches!(err, ConfigError::Config { .. }));
+        assert!(matches!(err, ConfigError::JsonParse { .. }));
     }
 
     #[test]

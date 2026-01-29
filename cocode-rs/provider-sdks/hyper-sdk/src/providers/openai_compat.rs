@@ -3,8 +3,6 @@
 //! This provider can be used with any service that implements the OpenAI API,
 //! such as Azure OpenAI, local LLM servers, or other cloud providers.
 
-use crate::capability::Capability;
-use crate::capability::ModelInfo;
 use crate::error::HyperError;
 use crate::model::Model;
 use crate::provider::Provider;
@@ -24,8 +22,6 @@ pub struct OpenAICompatConfig {
     pub api_version: Option<String>,
     /// Request timeout in seconds.
     pub timeout_secs: i64,
-    /// Default capabilities for models.
-    pub default_capabilities: Vec<Capability>,
 }
 
 impl Default for OpenAICompatConfig {
@@ -36,11 +32,6 @@ impl Default for OpenAICompatConfig {
             base_url: String::new(),
             api_version: None,
             timeout_secs: 600,
-            default_capabilities: vec![
-                Capability::TextGeneration,
-                Capability::Streaming,
-                Capability::ToolCalling,
-            ],
         }
     }
 }
@@ -103,12 +94,6 @@ impl Provider for OpenAICompatProvider {
             client: self.client.clone(),
         }))
     }
-
-    async fn list_models(&self) -> Result<Vec<ModelInfo>, HyperError> {
-        // OpenAI-compatible providers don't have a standard way to list models
-        // Return an empty list by default
-        Ok(vec![])
-    }
 }
 
 /// Builder for OpenAI-compatible provider.
@@ -152,12 +137,6 @@ impl OpenAICompatProviderBuilder {
         self
     }
 
-    /// Set the default capabilities for models.
-    pub fn capabilities(mut self, caps: Vec<Capability>) -> Self {
-        self.config.default_capabilities = caps;
-        self
-    }
-
     /// Build the provider.
     pub fn build(self) -> Result<OpenAICompatProvider, HyperError> {
         OpenAICompatProvider::new(self.config)
@@ -174,16 +153,12 @@ struct OpenAICompatModel {
 
 #[async_trait]
 impl Model for OpenAICompatModel {
-    fn model_id(&self) -> &str {
+    fn model_name(&self) -> &str {
         &self.model_id
     }
 
     fn provider(&self) -> &str {
         &self.config.name
-    }
-
-    fn capabilities(&self) -> &[Capability] {
-        &self.config.default_capabilities
     }
 
     async fn generate(

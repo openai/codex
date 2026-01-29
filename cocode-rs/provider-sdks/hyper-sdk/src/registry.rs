@@ -107,7 +107,6 @@ impl ProviderRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability::ModelInfo;
     use crate::error::HyperError;
     use crate::model::Model;
     use async_trait::async_trait;
@@ -125,10 +124,6 @@ mod tests {
 
         fn model(&self, _model_id: &str) -> Result<Arc<dyn Model>, HyperError> {
             Err(HyperError::ModelNotFound("mock".to_string()))
-        }
-
-        async fn list_models(&self) -> Result<Vec<ModelInfo>, HyperError> {
-            Ok(vec![])
         }
     }
 

@@ -1,0 +1,24 @@
+[package]
+name = "cocode-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cocode-protocol.workspace = true
+cocode-error.workspace = true
+hyper-sdk.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }
+futures.workspace = true
+tracing.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+humantime-serde = "1.1"
+snafu.workspace = true
+snafu-virtstack.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true

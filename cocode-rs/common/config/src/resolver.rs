@@ -12,6 +12,8 @@
 
 use crate::builtin;
 use crate::error::ConfigError;
+use crate::error::NotFoundKind;
+use crate::error::config_error::{AuthSnafu, NotFoundSnafu};
 use crate::types::ModelsFile;
 use crate::types::ProviderConfig;
 use crate::types::ProvidersFile;
@@ -20,6 +22,7 @@ use cocode_protocol::Capability;
 use cocode_protocol::ModelInfo;
 use cocode_protocol::ProviderInfo;
 use cocode_protocol::ProviderModel;
+use snafu::OptionExt;
 use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
@@ -133,9 +136,8 @@ impl ConfigResolver {
             top_p: config.top_p,
             auto_compact_token_limit: config.auto_compact_token_limit,
             effective_context_window_percent: config.effective_context_window_percent,
-            default_reasoning_effort: config.default_reasoning_effort,
-            supported_reasoning_levels: config.supported_reasoning_levels,
-            thinking_budget_default: config.thinking_budget,
+            default_thinking_level: config.default_thinking_level,
+            supported_thinking_levels: config.supported_thinking_levels,
             include_thoughts: config.include_thoughts,
             base_instructions,
         })
@@ -199,10 +201,10 @@ impl ConfigResolver {
     /// - API key from environment variables or config
     /// - All models with their resolved `ModelInfo`
     pub fn resolve_provider(&self, provider_name: &str) -> Result<ProviderInfo, ConfigError> {
-        let provider_config = self
-            .providers
-            .get(provider_name)
-            .ok_or_else(|| ConfigError::provider_not_found(provider_name))?;
+        let provider_config = self.providers.get(provider_name).context(NotFoundSnafu {
+            kind: NotFoundKind::Provider,
+            name: provider_name.to_string(),
+        })?;
 
         // Resolve API key: env var takes precedence
         let api_key = self.resolve_api_key(provider_config).ok_or_else(|| {
@@ -211,9 +213,10 @@ impl ConfigResolver {
                 .as_ref()
                 .map(|k| format!(" (set {k} or api_key in config)"))
                 .unwrap_or_default();
-            ConfigError::auth(format!(
-                "API key not found for provider '{provider_name}'{env_hint}"
-            ))
+            AuthSnafu {
+                message: format!("API key not found for provider '{provider_name}'{env_hint}"),
+            }
+            .build()
         })?;
 
         // Resolve all models for this provider
@@ -325,9 +328,8 @@ impl ConfigResolver {
             top_p: config.top_p,
             auto_compact_token_limit: config.auto_compact_token_limit,
             effective_context_window_percent: config.effective_context_window_percent,
-            default_reasoning_effort: config.default_reasoning_effort,
-            supported_reasoning_levels: config.supported_reasoning_levels,
-            thinking_budget_default: config.thinking_budget,
+            default_thinking_level: config.default_thinking_level,
+            supported_thinking_levels: config.supported_thinking_levels,
             include_thoughts: config.include_thoughts,
             base_instructions: config.base_instructions,
         })

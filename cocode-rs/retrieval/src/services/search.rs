@@ -7,7 +7,7 @@
 //! ## Usage
 //!
 //! ```ignore
-//! use codex_retrieval::SearchRequest;
+//! use cocode_retrieval::SearchRequest;
 //!
 //! // Simple search (hybrid mode, default limit)
 //! let results = service.execute("authentication handler").await?;

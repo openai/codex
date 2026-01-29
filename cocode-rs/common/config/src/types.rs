@@ -8,9 +8,10 @@
 //!
 //! For resolved runtime types, see `ProviderInfo` in cocode_protocol.
 
+use crate::error::config_error::ConfigValidationSnafu;
 use cocode_protocol::Capability;
 use cocode_protocol::ModelInfo;
-use cocode_protocol::ReasoningEffort;
+use cocode_protocol::ThinkingLevel;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -50,10 +51,11 @@ impl ModelsFile {
     ) -> Result<(), crate::error::ConfigError> {
         for model in models {
             if self.models.contains_key(&model.slug) {
-                return Err(crate::error::ConfigError::config(
-                    source.to_string(),
-                    format!("duplicate model slug: {}", model.slug),
-                ));
+                return ConfigValidationSnafu {
+                    file: source.to_string(),
+                    message: format!("duplicate model slug: {}", model.slug),
+                }
+                .fail();
             }
             self.models.insert(model.slug.clone(), model);
         }
@@ -91,10 +93,11 @@ impl ProvidersFile {
     ) -> Result<(), crate::error::ConfigError> {
         for provider in providers {
             if self.providers.contains_key(&provider.name) {
-                return Err(crate::error::ConfigError::config(
-                    source.to_string(),
-                    format!("duplicate provider name: {}", provider.name),
-                ));
+                return ConfigValidationSnafu {
+                    file: source.to_string(),
+                    message: format!("duplicate provider name: {}", provider.name),
+                }
+                .fail();
             }
             self.providers.insert(provider.name.clone(), provider);
         }
@@ -306,12 +309,10 @@ pub struct ResolvedModelInfo {
     pub auto_compact_token_limit: Option<i64>,
     /// Effective context window as percentage.
     pub effective_context_window_percent: Option<i32>,
-    /// Default reasoning effort level.
-    pub default_reasoning_effort: Option<ReasoningEffort>,
-    /// Supported reasoning effort levels.
-    pub supported_reasoning_levels: Option<Vec<ReasoningEffort>>,
-    /// Default thinking budget in tokens.
-    pub thinking_budget_default: Option<i32>,
+    /// Default thinking level for this model.
+    pub default_thinking_level: Option<ThinkingLevel>,
+    /// Supported thinking levels (ordered from low to high).
+    pub supported_thinking_levels: Option<Vec<ThinkingLevel>>,
     /// Whether to include thoughts in response.
     pub include_thoughts: Option<bool>,
     /// Base system instructions for this model.
@@ -462,7 +463,7 @@ mod tests {
             "model_id": "ep-20250101-xxxxx",
             "timeout_secs": 300,
             "max_output_tokens": 16384,
-            "thinking_budget": 32000
+            "default_thinking_level": {"effort": "high", "budget_tokens": 32000}
         }"#;
 
         let entry: ProviderModelEntry = serde_json::from_str(json).expect("deserialize");
@@ -470,7 +471,8 @@ mod tests {
         assert_eq!(entry.model_alias, Some("ep-20250101-xxxxx".to_string()));
         assert_eq!(entry.model_info.timeout_secs, Some(300));
         assert_eq!(entry.model_info.max_output_tokens, Some(16384));
-        assert_eq!(entry.model_info.thinking_budget, Some(32000));
+        let level = entry.model_info.default_thinking_level.unwrap();
+        assert_eq!(level.budget_tokens, Some(32000));
     }
 
     #[test]
@@ -560,9 +562,8 @@ mod tests {
             top_p: None,
             auto_compact_token_limit: None,
             effective_context_window_percent: None,
-            default_reasoning_effort: None,
-            supported_reasoning_levels: None,
-            thinking_budget_default: None,
+            default_thinking_level: None,
+            supported_thinking_levels: None,
             include_thoughts: None,
             base_instructions: None,
         };

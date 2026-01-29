@@ -6,13 +6,13 @@ use std::sync::Arc;
 
 use tempfile::TempDir;
 
-use codex_retrieval::chunking::CodeChunkerService;
-use codex_retrieval::config::RetrievalConfig;
-use codex_retrieval::indexing::ChangeDetector;
-use codex_retrieval::indexing::ChangeStatus;
-use codex_retrieval::indexing::FileWalker;
-use codex_retrieval::indexing::IndexManager;
-use codex_retrieval::storage::SqliteStore;
+use cocode_retrieval::chunking::CodeChunkerService;
+use cocode_retrieval::config::RetrievalConfig;
+use cocode_retrieval::indexing::ChangeDetector;
+use cocode_retrieval::indexing::ChangeStatus;
+use cocode_retrieval::indexing::FileWalker;
+use cocode_retrieval::indexing::IndexManager;
+use cocode_retrieval::storage::SqliteStore;
 
 // ==== CodeChunkerService Tests ====
 

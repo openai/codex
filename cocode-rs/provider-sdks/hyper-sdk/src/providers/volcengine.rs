@@ -1,7 +1,5 @@
 //! Volcengine Ark provider implementation.
 
-use crate::capability::Capability;
-use crate::capability::ModelInfo;
 use crate::error::HyperError;
 use crate::messages::ContentBlock;
 use crate::messages::ImageSource;
@@ -117,52 +115,6 @@ impl Provider for VolcengineProvider {
             client: self.client.clone(),
         }))
     }
-
-    async fn list_models(&self) -> Result<Vec<ModelInfo>, HyperError> {
-        // Return commonly used models
-        Ok(vec![
-            ModelInfo::new("doubao-1-5-pro-256k-250115", "volcengine")
-                .with_name("Doubao 1.5 Pro 256K")
-                .with_capabilities(vec![
-                    Capability::TextGeneration,
-                    Capability::Vision,
-                    Capability::ToolCalling,
-                ])
-                .with_context_window(256000)
-                .with_max_output_tokens(16384),
-            ModelInfo::new("doubao-1-5-pro-32k-250115", "volcengine")
-                .with_name("Doubao 1.5 Pro 32K")
-                .with_capabilities(vec![
-                    Capability::TextGeneration,
-                    Capability::Vision,
-                    Capability::ToolCalling,
-                ])
-                .with_context_window(32000)
-                .with_max_output_tokens(16384),
-            ModelInfo::new("doubao-1-5-thinking-pro-250415", "volcengine")
-                .with_name("Doubao 1.5 Thinking Pro")
-                .with_capabilities(vec![
-                    Capability::TextGeneration,
-                    Capability::ToolCalling,
-                    Capability::ExtendedThinking,
-                ])
-                .with_context_window(128000)
-                .with_max_output_tokens(32000),
-            ModelInfo::new("deepseek-v3-250324", "volcengine")
-                .with_name("DeepSeek V3")
-                .with_capabilities(vec![Capability::TextGeneration, Capability::ToolCalling])
-                .with_context_window(64000)
-                .with_max_output_tokens(8192),
-            ModelInfo::new("deepseek-r1-250120", "volcengine")
-                .with_name("DeepSeek R1")
-                .with_capabilities(vec![
-                    Capability::TextGeneration,
-                    Capability::ExtendedThinking,
-                ])
-                .with_context_window(64000)
-                .with_max_output_tokens(32000),
-        ])
-    }
 }
 
 /// Builder for Volcengine provider.
@@ -226,7 +178,7 @@ struct VolcengineModel {
 
 #[async_trait]
 impl Model for VolcengineModel {
-    fn model_id(&self) -> &str {
+    fn model_name(&self) -> &str {
         &self.model_id
     }
 
@@ -234,19 +186,9 @@ impl Model for VolcengineModel {
         "volcengine"
     }
 
-    fn capabilities(&self) -> &[Capability] {
-        static CAPS: &[Capability] = &[
-            Capability::TextGeneration,
-            Capability::Vision,
-            Capability::ToolCalling,
-            Capability::ExtendedThinking,
-        ];
-        CAPS
-    }
-
     async fn generate(&self, mut request: GenerateRequest) -> Result<GenerateResponse, HyperError> {
         // Built-in cross-provider sanitization: strip thinking signatures from other providers
-        request.sanitize_for_target(self.provider(), self.model_id());
+        request.sanitize_for_target(self.provider(), self.model_name());
 
         // Convert messages
         let mut input_messages = Vec::new();
@@ -358,7 +300,7 @@ impl Model for VolcengineModel {
 
     async fn stream(&self, _request: GenerateRequest) -> Result<StreamResponse, HyperError> {
         // Volcengine Ark SDK does not support streaming yet
-        Err(HyperError::UnsupportedCapability(Capability::Streaming))
+        Err(HyperError::UnsupportedCapability("streaming".to_string()))
     }
 }
 
@@ -584,20 +526,6 @@ mod tests {
     fn test_builder_missing_key() {
         let result = VolcengineProvider::builder().build();
         assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_list_models() {
-        let provider = VolcengineProvider::builder()
-            .api_key("ark-test")
-            .build()
-            .unwrap();
-
-        let models = provider.list_models().await.unwrap();
-        assert!(!models.is_empty());
-
-        let doubao = models.iter().find(|m| m.id.contains("doubao"));
-        assert!(doubao.is_some());
     }
 
     #[test]

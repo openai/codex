@@ -5,47 +5,49 @@ use strum::{Display, EnumIter};
 
 /// Reasoning effort level for models that support extended thinking.
 ///
+/// Variants are ordered from lowest to highest effort, enabling direct comparison:
+/// `ReasoningEffort::High > ReasoningEffort::Low`
+///
 /// See <https://platform.openai.com/docs/guides/reasoning>
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize, Display, EnumIter,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Default,
+    Serialize,
+    Deserialize,
+    Display,
+    EnumIter,
 )]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum ReasoningEffort {
-    /// No reasoning.
+    /// No reasoning (ord = 0).
     None,
-    /// Minimal reasoning.
+    /// Minimal reasoning (ord = 1).
     Minimal,
-    /// Low reasoning effort.
+    /// Low reasoning effort (ord = 2).
     Low,
-    /// Medium reasoning effort (default).
+    /// Medium reasoning effort (ord = 3, default).
     #[default]
     Medium,
-    /// High reasoning effort.
+    /// High reasoning effort (ord = 4).
     High,
-    /// Extra high reasoning effort.
+    /// Extra high reasoning effort (ord = 5).
     XHigh,
 }
 
-/// Get effort rank for comparison.
-pub fn effort_rank(effort: ReasoningEffort) -> i32 {
-    match effort {
-        ReasoningEffort::None => 0,
-        ReasoningEffort::Minimal => 1,
-        ReasoningEffort::Low => 2,
-        ReasoningEffort::Medium => 3,
-        ReasoningEffort::High => 4,
-        ReasoningEffort::XHigh => 5,
-    }
-}
-
-/// Find nearest supported effort level.
+/// Find nearest supported effort level using `Ord` comparison.
 pub fn nearest_effort(target: ReasoningEffort, supported: &[ReasoningEffort]) -> ReasoningEffort {
-    let target_rank = effort_rank(target);
     supported
         .iter()
         .copied()
-        .min_by_key(|c| (effort_rank(*c) - target_rank).abs())
+        .min_by_key(|c| (*c as i32 - target as i32).abs())
         .unwrap_or(target)
 }
 
@@ -54,10 +56,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_effort_rank() {
-        assert_eq!(effort_rank(ReasoningEffort::None), 0);
-        assert_eq!(effort_rank(ReasoningEffort::Medium), 3);
-        assert_eq!(effort_rank(ReasoningEffort::XHigh), 5);
+    fn test_ord_comparison() {
+        // Test Ord trait - variants are ordered from lowest to highest
+        assert!(ReasoningEffort::None < ReasoningEffort::Minimal);
+        assert!(ReasoningEffort::Minimal < ReasoningEffort::Low);
+        assert!(ReasoningEffort::Low < ReasoningEffort::Medium);
+        assert!(ReasoningEffort::Medium < ReasoningEffort::High);
+        assert!(ReasoningEffort::High < ReasoningEffort::XHigh);
+
+        // Direct comparison
+        assert!(ReasoningEffort::High > ReasoningEffort::Low);
+        assert!(ReasoningEffort::Medium == ReasoningEffort::Medium);
+        assert!(ReasoningEffort::XHigh >= ReasoningEffort::High);
     }
 
     #[test]

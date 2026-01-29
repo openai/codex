@@ -1,7 +1,5 @@
 //! Anthropic provider implementation.
 
-use crate::capability::Capability;
-use crate::capability::ModelInfo;
 use crate::error::HyperError;
 use crate::messages::ContentBlock;
 use crate::messages::ImageSource;
@@ -123,64 +121,6 @@ impl Provider for AnthropicProvider {
             client: self.sdk_client.clone(),
         }))
     }
-
-    async fn list_models(&self) -> Result<Vec<ModelInfo>, HyperError> {
-        // Return commonly used models
-        Ok(vec![
-            ModelInfo::new("claude-sonnet-4-20250514", "anthropic")
-                .with_name("Claude Sonnet 4")
-                .with_capabilities(vec![
-                    Capability::TextGeneration,
-                    Capability::Streaming,
-                    Capability::Vision,
-                    Capability::ToolCalling,
-                    Capability::ExtendedThinking,
-                ])
-                .with_context_window(200000)
-                .with_max_output_tokens(64000),
-            ModelInfo::new("claude-opus-4-20250514", "anthropic")
-                .with_name("Claude Opus 4")
-                .with_capabilities(vec![
-                    Capability::TextGeneration,
-                    Capability::Streaming,
-                    Capability::Vision,
-                    Capability::ToolCalling,
-                    Capability::ExtendedThinking,
-                ])
-                .with_context_window(200000)
-                .with_max_output_tokens(32000),
-            ModelInfo::new("claude-3-5-sonnet-20241022", "anthropic")
-                .with_name("Claude 3.5 Sonnet")
-                .with_capabilities(vec![
-                    Capability::TextGeneration,
-                    Capability::Streaming,
-                    Capability::Vision,
-                    Capability::ToolCalling,
-                ])
-                .with_context_window(200000)
-                .with_max_output_tokens(8192),
-            ModelInfo::new("claude-3-5-haiku-20241022", "anthropic")
-                .with_name("Claude 3.5 Haiku")
-                .with_capabilities(vec![
-                    Capability::TextGeneration,
-                    Capability::Streaming,
-                    Capability::Vision,
-                    Capability::ToolCalling,
-                ])
-                .with_context_window(200000)
-                .with_max_output_tokens(8192),
-            ModelInfo::new("claude-3-opus-20240229", "anthropic")
-                .with_name("Claude 3 Opus")
-                .with_capabilities(vec![
-                    Capability::TextGeneration,
-                    Capability::Streaming,
-                    Capability::Vision,
-                    Capability::ToolCalling,
-                ])
-                .with_context_window(200000)
-                .with_max_output_tokens(4096),
-        ])
-    }
 }
 
 /// Builder for Anthropic provider.
@@ -244,7 +184,7 @@ struct AnthropicModel {
 
 #[async_trait]
 impl Model for AnthropicModel {
-    fn model_id(&self) -> &str {
+    fn model_name(&self) -> &str {
         &self.model_id
     }
 
@@ -252,22 +192,11 @@ impl Model for AnthropicModel {
         "anthropic"
     }
 
-    fn capabilities(&self) -> &[Capability] {
-        static CAPS: &[Capability] = &[
-            Capability::TextGeneration,
-            Capability::Streaming,
-            Capability::Vision,
-            Capability::ToolCalling,
-            Capability::ExtendedThinking,
-        ];
-        CAPS
-    }
-
     #[instrument(skip(self, request), fields(provider = "anthropic", model = %self.model_id))]
     async fn generate(&self, mut request: GenerateRequest) -> Result<GenerateResponse, HyperError> {
         debug!(messages = request.messages.len(), "Starting generation");
         // Built-in cross-provider sanitization: strip thinking signatures from other providers
-        request.sanitize_for_target(self.provider(), self.model_id());
+        request.sanitize_for_target(self.provider(), self.model_name());
 
         // Convert messages
         let mut messages = Vec::new();
@@ -381,7 +310,7 @@ impl Model for AnthropicModel {
             "Starting streaming generation"
         );
         // Built-in cross-provider sanitization: strip thinking signatures from other providers
-        request.sanitize_for_target(self.provider(), self.model_id());
+        request.sanitize_for_target(self.provider(), self.model_name());
 
         // Convert messages (same as generate)
         let mut messages = Vec::new();
@@ -775,20 +704,5 @@ mod tests {
     fn test_builder_missing_key() {
         let result = AnthropicProvider::builder().build();
         assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_list_models() {
-        let provider = AnthropicProvider::builder()
-            .api_key("sk-ant-test")
-            .build()
-            .unwrap();
-
-        let models = provider.list_models().await.unwrap();
-        assert!(!models.is_empty());
-
-        let sonnet = models.iter().find(|m| m.id.contains("sonnet-4"));
-        assert!(sonnet.is_some());
-        assert!(sonnet.unwrap().has_capability(Capability::ExtendedThinking));
     }
 }

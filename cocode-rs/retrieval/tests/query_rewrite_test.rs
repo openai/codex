@@ -2,16 +2,16 @@
 //!
 //! Tests for Chinese query detection and translation.
 
-use codex_retrieval::FacadeBuilder;
-use codex_retrieval::Result;
-use codex_retrieval::RetrievalConfig;
-use codex_retrieval::RetrievalFeatures;
-use codex_retrieval::query::LlmRewriter;
-use codex_retrieval::query::QueryRewriter;
-use codex_retrieval::query::RewrittenQuery;
-use codex_retrieval::query::SimpleRewriter;
-use codex_retrieval::query::Translator;
-use codex_retrieval::query::preprocessor::contains_chinese;
+use cocode_retrieval::FacadeBuilder;
+use cocode_retrieval::Result;
+use cocode_retrieval::RetrievalConfig;
+use cocode_retrieval::RetrievalFeatures;
+use cocode_retrieval::query::LlmRewriter;
+use cocode_retrieval::query::QueryRewriter;
+use cocode_retrieval::query::RewrittenQuery;
+use cocode_retrieval::query::SimpleRewriter;
+use cocode_retrieval::query::Translator;
+use cocode_retrieval::query::preprocessor::contains_chinese;
 
 use async_trait::async_trait;
 use tempfile::TempDir;

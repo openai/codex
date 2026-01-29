@@ -23,7 +23,7 @@ use crate::patterns::SYSTEM_FILE_EXCLUDES;
 /// # Example
 ///
 /// ```rust,no_run
-/// use codex_file_ignore::{IgnoreService, IgnoreConfig};
+/// use cocode_file_ignore::{IgnoreService, IgnoreConfig};
 /// use std::path::Path;
 ///
 /// let service = IgnoreService::with_defaults();

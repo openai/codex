@@ -15,7 +15,7 @@ use crate::types::ProviderType;
 use cocode_protocol::Capability;
 use cocode_protocol::ConfigShellToolType;
 use cocode_protocol::ModelInfo;
-use cocode_protocol::ReasoningEffort;
+use cocode_protocol::ThinkingLevel;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -77,11 +77,11 @@ fn init_builtin_models() -> HashMap<String, ModelInfo> {
             ]),
             auto_compact_token_limit: Some(250000),
             effective_context_window_percent: Some(95),
-            default_reasoning_effort: Some(ReasoningEffort::Medium),
-            supported_reasoning_levels: Some(vec![
-                ReasoningEffort::Low,
-                ReasoningEffort::Medium,
-                ReasoningEffort::High,
+            default_thinking_level: Some(ThinkingLevel::medium()),
+            supported_thinking_levels: Some(vec![
+                ThinkingLevel::low(),
+                ThinkingLevel::medium(),
+                ThinkingLevel::high(),
             ]),
             ..Default::default()
         },
@@ -106,12 +106,12 @@ fn init_builtin_models() -> HashMap<String, ModelInfo> {
             ]),
             auto_compact_token_limit: Some(250000),
             effective_context_window_percent: Some(95),
-            default_reasoning_effort: Some(ReasoningEffort::Medium),
-            supported_reasoning_levels: Some(vec![
-                ReasoningEffort::Low,
-                ReasoningEffort::Medium,
-                ReasoningEffort::High,
-                ReasoningEffort::XHigh,
+            default_thinking_level: Some(ThinkingLevel::medium()),
+            supported_thinking_levels: Some(vec![
+                ThinkingLevel::low(),
+                ThinkingLevel::medium(),
+                ThinkingLevel::high(),
+                ThinkingLevel::xhigh(),
             ]),
             shell_type: Some(ConfigShellToolType::ShellCommand),
             ..Default::default()
@@ -138,12 +138,12 @@ fn init_builtin_models() -> HashMap<String, ModelInfo> {
             ]),
             auto_compact_token_limit: Some(250000),
             effective_context_window_percent: Some(95),
-            default_reasoning_effort: Some(ReasoningEffort::Medium),
-            supported_reasoning_levels: Some(vec![
-                ReasoningEffort::Low,
-                ReasoningEffort::Medium,
-                ReasoningEffort::High,
-                ReasoningEffort::XHigh,
+            default_thinking_level: Some(ThinkingLevel::medium()),
+            supported_thinking_levels: Some(vec![
+                ThinkingLevel::low(),
+                ThinkingLevel::medium(),
+                ThinkingLevel::high(),
+                ThinkingLevel::xhigh(),
             ]),
             shell_type: Some(ConfigShellToolType::ShellCommand),
             ..Default::default()
@@ -246,6 +246,7 @@ pub(crate) fn ensure_initialized() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cocode_protocol::ReasoningEffort;
 
     #[test]
     fn test_get_model_defaults() {
@@ -317,21 +318,24 @@ mod tests {
     }
 
     #[test]
-    fn test_reasoning_models() {
+    fn test_thinking_models() {
         ensure_initialized();
 
         let gpt5 = get_model_defaults("gpt-5").unwrap();
-        assert!(gpt5.default_reasoning_effort.is_some());
-        assert!(gpt5.supported_reasoning_levels.is_some());
+        assert!(gpt5.default_thinking_level.is_some());
+        assert!(gpt5.supported_thinking_levels.is_some());
 
-        let levels = gpt5.supported_reasoning_levels.unwrap();
-        assert!(levels.contains(&ReasoningEffort::Low));
-        assert!(levels.contains(&ReasoningEffort::Medium));
-        assert!(levels.contains(&ReasoningEffort::High));
+        let default_level = gpt5.default_thinking_level.unwrap();
+        assert_eq!(default_level.effort, ReasoningEffort::Medium);
+
+        let levels = gpt5.supported_thinking_levels.unwrap();
+        assert!(levels.iter().any(|l| l.effort == ReasoningEffort::Low));
+        assert!(levels.iter().any(|l| l.effort == ReasoningEffort::Medium));
+        assert!(levels.iter().any(|l| l.effort == ReasoningEffort::High));
 
         let gpt52 = get_model_defaults("gpt-5.2").unwrap();
-        let levels = gpt52.supported_reasoning_levels.unwrap();
-        assert!(levels.contains(&ReasoningEffort::XHigh));
+        let levels = gpt52.supported_thinking_levels.unwrap();
+        assert!(levels.iter().any(|l| l.effort == ReasoningEffort::XHigh));
     }
 
     #[test]
@@ -360,11 +364,11 @@ mod tests {
         assert!(caps.contains(&Capability::ReasoningSummaries));
         assert!(caps.contains(&Capability::ParallelToolCalls));
 
-        let levels = codex.supported_reasoning_levels.unwrap();
-        assert!(levels.contains(&ReasoningEffort::Low));
-        assert!(levels.contains(&ReasoningEffort::Medium));
-        assert!(levels.contains(&ReasoningEffort::High));
-        assert!(levels.contains(&ReasoningEffort::XHigh));
+        let levels = codex.supported_thinking_levels.unwrap();
+        assert!(levels.iter().any(|l| l.effort == ReasoningEffort::Low));
+        assert!(levels.iter().any(|l| l.effort == ReasoningEffort::Medium));
+        assert!(levels.iter().any(|l| l.effort == ReasoningEffort::High));
+        assert!(levels.iter().any(|l| l.effort == ReasoningEffort::XHigh));
     }
 
     #[test]

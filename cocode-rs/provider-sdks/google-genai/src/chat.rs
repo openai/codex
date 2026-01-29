@@ -314,7 +314,7 @@ impl Chat {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use google_genai::Chat;
+    /// use google_genai_sdk::Chat;
     /// use futures::StreamExt;
     ///
     /// # async fn example(chat: &mut Chat) -> anyhow::Result<()> {
@@ -387,7 +387,7 @@ impl Chat {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use google_genai::Chat;
+    /// use google_genai_sdk::Chat;
     ///
     /// # async fn example(chat: &mut Chat) -> anyhow::Result<()> {
     /// // Stream with auto-history (Python SDK style)

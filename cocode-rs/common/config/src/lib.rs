@@ -43,6 +43,7 @@
 
 pub mod builtin;
 pub mod config;
+pub mod env_loader;
 pub mod error;
 pub mod json_config;
 pub mod loader;
@@ -115,3 +116,13 @@ pub use config::ConfigOverrides;
 
 // Re-export sandbox types from protocol
 pub use cocode_protocol::SandboxMode;
+
+// Re-export extended config types from protocol
+pub use cocode_protocol::AttachmentConfig;
+pub use cocode_protocol::CompactConfig;
+pub use cocode_protocol::PathConfig;
+pub use cocode_protocol::PlanModeConfig;
+pub use cocode_protocol::ToolConfig;
+
+// Re-export env loader
+pub use env_loader::EnvLoader;

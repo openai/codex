@@ -1,0 +1,32 @@
+[package]
+name = "cocode-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Multi-provider LLM CLI"
+
+[[bin]]
+name = "cocode"
+path = "src/main.rs"
+
+[dependencies]
+# Internal
+cocode-session = { workspace = true, features = [] }
+cocode-config.workspace = true
+cocode-protocol.workspace = true
+cocode-skill.workspace = true
+
+# External
+clap = { workspace = true, features = ["derive"] }
+tokio = { workspace = true, features = ["full"] }
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+dirs.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

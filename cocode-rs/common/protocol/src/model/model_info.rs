@@ -2,8 +2,8 @@
 
 use super::Capability;
 use super::ConfigShellToolType;
-use super::ReasoningEffort;
 use super::TruncationPolicyConfig;
+use crate::thinking::ThinkingLevel;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -65,18 +65,14 @@ pub struct ModelInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub presence_penalty: Option<f32>,
 
-    // === Reasoning/Thinking ===
-    /// Default reasoning effort level.
+    // === Thinking/Reasoning (Unified) ===
+    /// Default thinking level for this model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_reasoning_effort: Option<ReasoningEffort>,
+    pub default_thinking_level: Option<ThinkingLevel>,
 
-    /// Supported reasoning effort levels.
+    /// Supported thinking levels (ordered from low to high).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub supported_reasoning_levels: Option<Vec<ReasoningEffort>>,
-
-    /// Default thinking budget in tokens.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thinking_budget: Option<i32>,
+    pub supported_thinking_levels: Option<Vec<ThinkingLevel>>,
 
     /// Whether to include thoughts in response (Gemini thinking display).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -123,8 +119,7 @@ pub mod override_keys {
     pub const TOP_P: &str = "top_p";
     pub const FREQUENCY_PENALTY: &str = "frequency_penalty";
     pub const PRESENCE_PENALTY: &str = "presence_penalty";
-    pub const THINKING_BUDGET: &str = "thinking_budget";
-    pub const REASONING_EFFORT: &str = "reasoning_effort";
+    pub const THINKING_LEVEL: &str = "thinking_level";
     pub const INCLUDE_THOUGHTS: &str = "include_thoughts";
     pub const BASE_INSTRUCTIONS: &str = "base_instructions";
     pub const BASE_INSTRUCTIONS_FILE: &str = "base_instructions_file";
@@ -161,10 +156,9 @@ impl ModelInfo {
         merge_field!(top_p);
         merge_field!(frequency_penalty);
         merge_field!(presence_penalty);
-        // Reasoning
-        merge_field!(default_reasoning_effort);
-        merge_field!(supported_reasoning_levels);
-        merge_field!(thinking_budget);
+        // Thinking/Reasoning (unified)
+        merge_field!(default_thinking_level);
+        merge_field!(supported_thinking_levels);
         merge_field!(include_thoughts);
         // Context management
         merge_field!(auto_compact_token_limit);
@@ -222,16 +216,10 @@ impl ModelInfo {
                         self.presence_penalty = Some(v as f32);
                     }
                 }
-                THINKING_BUDGET => {
-                    if let Some(v) = value.as_i64() {
-                        self.thinking_budget = Some(v as i32);
-                    }
-                }
-                REASONING_EFFORT => {
-                    if let Some(s) = value.as_str() {
-                        if let Ok(effort) = serde_json::from_value(serde_json::json!(s)) {
-                            self.default_reasoning_effort = Some(effort);
-                        }
+                THINKING_LEVEL => {
+                    // ThinkingLevel supports both string and object formats
+                    if let Ok(level) = serde_json::from_value(value.clone()) {
+                        self.default_thinking_level = Some(level);
                     }
                 }
                 INCLUDE_THOUGHTS => {
@@ -306,11 +294,51 @@ impl ModelInfo {
         self.capabilities = Some(caps);
         self
     }
+
+    /// Set the default thinking level.
+    pub fn with_thinking_level(mut self, level: ThinkingLevel) -> Self {
+        self.default_thinking_level = Some(level);
+        self
+    }
+
+    /// Set the supported thinking levels.
+    pub fn with_supported_thinking_levels(mut self, levels: Vec<ThinkingLevel>) -> Self {
+        self.supported_thinking_levels = Some(levels);
+        self
+    }
+
+    /// Find nearest supported thinking level to target.
+    ///
+    /// Compares by effort level and returns the closest match.
+    pub fn nearest_supported_level(&self, target: &ThinkingLevel) -> Option<ThinkingLevel> {
+        self.supported_thinking_levels.as_ref().and_then(|levels| {
+            levels
+                .iter()
+                .min_by_key(|l| (l.effort as i32 - target.effort as i32).abs())
+                .cloned()
+        })
+    }
+
+    /// Resolve requested thinking level against supported levels.
+    ///
+    /// If the exact effort level is supported, returns a matching level.
+    /// Otherwise, returns the nearest supported level.
+    pub fn resolve_thinking_level(&self, requested: &ThinkingLevel) -> ThinkingLevel {
+        match &self.supported_thinking_levels {
+            Some(levels) if !levels.is_empty() => levels
+                .iter()
+                .find(|l| l.effort == requested.effort)
+                .cloned()
+                .unwrap_or_else(|| self.nearest_supported_level(requested).unwrap()),
+            _ => requested.clone(),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::ReasoningEffort;
 
     #[test]
     fn test_merge_from() {
@@ -325,7 +353,7 @@ mod tests {
 
         let other = ModelInfo {
             context_window: Some(8192),
-            default_reasoning_effort: Some(ReasoningEffort::High),
+            default_thinking_level: Some(ThinkingLevel::high()),
             temperature: Some(0.9),
             timeout_secs: Some(300),
             ..Default::default()
@@ -336,7 +364,7 @@ mod tests {
         assert_eq!(base.display_name, Some("Base Model".to_string())); // Not overridden
         assert_eq!(base.context_window, Some(8192)); // Overridden
         assert_eq!(base.max_output_tokens, Some(1024)); // Not overridden
-        assert_eq!(base.default_reasoning_effort, Some(ReasoningEffort::High)); // New value
+        assert_eq!(base.default_thinking_level, Some(ThinkingLevel::high())); // New value
         assert_eq!(base.temperature, Some(0.9)); // Overridden
         assert_eq!(base.timeout_secs, Some(300)); // New value
     }
@@ -360,13 +388,15 @@ mod tests {
             .with_context_window(128000)
             .with_temperature(0.5)
             .with_timeout_secs(120)
-            .with_capabilities(vec![Capability::TextGeneration, Capability::Streaming]);
+            .with_capabilities(vec![Capability::TextGeneration, Capability::Streaming])
+            .with_thinking_level(ThinkingLevel::medium());
 
         assert_eq!(config.display_name, Some("Test Model".to_string()));
         assert_eq!(config.context_window, Some(128000));
         assert_eq!(config.temperature, Some(0.5));
         assert_eq!(config.timeout_secs, Some(120));
         assert!(config.has_capability(Capability::Streaming));
+        assert_eq!(config.default_thinking_level, Some(ThinkingLevel::medium()));
     }
 
     #[test]
@@ -399,6 +429,7 @@ mod tests {
         overrides.insert("temperature".to_string(), serde_json::json!(0.8));
         overrides.insert("max_output_tokens".to_string(), serde_json::json!(8192));
         overrides.insert("include_thoughts".to_string(), serde_json::json!(true));
+        overrides.insert("thinking_level".to_string(), serde_json::json!("high"));
         overrides.insert("unknown_key".to_string(), serde_json::json!("ignored"));
 
         config.apply_overrides(&overrides);
@@ -407,8 +438,91 @@ mod tests {
         assert_eq!(config.temperature, Some(0.8));
         assert_eq!(config.max_output_tokens, Some(8192));
         assert_eq!(config.include_thoughts, Some(true));
+        assert_eq!(config.default_thinking_level, Some(ThinkingLevel::high()));
         // Original values preserved
         assert_eq!(config.display_name, Some("Test Model".to_string()));
         assert_eq!(config.context_window, Some(4096));
+    }
+
+    #[test]
+    fn test_apply_overrides_thinking_level_object() {
+        let mut config = ModelInfo::default();
+
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            "thinking_level".to_string(),
+            serde_json::json!({
+                "effort": "high",
+                "budget_tokens": 32000,
+                "interleaved": true
+            }),
+        );
+
+        config.apply_overrides(&overrides);
+
+        let level = config.default_thinking_level.unwrap();
+        assert_eq!(level.effort, ReasoningEffort::High);
+        assert_eq!(level.budget_tokens, Some(32000));
+        assert!(level.interleaved);
+    }
+
+    #[test]
+    fn test_nearest_supported_level() {
+        let config = ModelInfo {
+            supported_thinking_levels: Some(vec![
+                ThinkingLevel::low(),
+                ThinkingLevel::medium(),
+                ThinkingLevel::high(),
+            ]),
+            ..Default::default()
+        };
+
+        // Exact match
+        let result = config
+            .nearest_supported_level(&ThinkingLevel::medium())
+            .unwrap();
+        assert_eq!(result.effort, ReasoningEffort::Medium);
+
+        // None -> Low (nearest)
+        let result = config
+            .nearest_supported_level(&ThinkingLevel::none())
+            .unwrap();
+        assert_eq!(result.effort, ReasoningEffort::Low);
+
+        // XHigh -> High (nearest)
+        let result = config
+            .nearest_supported_level(&ThinkingLevel::xhigh())
+            .unwrap();
+        assert_eq!(result.effort, ReasoningEffort::High);
+    }
+
+    #[test]
+    fn test_resolve_thinking_level() {
+        let config = ModelInfo {
+            supported_thinking_levels: Some(vec![
+                ThinkingLevel::low(),
+                ThinkingLevel::medium(),
+                ThinkingLevel::high(),
+            ]),
+            ..Default::default()
+        };
+
+        // Exact match
+        let result = config.resolve_thinking_level(&ThinkingLevel::medium());
+        assert_eq!(result.effort, ReasoningEffort::Medium);
+
+        // XHigh -> High (nearest)
+        let result = config.resolve_thinking_level(&ThinkingLevel::xhigh());
+        assert_eq!(result.effort, ReasoningEffort::High);
+    }
+
+    #[test]
+    fn test_resolve_thinking_level_no_supported() {
+        let config = ModelInfo::default();
+
+        // When no supported levels, return requested as-is
+        let requested = ThinkingLevel::high();
+        let result = config.resolve_thinking_level(&requested);
+        assert_eq!(result, requested);
     }
 }

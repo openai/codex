@@ -18,7 +18,6 @@
 //! The `From` implementations preserve error context by including the source error's
 //! Display output, which typically contains the full error chain information.
 
-use crate::capability::Capability;
 use std::time::Duration;
 use thiserror::Error;
 
@@ -37,8 +36,8 @@ pub enum HyperError {
     ModelNotFound(String),
 
     /// Requested capability is not supported by the model.
-    #[error("unsupported capability: {0:?}")]
-    UnsupportedCapability(Capability),
+    #[error("unsupported capability: {0}")]
+    UnsupportedCapability(String),
 
     /// Authentication failed (invalid or missing API key).
     #[error("authentication failed: {0}")]
@@ -210,7 +209,7 @@ mod tests {
         let err = HyperError::ProviderNotFound("openai".to_string());
         assert_eq!(err.to_string(), "provider not found: openai");
 
-        let err = HyperError::UnsupportedCapability(Capability::Vision);
+        let err = HyperError::UnsupportedCapability("Vision".to_string());
         assert_eq!(err.to_string(), "unsupported capability: Vision");
 
         let err = HyperError::ProviderError {
@@ -317,7 +316,7 @@ mod tests {
         let errors: Vec<HyperError> = vec![
             HyperError::ProviderNotFound("openai".into()),
             HyperError::ModelNotFound("gpt-5".into()),
-            HyperError::UnsupportedCapability(Capability::Vision),
+            HyperError::UnsupportedCapability("Vision".to_string()),
             HyperError::AuthenticationFailed("invalid key".into()),
             HyperError::RateLimitExceeded("429".into()),
             HyperError::ContextWindowExceeded("too long".into()),
@@ -369,7 +368,7 @@ mod tests {
         let non_retryable = [
             HyperError::ProviderNotFound("openai".into()),
             HyperError::ModelNotFound("gpt-5".into()),
-            HyperError::UnsupportedCapability(Capability::Vision),
+            HyperError::UnsupportedCapability("Vision".to_string()),
             HyperError::AuthenticationFailed("auth".into()),
             HyperError::ContextWindowExceeded("ctx".into()),
             HyperError::InvalidRequest("req".into()),

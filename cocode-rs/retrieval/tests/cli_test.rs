@@ -7,14 +7,14 @@ use std::sync::Arc;
 
 use tempfile::TempDir;
 
-use codex_retrieval::FacadeBuilder;
-use codex_retrieval::RetrievalFeatures;
-use codex_retrieval::SnippetStorage;
-use codex_retrieval::SymbolQuery;
-use codex_retrieval::config::RetrievalConfig;
-use codex_retrieval::indexing::IndexManager;
-use codex_retrieval::indexing::RebuildMode;
-use codex_retrieval::storage::SqliteStore;
+use cocode_retrieval::FacadeBuilder;
+use cocode_retrieval::RetrievalFeatures;
+use cocode_retrieval::SnippetStorage;
+use cocode_retrieval::SymbolQuery;
+use cocode_retrieval::config::RetrievalConfig;
+use cocode_retrieval::indexing::IndexManager;
+use cocode_retrieval::indexing::RebuildMode;
+use cocode_retrieval::storage::SqliteStore;
 
 // ==== Helper Function Tests ====
 
@@ -287,7 +287,7 @@ async fn test_search_empty_index() {
 
 #[tokio::test]
 async fn test_search_with_limit() {
-    use codex_retrieval::SearchRequest;
+    use cocode_retrieval::SearchRequest;
 
     let dir = TempDir::new().unwrap();
     let mut config = RetrievalConfig::default();
@@ -324,7 +324,7 @@ async fn test_search_with_limit() {
 
 #[tokio::test]
 async fn test_bm25_search() {
-    use codex_retrieval::SearchRequest;
+    use cocode_retrieval::SearchRequest;
 
     let dir = TempDir::new().unwrap();
     let mut config = RetrievalConfig::default();
@@ -359,7 +359,7 @@ async fn test_bm25_search() {
 
 #[tokio::test]
 async fn test_vector_search_without_embeddings() {
-    use codex_retrieval::SearchRequest;
+    use cocode_retrieval::SearchRequest;
 
     let dir = TempDir::new().unwrap();
     let mut config = RetrievalConfig::default();
@@ -480,7 +480,7 @@ impl AppConfig {
     assert!(stats.file_count > 0, "Should have indexed the test file");
 
     // Step 2: Search
-    use codex_retrieval::SearchRequest;
+    use cocode_retrieval::SearchRequest;
     let service = FacadeBuilder::new(config)
         .features(RetrievalFeatures::MINIMAL)
         .build()

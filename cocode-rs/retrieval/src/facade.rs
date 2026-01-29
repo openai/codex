@@ -6,7 +6,7 @@
 //! ## Usage
 //!
 //! ```ignore
-//! use codex_retrieval::{RetrievalFacade, FacadeBuilder, RetrievalFeatures};
+//! use cocode_retrieval::{RetrievalFacade, FacadeBuilder, RetrievalFeatures};
 //!
 //! // Standard: Get facade for current working directory (cached)
 //! let facade = RetrievalFacade::for_workdir(&cwd).await?;
@@ -23,7 +23,7 @@
 //! let repomap = facade.generate_repomap(request).await?;
 //!
 //! // Advanced API - use SearchRequest for more control
-//! use codex_retrieval::SearchRequest;
+//! use cocode_retrieval::SearchRequest;
 //! let search_svc = facade.search_service();
 //! search_svc.execute(SearchRequest::new("query").bm25().limit(10)).await?;
 //! ```

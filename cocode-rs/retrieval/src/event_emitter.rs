@@ -8,8 +8,8 @@
 //! # Usage
 //!
 //! ```ignore
-//! use codex_retrieval::event_emitter::{EventEmitter, subscribe};
-//! use codex_retrieval::events::{RetrievalEvent, EventConsumer};
+//! use cocode_retrieval::event_emitter::{EventEmitter, subscribe};
+//! use cocode_retrieval::events::{RetrievalEvent, EventConsumer};
 //!
 //! // Subscribe to events
 //! let mut rx = subscribe();

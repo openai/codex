@@ -4,6 +4,11 @@ members = [
     "common/protocol",
     "common/config",
     "common/otel",
+    "core/api",
+    "core/message",
+    "core/tools",
+    "core/context",
+    "core/prompt",
     "utils/file-ignore",
     "utils/file-search",
     "provider-sdks/anthropic",
@@ -31,6 +36,16 @@ members = [
     "utils/shell-parser",
     "retrieval",
     "lsp",
+    "exec/shell",
+    "exec/sandbox",
+    "features/skill",
+    "features/hooks",
+    "features/plugin",
+    "core/loop",
+    "core/subagent",
+    "core/executor",
+    "app/session",
+    "app/cli",
 ]
 resolver = "2"
 
@@ -49,6 +64,16 @@ cocode-error = { path = "common/error" }
 cocode-protocol = { path = "common/protocol" }
 cocode-config = { path = "common/config" }
 cocode-otel = { path = "common/otel" }
+
+# Internal - core
+cocode-api = { path = "core/api" }
+cocode-message = { path = "core/message" }
+cocode-tools = { path = "core/tools" }
+cocode-context = { path = "core/context" }
+cocode-prompt = { path = "core/prompt" }
+cocode-loop = { path = "core/loop" }
+cocode-subagent = { path = "core/subagent" }
+cocode-executor = { path = "core/executor" }
 
 # Internal - provider SDKs (keep original names)
 anthropic-sdk = { path = "provider-sdks/anthropic" }
@@ -81,6 +106,19 @@ cocode-shell-parser = { path = "utils/shell-parser" }
 cocode-mcp-types = { path = "mcp/mcp-types" }
 cocode-rmcp-client = { path = "mcp/rmcp-client" }
 
+# Internal - exec
+cocode-shell = { path = "exec/shell" }
+cocode-sandbox = { path = "exec/sandbox" }
+
+# Internal - features
+cocode-skill = { path = "features/skill" }
+cocode-hooks = { path = "features/hooks" }
+cocode-plugin = { path = "features/plugin" }
+
+# Internal - app
+cocode-session = { path = "app/session" }
+cocode-cli = { path = "app/cli" }
+
 # Internal - LSP
 cocode-lsp = { path = "lsp" }
 
@@ -98,6 +136,7 @@ eventsource-stream = "0.2.3"
 futures = { version = "0.3", default-features = false }
 globset = "0.4"
 http = "1.3.1"
+humantime-serde = "1"
 ignore = "0.4.23"
 image = { version = "^0.25.9", default-features = false }
 keyring = "3"

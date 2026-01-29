@@ -26,7 +26,7 @@ use tracing::info;
 
 /// Helper to get user-level codex directory (respects CODEX_HOME).
 fn get_codex_home() -> PathBuf {
-    crate::config::find_codex_home().unwrap_or_else(|| PathBuf::from(".codex"))
+    cocode_lsp::config::find_codex_home().unwrap_or_else(|| PathBuf::from(".codex"))
 }
 
 /// Application modes

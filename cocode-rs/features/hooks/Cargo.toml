@@ -1,0 +1,24 @@
+[package]
+name = "cocode-hooks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cocode-protocol.workspace = true
+cocode-error.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["sync", "process", "time", "io-util"] }
+tracing.workspace = true
+regex.workspace = true
+snafu.workspace = true
+snafu-virtstack.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tempfile.workspace = true
+
+[lints]
+workspace = true

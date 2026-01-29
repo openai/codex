@@ -1,0 +1,19 @@
+[package]
+name = "cocode-shell"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cocode-protocol.workspace = true
+tokio = { workspace = true, features = ["sync", "process", "time", "io-util", "rt"] }
+tracing.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tempfile.workspace = true
+
+[lints]
+workspace = true

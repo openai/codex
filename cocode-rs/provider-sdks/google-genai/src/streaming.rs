@@ -10,7 +10,7 @@
 //! ## Example
 //!
 //! ```rust,ignore
-//! use google_genai::{Client, GenerateContentStream};
+//! use google_genai_sdk::{Client, GenerateContentStream};
 //!
 //! # async fn example() -> anyhow::Result<()> {
 //! let client = Client::from_env()?;
@@ -134,7 +134,7 @@ impl GenerateContentStream {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use google_genai::GenerateContentStream;
+    /// use google_genai_sdk::GenerateContentStream;
     /// use futures::StreamExt;
     ///
     /// # async fn example(stream: GenerateContentStream) -> anyhow::Result<()> {
@@ -169,7 +169,7 @@ impl GenerateContentStream {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use google_genai::GenerateContentStream;
+    /// use google_genai_sdk::GenerateContentStream;
     ///
     /// # async fn example(stream: GenerateContentStream) -> anyhow::Result<()> {
     /// let final_response = stream.get_final_response().await?;
@@ -193,7 +193,7 @@ impl GenerateContentStream {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use google_genai::GenerateContentStream;
+    /// use google_genai_sdk::GenerateContentStream;
     ///
     /// # async fn example(stream: GenerateContentStream) -> anyhow::Result<()> {
     /// let final_text = stream.get_final_text().await?;
@@ -224,7 +224,7 @@ impl GenerateContentStream {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use google_genai::GenerateContentStream;
+    /// use google_genai_sdk::GenerateContentStream;
     /// use futures::StreamExt;
     ///
     /// # async fn example(stream: GenerateContentStream) -> anyhow::Result<()> {

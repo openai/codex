@@ -6,12 +6,27 @@
 //! - Provider type definitions
 //! - Shell and truncation policies
 //! - MCP protocol types
+//! - Permission and approval types
+//! - Core loop configuration and events
+//! - Tool execution types
+//! - Query and compaction tracking
 
+pub mod attachment_config;
+pub mod compact_config;
 pub mod features;
+pub mod loop_config;
+pub mod loop_event;
 pub mod model;
+pub mod path_config;
+pub mod permission;
+pub mod plan_config;
 pub mod protocol;
 pub mod provider;
 pub mod sandbox;
+pub mod thinking;
+pub mod tool_config;
+pub mod tool_types;
+pub mod tracking;
 
 // Model types
 pub use model::Capability;
@@ -20,7 +35,6 @@ pub use model::ModelInfo;
 pub use model::ReasoningEffort;
 pub use model::TruncationMode;
 pub use model::TruncationPolicyConfig;
-pub use model::effort_rank;
 pub use model::nearest_effort;
 
 // Provider types
@@ -40,3 +54,74 @@ pub use features::is_known_feature_key;
 
 // Sandbox types
 pub use sandbox::SandboxMode;
+
+// Permission types
+pub use permission::ApprovalRequest;
+pub use permission::PermissionBehavior;
+pub use permission::PermissionCheckResult;
+pub use permission::PermissionMode;
+pub use permission::PermissionResult;
+pub use permission::RiskSeverity;
+pub use permission::RiskType;
+pub use permission::SecurityRisk;
+
+// Loop config types
+pub use loop_config::CacheBreakpoint;
+pub use loop_config::CacheType;
+pub use loop_config::FileRestorationPriority;
+pub use loop_config::LoopConfig;
+pub use loop_config::PromptCachingConfig;
+pub use loop_config::SessionMemoryConfig;
+pub use loop_config::StallDetectionConfig;
+pub use loop_config::StallRecovery;
+
+// Loop event types
+pub use loop_event::AbortReason;
+pub use loop_event::AgentProgress;
+pub use loop_event::ApiErrorInfo;
+pub use loop_event::HookEventType;
+pub use loop_event::LoopError;
+pub use loop_event::LoopEvent;
+pub use loop_event::McpServerInfo;
+pub use loop_event::McpStartupStatus;
+pub use loop_event::RawStreamEvent;
+pub use loop_event::RetryInfo;
+pub use loop_event::TaskProgress;
+pub use loop_event::TaskType;
+pub use loop_event::TokenUsage;
+pub use loop_event::TombstonedMessage;
+pub use loop_event::ToolProgressInfo;
+pub use loop_event::ToolResultContent;
+
+// Tool types
+pub use tool_types::ConcurrencySafety;
+pub use tool_types::ContextModifier;
+pub use tool_types::QueuedCommand;
+pub use tool_types::ToolOutput;
+pub use tool_types::ValidationError;
+pub use tool_types::ValidationResult;
+
+// Tracking types
+pub use tracking::AutoCompactTracking;
+pub use tracking::FileChange;
+pub use tracking::FileChangeType;
+pub use tracking::FileReadInfo;
+pub use tracking::QueryTracking;
+
+// Extended config types
+pub use attachment_config::AttachmentConfig;
+pub use compact_config::CompactConfig;
+pub use compact_config::DEFAULT_CONTEXT_RESTORE_BUDGET;
+pub use compact_config::DEFAULT_CONTEXT_RESTORE_MAX_FILES;
+pub use compact_config::DEFAULT_EXTRACTION_COOLDOWN_SECS;
+pub use compact_config::DEFAULT_SESSION_MEMORY_MAX_TOKENS;
+pub use compact_config::DEFAULT_SESSION_MEMORY_MIN_TOKENS;
+pub use path_config::PathConfig;
+pub use plan_config::DEFAULT_PLAN_AGENT_COUNT;
+pub use plan_config::DEFAULT_PLAN_EXPLORE_AGENT_COUNT;
+pub use plan_config::MAX_AGENT_COUNT;
+pub use plan_config::MIN_AGENT_COUNT;
+pub use plan_config::PlanModeConfig;
+pub use thinking::ThinkingLevel;
+pub use tool_config::DEFAULT_MAX_TOOL_CONCURRENCY;
+pub use tool_config::ToolConfig;

@@ -2,8 +2,6 @@
 
 use crate::call_id::enhance_server_call_id;
 use crate::call_id::generate_client_call_id;
-use crate::capability::Capability;
-use crate::capability::ModelInfo;
 use crate::error::HyperError;
 use crate::messages::ContentBlock;
 use crate::messages::ImageSource;
@@ -129,68 +127,6 @@ impl Provider for GeminiProvider {
             sdk_client: self.sdk_client.clone(),
         }))
     }
-
-    async fn list_models(&self) -> Result<Vec<ModelInfo>, HyperError> {
-        // Return commonly used models
-        Ok(vec![
-            ModelInfo::new("gemini-2.5-pro", "gemini")
-                .with_name("Gemini 2.5 Pro")
-                .with_capabilities(vec![
-                    Capability::TextGeneration,
-                    Capability::Streaming,
-                    Capability::Vision,
-                    Capability::ToolCalling,
-                    Capability::ExtendedThinking,
-                ])
-                .with_context_window(1000000)
-                .with_max_output_tokens(65536),
-            ModelInfo::new("gemini-2.5-flash", "gemini")
-                .with_name("Gemini 2.5 Flash")
-                .with_capabilities(vec![
-                    Capability::TextGeneration,
-                    Capability::Streaming,
-                    Capability::Vision,
-                    Capability::ToolCalling,
-                    Capability::ExtendedThinking,
-                ])
-                .with_context_window(1000000)
-                .with_max_output_tokens(65536),
-            ModelInfo::new("gemini-2.0-flash", "gemini")
-                .with_name("Gemini 2.0 Flash")
-                .with_capabilities(vec![
-                    Capability::TextGeneration,
-                    Capability::Streaming,
-                    Capability::Vision,
-                    Capability::ToolCalling,
-                    Capability::Audio,
-                ])
-                .with_context_window(1000000)
-                .with_max_output_tokens(8192),
-            ModelInfo::new("gemini-1.5-pro", "gemini")
-                .with_name("Gemini 1.5 Pro")
-                .with_capabilities(vec![
-                    Capability::TextGeneration,
-                    Capability::Streaming,
-                    Capability::Vision,
-                    Capability::ToolCalling,
-                ])
-                .with_context_window(2000000)
-                .with_max_output_tokens(8192),
-            ModelInfo::new("gemini-1.5-flash", "gemini")
-                .with_name("Gemini 1.5 Flash")
-                .with_capabilities(vec![
-                    Capability::TextGeneration,
-                    Capability::Streaming,
-                    Capability::Vision,
-                    Capability::ToolCalling,
-                ])
-                .with_context_window(1000000)
-                .with_max_output_tokens(8192),
-            ModelInfo::new("text-embedding-004", "gemini")
-                .with_name("Text Embedding 004")
-                .with_capabilities(vec![Capability::Embedding]),
-        ])
-    }
 }
 
 /// Builder for Gemini provider.
@@ -254,7 +190,7 @@ struct GeminiModel {
 
 #[async_trait]
 impl Model for GeminiModel {
-    fn model_id(&self) -> &str {
+    fn model_name(&self) -> &str {
         &self.model_id
     }
 
@@ -262,25 +198,9 @@ impl Model for GeminiModel {
         "gemini"
     }
 
-    fn capabilities(&self) -> &[Capability] {
-        static CHAT_CAPS: &[Capability] = &[
-            Capability::TextGeneration,
-            Capability::Streaming,
-            Capability::Vision,
-            Capability::ToolCalling,
-        ];
-        static EMBED_CAPS: &[Capability] = &[Capability::Embedding];
-
-        if self.model_id.contains("embedding") {
-            EMBED_CAPS
-        } else {
-            CHAT_CAPS
-        }
-    }
-
     async fn generate(&self, mut request: GenerateRequest) -> Result<GenerateResponse, HyperError> {
         // Built-in cross-provider sanitization: strip thinking signatures from other providers
-        request.sanitize_for_target(self.provider(), self.model_id());
+        request.sanitize_for_target(self.provider(), self.model_name());
 
         // Separate system message from content messages
         let (system_msg, content_messages) = extract_system_message(&request.messages);
@@ -329,7 +249,7 @@ impl Model for GeminiModel {
 
     async fn stream(&self, mut request: GenerateRequest) -> Result<StreamResponse, HyperError> {
         // Built-in cross-provider sanitization: strip thinking signatures from other providers
-        request.sanitize_for_target(self.provider(), self.model_id());
+        request.sanitize_for_target(self.provider(), self.model_name());
 
         // Separate system message from content messages
         let (system_msg, content_messages) = extract_system_message(&request.messages);
@@ -852,20 +772,5 @@ mod tests {
     fn test_builder_missing_key() {
         let result = GeminiProvider::builder().build();
         assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_list_models() {
-        let provider = GeminiProvider::builder()
-            .api_key("test-key")
-            .build()
-            .unwrap();
-
-        let models = provider.list_models().await.unwrap();
-        assert!(!models.is_empty());
-
-        let pro = models.iter().find(|m| m.id == "gemini-2.5-pro");
-        assert!(pro.is_some());
-        assert!(pro.unwrap().has_capability(Capability::ExtendedThinking));
     }
 }

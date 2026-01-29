@@ -257,7 +257,7 @@ impl ConversationContext {
             self.provider = model.provider().to_string();
         }
         if self.model_id.is_empty() {
-            self.model_id = model.model_id().to_string();
+            self.model_id = model.model_name().to_string();
         }
 
         // Prepend conversation history if requested
@@ -352,7 +352,7 @@ impl ConversationContext {
     ///
     /// For single-turn requests without history, use [`generate_stateless`].
     #[must_use = "this returns a Result that must be handled"]
-    #[instrument(skip(self, model, request), fields(conversation_id = %self.id, provider = %model.provider(), model_id = %model.model_id()))]
+    #[instrument(skip(self, model, request), fields(conversation_id = %self.id, provider = %model.provider(), model_id = %model.model_name()))]
     pub async fn generate(
         &mut self,
         model: &dyn Model,
@@ -460,7 +460,7 @@ impl ConversationContext {
         if model.provider() != self.provider {
             let mut sanitized_history = self.messages.clone();
             for msg in &mut sanitized_history {
-                msg.convert_for_provider(model.provider(), model.model_id());
+                msg.convert_for_provider(model.provider(), model.model_name());
             }
 
             // Build request with sanitized history
@@ -477,7 +477,7 @@ impl ConversationContext {
             let original_provider = std::mem::take(&mut self.provider);
             let original_model = std::mem::take(&mut self.model_id);
             self.provider = model.provider().to_string();
-            self.model_id = model.model_id().to_string();
+            self.model_id = model.model_name().to_string();
 
             let (prepared_request, hook_ctx) =
                 self.prepare_request(modified_request, model, false).await?;
@@ -489,14 +489,14 @@ impl ConversationContext {
             let mut response = model.generate(prepared_request).await?;
 
             // Track response but keep source info from the actual provider
-            response.model = model.model_id().to_string();
+            response.model = model.model_name().to_string();
 
             // Add assistant response to history with source tracking
             if self.track_history {
                 let mut assistant_msg = Message::new(Role::Assistant, response.content.clone());
                 assistant_msg.metadata = crate::messages::ProviderMetadata::with_source(
                     model.provider(),
-                    model.model_id(),
+                    model.model_name(),
                 );
                 self.messages.push(assistant_msg);
             }
@@ -712,14 +712,11 @@ mod tests {
 
     #[async_trait::async_trait]
     impl crate::model::Model for MockModel {
-        fn model_id(&self) -> &str {
+        fn model_name(&self) -> &str {
             &self.model_id
         }
         fn provider(&self) -> &str {
             &self.provider
-        }
-        fn capabilities(&self) -> &[crate::capability::Capability] {
-            &[]
         }
         async fn generate(
             &self,
@@ -735,9 +732,7 @@ mod tests {
             &self,
             _request: GenerateRequest,
         ) -> Result<crate::stream::StreamResponse, HyperError> {
-            Err(HyperError::UnsupportedCapability(
-                crate::capability::Capability::Streaming,
-            ))
+            Err(HyperError::UnsupportedCapability("streaming".to_string()))
         }
     }
 

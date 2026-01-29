@@ -17,7 +17,6 @@ pub use model_roles::ModelRoles;
 pub use model_spec::ModelSpec;
 pub use model_spec::ModelSpecParseError;
 pub use reasoning::ReasoningEffort;
-pub use reasoning::effort_rank;
 pub use reasoning::nearest_effort;
 pub use shell_type::ConfigShellToolType;
 pub use truncation::TruncationMode;

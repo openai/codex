@@ -23,22 +23,58 @@ impl std::fmt::Display for NotFoundKind {
 }
 
 /// Configuration error type.
+///
+/// Use snafu context selectors from `config_error` module within the crate:
+/// ```ignore
+/// use crate::error::config_error::*;
+/// use snafu::ResultExt;
+///
+/// // Wrapping std::io::Error
+/// fs::read(path).context(IoSnafu { message: "read file" })?;
+///
+/// // Wrapping serde_json::Error
+/// serde_json::from_str(s).context(JsonParseSnafu { file: "config.json" })?;
+///
+/// // For errors without a source, use ensure! or .fail()
+/// snafu::ensure!(condition, NotFoundSnafu { kind: NotFoundKind::Provider, name: "test" });
+/// return NotFoundSnafu { kind: NotFoundKind::Model, name }.fail();
+/// ```
 #[stack_trace_debug]
 #[derive(Snafu)]
 #[snafu(visibility(pub(crate)), module)]
 pub enum ConfigError {
-    /// I/O or system error.
+    /// I/O or system error (wraps std::io::Error).
     #[snafu(display("IO error: {message}"))]
     Io {
+        message: String,
+        #[snafu(source)]
+        source: std::io::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+
+    /// Configuration parsing error (wraps serde_json::Error).
+    #[snafu(display("Config error in {file}: {source}"))]
+    JsonParse {
+        file: String,
+        #[snafu(source)]
+        source: serde_json::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+
+    /// Configuration validation error (no underlying source).
+    #[snafu(display("Config error in {file}: {message}"))]
+    ConfigValidation {
+        file: String,
         message: String,
         #[snafu(implicit)]
         location: Location,
     },
 
-    /// Configuration parsing or validation error.
-    #[snafu(display("Config error in {file}: {message}"))]
-    Config {
-        file: String,
+    /// Internal error (lock poisoning, unexpected state, etc).
+    #[snafu(display("Internal error: {message}"))]
+    Internal {
         message: String,
         #[snafu(implicit)]
         location: Location,
@@ -62,79 +98,12 @@ pub enum ConfigError {
     },
 }
 
-/// Create a Location from the caller's position.
-#[track_caller]
-fn caller_location() -> Location {
-    let loc = std::panic::Location::caller();
-    Location::new(loc.file(), loc.line(), loc.column())
-}
-
-/// Clean public constructors (library-agnostic API).
-impl ConfigError {
-    /// Create an IO error.
-    #[track_caller]
-    pub fn io(message: impl Into<String>) -> Self {
-        Self::Io {
-            message: message.into(),
-            location: caller_location(),
-        }
-    }
-
-    /// Create a config parsing error.
-    #[track_caller]
-    pub fn config(file: impl Into<String>, message: impl Into<String>) -> Self {
-        Self::Config {
-            file: file.into(),
-            message: message.into(),
-            location: caller_location(),
-        }
-    }
-
-    /// Create a provider not found error.
-    #[track_caller]
-    pub fn provider_not_found(name: impl Into<String>) -> Self {
-        Self::NotFound {
-            kind: NotFoundKind::Provider,
-            name: name.into(),
-            location: caller_location(),
-        }
-    }
-
-    /// Create a model not found error.
-    #[track_caller]
-    pub fn model_not_found(name: impl Into<String>) -> Self {
-        Self::NotFound {
-            kind: NotFoundKind::Model,
-            name: name.into(),
-            location: caller_location(),
-        }
-    }
-
-    /// Create a profile not found error.
-    #[track_caller]
-    pub fn profile_not_found(name: impl Into<String>) -> Self {
-        Self::NotFound {
-            kind: NotFoundKind::Profile,
-            name: name.into(),
-            location: caller_location(),
-        }
-    }
-
-    /// Create an authentication error.
-    #[track_caller]
-    pub fn auth(message: impl Into<String>) -> Self {
-        Self::Auth {
-            message: message.into(),
-            location: caller_location(),
-        }
-    }
-}
-
 impl ErrorExt for ConfigError {
     fn status_code(&self) -> StatusCode {
         match self {
             Self::Io { .. } => StatusCode::IoError,
-            Self::Config { .. } => StatusCode::InvalidConfig,
+            Self::JsonParse { .. } | Self::ConfigValidation { .. } => StatusCode::InvalidConfig,
+            Self::Internal { .. } => StatusCode::Internal,
             Self::NotFound { kind, .. } => match kind {
                 NotFoundKind::Provider => StatusCode::ProviderNotFound,
                 NotFoundKind::Model => StatusCode::ModelNotFound,

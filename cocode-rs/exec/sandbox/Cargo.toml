@@ -1,0 +1,20 @@
+[package]
+name = "cocode-sandbox"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cocode-protocol.workspace = true
+cocode-error.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tracing.workspace = true
+snafu.workspace = true
+snafu-virtstack.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

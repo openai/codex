@@ -10,7 +10,7 @@ use ratatui::widgets::Paragraph;
 pub fn render(app: &App, frame: &mut Frame, area: Rect) {
     let server_name = app.pending_install_server.as_deref().unwrap_or("Unknown");
 
-    let user_dir = crate::config::find_codex_home()
+    let user_dir = cocode_lsp::config::find_codex_home()
         .map(|h| h.display().to_string())
         .unwrap_or_else(|| "~/.codex".to_string());
 

@@ -544,7 +544,7 @@ impl Client {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use google_genai::Client;
+    /// use google_genai_sdk::Client;
     /// use futures::StreamExt;
     ///
     /// # async fn example() -> anyhow::Result<()> {
@@ -671,7 +671,7 @@ impl Client {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use google_genai::Client;
+    /// use google_genai_sdk::Client;
     ///
     /// # async fn example() -> anyhow::Result<()> {
     /// let client = Client::from_env()?;

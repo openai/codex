@@ -1,7 +1,5 @@
 //! OpenAI provider implementation.
 
-use crate::capability::Capability;
-use crate::capability::ModelInfo;
 use crate::error::HyperError;
 use crate::messages::ContentBlock;
 use crate::messages::ImageSource;
@@ -132,60 +130,6 @@ impl Provider for OpenAIProvider {
             client: self.sdk_client.clone(),
         }))
     }
-
-    async fn list_models(&self) -> Result<Vec<ModelInfo>, HyperError> {
-        // Return commonly used models
-        Ok(vec![
-            ModelInfo::new("gpt-4o", "openai")
-                .with_name("GPT-4o")
-                .with_capabilities(vec![
-                    Capability::TextGeneration,
-                    Capability::Streaming,
-                    Capability::Vision,
-                    Capability::ToolCalling,
-                    Capability::StructuredOutput,
-                ])
-                .with_context_window(128000)
-                .with_max_output_tokens(16384),
-            ModelInfo::new("gpt-4o-mini", "openai")
-                .with_name("GPT-4o Mini")
-                .with_capabilities(vec![
-                    Capability::TextGeneration,
-                    Capability::Streaming,
-                    Capability::Vision,
-                    Capability::ToolCalling,
-                    Capability::StructuredOutput,
-                ])
-                .with_context_window(128000)
-                .with_max_output_tokens(16384),
-            ModelInfo::new("o1", "openai")
-                .with_name("o1")
-                .with_capabilities(vec![
-                    Capability::TextGeneration,
-                    Capability::Streaming,
-                    Capability::ExtendedThinking,
-                    Capability::ToolCalling,
-                ])
-                .with_context_window(200000)
-                .with_max_output_tokens(100000),
-            ModelInfo::new("o3-mini", "openai")
-                .with_name("o3-mini")
-                .with_capabilities(vec![
-                    Capability::TextGeneration,
-                    Capability::Streaming,
-                    Capability::ExtendedThinking,
-                    Capability::ToolCalling,
-                ])
-                .with_context_window(200000)
-                .with_max_output_tokens(100000),
-            ModelInfo::new("text-embedding-3-small", "openai")
-                .with_name("Text Embedding 3 Small")
-                .with_capabilities(vec![Capability::Embedding]),
-            ModelInfo::new("text-embedding-3-large", "openai")
-                .with_name("Text Embedding 3 Large")
-                .with_capabilities(vec![Capability::Embedding]),
-        ])
-    }
 }
 
 /// Builder for OpenAI provider.
@@ -239,9 +183,6 @@ impl From<ProviderConfig> for OpenAIProviderBuilder {
         if let Some(url) = config.base_url {
             builder = builder.base_url(url);
         }
-        if let Some(org) = config.organization_id {
-            builder = builder.organization_id(org);
-        }
         if let Some(timeout) = config.timeout_secs {
             builder = builder.timeout_secs(timeout);
         }
@@ -258,7 +199,7 @@ struct OpenAIModel {
 
 #[async_trait]
 impl Model for OpenAIModel {
-    fn model_id(&self) -> &str {
+    fn model_name(&self) -> &str {
         &self.model_id
     }
 
@@ -266,27 +207,11 @@ impl Model for OpenAIModel {
         "openai"
     }
 
-    fn capabilities(&self) -> &[Capability] {
-        static CHAT_CAPS: &[Capability] = &[
-            Capability::TextGeneration,
-            Capability::Streaming,
-            Capability::Vision,
-            Capability::ToolCalling,
-        ];
-        static EMBED_CAPS: &[Capability] = &[Capability::Embedding];
-
-        if self.model_id.contains("embedding") {
-            EMBED_CAPS
-        } else {
-            CHAT_CAPS
-        }
-    }
-
     #[instrument(skip(self, request), fields(provider = "openai", model = %self.model_id))]
     async fn generate(&self, mut request: GenerateRequest) -> Result<GenerateResponse, HyperError> {
         debug!(messages = request.messages.len(), "Starting generation");
         // Built-in cross-provider sanitization: strip thinking signatures from other providers
-        request.sanitize_for_target(self.provider(), self.model_id());
+        request.sanitize_for_target(self.provider(), self.model_name());
 
         // Convert messages
         let mut input_messages = Vec::new();
@@ -399,7 +324,7 @@ impl Model for OpenAIModel {
             "Starting streaming generation"
         );
         // Built-in cross-provider sanitization: strip thinking signatures from other providers
-        request.sanitize_for_target(self.provider(), self.model_id());
+        request.sanitize_for_target(self.provider(), self.model_name());
 
         // Convert messages (same as generate)
         let mut input_messages = Vec::new();
@@ -520,7 +445,7 @@ impl Model for OpenAIModel {
         request: crate::embedding::EmbedRequest,
     ) -> Result<crate::embedding::EmbedResponse, HyperError> {
         let _ = request;
-        Err(HyperError::UnsupportedCapability(Capability::Embedding))
+        Err(HyperError::UnsupportedCapability("embedding".to_string()))
     }
 }
 
@@ -852,20 +777,5 @@ mod tests {
     fn test_builder_missing_key() {
         let result = OpenAIProvider::builder().build();
         assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_list_models() {
-        let provider = OpenAIProvider::builder()
-            .api_key("sk-test")
-            .build()
-            .unwrap();
-
-        let models = provider.list_models().await.unwrap();
-        assert!(!models.is_empty());
-
-        let gpt4o = models.iter().find(|m| m.id == "gpt-4o");
-        assert!(gpt4o.is_some());
-        assert!(gpt4o.unwrap().has_capability(Capability::Vision));
     }
 }

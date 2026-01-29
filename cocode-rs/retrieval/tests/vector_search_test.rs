@@ -9,13 +9,13 @@ use std::sync::atomic::Ordering;
 use async_trait::async_trait;
 use tempfile::TempDir;
 
-use codex_retrieval::Result;
-use codex_retrieval::error::RetrievalErr;
-use codex_retrieval::search::HybridSearcher;
-use codex_retrieval::storage::LanceDbStore;
-use codex_retrieval::traits::EmbeddingProvider;
-use codex_retrieval::types::CodeChunk;
-use codex_retrieval::types::ScoreType;
+use cocode_retrieval::Result;
+use cocode_retrieval::error::RetrievalErr;
+use cocode_retrieval::search::HybridSearcher;
+use cocode_retrieval::storage::LanceDbStore;
+use cocode_retrieval::traits::EmbeddingProvider;
+use cocode_retrieval::types::CodeChunk;
+use cocode_retrieval::types::ScoreType;
 
 // ==== Mock Embedding Provider ====
 

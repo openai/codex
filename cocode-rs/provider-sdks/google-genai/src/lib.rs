@@ -13,7 +13,7 @@
 //! ## Quick Start
 //!
 //! ```rust,no_run
-//! use google_genai::{Client, ClientConfig};
+//! use google_genai_sdk::{Client, ClientConfig};
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
@@ -33,7 +33,7 @@
 //! ## Chat Sessions
 //!
 //! ```rust,no_run
-//! use google_genai::{Client, Chat, ChatBuilder};
+//! use google_genai_sdk::{Client, Chat, ChatBuilder};
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
@@ -60,7 +60,7 @@
 //! ## Tool Calling
 //!
 //! ```rust,no_run
-//! use google_genai::{Client, types::*};
+//! use google_genai_sdk::{Client, types::*};
 //! use std::collections::HashMap;
 //!
 //! #[tokio::main]
@@ -102,7 +102,7 @@
 //! ## Multimodal (Images)
 //!
 //! ```rust,no_run
-//! use google_genai::{Client, Chat};
+//! use google_genai_sdk::{Client, Chat};
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {

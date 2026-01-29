@@ -48,7 +48,12 @@
 //! }
 //! ```
 
+use cocode_protocol::AttachmentConfig;
+use cocode_protocol::CompactConfig;
 use cocode_protocol::Features;
+use cocode_protocol::PathConfig;
+use cocode_protocol::PlanModeConfig;
+use cocode_protocol::ToolConfig;
 use cocode_protocol::model::ModelRoles;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -123,6 +128,26 @@ pub struct AppConfig {
     /// Profile definitions for quick switching.
     #[serde(default)]
     pub profiles: HashMap<String, ConfigProfile>,
+
+    /// Tool execution configuration.
+    #[serde(default)]
+    pub tool: Option<ToolConfig>,
+
+    /// Compaction configuration.
+    #[serde(default)]
+    pub compact: Option<CompactConfig>,
+
+    /// Plan mode configuration.
+    #[serde(default)]
+    pub plan: Option<PlanModeConfig>,
+
+    /// Attachment configuration.
+    #[serde(default)]
+    pub attachment: Option<AttachmentConfig>,
+
+    /// Extended path configuration.
+    #[serde(default)]
+    pub paths: Option<PathConfig>,
 }
 
 /// Resolved configuration with profile applied.
@@ -137,6 +162,16 @@ pub struct ResolvedAppConfig {
     pub logging: Option<LoggingConfig>,
     /// Effective features.
     pub features: Features,
+    /// Effective tool configuration.
+    pub tool: Option<ToolConfig>,
+    /// Effective compaction configuration.
+    pub compact: Option<CompactConfig>,
+    /// Effective plan mode configuration.
+    pub plan: Option<PlanModeConfig>,
+    /// Effective attachment configuration.
+    pub attachment: Option<AttachmentConfig>,
+    /// Effective path configuration.
+    pub paths: Option<PathConfig>,
 }
 
 impl AppConfig {
@@ -153,6 +188,11 @@ impl AppConfig {
             models: self.resolve_models(profile),
             logging: self.resolve_logging(profile),
             features: self.resolve_features_with_profile(profile),
+            tool: self.tool.clone(),
+            compact: self.compact.clone(),
+            plan: self.plan.clone(),
+            attachment: self.attachment.clone(),
+            paths: self.paths.clone(),
         }
     }
 

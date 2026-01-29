@@ -2,11 +2,8 @@ use crate::harness::attributes_to_map;
 use crate::harness::build_metrics_with_defaults;
 use crate::harness::find_metric;
 use crate::harness::latest_metrics;
-use codex_app_server_protocol::AuthMode;
-use codex_otel::OtelManager;
-use codex_otel::metrics::Result;
-use codex_protocol::ThreadId;
-use codex_protocol::protocol::SessionSource;
+use cocode_otel::OtelManager;
+use cocode_otel::metrics::Result;
 use opentelemetry_sdk::metrics::data::AggregatedMetrics;
 use opentelemetry_sdk::metrics::data::MetricData;
 use pretty_assertions::assert_eq;
@@ -17,15 +14,15 @@ use std::collections::BTreeMap;
 fn manager_attaches_metadata_tags_to_metrics() -> Result<()> {
     let (metrics, exporter) = build_metrics_with_defaults(&[("service", "codex-cli")])?;
     let manager = OtelManager::new(
-        ThreadId::new(),
+        "test-conversation-id",
         "gpt-5.1",
         "gpt-5.1",
         Some("account-id".to_string()),
         None,
-        Some(AuthMode::ApiKey),
+        Some("api_key"),
         true,
         "tty".to_string(),
-        SessionSource::Cli,
+        "cli",
     )
     .with_metrics(metrics);
 
@@ -52,7 +49,7 @@ fn manager_attaches_metadata_tags_to_metrics() -> Result<()> {
             "app.version".to_string(),
             env!("CARGO_PKG_VERSION").to_string(),
         ),
-        ("auth_mode".to_string(), AuthMode::ApiKey.to_string()),
+        ("auth_mode".to_string(), "api_key".to_string()),
         ("model".to_string(), "gpt-5.1".to_string()),
         ("service".to_string(), "codex-cli".to_string()),
         ("source".to_string(), "tui".to_string()),
@@ -67,15 +64,15 @@ fn manager_attaches_metadata_tags_to_metrics() -> Result<()> {
 fn manager_allows_disabling_metadata_tags() -> Result<()> {
     let (metrics, exporter) = build_metrics_with_defaults(&[])?;
     let manager = OtelManager::new(
-        ThreadId::new(),
+        "test-conversation-id",
         "gpt-4o",
         "gpt-4o",
         Some("account-id".to_string()),
         None,
-        Some(AuthMode::ApiKey),
+        Some("api_key"),
         true,
         "tty".to_string(),
-        SessionSource::Cli,
+        "cli",
     )
     .with_metrics_without_metadata_tags(metrics);
 

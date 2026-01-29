@@ -1,0 +1,37 @@
+[package]
+name = "cocode-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cocode-protocol.workspace = true
+cocode-message.workspace = true
+cocode-error.workspace = true
+cocode-hooks.workspace = true
+cocode-mcp-types.workspace = true
+cocode-rmcp-client.workspace = true
+cocode-shell-parser.workspace = true
+cocode-apply-patch.workspace = true
+cocode-file-ignore.workspace = true
+cocode-file-search.workspace = true
+hyper-sdk.workspace = true
+async-trait.workspace = true
+schemars.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["sync", "fs", "process"] }
+tokio-util = { workspace = true, features = ["codec"] }
+tracing.workspace = true
+regex.workspace = true
+globset.workspace = true
+walkdir.workspace = true
+snafu.workspace = true
+snafu-virtstack.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tempfile.workspace = true
+
+[lints]
+workspace = true

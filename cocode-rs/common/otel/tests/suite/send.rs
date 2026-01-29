@@ -3,7 +3,7 @@ use crate::harness::build_metrics_with_defaults;
 use crate::harness::find_metric;
 use crate::harness::histogram_data;
 use crate::harness::latest_metrics;
-use codex_otel::metrics::Result;
+use cocode_otel::metrics::Result;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 

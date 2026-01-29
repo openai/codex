@@ -1,8 +1,8 @@
-use codex_otel::config::OtelExporter;
-use codex_otel::config::OtelHttpProtocol;
-use codex_otel::metrics::MetricsClient;
-use codex_otel::metrics::MetricsConfig;
-use codex_otel::metrics::Result;
+use cocode_otel::config::OtelExporter;
+use cocode_otel::config::OtelHttpProtocol;
+use cocode_otel::metrics::MetricsClient;
+use cocode_otel::metrics::MetricsConfig;
+use cocode_otel::metrics::Result;
 use std::collections::HashMap;
 use std::io::Read as _;
 use std::io::Write as _;

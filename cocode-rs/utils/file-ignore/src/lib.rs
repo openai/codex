@@ -8,7 +8,7 @@
 //! # Usage
 //!
 //! ```rust,no_run
-//! use codex_file_ignore::{IgnoreService, IgnoreConfig};
+//! use cocode_file_ignore::{IgnoreService, IgnoreConfig};
 //! use std::path::Path;
 //!
 //! // Default: respects both .gitignore and .ignore
@@ -23,7 +23,7 @@
 //! # Configuration
 //!
 //! ```rust
-//! use codex_file_ignore::{IgnoreService, IgnoreConfig};
+//! use cocode_file_ignore::{IgnoreService, IgnoreConfig};
 //!
 //! let config = IgnoreConfig {
 //!     respect_gitignore: true,

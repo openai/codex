@@ -1,6 +1,6 @@
-use codex_otel::metrics::MetricsClient;
-use codex_otel::metrics::MetricsConfig;
-use codex_otel::metrics::Result;
+use cocode_otel::metrics::MetricsClient;
+use cocode_otel::metrics::MetricsConfig;
+use cocode_otel::metrics::Result;
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 use opentelemetry_sdk::metrics::data::AggregatedMetrics;

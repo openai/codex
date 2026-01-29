@@ -1,0 +1,24 @@
+[package]
+name = "cocode-skill"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cocode-protocol.workspace = true
+cocode-error.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+toml.workspace = true
+sha2.workspace = true
+tracing.workspace = true
+walkdir.workspace = true
+snafu.workspace = true
+snafu-virtstack.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tempfile.workspace = true
+
+[lints]
+workspace = true

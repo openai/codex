@@ -5,9 +5,9 @@
 use std::time::Duration;
 use std::time::Instant;
 
-use codex_retrieval::config::RetrievalConfig;
-use codex_retrieval::tui::app_event::AppEvent;
-use codex_retrieval::tui::app_event::ViewMode;
+use cocode_retrieval::config::RetrievalConfig;
+use cocode_retrieval::tui::app_event::AppEvent;
+use cocode_retrieval::tui::app_event::ViewMode;
 
 // Note: We can't directly test App because it requires terminal access.
 // These tests verify the public API and event types work correctly.

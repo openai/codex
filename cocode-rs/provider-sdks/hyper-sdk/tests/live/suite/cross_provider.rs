@@ -28,7 +28,7 @@ pub async fn run(source_model: &Arc<dyn Model>, target_model: &Arc<dyn Model>) -
     // Convert response to assistant message with source tracking
     let mut assistant_msg = Message::assistant(&source_response.text());
     assistant_msg.metadata.source_provider = Some(source_model.provider().to_string());
-    assistant_msg.metadata.source_model = Some(source_model.model_id().to_string());
+    assistant_msg.metadata.source_model = Some(source_model.model_name().to_string());
 
     // Step 2: Create follow-up request with history for target provider
     let mut follow_up_request = GenerateRequest::new(vec![
@@ -40,7 +40,7 @@ pub async fn run(source_model: &Arc<dyn Model>, target_model: &Arc<dyn Model>) -
     .temperature(0.0);
 
     // Sanitize for target provider
-    follow_up_request.sanitize_for_target(target_model.provider(), target_model.model_id());
+    follow_up_request.sanitize_for_target(target_model.provider(), target_model.model_name());
 
     // Step 3: Send to target provider
     let target_response = target_model.generate(follow_up_request).await?;
@@ -83,7 +83,7 @@ pub async fn run_with_thinking(
             ContentBlock::text("The answer is 42."),
         ],
     )
-    .with_source(source_model.provider(), source_model.model_id());
+    .with_source(source_model.provider(), source_model.model_name());
 
     // Create request with the thinking message
     let mut request = GenerateRequest::new(vec![
@@ -95,7 +95,7 @@ pub async fn run_with_thinking(
     .temperature(0.5);
 
     // Sanitize for target provider - this should strip the signature
-    request.sanitize_for_target(target_model.provider(), target_model.model_id());
+    request.sanitize_for_target(target_model.provider(), target_model.model_name());
 
     // Verify signature was stripped before sending
     if let ContentBlock::Thinking { signature, .. } = &request.messages[1].content[0] {
@@ -126,7 +126,7 @@ pub async fn run_streaming(
 ) -> Result<()> {
     // Create message from source provider
     let source_msg = Message::assistant("The capital of France is Paris.")
-        .with_source(source_model.provider(), source_model.model_id());
+        .with_source(source_model.provider(), source_model.model_name());
 
     // Create follow-up request
     let mut request = GenerateRequest::new(vec![
@@ -138,7 +138,7 @@ pub async fn run_streaming(
     .temperature(0.5);
 
     // Sanitize for target
-    request.sanitize_for_target(target_model.provider(), target_model.model_id());
+    request.sanitize_for_target(target_model.provider(), target_model.model_name());
 
     // Stream the response and collect using the processor
     let stream = target_model.stream(request).await?;

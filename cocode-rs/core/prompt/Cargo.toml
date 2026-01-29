@@ -1,0 +1,21 @@
+[package]
+name = "cocode-prompt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cocode-protocol.workspace = true
+cocode-context.workspace = true
+cocode-error.workspace = true
+snafu.workspace = true
+snafu-virtstack.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+
+[lints]
+workspace = true

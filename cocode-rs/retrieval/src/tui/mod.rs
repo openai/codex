@@ -17,8 +17,8 @@
 //! # Usage
 //!
 //! ```ignore
-//! use codex_retrieval::tui::run_tui;
-//! use codex_retrieval::config::RetrievalConfig;
+//! use cocode_retrieval::tui::run_tui;
+//! use cocode_retrieval::config::RetrievalConfig;
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {

@@ -1,0 +1,28 @@
+[package]
+name = "cocode-executor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cocode-protocol.workspace = true
+cocode-api.workspace = true
+cocode-loop.workspace = true
+cocode-tools.workspace = true
+cocode-context.workspace = true
+cocode-hooks.workspace = true
+cocode-subagent.workspace = true
+hyper-sdk.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }
+tokio-util.workspace = true
+tracing.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+anyhow.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true

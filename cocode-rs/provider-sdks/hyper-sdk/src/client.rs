@@ -276,7 +276,6 @@ impl HyperClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability::ModelInfo;
 
     #[derive(Debug)]
     struct MockProvider {
@@ -294,10 +293,6 @@ mod tests {
                 "{}:{}",
                 self.name, model_id
             )))
-        }
-
-        async fn list_models(&self) -> Result<Vec<ModelInfo>, HyperError> {
-            Ok(vec![])
         }
     }
 

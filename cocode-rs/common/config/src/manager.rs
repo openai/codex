@@ -6,7 +6,10 @@
 use crate::builtin;
 use crate::config::Config;
 use crate::config::ConfigOverrides;
+use crate::env_loader::EnvLoader;
 use crate::error::ConfigError;
+use crate::error::NotFoundKind;
+use crate::error::config_error::{InternalSnafu, NotFoundSnafu};
 use crate::json_config::AppConfig;
 use crate::json_config::LoggingConfig;
 use crate::loader::ConfigLoader;
@@ -150,10 +153,12 @@ impl ConfigManager {
         provider: &str,
         model: &str,
     ) -> Result<ResolvedModelInfo, ConfigError> {
-        let resolver = self
-            .resolver
-            .read()
-            .map_err(|e| ConfigError::io(format!("Failed to acquire read lock: {e}")))?;
+        let resolver = self.resolver.read().map_err(|e| {
+            InternalSnafu {
+                message: format!("Failed to acquire read lock: {e}"),
+            }
+            .build()
+        })?;
         resolver.resolve_model_info(provider, model)
     }
 
@@ -164,10 +169,12 @@ impl ConfigManager {
     /// - All connection settings (base_url, streaming, wire_api)
     /// - Map of resolved models (slug -> ModelInfo)
     pub fn resolve_provider(&self, provider: &str) -> Result<ProviderInfo, ConfigError> {
-        let resolver = self
-            .resolver
-            .read()
-            .map_err(|e| ConfigError::io(format!("Failed to acquire read lock: {e}")))?;
+        let resolver = self.resolver.read().map_err(|e| {
+            InternalSnafu {
+                message: format!("Failed to acquire read lock: {e}"),
+            }
+            .build()
+        })?;
         resolver.resolve_provider(provider)
     }
 
@@ -254,16 +261,22 @@ impl ConfigManager {
     /// To persist, edit `config.toml` directly.
     pub fn switch(&self, provider: &str, model: &str) -> Result<(), ConfigError> {
         // Validate the provider/model combination
-        let resolver = self
-            .resolver
-            .read()
-            .map_err(|e| ConfigError::io(format!("Failed to acquire read lock: {e}")))?;
+        let resolver = self.resolver.read().map_err(|e| {
+            InternalSnafu {
+                message: format!("Failed to acquire read lock: {e}"),
+            }
+            .build()
+        })?;
 
         // Check if provider is configured (either in config or built-in)
         if !resolver.has_provider(provider) {
             // Check built-in providers
             if builtin::get_provider_defaults(provider).is_none() {
-                return Err(ConfigError::provider_not_found(provider));
+                return NotFoundSnafu {
+                    kind: NotFoundKind::Provider,
+                    name: provider.to_string(),
+                }
+                .fail();
             }
         }
 
@@ -271,10 +284,12 @@ impl ConfigManager {
 
         // Update runtime overrides (in-memory)
         {
-            let mut runtime = self
-                .runtime_overrides
-                .write()
-                .map_err(|e| ConfigError::io(format!("Failed to acquire write lock: {e}")))?;
+            let mut runtime = self.runtime_overrides.write().map_err(|e| {
+                InternalSnafu {
+                    message: format!("Failed to acquire write lock: {e}"),
+                }
+                .build()
+            })?;
 
             runtime.main = Some(ModelSpec::new(provider, model));
         }
@@ -302,18 +317,22 @@ impl ConfigManager {
             ConfigResolver::with_config_dir(loaded.models, loaded.providers, &self.config_path);
 
         {
-            let mut resolver = self
-                .resolver
-                .write()
-                .map_err(|e| ConfigError::io(format!("Failed to acquire write lock: {e}")))?;
+            let mut resolver = self.resolver.write().map_err(|e| {
+                InternalSnafu {
+                    message: format!("Failed to acquire write lock: {e}"),
+                }
+                .build()
+            })?;
             *resolver = new_resolver;
         }
 
         {
-            let mut config = self
-                .config
-                .write()
-                .map_err(|e| ConfigError::io(format!("Failed to acquire write lock: {e}")))?;
+            let mut config = self.config.write().map_err(|e| {
+                InternalSnafu {
+                    message: format!("Failed to acquire write lock: {e}"),
+                }
+                .build()
+            })?;
             *config = loaded.config;
         }
 
@@ -517,6 +536,143 @@ impl ConfigManager {
             }
         });
 
+        // Load extended configs from environment variables
+        // Precedence: overrides > env vars > JSON config > defaults
+        let env_loader = EnvLoader::new();
+
+        // Tool config: overrides > env > JSON > default
+        let tool_config = overrides.tool_config.unwrap_or_else(|| {
+            let mut config = env_loader.load_tool_config();
+            if let Some(json_config) = &resolved.tool {
+                // JSON config fills in gaps where env didn't set values
+                // For numeric fields: use JSON if env produced the default value
+                if config.max_tool_concurrency == cocode_protocol::DEFAULT_MAX_TOOL_CONCURRENCY {
+                    config.max_tool_concurrency = json_config.max_tool_concurrency;
+                }
+                if config.mcp_tool_timeout.is_none() {
+                    config.mcp_tool_timeout = json_config.mcp_tool_timeout;
+                }
+            }
+            config
+        });
+
+        // Compact config: overrides > env > JSON > default
+        let compact_config = overrides.compact_config.unwrap_or_else(|| {
+            let mut config = env_loader.load_compact_config();
+            if let Some(json_config) = &resolved.compact {
+                // Merge ALL JSON values where env didn't set them
+                // Boolean fields: OR logic (true from either source wins)
+                if !config.disable_compact && json_config.disable_compact {
+                    config.disable_compact = true;
+                }
+                if !config.disable_auto_compact && json_config.disable_auto_compact {
+                    config.disable_auto_compact = true;
+                }
+                if !config.disable_micro_compact && json_config.disable_micro_compact {
+                    config.disable_micro_compact = true;
+                }
+                // Option fields: use JSON if env didn't set
+                if config.autocompact_pct_override.is_none() {
+                    config.autocompact_pct_override = json_config.autocompact_pct_override;
+                }
+                if config.blocking_limit_override.is_none() {
+                    config.blocking_limit_override = json_config.blocking_limit_override;
+                }
+                // Numeric fields: use JSON if env produced the default value
+                if config.session_memory_min_tokens
+                    == cocode_protocol::DEFAULT_SESSION_MEMORY_MIN_TOKENS
+                {
+                    config.session_memory_min_tokens = json_config.session_memory_min_tokens;
+                }
+                if config.session_memory_max_tokens
+                    == cocode_protocol::DEFAULT_SESSION_MEMORY_MAX_TOKENS
+                {
+                    config.session_memory_max_tokens = json_config.session_memory_max_tokens;
+                }
+                if config.extraction_cooldown_secs
+                    == cocode_protocol::DEFAULT_EXTRACTION_COOLDOWN_SECS
+                {
+                    config.extraction_cooldown_secs = json_config.extraction_cooldown_secs;
+                }
+                if config.context_restore_max_files
+                    == cocode_protocol::DEFAULT_CONTEXT_RESTORE_MAX_FILES
+                {
+                    config.context_restore_max_files = json_config.context_restore_max_files;
+                }
+                if config.context_restore_budget == cocode_protocol::DEFAULT_CONTEXT_RESTORE_BUDGET
+                {
+                    config.context_restore_budget = json_config.context_restore_budget;
+                }
+            }
+            // Validate and log warning if invalid
+            if let Err(e) = config.validate() {
+                tracing::warn!(error = %e, "Invalid compact config");
+            }
+            config
+        });
+
+        // Plan config: overrides > env > JSON > default
+        let plan_config = overrides.plan_config.unwrap_or_else(|| {
+            let mut config = env_loader.load_plan_config();
+            if let Some(json_config) = &resolved.plan {
+                // Merge JSON values where env didn't set them
+                // Note: env loader already calls clamp_all(), so we check against clamped defaults
+                if config.agent_count == cocode_protocol::DEFAULT_PLAN_AGENT_COUNT {
+                    config.agent_count = json_config.agent_count.clamp(
+                        cocode_protocol::MIN_AGENT_COUNT,
+                        cocode_protocol::MAX_AGENT_COUNT,
+                    );
+                }
+                if config.explore_agent_count == cocode_protocol::DEFAULT_PLAN_EXPLORE_AGENT_COUNT {
+                    config.explore_agent_count = json_config.explore_agent_count.clamp(
+                        cocode_protocol::MIN_AGENT_COUNT,
+                        cocode_protocol::MAX_AGENT_COUNT,
+                    );
+                }
+            }
+            // Validate and log warning if invalid (should always pass after clamp)
+            if let Err(e) = config.validate() {
+                tracing::warn!(error = %e, "Invalid plan config");
+            }
+            config
+        });
+
+        // Attachment config: overrides > env > JSON > default
+        let attachment_config = overrides.attachment_config.unwrap_or_else(|| {
+            let mut config = env_loader.load_attachment_config();
+            if let Some(json_config) = &resolved.attachment {
+                // Merge JSON values where env didn't set them
+                // Boolean fields: OR logic (true from either source wins)
+                if !config.disable_attachments && json_config.disable_attachments {
+                    config.disable_attachments = true;
+                }
+                if !config.enable_token_usage_attachment
+                    && json_config.enable_token_usage_attachment
+                {
+                    config.enable_token_usage_attachment = true;
+                }
+            }
+            config
+        });
+
+        // Path config: overrides > env > JSON > default
+        let mut path_config = overrides.path_config.unwrap_or_else(|| {
+            let config = env_loader.load_path_config();
+            config
+        });
+        // Merge JSON path config
+        if let Some(json_paths) = &resolved.paths {
+            if path_config.project_dir.is_none() {
+                path_config.project_dir = json_paths.project_dir.clone();
+            }
+            if path_config.plugin_root.is_none() {
+                path_config.plugin_root = json_paths.plugin_root.clone();
+            }
+            if path_config.env_file.is_none() {
+                path_config.env_file = json_paths.env_file.clone();
+            }
+        }
+
         Ok(Config {
             models,
             providers,
@@ -530,6 +686,11 @@ impl ConfigManager {
             ephemeral: overrides.ephemeral.unwrap_or(false),
             sandbox_mode,
             writable_roots,
+            tool_config,
+            compact_config,
+            plan_config,
+            attachment_config,
+            path_config,
         })
     }
 }
