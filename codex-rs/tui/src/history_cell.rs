@@ -2303,6 +2303,22 @@ mod tests {
     }
 
     #[test]
+    fn context_compaction_active_snapshot() {
+        let cell = new_active_context_compaction("compaction-1".to_string(), false);
+        let rendered = render_lines(&cell.display_lines(64)).join("\n");
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn context_compaction_completed_snapshot() {
+        let cell = new_context_compaction_completed("compaction-1".to_string());
+        let rendered = render_lines(&cell.display_lines(64)).join("\n");
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
     fn active_mcp_tool_call_snapshot() {
         let invocation = McpInvocation {
             server: "search".into(),
