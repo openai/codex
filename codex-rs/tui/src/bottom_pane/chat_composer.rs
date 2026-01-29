@@ -116,6 +116,7 @@ use super::footer::FooterMode;
 use super::footer::FooterProps;
 use super::footer::SummaryLeft;
 use super::footer::can_show_left_with_context;
+use super::footer::max_left_width_for_right;
 use super::footer::context_window_line;
 use super::footer::esc_hint_mode;
 use super::footer::footer_height;
@@ -3138,20 +3139,24 @@ impl ChatComposer {
                 };
                 let available_width =
                     hint_rect.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
-                let truncated_status_line = if footer_props.status_line_enabled
+                let status_line = footer_props
+                    .status_line_value
+                    .as_ref()
+                    .map(StatusLineValue::as_line);
+                let mut truncated_status_line = if footer_props.status_line_enabled
                     && matches!(
                         footer_props.mode,
                         FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
                     ) {
-                    footer_props
-                        .status_line_value
+                    status_line
                         .as_ref()
-                        .map(StatusLineValue::as_line)
-                        .map(|line| truncate_line_with_ellipsis_if_overflow(line, available_width))
+                        .map(|line| {
+                            truncate_line_with_ellipsis_if_overflow(line.clone(), available_width)
+                        })
                 } else {
                     None
                 };
-                let left_width = if self.footer_flash_visible() {
+                let mut left_width = if self.footer_flash_visible() {
                     self.footer_flash
                         .as_ref()
                         .map(|flash| flash.line.width() as u16)
@@ -3176,20 +3181,11 @@ impl ChatComposer {
                     let full =
                         mode_indicator_line(self.collaboration_mode_indicator, show_cycle_hint);
                     let compact = mode_indicator_line(self.collaboration_mode_indicator, false);
-
-                    // choose based on fit (use left_width + hint_rect)
-                    let mut chosen = full;
-                    let mut chosen_width = chosen.as_ref().map(|l| l.width() as u16).unwrap_or(0);
-
-                    if !can_show_left_with_context(hint_rect, left_width, chosen_width) {
-                        chosen = compact;
-                        chosen_width = chosen.as_ref().map(|l| l.width() as u16).unwrap_or(0);
-                    }
-
-                    if !can_show_left_with_context(hint_rect, left_width, chosen_width) {
-                        None
+                    let full_width = full.as_ref().map(|l| l.width() as u16).unwrap_or(0);
+                    if can_show_left_with_context(hint_rect, left_width, full_width) {
+                        full
                     } else {
-                        chosen
+                        compact
                     }
                 } else {
                     Some(context_window_line(
@@ -3198,6 +3194,21 @@ impl ChatComposer {
                     ))
                 };
                 let right_width = right_line.as_ref().map(|l| l.width() as u16).unwrap_or(0);
+                if footer_props.status_line_enabled {
+                    if let Some(max_left) = max_left_width_for_right(hint_rect, right_width) {
+                        if left_width > max_left {
+                            if let Some(line) = status_line.as_ref().map(|line| {
+                                truncate_line_with_ellipsis_if_overflow(
+                                    line.clone(),
+                                    max_left as usize,
+                                )
+                            }) {
+                                left_width = line.width() as u16;
+                                truncated_status_line = Some(line);
+                            }
+                        }
+                    }
+                }
                 let can_show_left_and_context =
                     can_show_left_with_context(hint_rect, left_width, right_width);
                 let has_override =
