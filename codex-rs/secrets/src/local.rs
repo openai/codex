@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::sync::atomic::compiler_fence;
 
 use age::decrypt;
 use age::encrypt;
@@ -170,7 +172,17 @@ fn generate_passphrase() -> Result<SecretString> {
     rng.try_fill_bytes(&mut bytes)
         .context("failed to generate random secrets key")?;
     let encoded = BASE64_STANDARD.encode(bytes);
+    wipe_bytes(&mut bytes);
     Ok(SecretString::from(encoded))
+}
+
+fn wipe_bytes(bytes: &mut [u8]) {
+    for byte in bytes {
+        // Volatile writes make it much harder for the compiler to elide the wipe.
+        // SAFETY: `byte` is a valid mutable reference into `bytes`.
+        unsafe { std::ptr::write_volatile(byte, 0) };
+    }
+    compiler_fence(Ordering::SeqCst);
 }
 
 fn encrypt_with_passphrase(plaintext: &[u8], passphrase: &SecretString) -> Result<Vec<u8>> {
