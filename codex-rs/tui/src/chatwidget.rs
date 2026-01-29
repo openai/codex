@@ -1193,6 +1193,8 @@ impl ChatWidget {
                 " Try again in {}.",
                 format_duration_short(seconds)
             ));
+        } else {
+            message.push_str(" Try again later.");
         }
 
         self.add_to_history(history_cell::new_warning_event(message));

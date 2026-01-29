@@ -415,6 +415,8 @@ impl std::fmt::Display for ModelCapError {
                 " Try again in {}.",
                 format_duration_short(seconds)
             ));
+        } else {
+            message.push_str(" Try again later.");
         }
         write!(f, "{message}")
     }
@@ -682,6 +684,18 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "Model boomslang is at capacity. Please try a different model. Try again in 2m."
+        );
+    }
+
+    #[test]
+    fn model_cap_error_formats_message_without_reset() {
+        let err = ModelCapError {
+            model: "boomslang".to_string(),
+            reset_after_seconds: None,
+        };
+        assert_eq!(
+            err.to_string(),
+            "Model boomslang is at capacity. Please try a different model. Try again later."
         );
     }
 
