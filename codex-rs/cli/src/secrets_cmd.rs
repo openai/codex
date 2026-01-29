@@ -31,6 +31,8 @@ pub struct SecretsCli {
 pub enum SecretsSubcommand {
     /// Store or update a secret value.
     Set(SecretsSetArgs),
+    /// Update an existing secret value.
+    Edit(SecretsEditArgs),
     /// List secret names (values are never displayed).
     List(SecretsListArgs),
     /// Delete a secret value.
@@ -62,6 +64,19 @@ pub struct SecretsSetArgs {
 }
 
 #[derive(Debug, Parser)]
+pub struct SecretsEditArgs {
+    /// Secret name (A-Z, 0-9, underscore only).
+    pub name: String,
+
+    /// New secret value. Prefer piping via stdin to avoid shell history.
+    #[arg(long)]
+    pub value: Option<String>,
+
+    #[clap(flatten)]
+    pub scope: SecretsScopeArgs,
+}
+
+#[derive(Debug, Parser)]
 pub struct SecretsListArgs {
     #[clap(flatten)]
     pub scope: SecretsScopeArgs,
@@ -82,6 +97,7 @@ impl SecretsCli {
         let manager = SecretsManager::new(config.codex_home.clone(), config.secrets_backend);
         match self.subcommand {
             SecretsSubcommand::Set(args) => run_set(&config, &manager, args),
+            SecretsSubcommand::Edit(args) => run_edit(&config, &manager, args),
             SecretsSubcommand::List(args) => run_list(&config, &manager, args),
             SecretsSubcommand::Delete(args) => run_delete(&config, &manager, args),
         }
@@ -100,9 +116,25 @@ async fn load_config(cli_config_overrides: CliConfigOverrides) -> Result<Config>
 fn run_set(config: &Config, manager: &SecretsManager, args: SecretsSetArgs) -> Result<()> {
     let name = SecretName::new(&args.name)?;
     let scope = resolve_scope(config, &args.scope)?;
-    let value = resolve_value(&name, args.value)?;
+    let value = resolve_value(&args.name, args.value)?;
     manager.set(&scope, &name, &value)?;
     println!("Stored {name} in {}.", scope_label(&scope));
+    Ok(())
+}
+
+fn run_edit(config: &Config, manager: &SecretsManager, args: SecretsEditArgs) -> Result<()> {
+    let name = SecretName::new(&args.name)?;
+    let scope = resolve_scope(config, &args.scope)?;
+    let exists = manager.get(&scope, &name)?.is_some();
+    if !exists {
+        bail!(
+            "No secret named {name} found in {}. Use `codex secrets set {name}` to create it.",
+            scope_label(&scope)
+        );
+    }
+    let value = resolve_value(&args.name, args.value)?;
+    manager.set(&scope, &name, &value)?;
+    println!("Updated {name} in {}.", scope_label(&scope));
     Ok(())
 }
 
@@ -165,13 +197,13 @@ fn default_environment_scope(config: &Config) -> Result<SecretScope> {
     SecretScope::environment(environment_id)
 }
 
-fn resolve_value(name: &SecretName, explicit: Option<String>) -> Result<String> {
+fn resolve_value(display_name: &str, explicit: Option<String>) -> Result<String> {
     if let Some(value) = explicit {
         return Ok(value);
     }
 
     if std::io::stdin().is_terminal() {
-        return prompt_secret_value(name);
+        return prompt_secret_value(display_name);
     }
 
     let mut buf = String::new();
@@ -183,8 +215,8 @@ fn resolve_value(name: &SecretName, explicit: Option<String>) -> Result<String> 
     Ok(trimmed)
 }
 
-fn prompt_secret_value(name: &SecretName) -> Result<String> {
-    print!("Enter value for {name}: ");
+fn prompt_secret_value(display_name: &str) -> Result<String> {
+    print!("Enter value for {display_name}: ");
     std::io::stdout()
         .flush()
         .context("failed to flush stdout before prompt")?;
@@ -248,5 +280,92 @@ fn scope_label(scope: &SecretScope) -> String {
     match scope {
         SecretScope::Global => "global".to_string(),
         SecretScope::Environment(env_id) => format!("env/{env_id}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_core::config::ConfigBuilder;
+    use codex_core::config::ConfigOverrides;
+    use codex_keyring_store::tests::MockKeyringStore;
+    use pretty_assertions::assert_eq;
+    use std::sync::Arc;
+
+    async fn test_config(codex_home: &std::path::Path, cwd: &std::path::Path) -> Result<Config> {
+        let overrides = ConfigOverrides {
+            cwd: Some(cwd.to_path_buf()),
+            ..Default::default()
+        };
+        Ok(ConfigBuilder::default()
+            .codex_home(codex_home.to_path_buf())
+            .harness_overrides(overrides)
+            .build()
+            .await?)
+    }
+
+    #[tokio::test]
+    async fn edit_updates_existing_secret() -> Result<()> {
+        let codex_home = tempfile::tempdir().context("temp codex home")?;
+        let cwd = tempfile::tempdir().context("temp cwd")?;
+        let config = test_config(codex_home.path(), cwd.path()).await?;
+        let keyring = Arc::new(MockKeyringStore::default());
+        let manager = SecretsManager::new_with_keyring_store(
+            config.codex_home.clone(),
+            config.secrets_backend,
+            keyring,
+        );
+
+        let scope = SecretScope::Global;
+        let name = SecretName::new("TEST_SECRET")?;
+        manager.set(&scope, &name, "before")?;
+
+        run_edit(
+            &config,
+            &manager,
+            SecretsEditArgs {
+                name: "TEST_SECRET".to_string(),
+                value: Some("after".to_string()),
+                scope: SecretsScopeArgs {
+                    global: true,
+                    environment_id: None,
+                },
+            },
+        )?;
+
+        assert_eq!(manager.get(&scope, &name)?, Some("after".to_string()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn edit_missing_secret_errors() -> Result<()> {
+        let codex_home = tempfile::tempdir().context("temp codex home")?;
+        let cwd = tempfile::tempdir().context("temp cwd")?;
+        let config = test_config(codex_home.path(), cwd.path()).await?;
+        let keyring = Arc::new(MockKeyringStore::default());
+        let manager = SecretsManager::new_with_keyring_store(
+            config.codex_home.clone(),
+            config.secrets_backend,
+            keyring,
+        );
+
+        let err = run_edit(
+            &config,
+            &manager,
+            SecretsEditArgs {
+                name: "TEST_SECRET".to_string(),
+                value: Some("after".to_string()),
+                scope: SecretsScopeArgs {
+                    global: true,
+                    environment_id: None,
+                },
+            },
+        )
+        .expect_err("edit should fail when secret is missing");
+
+        let message = err.to_string();
+        assert!(message.contains("No secret named TEST_SECRET found in global."));
+        assert!(message.contains("codex secrets set TEST_SECRET"));
+        Ok(())
     }
 }

@@ -236,6 +236,7 @@ fn candidate_filenames<'a>(config: &'a Config) -> Vec<&'a str> {
 mod tests {
     use super::*;
     use crate::config::ConfigBuilder;
+    use crate::config::ConfigOverrides;
     use crate::skills::load_skills;
     use std::fs;
     use std::path::PathBuf;
@@ -248,13 +249,16 @@ mod tests {
     /// been configured.
     async fn make_config(root: &TempDir, limit: usize, instructions: Option<&str>) -> Config {
         let codex_home = TempDir::new().unwrap();
+        let overrides = ConfigOverrides {
+            cwd: Some(root.path().to_path_buf()),
+            ..Default::default()
+        };
         let mut config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
+            .harness_overrides(overrides)
             .build()
             .await
             .expect("defaults for test should always succeed");
-
-        config.cwd = root.path().to_path_buf();
         config.project_doc_max_bytes = limit;
 
         config.user_instructions = instructions.map(ToOwned::to_owned);

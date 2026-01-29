@@ -16,6 +16,7 @@ members = [
     "cli",
     "common",
     "core",
+    "secrets",
     "exec",
     "exec-server",
     "execpolicy",
@@ -76,6 +77,7 @@ codex-cli = { path = "cli"}
 codex-client = { path = "codex-client" }
 codex-common = { path = "common" }
 codex-core = { path = "core" }
+codex-secrets = { path = "secrets" }
 codex-exec = { path = "exec" }
 codex-execpolicy = { path = "execpolicy" }
 codex-feedback = { path = "feedback" }

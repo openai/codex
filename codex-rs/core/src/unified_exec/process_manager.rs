@@ -483,14 +483,7 @@ impl UnifiedExecProcessManager {
         cwd: PathBuf,
         context: &UnifiedExecContext,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
-        let mut env = apply_unified_exec_env(create_env(&context.turn.shell_environment_policy));
-        if let Some(overrides) = context
-            .session
-            .skill_env_overrides(&context.turn.sub_id)
-            .await
-        {
-            env.extend(overrides);
-        }
+        let env = apply_unified_exec_env(create_env(&context.turn.shell_environment_policy));
         let features = context.session.features();
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);

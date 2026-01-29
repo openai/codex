@@ -205,10 +205,8 @@ fn parse_canonical_key(canonical_key: &str) -> Option<SecretListEntry> {
                 return None;
             }
             let name = SecretName::new(name).ok()?;
-            Some(SecretListEntry {
-                scope: SecretScope::Environment(environment_id.to_string()),
-                name,
-            })
+            let scope = SecretScope::environment(environment_id.to_string()).ok()?;
+            Some(SecretListEntry { scope, name })
         }
         _ => None,
     }

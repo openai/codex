@@ -155,7 +155,6 @@ use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
 use crate::rollout::map_session_init_error;
 use crate::rollout::metadata;
-use crate::secrets::resolve_skill_env_dependencies;
 use crate::shell;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillError;
@@ -1936,41 +1935,6 @@ impl Session {
         state.record_mcp_dependency_prompted(names);
     }
 
-    pub(crate) async fn skill_secret_prompted(&self) -> HashSet<String> {
-        let state = self.state.lock().await;
-        state.skill_secret_prompted()
-    }
-
-    pub(crate) async fn record_skill_secret_prompted<I>(&self, keys: I)
-    where
-        I: IntoIterator<Item = String>,
-    {
-        let mut state = self.state.lock().await;
-        state.record_skill_secret_prompted(keys);
-    }
-
-    pub(crate) async fn set_skill_env_overrides(
-        &self,
-        sub_id: String,
-        overrides: HashMap<String, String>,
-    ) {
-        let mut state = self.state.lock().await;
-        state.set_skill_env_overrides(sub_id, overrides);
-    }
-
-    pub(crate) async fn skill_env_overrides(
-        &self,
-        sub_id: &str,
-    ) -> Option<HashMap<String, String>> {
-        let state = self.state.lock().await;
-        state.skill_env_overrides(sub_id)
-    }
-
-    pub(crate) async fn clear_skill_env_overrides(&self, sub_id: &str) {
-        let mut state = self.state.lock().await;
-        state.clear_skill_env_overrides(sub_id);
-    }
-
     pub(crate) async fn set_server_reasoning_included(&self, included: bool) {
         let mut state = self.state.lock().await;
         state.set_server_reasoning_included(included);
@@ -3213,20 +3177,6 @@ pub(crate) async fn run_turn(
         &mentioned_skills,
     )
     .await;
-
-    let skill_secrets = resolve_skill_env_dependencies(
-        sess.as_ref(),
-        turn_context.as_ref(),
-        &cancellation_token,
-        &mentioned_skills,
-    )
-    .await;
-    sess.set_skill_env_overrides(turn_context.sub_id.clone(), skill_secrets.overrides)
-        .await;
-    for message in skill_secrets.warnings {
-        sess.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))
-            .await;
-    }
 
     let otel_manager = turn_context.client.get_otel_manager();
     let SkillInjections {

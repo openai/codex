@@ -671,6 +671,10 @@ impl ChatComposer {
         self.footer_hint_override = items;
     }
 
+    pub(crate) fn set_mask_input(&mut self, mask_input: bool) {
+        self.textarea.set_mask_input(mask_input);
+    }
+
     #[cfg(test)]
     pub(crate) fn show_footer_flash(&mut self, line: Line<'static>, duration: Duration) {
         let expires_at = Instant::now()

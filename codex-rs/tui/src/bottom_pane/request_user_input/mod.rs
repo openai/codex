@@ -32,6 +32,7 @@ use crate::render::renderable::Renderable;
 use codex_core::protocol::Op;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputEvent;
+use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::TextElement;
 use unicode_width::UnicodeWidthStr;
@@ -375,6 +376,10 @@ impl RequestUserInputOverlay {
     }
 
     fn restore_current_draft(&mut self) {
+        let mask_input = self
+            .current_question()
+            .is_some_and(Self::is_secret_question);
+        self.composer.set_mask_input(mask_input);
         self.composer
             .set_placeholder_text(self.notes_placeholder().to_string());
         self.composer.set_footer_hint_override(Some(Vec::new()));
@@ -399,6 +404,18 @@ impl RequestUserInputOverlay {
         } else {
             ANSWER_PLACEHOLDER
         }
+    }
+
+    fn is_secret_question(question: &RequestUserInputQuestion) -> bool {
+        let has_options = question
+            .options
+            .as_ref()
+            .is_some_and(|options| !options.is_empty());
+        if has_options {
+            return false;
+        }
+        let id = question.id.as_str();
+        id.starts_with("global/") || id.starts_with("env/")
     }
 
     fn sync_composer_placeholder(&mut self) {
@@ -708,9 +725,14 @@ impl RequestUserInputOverlay {
             };
             let selected_label = selected_idx
                 .and_then(|selected_idx| Self::option_label_for_index(question, selected_idx));
+            let has_options = options.is_some_and(|opts| !opts.is_empty());
             let mut answer_list = selected_label.into_iter().collect::<Vec<_>>();
             if !notes.is_empty() {
-                answer_list.push(format!("user_note: {notes}"));
+                if has_options {
+                    answer_list.push(format!("user_note: {notes}"));
+                } else {
+                    answer_list.push(notes);
+                }
             }
             answers.insert(
                 question.id.clone(),
@@ -1974,6 +1996,61 @@ mod tests {
         };
         let answer = response.answers.get("q1").expect("answer missing");
         assert_eq!(answer.answers, Vec::<String>::new());
+    }
+
+    #[test]
+    fn freeform_submission_does_not_prefix_user_note() {
+        let (tx, mut rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event("turn-1", vec![question_without_options("q1", "Secret")]),
+            tx,
+            true,
+            false,
+            false,
+        );
+
+        overlay
+            .composer
+            .set_text_content("super-secret".to_string(), Vec::new(), Vec::new());
+        overlay.composer.move_cursor_to_end();
+        let draft = overlay.capture_composer_draft();
+        if let Some(answer) = overlay.current_answer_mut() {
+            answer.draft = draft;
+            answer.answer_committed = true;
+        }
+
+        overlay.submit_answers();
+
+        let event = rx.try_recv().expect("expected AppEvent");
+        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+            panic!("expected UserInputAnswer");
+        };
+        let answer = response.answers.get("q1").expect("answer missing");
+        assert_eq!(answer.answers, vec!["super-secret".to_string()]);
+    }
+
+    #[test]
+    fn secret_questions_mask_rendered_input() {
+        let (tx, _rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![question_without_options("global/TEST_SECRET", "Secret")],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+
+        overlay
+            .composer
+            .set_text_content("super-secret".to_string(), Vec::new(), Vec::new());
+        overlay.composer.move_cursor_to_end();
+
+        let snapshot = render_snapshot(&overlay, Rect::new(0, 0, 80, 12));
+        assert!(!snapshot.contains("super-secret"));
+        assert!(snapshot.contains("************"));
     }
 
     #[test]

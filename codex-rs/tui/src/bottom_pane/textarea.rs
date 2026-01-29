@@ -36,6 +36,7 @@ pub(crate) struct TextArea {
     preferred_col: Option<usize>,
     elements: Vec<TextElement>,
     kill_buffer: String,
+    mask_input: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +60,7 @@ impl TextArea {
             preferred_col: None,
             elements: Vec::new(),
             kill_buffer: String::new(),
+            mask_input: false,
         }
     }
 
@@ -70,6 +72,10 @@ impl TextArea {
     /// Replace the textarea text and set the provided text elements.
     pub fn set_text_with_elements(&mut self, text: &str, elements: &[UserTextElement]) {
         self.set_text_inner(text, Some(elements));
+    }
+
+    pub fn set_mask_input(&mut self, mask_input: bool) {
+        self.mask_input = mask_input;
     }
 
     fn set_text_inner(&mut self, text: &str, elements: Option<&[UserTextElement]>) {
@@ -1157,8 +1163,15 @@ impl TextArea {
             let r = &lines[idx];
             let y = area.y + row as u16;
             let line_range = r.start..r.end - 1;
+            let line_slice = &self.text[line_range.clone()];
+            if self.mask_input {
+                let masked_len = line_slice.graphemes(true).count();
+                let masked = "*".repeat(masked_len);
+                buf.set_string(area.x, y, masked, Style::default());
+                continue;
+            }
             // Draw base line with default style.
-            buf.set_string(area.x, y, &self.text[line_range.clone()], Style::default());
+            buf.set_string(area.x, y, line_slice, Style::default());
 
             // Overlay styled segments for elements that intersect this line.
             for elem in &self.elements {
