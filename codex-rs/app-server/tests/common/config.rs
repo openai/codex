@@ -12,6 +12,7 @@ pub fn write_mock_responses_config_toml(
     model_provider_id: &str,
     compact_prompt: &str,
 ) -> std::io::Result<()> {
+    // Phase 1: build the features block for config.toml.
     let mut features = BTreeMap::from([(Feature::RemoteModels, false)]);
     for (feature, enabled) in feature_flags {
         features.insert(*feature, *enabled);
@@ -28,6 +29,7 @@ pub fn write_mock_responses_config_toml(
         })
         .collect::<Vec<_>>()
         .join("\n");
+    // Phase 2: build provider-specific config bits.
     let requires_line = match requires_openai_auth {
         Some(true) => "requires_openai_auth = true\n".to_string(),
         Some(false) | None => String::new(),
@@ -47,6 +49,7 @@ stream_max_retries = 0
 "#
         )
     };
+    // Phase 3: write the final config file.
     let config_toml = codex_home.join("config.toml");
     std::fs::write(
         config_toml,
