@@ -459,21 +459,72 @@
       "additionalProperties": false,
       "description": "Network proxy configuration layer from `[[network]]` entries in `config.toml`.\n\nMultiple `[[network]]` entries are merged in order (later entries win).",
       "properties": {
+        "allow_upstream_proxy": {
+          "description": "Allow upstream proxy env vars to be honored by the network proxy.",
+          "type": "boolean"
+        },
+        "dangerously_allow_non_loopback_admin": {
+          "description": "Allow non-loopback binding for admin listener (dangerous).",
+          "type": "boolean"
+        },
+        "dangerously_allow_non_loopback_proxy": {
+          "description": "Allow non-loopback binding for proxy listeners (dangerous).",
+          "type": "boolean"
+        },
         "enabled": {
           "description": "Enable proxy configuration for sandboxed tool execution.",
           "type": "boolean"
         },
-        "no_proxy": {
+        "mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/NetworkMode"
+            }
+          ],
+          "description": "Network proxy mode."
+        },
+        "policy": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/NetworkPolicyToml"
+            }
+          ],
           "default": null,
-          "description": "Optional NO_PROXY entries.",
+          "description": "Policy configuration."
+        }
+      },
+      "type": "object"
+    },
+    "NetworkMode": {
+      "enum": [
+        "limited",
+        "full"
+      ],
+      "type": "string"
+    },
+    "NetworkPolicyToml": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_local_binding": {
+          "type": "boolean"
+        },
+        "allow_unix_sockets": {
           "items": {
             "type": "string"
           },
           "type": "array"
         },
-        "socks_proxy": {
-          "description": "SOCKS proxy URL (for example: `socks5h://127.0.0.1:1080`).",
-          "type": "string"
+        "allowed_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "denied_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "type": "object"

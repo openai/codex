@@ -1255,35 +1255,35 @@ fn resolve_network_config(entries: &[NetworkConfigToml]) -> std::io::Result<Netw
         if let Some(enabled) = entry.enabled {
             resolved.enabled = enabled;
         }
-        if let Some(socks_proxy) = entry.socks_proxy.as_ref() {
-            validate_socks_proxy_url(socks_proxy)?;
-            resolved.socks_proxy = Some(socks_proxy.clone());
+        if let Some(mode) = entry.mode.as_ref() {
+            resolved.mode = mode.clone();
         }
-        if let Some(no_proxy) = entry.no_proxy.as_ref() {
-            resolved.no_proxy = no_proxy.clone();
+        if let Some(allow_upstream_proxy) = entry.allow_upstream_proxy {
+            resolved.allow_upstream_proxy = allow_upstream_proxy;
+        }
+        if let Some(value) = entry.dangerously_allow_non_loopback_proxy {
+            resolved.dangerously_allow_non_loopback_proxy = value;
+        }
+        if let Some(value) = entry.dangerously_allow_non_loopback_admin {
+            resolved.dangerously_allow_non_loopback_admin = value;
+        }
+        if let Some(policy) = entry.policy.as_ref() {
+            if let Some(allowed_domains) = policy.allowed_domains.as_ref() {
+                resolved.policy.allowed_domains = allowed_domains.clone();
+            }
+            if let Some(denied_domains) = policy.denied_domains.as_ref() {
+                resolved.policy.denied_domains = denied_domains.clone();
+            }
+            if let Some(allow_unix_sockets) = policy.allow_unix_sockets.as_ref() {
+                resolved.policy.allow_unix_sockets = allow_unix_sockets.clone();
+            }
+            if let Some(allow_local_binding) = policy.allow_local_binding {
+                resolved.policy.allow_local_binding = allow_local_binding;
+            }
         }
     }
 
     Ok(resolved)
-}
-
-fn validate_socks_proxy_url(value: &str) -> std::io::Result<()> {
-    let url = url::Url::parse(value).map_err(|err| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("invalid network.socks_proxy URL `{value}`: {err}"),
-        )
-    })?;
-
-    let scheme = url.scheme();
-    if !matches!(scheme, "socks5" | "socks5h") {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("invalid network.socks_proxy URL `{value}`: scheme must be socks5 or socks5h"),
-        ));
-    }
-
-    Ok(())
 }
 
 impl Config {
@@ -1911,12 +1911,18 @@ persistence = "none"
         let cfg = r#"
 [[network]]
 enabled = false
-socks_proxy = "socks5h://127.0.0.1:1080"
-no_proxy = ["localhost"]
+allow_upstream_proxy = false
+[network.policy]
+allowed_domains = ["example.com"]
+allow_local_binding = false
 
 [[network]]
 enabled = true
-socks_proxy = "socks5://127.0.0.1:2080"
+mode = "limited"
+allow_upstream_proxy = true
+[network.policy]
+denied_domains = ["internal.local"]
+allow_unix_sockets = ["/var/run/docker.sock"]
 "#;
 
         let parsed = toml::from_str::<ConfigToml>(cfg).expect("network config should parse");
@@ -1927,35 +1933,31 @@ socks_proxy = "socks5://127.0.0.1:2080"
             resolved,
             NetworkConfig {
                 enabled: true,
-                socks_proxy: Some("socks5://127.0.0.1:2080".to_string()),
-                no_proxy: vec!["localhost".to_string()],
+                mode: crate::config::types::NetworkMode::Limited,
+                allow_upstream_proxy: true,
+                dangerously_allow_non_loopback_proxy: false,
+                dangerously_allow_non_loopback_admin: false,
+                policy: crate::config::types::NetworkPolicy {
+                    allowed_domains: vec!["example.com".to_string()],
+                    denied_domains: vec!["internal.local".to_string()],
+                    allow_unix_sockets: vec!["/var/run/docker.sock".to_string()],
+                    allow_local_binding: false,
+                },
             }
         );
     }
 
     #[test]
-    fn network_config_rejects_invalid_url() {
+    fn network_config_defaults_mode_to_full() {
         let cfg = r#"
 [[network]]
-socks_proxy = "not-a-url"
+enabled = true
 "#;
 
         let parsed = toml::from_str::<ConfigToml>(cfg).expect("network config should parse");
-        let err = resolve_network_config(&parsed.network).expect_err("invalid URL should fail");
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
-    }
-
-    #[test]
-    fn network_config_rejects_non_socks_scheme() {
-        let cfg = r#"
-[[network]]
-socks_proxy = "http://127.0.0.1:8080"
-"#;
-
-        let parsed = toml::from_str::<ConfigToml>(cfg).expect("network config should parse");
-        let err =
-            resolve_network_config(&parsed.network).expect_err("non-socks scheme should fail");
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        let resolved =
+            resolve_network_config(&parsed.network).expect("network config should resolve");
+        assert_eq!(resolved.mode, crate::config::types::NetworkMode::Full);
     }
 
     #[test]
