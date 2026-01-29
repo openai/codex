@@ -2262,31 +2262,36 @@ pub struct TurnPlanUpdatedNotification {
     pub turn_id: String,
     pub explanation: Option<String>,
     #[serde(default)]
-    pub todo: Vec<TurnPlanStep>,
+    pub todo: Vec<TurnTodoStep>,
     #[serde(default)]
-    pub plan: Vec<TurnPlanStep>,
+    pub plan: Vec<TurnTodoStep>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-/// Legacy plan-named todo step used by the todo list update notification.
-pub struct TurnPlanStep {
+/// Todo step used by the todo list update notification.
+pub struct TurnTodoStep {
     pub step: String,
-    pub status: TurnPlanStepStatus,
+    pub status: TurnTodoStepStatus,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-/// Legacy plan-named todo status used by the todo list update notification.
-pub enum TurnPlanStepStatus {
+/// Todo status used by the todo list update notification.
+pub enum TurnTodoStepStatus {
     Pending,
     InProgress,
     Completed,
 }
 
-impl From<CoreTodoItemArg> for TurnPlanStep {
+#[deprecated(note = "use TurnTodoStep")]
+pub type TurnPlanStep = TurnTodoStep;
+#[deprecated(note = "use TurnTodoStepStatus")]
+pub type TurnPlanStepStatus = TurnTodoStepStatus;
+
+impl From<CoreTodoItemArg> for TurnTodoStep {
     fn from(value: CoreTodoItemArg) -> Self {
         Self {
             step: value.step,
@@ -2295,7 +2300,7 @@ impl From<CoreTodoItemArg> for TurnPlanStep {
     }
 }
 
-impl From<CoreTodoStatus> for TurnPlanStepStatus {
+impl From<CoreTodoStatus> for TurnTodoStepStatus {
     fn from(value: CoreTodoStatus) -> Self {
         match value {
             CoreTodoStatus::Pending => Self::Pending,

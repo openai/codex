@@ -429,6 +429,9 @@ macro_rules! server_notification_definitions {
     (
         $(
             $(#[$variant_meta:meta])*
+            // Optional wire name and aliases:
+            // `Variant => "wire/name", aliases(["old/name"]) (Payload)`
+            // expands to serde rename + alias attributes on the enum variant.
             $variant:ident $(=> $wire:literal $(, aliases([$($alias:literal),* $(,)?]))? )? ( $payload:ty )
         ),* $(,)?
     ) => {
@@ -440,6 +443,8 @@ macro_rules! server_notification_definitions {
             $(
                 $(#[$variant_meta])*
                 $(
+                    // If a wire name is provided, emit serde/TS/strum renames
+                    // plus any legacy serde aliases for compatibility.
                     #[serde(rename = $wire)]
                     #[ts(rename = $wire)]
                     #[strum(serialize = $wire)]
@@ -589,7 +594,7 @@ server_notification_definitions! {
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
     TurnCompleted => "turn/completed" (v2::TurnCompletedNotification),
     TurnDiffUpdated => "turn/diff/updated" (v2::TurnDiffUpdatedNotification),
-    TurnPlanUpdated => "turn/plan/updated", aliases(["turn/todo/updated", "turn/todos/updated"]) (v2::TurnPlanUpdatedNotification),
+    TurnPlanUpdated => "turn/plan/updated", aliases(["turn/todos/updated"]) (v2::TurnPlanUpdatedNotification),
     ItemStarted => "item/started" (v2::ItemStartedNotification),
     ItemCompleted => "item/completed" (v2::ItemCompletedNotification),
     /// This event is internal-only. Used by Codex Cloud.
