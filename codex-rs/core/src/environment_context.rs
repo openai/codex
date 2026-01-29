@@ -267,9 +267,10 @@ mod tests {
     #[test]
     fn serialize_environment_context_with_workspace_configuration() {
         let cwd = test_path_buf("/repo");
+        let cwd_str = cwd.to_string_lossy().to_string();
         let mut workspaces = BTreeMap::new();
         workspaces.insert(
-            cwd.to_string_lossy().to_string(),
+            cwd_str.clone(),
             WorkspaceEntry {
                 associated_remote_urls: Some(BTreeMap::from([(
                     "origin".to_string(),
@@ -282,18 +283,20 @@ mod tests {
         let context =
             EnvironmentContext::new(Some(cwd), fake_shell(), Some(workspace_configuration));
 
-        let expected = r#"<environment_context>
-  <cwd>/repo</cwd>
+        let expected = format!(
+            r#"<environment_context>
+  <cwd>{cwd_str}</cwd>
   <shell>bash</shell>
   <workspace_configuration>
-    <workspace path="/repo">
+    <workspace path="{cwd_str}">
       <latest_git_commit_hash>abc123</latest_git_commit_hash>
       <associated_remote_urls>
         <remote name="origin">https://example.com/repo.git</remote>
       </associated_remote_urls>
     </workspace>
   </workspace_configuration>
-</environment_context>"#;
+</environment_context>"#
+        );
 
         assert_eq!(context.serialize_to_xml(), expected);
     }
