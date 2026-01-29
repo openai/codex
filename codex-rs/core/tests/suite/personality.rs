@@ -264,6 +264,219 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_personality_remote_model_legacy_placeholder_instructions() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::builder()
+        .body_print_limit(BodyPrintLimit::Limited(80_000))
+        .start()
+        .await;
+
+    let remote_slug = "codex-remote-legacy-personality";
+    let remote_personality_message = "Friendly from legacy remote template";
+    let remote_model = ModelInfo {
+        slug: remote_slug.to_string(),
+        display_name: "Remote legacy personality test".to_string(),
+        description: Some("Remote model with legacy personality template".to_string()),
+        default_reasoning_level: Some(ReasoningEffort::Medium),
+        supported_reasoning_levels: vec![ReasoningEffortPreset {
+            effort: ReasoningEffort::Medium,
+            description: ReasoningEffort::Medium.to_string(),
+        }],
+        shell_type: ConfigShellToolType::UnifiedExec,
+        visibility: ModelVisibility::List,
+        supported_in_api: true,
+        priority: 1,
+        upgrade: None,
+        base_instructions: "base instructions".to_string(),
+        model_instructions_template: Some(ModelInstructionsTemplate {
+            template: Some("Base instructions\n{{ personality_message }}\n".to_string()),
+            variables: Some(InstructionsVariables {
+                personality: Some(PersonalityVariable {
+                    default: None,
+                    friendly: Some(remote_personality_message.to_string()),
+                    pragmatic: None,
+                }),
+            }),
+        }),
+        supports_reasoning_summaries: false,
+        support_verbosity: false,
+        default_verbosity: None,
+        apply_patch_tool_type: None,
+        truncation_policy: TruncationPolicyConfig::bytes(10_000),
+        supports_parallel_tool_calls: false,
+        context_window: Some(128_000),
+        auto_compact_token_limit: None,
+        effective_context_window_percent: 95,
+        experimental_supported_tools: Vec::new(),
+    };
+
+    let _models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![remote_model],
+        },
+    )
+    .await;
+
+    let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
+
+    let mut builder = test_codex()
+        .with_auth(codex_core::CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.features.enable(Feature::RemoteModels);
+            config.model = Some(remote_slug.to_string());
+            config.model_personality = Some(Personality::Friendly);
+        });
+    let test = builder.build(&server).await?;
+
+    wait_for_model_available(
+        &test.thread_manager.get_models_manager(),
+        remote_slug,
+        &test.config,
+    )
+    .await;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd_path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            model: remote_slug.to_string(),
+            effort: test.config.model_reasoning_effort,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let instructions_text = request.instructions_text();
+
+    assert!(
+        instructions_text.contains(remote_personality_message),
+        "expected instructions to include the remote legacy personality template, got: {instructions_text:?}"
+    );
+    assert!(
+        !instructions_text.contains("{{ personality_message }}"),
+        "expected legacy personality placeholder to be replaced, got: {instructions_text:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_model_default_personality_instructions() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::builder()
+        .body_print_limit(BodyPrintLimit::Limited(80_000))
+        .start()
+        .await;
+
+    let remote_slug = "codex-remote-default-personality";
+    let default_personality_message = "Default from remote template";
+    let remote_model = ModelInfo {
+        slug: remote_slug.to_string(),
+        display_name: "Remote default personality test".to_string(),
+        description: Some("Remote model with default personality template".to_string()),
+        default_reasoning_level: Some(ReasoningEffort::Medium),
+        supported_reasoning_levels: vec![ReasoningEffortPreset {
+            effort: ReasoningEffort::Medium,
+            description: ReasoningEffort::Medium.to_string(),
+        }],
+        shell_type: ConfigShellToolType::UnifiedExec,
+        visibility: ModelVisibility::List,
+        supported_in_api: true,
+        priority: 1,
+        upgrade: None,
+        base_instructions: "base instructions".to_string(),
+        model_instructions_template: Some(ModelInstructionsTemplate {
+            template: Some("Base instructions\n{{ personality }}\n".to_string()),
+            variables: Some(InstructionsVariables {
+                personality: Some(PersonalityVariable {
+                    default: Some(default_personality_message.to_string()),
+                    friendly: Some("Friendly variant".to_string()),
+                    pragmatic: Some("Pragmatic variant".to_string()),
+                }),
+            }),
+        }),
+        supports_reasoning_summaries: false,
+        support_verbosity: false,
+        default_verbosity: None,
+        apply_patch_tool_type: None,
+        truncation_policy: TruncationPolicyConfig::bytes(10_000),
+        supports_parallel_tool_calls: false,
+        context_window: Some(128_000),
+        auto_compact_token_limit: None,
+        effective_context_window_percent: 95,
+        experimental_supported_tools: Vec::new(),
+    };
+
+    let _models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![remote_model],
+        },
+    )
+    .await;
+
+    let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
+
+    let mut builder = test_codex()
+        .with_auth(codex_core::CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.features.enable(Feature::RemoteModels);
+            config.model = Some(remote_slug.to_string());
+        });
+    let test = builder.build(&server).await?;
+
+    wait_for_model_available(
+        &test.thread_manager.get_models_manager(),
+        remote_slug,
+        &test.config,
+    )
+    .await;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd_path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            model: remote_slug.to_string(),
+            effort: test.config.model_reasoning_effort,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let instructions_text = request.instructions_text();
+
+    assert!(
+        instructions_text.contains(default_personality_message),
+        "expected instructions to include the remote default personality template, got: {instructions_text:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_turn_personality_remote_model_template_includes_update_message() -> anyhow::Result<()>
 {
     skip_if_no_network!(Ok(()));

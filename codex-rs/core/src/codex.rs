@@ -1833,6 +1833,12 @@ impl Session {
         {
             items.push(collab_instructions.into());
         }
+        if let Some(personality) = turn_context.personality
+            && let Some(personality_message) =
+                Self::personality_message_for(&turn_context.client.get_model_info(), personality)
+        {
+            items.push(DeveloperInstructions::personality_spec_message(personality_message).into());
+        }
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
             items.push(
                 UserInstructions {
