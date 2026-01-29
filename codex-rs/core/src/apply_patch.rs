@@ -42,6 +42,7 @@ pub(crate) async fn apply_patch(
         turn_context.approval_policy,
         &turn_context.sandbox_policy,
         &turn_context.cwd,
+        turn_context.windows_sandbox_level,
     ) {
         SafetyCheck::AutoApprove {
             user_explicitly_approved,
