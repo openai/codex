@@ -28,6 +28,22 @@ pub enum CargoBinError {
     },
 }
 
+pub fn repo_root() -> Result<PathBuf, std::io::Error> {
+    if let Ok(runfiles_dir) = std::env::var("RUNFILES_DIR") {
+        return Ok(PathBuf::from(runfiles_dir).join("_main"));
+    }
+
+    if let Some(root) = runfiles_manifest_root() {
+        return Ok(root);
+    }
+
+    if let Some(root) = repo_root_from_current_dir() {
+        return Ok(root);
+    }
+
+    Ok(std::env::current_dir()?)
+}
+
 /// Returns an absolute path to a binary target built for the current test run.
 ///
 /// In `cargo test`, `CARGO_BIN_EXE_*` env vars are absolute, but Buck2 may set
@@ -118,10 +134,38 @@ macro_rules! find_resource {
                     "BAZEL_PACKAGE not set in Bazel build",
                 )),
             },
-            Err(_) => {
-                let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-                Ok(manifest_dir.join(resource))
-            }
+            Err(_) => match std::env::var("RUNFILES_MANIFEST_FILE") {
+                Ok(_) => match option_env!("BAZEL_PACKAGE") {
+                    Some(bazel_package) => {
+                        if resource == std::path::Path::new(".") {
+                            $crate::runfiles_package_root_from_manifest(bazel_package)
+                                .ok_or_else(|| {
+                                    std::io::Error::new(
+                                        std::io::ErrorKind::NotFound,
+                                        "runfiles manifest missing package root entry",
+                                    )
+                                })
+                        } else {
+                            let key =
+                                $crate::runfiles_manifest_key_for_resource(bazel_package, resource);
+                            $crate::runfiles_manifest_lookup(&key).ok_or_else(|| {
+                                std::io::Error::new(
+                                    std::io::ErrorKind::NotFound,
+                                    format!("runfiles manifest missing entry for {key}"),
+                                )
+                            })
+                        }
+                    }
+                    None => Err(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "BAZEL_PACKAGE not set in Bazel build",
+                    )),
+                },
+                Err(_) => {
+                    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+                    Ok(manifest_dir.join(resource))
+                }
+            },
         }
     }};
 }
@@ -158,22 +202,8 @@ fn absolutize_from_buck_or_cwd(path: PathBuf) -> Result<PathBuf, CargoBinError> 
 }
 
 fn resolve_from_runfiles_manifest(path: &Path) -> Option<PathBuf> {
-    let manifest_path = std::env::var_os("RUNFILES_MANIFEST_FILE")?;
     let key = runfiles_manifest_key(path)?;
-    let file = std::fs::File::open(manifest_path).ok()?;
-    let reader = BufReader::new(file);
-
-    for line in reader.lines().map_while(Result::ok) {
-        if line.is_empty() {
-            continue;
-        }
-        let (manifest_key, manifest_path) = line.split_once(' ')?;
-        if manifest_key == key {
-            return Some(PathBuf::from(manifest_path));
-        }
-    }
-
-    None
+    runfiles_manifest_lookup(&key)
 }
 
 fn runfiles_manifest_key(path: &Path) -> Option<String> {
@@ -192,6 +222,72 @@ fn runfiles_manifest_key(path: &Path) -> Option<String> {
     } else {
         Some(key)
     }
+}
+
+pub fn runfiles_manifest_lookup(key: &str) -> Option<PathBuf> {
+    let manifest_path = std::env::var_os("RUNFILES_MANIFEST_FILE")?;
+    let file = std::fs::File::open(manifest_path).ok()?;
+    let reader = BufReader::new(file);
+
+    for line in reader.lines().map_while(Result::ok) {
+        if line.is_empty() {
+            continue;
+        }
+        let (manifest_key, manifest_path) = line.split_once(' ')?;
+        if manifest_key == key {
+            return Some(PathBuf::from(manifest_path));
+        }
+    }
+
+    None
+}
+
+pub fn runfiles_manifest_key_for_resource(bazel_package: &str, resource: &Path) -> String {
+    let mut resource_path = resource.to_string_lossy().replace('\\', "/");
+    while resource_path.starts_with("./") {
+        resource_path = resource_path.trim_start_matches("./").to_string();
+    }
+    while resource_path.starts_with('/') {
+        resource_path = resource_path.trim_start_matches('/').to_string();
+    }
+
+    if resource_path.is_empty() {
+        format!("_main/{bazel_package}")
+    } else {
+        format!("_main/{bazel_package}/{resource_path}")
+    }
+}
+
+pub fn runfiles_package_root_from_manifest(bazel_package: &str) -> Option<PathBuf> {
+    let build_key = format!("_main/{bazel_package}/BUILD.bazel");
+    if let Some(path) = runfiles_manifest_lookup(&build_key) {
+        return path.parent().map(PathBuf::from);
+    }
+
+    let cargo_key = format!("_main/{bazel_package}/Cargo.toml");
+    runfiles_manifest_lookup(&cargo_key)
+        .and_then(|path| path.parent().map(PathBuf::from))
+}
+
+fn runfiles_manifest_root() -> Option<PathBuf> {
+    let root = runfiles_manifest_lookup("_main/codex-rs/Cargo.toml")?;
+    root.parent()?.parent().map(PathBuf::from)
+}
+
+fn repo_root_from_current_dir() -> Option<PathBuf> {
+    let mut dir = std::env::current_dir().ok()?;
+    loop {
+        if dir.join("codex-rs").is_dir() {
+            return Some(dir);
+        }
+        if dir.file_name().is_some_and(|name| name == "codex-rs") {
+            return dir.parent().map(PathBuf::from);
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    None
 }
 
 /// Best-effort attempt to find the Buck project root for the currently running
