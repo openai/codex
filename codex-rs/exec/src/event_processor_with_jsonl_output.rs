@@ -78,7 +78,8 @@ pub struct EventProcessorWithJsonOutput {
 struct RunningCommand {
     command: String,
     item_id: String,
-    aggregated_output: Vec<u8>,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -126,7 +127,7 @@ impl EventProcessorWithJsonOutput {
             protocol::EventMsg::ExecCommandEnd(ev) => self.handle_exec_command_end(ev),
             protocol::EventMsg::TerminalInteraction(ev) => self.handle_terminal_interaction(ev),
             protocol::EventMsg::ExecCommandOutputDelta(ev) => {
-                self.handle_output_chunk(&ev.call_id, &ev.chunk)
+                self.handle_output_chunk(&ev.call_id, &ev.stream, &ev.chunk)
             }
             protocol::EventMsg::McpToolCallBegin(ev) => self.handle_mcp_tool_call_begin(ev),
             protocol::EventMsg::McpToolCallEnd(ev) => self.handle_mcp_tool_call_end(ev),
@@ -237,13 +238,18 @@ impl EventProcessorWithJsonOutput {
         vec![ThreadEvent::ItemCompleted(ItemCompletedEvent { item })]
     }
 
-    fn handle_output_chunk(&mut self, call_id: &str, chunk: &[u8]) -> Vec<ThreadEvent> {
+    fn handle_output_chunk(
+        &mut self,
+        call_id: &str,
+        stream: &protocol::ExecOutputStream,
+        chunk: &[u8],
+    ) -> Vec<ThreadEvent> {
         if let Some(running) = self.running_commands.get_mut(call_id) {
-            let remaining = EXEC_OUTPUT_MAX_BYTES.saturating_sub(running.aggregated_output.len());
-            if remaining > 0 {
-                let take = remaining.min(chunk.len());
-                running.aggregated_output.extend_from_slice(&chunk[..take]);
-            }
+            let target = match stream {
+                protocol::ExecOutputStream::Stdout => &mut running.stdout,
+                protocol::ExecOutputStream::Stderr => &mut running.stderr,
+            };
+            append_capped(target, chunk);
         }
         Vec::new()
     }
@@ -301,7 +307,8 @@ impl EventProcessorWithJsonOutput {
             RunningCommand {
                 command: command_string.clone(),
                 item_id: item_id.clone(),
-                aggregated_output: Vec::new(),
+                stdout: Vec::new(),
+                stderr: Vec::new(),
             },
         );
 
@@ -676,7 +683,8 @@ impl EventProcessorWithJsonOutput {
         let Some(RunningCommand {
             command,
             item_id,
-            aggregated_output,
+            stdout,
+            stderr,
         }) = self.running_commands.remove(&ev.call_id)
         else {
             warn!(
@@ -691,6 +699,7 @@ impl EventProcessorWithJsonOutput {
             CommandExecutionStatus::Failed
         };
         let aggregated_output = if ev.aggregated_output.is_empty() {
+            let aggregated_output = aggregate_output(&stdout, &stderr);
             String::from_utf8_lossy(&aggregated_output).into_owned()
         } else {
             ev.aggregated_output.clone()
@@ -773,12 +782,12 @@ impl EventProcessorWithJsonOutput {
 
         if !self.running_commands.is_empty() {
             for (_, running) in self.running_commands.drain() {
+                let aggregated_output = aggregate_output(&running.stdout, &running.stderr);
                 let item = ThreadItem {
                     id: running.item_id,
                     details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
                         command: running.command,
-                        aggregated_output: String::from_utf8_lossy(&running.aggregated_output)
-                            .into_owned(),
+                        aggregated_output: String::from_utf8_lossy(&aggregated_output).into_owned(),
                         exit_code: None,
                         status: CommandExecutionStatus::Completed,
                     }),
@@ -795,6 +804,39 @@ impl EventProcessorWithJsonOutput {
 
         items
     }
+}
+
+#[inline]
+fn append_capped(dst: &mut Vec<u8>, src: &[u8]) {
+    if dst.len() >= EXEC_OUTPUT_MAX_BYTES {
+        return;
+    }
+    let remaining = EXEC_OUTPUT_MAX_BYTES.saturating_sub(dst.len());
+    let take = remaining.min(src.len());
+    dst.extend_from_slice(&src[..take]);
+}
+
+fn aggregate_output(stdout: &[u8], stderr: &[u8]) -> Vec<u8> {
+    let total_len = stdout.len().saturating_add(stderr.len());
+    let max_bytes = EXEC_OUTPUT_MAX_BYTES;
+    let mut aggregated = Vec::with_capacity(total_len.min(max_bytes));
+
+    if total_len <= max_bytes {
+        aggregated.extend_from_slice(stdout);
+        aggregated.extend_from_slice(stderr);
+        return aggregated;
+    }
+
+    // Under contention, reserve 1/3 for stdout and 2/3 for stderr; rebalance unused stderr to stdout.
+    let want_stdout = stdout.len().min(max_bytes / 3);
+    let want_stderr = stderr.len();
+    let stderr_take = want_stderr.min(max_bytes.saturating_sub(want_stdout));
+    let remaining = max_bytes.saturating_sub(want_stdout + stderr_take);
+    let stdout_take = want_stdout + remaining.min(stdout.len().saturating_sub(want_stdout));
+
+    aggregated.extend_from_slice(&stdout[..stdout_take]);
+    aggregated.extend_from_slice(&stderr[..stderr_take]);
+    aggregated
 }
 
 fn is_collab_failure(status: &CoreAgentStatus) -> bool {

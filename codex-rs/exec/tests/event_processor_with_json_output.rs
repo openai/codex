@@ -1103,6 +1103,91 @@ fn command_execution_output_delta_preserves_utf8_across_chunks() {
 }
 
 #[test]
+fn command_execution_output_delta_preserves_stderr_under_cap() {
+    let mut ep = EventProcessorWithJsonOutput::new(None);
+    let command = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        "echo cap".to_string(),
+    ];
+    let cwd = std::env::current_dir().unwrap();
+    let parsed_cmd = Vec::new();
+
+    let begin = event(
+        "s1",
+        EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id: "stderr-cap-1".to_string(),
+            process_id: Some("42".to_string()),
+            turn_id: "turn-1".to_string(),
+            command: command.clone(),
+            cwd: cwd.clone(),
+            parsed_cmd: parsed_cmd.clone(),
+            source: ExecCommandSource::Agent,
+            interaction_input: None,
+        }),
+    );
+    ep.collect_thread_events(&begin);
+
+    let max_bytes = 1024 * 1024;
+    let stdout = vec![b'a'; max_bytes];
+    let stderr = b"ERR".to_vec();
+
+    let delta_stdout = event(
+        "s2",
+        EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
+            call_id: "stderr-cap-1".to_string(),
+            stream: ExecOutputStream::Stdout,
+            chunk: stdout,
+        }),
+    );
+    ep.collect_thread_events(&delta_stdout);
+
+    let delta_stderr = event(
+        "s3",
+        EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
+            call_id: "stderr-cap-1".to_string(),
+            stream: ExecOutputStream::Stderr,
+            chunk: stderr,
+        }),
+    );
+    ep.collect_thread_events(&delta_stderr);
+
+    let end = event(
+        "s4",
+        EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+            call_id: "stderr-cap-1".to_string(),
+            process_id: Some("42".to_string()),
+            turn_id: "turn-1".to_string(),
+            command,
+            cwd,
+            parsed_cmd,
+            source: ExecCommandSource::Agent,
+            interaction_input: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            aggregated_output: String::new(),
+            exit_code: 0,
+            duration: Duration::from_millis(3),
+            formatted_output: String::new(),
+        }),
+    );
+    let out_end = ep.collect_thread_events(&end);
+    let aggregated_output = match out_end.as_slice() {
+        [ThreadEvent::ItemCompleted(ItemCompletedEvent { item })] => {
+            if let ThreadItemDetails::CommandExecution(item) = &item.details {
+                item.aggregated_output.as_str()
+            } else {
+                panic!("expected command execution item");
+            }
+        }
+        _ => panic!("expected single completed item"),
+    };
+
+    assert_eq!(aggregated_output.len(), max_bytes);
+    assert!(aggregated_output.ends_with("ERR"));
+}
+
+#[test]
 fn exec_command_end_failure_produces_failed_command_item() {
     let mut ep = EventProcessorWithJsonOutput::new(None);
     let command = vec!["sh".to_string(), "-c".to_string(), "exit 1".to_string()];
