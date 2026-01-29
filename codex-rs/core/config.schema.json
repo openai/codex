@@ -144,6 +144,9 @@
             "apply_patch_freeform": {
               "type": "boolean"
             },
+            "apps": {
+              "type": "boolean"
+            },
             "child_agents_md": {
               "type": "boolean"
             },
@@ -180,6 +183,9 @@
             "include_apply_patch_tool": {
               "type": "boolean"
             },
+            "personality": {
+              "type": "boolean"
+            },
             "powershell_utf8": {
               "type": "boolean"
             },
@@ -199,6 +205,9 @@
               "type": "boolean"
             },
             "shell_tool": {
+              "type": "boolean"
+            },
+            "skill_env_var_dependency_prompt": {
               "type": "boolean"
             },
             "skill_mcp_dependency_install": {
@@ -1162,6 +1171,9 @@
         "apply_patch_freeform": {
           "type": "boolean"
         },
+        "apps": {
+          "type": "boolean"
+        },
         "child_agents_md": {
           "type": "boolean"
         },
@@ -1198,6 +1210,9 @@
         "include_apply_patch_tool": {
           "type": "boolean"
         },
+        "personality": {
+          "type": "boolean"
+        },
         "powershell_utf8": {
           "type": "boolean"
         },
@@ -1217,6 +1232,9 @@
           "type": "boolean"
         },
         "shell_tool": {
+          "type": "boolean"
+        },
+        "skill_env_var_dependency_prompt": {
           "type": "boolean"
         },
         "skill_mcp_dependency_install": {

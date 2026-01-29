@@ -13,7 +13,6 @@ pub enum SlashCommand {
     // DO NOT ALPHA-SORT! Enum order is presentation order in the popup, so
     // more frequently used commands should be listed first.
     Model,
-    Personality,
     Approvals,
     Permissions,
     #[strum(serialize = "setup-elevated-sandbox")]
@@ -33,12 +32,14 @@ pub enum SlashCommand {
     Mention,
     Status,
     Mcp,
+    Apps,
     Logout,
     Quit,
     Exit,
     Feedback,
     Rollout,
     Ps,
+    Personality,
     TestApproval,
 }
 
@@ -61,7 +62,7 @@ impl SlashCommand {
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::Ps => "list background terminals",
             SlashCommand::Model => "choose what model and reasoning effort to use",
-            SlashCommand::Personality => "choose a communication style for responses",
+            SlashCommand::Personality => "choose a communication style for Codex",
             SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Agent => "switch the active agent thread",
             SlashCommand::Approvals => "choose what Codex can do without approval",
@@ -69,6 +70,7 @@ impl SlashCommand {
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
             SlashCommand::Experimental => "toggle experimental features",
             SlashCommand::Mcp => "list configured MCP tools",
+            SlashCommand::Apps => "manage apps",
             SlashCommand::Logout => "log out of Codex",
             SlashCommand::Rollout => "print the rollout file path",
             SlashCommand::TestApproval => "test approval request",
@@ -104,6 +106,7 @@ impl SlashCommand {
             | SlashCommand::Status
             | SlashCommand::Ps
             | SlashCommand::Mcp
+            | SlashCommand::Apps
             | SlashCommand::Feedback
             | SlashCommand::Quit
             | SlashCommand::Exit => true,

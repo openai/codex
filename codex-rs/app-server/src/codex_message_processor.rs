@@ -13,7 +13,6 @@ use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::AccountUpdatedNotification;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
-use codex_app_server_protocol::AppInfo as ApiAppInfo;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::ArchiveConversationParams;
@@ -169,7 +168,7 @@ use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::rollout_date_parts;
 use codex_core::sandboxing::SandboxPermissions;
-use codex_core::state_db::{self};
+use codex_core::state_db::get_state_db;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;
@@ -1703,7 +1702,7 @@ impl CodexMessageProcessor {
 
         let rollout_path_display = archived_path.display().to_string();
         let fallback_provider = self.config.model_provider_id.clone();
-        let state_db_ctx = state_db::init_if_enabled(&self.config, None).await;
+        let state_db_ctx = get_state_db(&self.config, None).await;
         let archived_folder = self
             .config
             .codex_home
@@ -3572,7 +3571,7 @@ impl CodexMessageProcessor {
         }
 
         if state_db_ctx.is_none() {
-            state_db_ctx = state_db::init_if_enabled(&self.config, None).await;
+            state_db_ctx = get_state_db(&self.config, None).await;
         }
 
         // Move the rollout file to archived.
@@ -3712,7 +3711,7 @@ impl CodexMessageProcessor {
             }
         };
 
-        if !config.features.enabled(Feature::Connectors) {
+        if !config.features.enabled(Feature::Apps) {
             self.outgoing
                 .send_response(
                     request_id,
@@ -3775,18 +3774,7 @@ impl CodexMessageProcessor {
         }
 
         let end = start.saturating_add(effective_limit).min(total);
-        let data = connectors[start..end]
-            .iter()
-            .cloned()
-            .map(|connector| ApiAppInfo {
-                id: connector.connector_id,
-                name: connector.connector_name,
-                description: connector.connector_description,
-                logo_url: connector.logo_url,
-                install_url: connector.install_url,
-                is_accessible: connector.is_accessible,
-            })
-            .collect();
+        let data = connectors[start..end].to_vec();
 
         let next_cursor = if end < total {
             Some(end.to_string())

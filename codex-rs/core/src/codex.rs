@@ -30,6 +30,7 @@ use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
 use crate::terminal;
+use crate::transport_manager::TransportManager;
 use crate::truncate::TruncationPolicy;
 use crate::user_notification::UserNotifier;
 use crate::util::error_or_panic;
@@ -84,6 +85,7 @@ use tracing::debug;
 use tracing::error;
 use tracing::field;
 use tracing::info;
+use tracing::info_span;
 use tracing::instrument;
 use tracing::trace_span;
 use tracing::warn;
@@ -118,6 +120,10 @@ use crate::mcp::effective_mcp_servers;
 use crate::mcp::maybe_prompt_and_install_mcp_dependencies;
 use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
+use crate::mentions::build_connector_slug_counts;
+use crate::mentions::build_skill_name_counts;
+use crate::mentions::collect_explicit_app_paths;
+use crate::mentions::collect_tool_mentions_from_messages;
 use crate::model_provider_info::CHAT_WIRE_API_DEPRECATION_SUMMARY;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageContentDeltaEvent;
@@ -162,7 +168,12 @@ use crate::skills::SkillInjections;
 use crate::skills::SkillMetadata;
 use crate::skills::SkillsManager;
 use crate::skills::build_skill_injections;
+use crate::skills::collect_env_var_dependencies;
 use crate::skills::collect_explicit_skill_mentions;
+use crate::skills::injection::ToolMentionKind;
+use crate::skills::injection::app_id_from_path;
+use crate::skills::injection::tool_kind_for_path;
+use crate::skills::resolve_skill_dependencies_for_turn;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
 use crate::state::SessionState;
@@ -403,6 +414,7 @@ impl Codex {
         let session_source_clone = session_configuration.session_source.clone();
         let (agent_status_tx, agent_status_rx) = watch::channel(AgentStatus::PendingInit);
 
+        let session_init_span = info_span!("session_init");
         let session = Session::new(
             session_configuration,
             config.clone(),
@@ -416,6 +428,7 @@ impl Codex {
             skills_manager,
             agent_control,
         )
+        .instrument(session_init_span)
         .await
         .map_err(|e| {
             error!("Failed to create session: {e:#}");
@@ -424,7 +437,10 @@ impl Codex {
         let thread_id = session.conversation_id;
 
         // This task will run until Op::Shutdown is received.
-        tokio::spawn(submission_loop(Arc::clone(&session), config, rx_sub));
+        let session_loop_span = info_span!("session_loop", thread_id = %thread_id);
+        tokio::spawn(
+            submission_loop(Arc::clone(&session), config, rx_sub).instrument(session_loop_span),
+        );
         let codex = Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
@@ -668,6 +684,7 @@ impl Session {
         model_info: ModelInfo,
         conversation_id: ThreadId,
         sub_id: String,
+        transport_manager: TransportManager,
     ) -> TurnContext {
         let otel_manager = otel_manager.clone().with_model(
             session_configuration.collaboration_mode.model(),
@@ -684,6 +701,7 @@ impl Session {
             session_configuration.model_reasoning_summary,
             conversation_id,
             session_configuration.session_source.clone(),
+            transport_manager,
         );
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -913,6 +931,7 @@ impl Session {
             skills_manager,
             agent_control,
             state_db: state_db_ctx.clone(),
+            transport_manager: TransportManager::new(),
         };
 
         let sess = Arc::new(Session {
@@ -1232,6 +1251,7 @@ impl Session {
             model_info,
             self.conversation_id,
             sub_id,
+            self.services.transport_manager.clone(),
         );
         if let Some(final_schema) = final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
@@ -1992,6 +2012,16 @@ impl Session {
         state.record_mcp_dependency_prompted(names);
     }
 
+    pub async fn dependency_env(&self) -> HashMap<String, String> {
+        let state = self.state.lock().await;
+        state.dependency_env()
+    }
+
+    pub async fn set_dependency_env(&self, values: HashMap<String, String>) {
+        let mut state = self.state.lock().await;
+        state.set_dependency_env(values);
+    }
+
     pub(crate) async fn set_server_reasoning_included(&self, included: bool) {
         let mut state = self.state.lock().await;
         state.set_server_reasoning_included(included);
@@ -2246,7 +2276,7 @@ impl Session {
         let config = self.get_config().await;
         let mcp_servers = with_codex_apps_mcp(
             mcp_servers,
-            self.features.enabled(Feature::Connectors),
+            self.features.enabled(Feature::Apps),
             auth.as_ref(),
             config.as_ref(),
         );
@@ -3086,6 +3116,7 @@ async fn spawn_review_thread(
         per_turn_config.model_reasoning_summary,
         sess.conversation_id,
         parent_turn_context.client.get_session_source(),
+        parent_turn_context.client.transport_manager(),
     );
 
     let review_turn_context = TurnContext {
@@ -3208,13 +3239,13 @@ pub(crate) async fn run_turn(
     let model_info = turn_context.client.get_model_info();
     let auto_compact_limit = model_info.auto_compact_token_limit().unwrap_or(i64::MAX);
     let total_usage_tokens = sess.get_total_token_usage().await;
-    if total_usage_tokens >= auto_compact_limit {
-        run_auto_compact(&sess, &turn_context).await;
-    }
     let event = EventMsg::TurnStarted(TurnStartedEvent {
         model_context_window: turn_context.client.get_model_context_window(),
     });
     sess.send_event(&turn_context, event).await;
+    if total_usage_tokens >= auto_compact_limit {
+        run_auto_compact(&sess, &turn_context).await;
+    }
 
     let skills_outcome = Some(
         sess.services
@@ -3223,9 +3254,47 @@ pub(crate) async fn run_turn(
             .await,
     );
 
+    let (skill_name_counts, skill_name_counts_lower) = skills_outcome.as_ref().map_or_else(
+        || (HashMap::new(), HashMap::new()),
+        |outcome| build_skill_name_counts(&outcome.skills, &outcome.disabled_paths),
+    );
+    let connector_slug_counts = if turn_context.client.config().features.enabled(Feature::Apps) {
+        let mcp_tools = match sess
+            .services
+            .mcp_connection_manager
+            .read()
+            .await
+            .list_all_tools()
+            .or_cancel(&cancellation_token)
+            .await
+        {
+            Ok(mcp_tools) => mcp_tools,
+            Err(_) => return None,
+        };
+        let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
+        build_connector_slug_counts(&connectors)
+    } else {
+        HashMap::new()
+    };
     let mentioned_skills = skills_outcome.as_ref().map_or_else(Vec::new, |outcome| {
-        collect_explicit_skill_mentions(&input, &outcome.skills, &outcome.disabled_paths)
+        collect_explicit_skill_mentions(
+            &input,
+            &outcome.skills,
+            &outcome.disabled_paths,
+            &skill_name_counts,
+            &connector_slug_counts,
+        )
     });
+    let explicit_app_paths = collect_explicit_app_paths(&input);
+
+    let config = turn_context.client.config();
+    if config
+        .features
+        .enabled(Feature::SkillEnvVarDependencyPrompt)
+    {
+        let env_var_dependencies = collect_env_var_dependencies(&mentioned_skills);
+        resolve_skill_dependencies_for_turn(&sess, &turn_context, &env_var_dependencies).await;
+    }
 
     maybe_prompt_and_install_mcp_dependencies(
         sess.as_ref(),
@@ -3291,12 +3360,17 @@ pub(crate) async fn run_turn(
             })
             .map(|user_message| user_message.message())
             .collect::<Vec<String>>();
+        let tool_selection = SamplingRequestToolSelection {
+            explicit_app_paths: &explicit_app_paths,
+            skill_name_counts_lower: &skill_name_counts_lower,
+        };
         match run_sampling_request(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
             Arc::clone(&turn_diff_tracker),
             &mut client_session,
             sampling_request_input,
+            tool_selection,
             cancellation_token.child_token(),
         )
         .await
@@ -3371,40 +3445,79 @@ async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) 
 }
 
 fn filter_connectors_for_input(
-    connectors: Vec<connectors::ConnectorInfo>,
+    connectors: Vec<connectors::AppInfo>,
     input: &[ResponseItem],
-) -> Vec<connectors::ConnectorInfo> {
+    explicit_app_paths: &[String],
+    skill_name_counts_lower: &HashMap<String, usize>,
+) -> Vec<connectors::AppInfo> {
     let user_messages = collect_user_messages(input);
-    if user_messages.is_empty() {
+    if user_messages.is_empty() && explicit_app_paths.is_empty() {
         return Vec::new();
+    }
+
+    let mentions = collect_tool_mentions_from_messages(&user_messages);
+    let mention_names_lower = mentions
+        .plain_names
+        .iter()
+        .map(|name| name.to_ascii_lowercase())
+        .collect::<HashSet<String>>();
+
+    let connector_slug_counts = build_connector_slug_counts(&connectors);
+    let mut allowed_connector_ids: HashSet<String> = HashSet::new();
+    for path in explicit_app_paths
+        .iter()
+        .chain(mentions.paths.iter())
+        .filter(|path| tool_kind_for_path(path) == ToolMentionKind::App)
+    {
+        if let Some(connector_id) = app_id_from_path(path) {
+            allowed_connector_ids.insert(connector_id.to_string());
+        }
     }
 
     connectors
         .into_iter()
-        .filter(|connector| connector_inserted_in_messages(connector, &user_messages))
+        .filter(|connector| {
+            connector_inserted_in_messages(
+                connector,
+                &mention_names_lower,
+                &allowed_connector_ids,
+                &connector_slug_counts,
+                skill_name_counts_lower,
+            )
+        })
         .collect()
 }
 
 fn connector_inserted_in_messages(
-    connector: &connectors::ConnectorInfo,
-    user_messages: &[String],
+    connector: &connectors::AppInfo,
+    mention_names_lower: &HashSet<String>,
+    allowed_connector_ids: &HashSet<String>,
+    connector_slug_counts: &HashMap<String, usize>,
+    skill_name_counts_lower: &HashMap<String, usize>,
 ) -> bool {
-    let label = connectors::connector_display_label(connector);
-    let needle = label.to_lowercase();
-    let legacy = format!("{label} connector").to_lowercase();
-    user_messages.iter().any(|message| {
-        let message = message.to_lowercase();
-        message.contains(&needle) || message.contains(&legacy)
-    })
+    if allowed_connector_ids.contains(&connector.id) {
+        return true;
+    }
+
+    let mention_slug = connectors::connector_mention_slug(connector);
+    let connector_count = connector_slug_counts
+        .get(&mention_slug)
+        .copied()
+        .unwrap_or(0);
+    let skill_count = skill_name_counts_lower
+        .get(&mention_slug)
+        .copied()
+        .unwrap_or(0);
+    connector_count == 1 && skill_count == 0 && mention_names_lower.contains(&mention_slug)
 }
 
 fn filter_codex_apps_mcp_tools(
     mut mcp_tools: HashMap<String, crate::mcp_connection_manager::ToolInfo>,
-    connectors: &[connectors::ConnectorInfo],
+    connectors: &[connectors::AppInfo],
 ) -> HashMap<String, crate::mcp_connection_manager::ToolInfo> {
     let allowed: HashSet<&str> = connectors
         .iter()
-        .map(|connector| connector.connector_id.as_str())
+        .map(|connector| connector.id.as_str())
         .collect();
 
     mcp_tools.retain(|_, tool| {
@@ -3424,6 +3537,11 @@ fn codex_apps_connector_id(tool: &crate::mcp_connection_manager::ToolInfo) -> Op
     tool.connector_id.as_deref()
 }
 
+struct SamplingRequestToolSelection<'a> {
+    explicit_app_paths: &'a [String],
+    skill_name_counts_lower: &'a HashMap<String, usize>,
+}
+
 #[instrument(level = "trace",
     skip_all,
     fields(
@@ -3438,6 +3556,7 @@ async fn run_sampling_request(
     turn_diff_tracker: SharedTurnDiffTracker,
     client_session: &mut ModelClientSession,
     input: Vec<ResponseItem>,
+    tool_selection: SamplingRequestToolSelection<'_>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
     let mut mcp_tools = sess
@@ -3448,14 +3567,14 @@ async fn run_sampling_request(
         .list_all_tools()
         .or_cancel(&cancellation_token)
         .await?;
-    let connectors_for_tools = if turn_context
-        .client
-        .config()
-        .features
-        .enabled(Feature::Connectors)
-    {
+    let connectors_for_tools = if turn_context.client.config().features.enabled(Feature::Apps) {
         let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
-        Some(filter_connectors_for_input(connectors, &input))
+        Some(filter_connectors_for_input(
+            connectors,
+            &input,
+            tool_selection.explicit_app_paths,
+            tool_selection.skill_name_counts_lower,
+        ))
     } else {
         None
     };
@@ -3502,7 +3621,9 @@ async fn run_sampling_request(
         )
         .await
         {
-            Ok(output) => return Ok(output),
+            Ok(output) => {
+                return Ok(output);
+            }
             Err(CodexErr::ContextWindowExceeded) => {
                 sess.set_total_tokens_full(&turn_context).await;
                 return Err(CodexErr::ContextWindowExceeded);
@@ -3523,6 +3644,17 @@ async fn run_sampling_request(
 
         // Use the configured provider-specific stream retry budget.
         let max_retries = turn_context.client.get_provider().stream_max_retries();
+        if retries >= max_retries && client_session.try_switch_fallback_transport() {
+            sess.send_event(
+                &turn_context,
+                EventMsg::Warning(WarningEvent {
+                    message: format!("Falling back from WebSockets to HTTPS transport. {err:#}"),
+                }),
+            )
+            .await;
+            retries = 0;
+            continue;
+        }
         if retries < max_retries {
             retries += 1;
             let delay = match &err {
@@ -3879,6 +4011,7 @@ mod tests {
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::registry::ToolHandler;
     use crate::turn_diff_tracker::TurnDiffTracker;
+    use codex_app_server_protocol::AppInfo;
     use codex_app_server_protocol::AuthMode;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
@@ -3898,6 +4031,30 @@ mod tests {
     struct InstructionsTestCase {
         slug: &'static str,
         expects_apply_patch_instructions: bool,
+    }
+
+    fn user_message(text: &str) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: text.to_string(),
+            }],
+            end_turn: None,
+        }
+    }
+
+    fn make_connector(id: &str, name: &str) -> AppInfo {
+        AppInfo {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: None,
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            install_url: None,
+            is_accessible: true,
+        }
     }
 
     #[tokio::test]
@@ -3965,6 +4122,43 @@ mod tests {
             let base_instructions = session.get_base_instructions().await;
             assert_eq!(base_instructions.text, resolved_base_instructions);
         }
+    }
+
+    #[test]
+    fn filter_connectors_for_input_skips_duplicate_slug_mentions() {
+        let connectors = vec![
+            make_connector("one", "Foo Bar"),
+            make_connector("two", "Foo-Bar"),
+        ];
+        let input = vec![user_message("use $foo-bar")];
+        let explicit_app_paths = Vec::new();
+        let skill_name_counts_lower = HashMap::new();
+
+        let selected = filter_connectors_for_input(
+            connectors,
+            &input,
+            &explicit_app_paths,
+            &skill_name_counts_lower,
+        );
+
+        assert_eq!(selected, Vec::new());
+    }
+
+    #[test]
+    fn filter_connectors_for_input_skips_when_skill_name_conflicts() {
+        let connectors = vec![make_connector("one", "Todoist")];
+        let input = vec![user_message("use $todoist")];
+        let explicit_app_paths = Vec::new();
+        let skill_name_counts_lower = HashMap::from([("todoist".to_string(), 1)]);
+
+        let selected = filter_connectors_for_input(
+            connectors,
+            &input,
+            &explicit_app_paths,
+            &skill_name_counts_lower,
+        );
+
+        assert_eq!(selected, Vec::new());
     }
 
     #[tokio::test]
@@ -4663,6 +4857,7 @@ mod tests {
             skills_manager,
             agent_control,
             state_db: None,
+            transport_manager: TransportManager::new(),
         };
 
         let turn_context = Session::make_turn_context(
@@ -4674,6 +4869,7 @@ mod tests {
             model_info,
             conversation_id,
             "turn_id".to_string(),
+            services.transport_manager.clone(),
         );
 
         let session = Session {
@@ -4777,6 +4973,7 @@ mod tests {
             skills_manager,
             agent_control,
             state_db: None,
+            transport_manager: TransportManager::new(),
         };
 
         let turn_context = Arc::new(Session::make_turn_context(
@@ -4788,6 +4985,7 @@ mod tests {
             model_info,
             conversation_id,
             "turn_id".to_string(),
+            services.transport_manager.clone(),
         ));
 
         let session = Arc::new(Session {
