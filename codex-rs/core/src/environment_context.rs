@@ -70,7 +70,6 @@ pub(crate) struct WorkspaceConfiguration {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct WorkspaceEntry {
-    pub hint: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub associated_remote_urls: Option<BTreeMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -100,8 +99,7 @@ impl EnvironmentContext {
         if let Some(workspace_configuration) = self.workspace_configuration {
             lines.push("  <workspace_configuration>".to_string());
             for (path, workspace) in workspace_configuration.workspaces {
-                let hint = workspace.hint;
-                lines.push(format!("    <workspace path=\"{path}\" hint=\"{hint}\">"));
+                lines.push(format!("    <workspace path=\"{path}\">"));
 
                 if let Some(latest_git_commit_hash) = workspace.latest_git_commit_hash {
                     lines.push(format!(
@@ -273,7 +271,6 @@ mod tests {
         workspaces.insert(
             cwd.to_string_lossy().to_string(),
             WorkspaceEntry {
-                hint: "repo".to_string(),
                 associated_remote_urls: Some(BTreeMap::from([(
                     "origin".to_string(),
                     "https://example.com/repo.git".to_string(),
@@ -289,7 +286,7 @@ mod tests {
   <cwd>/repo</cwd>
   <shell>bash</shell>
   <workspace_configuration>
-    <workspace path="/repo" hint="repo">
+    <workspace path="/repo">
       <latest_git_commit_hash>abc123</latest_git_commit_hash>
       <associated_remote_urls>
         <remote name="origin">https://example.com/repo.git</remote>

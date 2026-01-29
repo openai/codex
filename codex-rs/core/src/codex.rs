@@ -1882,16 +1882,10 @@ impl Session {
                 return None;
             }
 
-            let hint = cwd.file_name().and_then(|name| name.to_str()).map_or_else(
-                || cwd.to_string_lossy().into_owned(),
-                std::string::ToString::to_string,
-            );
-
             let mut workspaces = BTreeMap::new();
             workspaces.insert(
                 cwd.to_string_lossy().into_owned(),
                 WorkspaceEntry {
-                    hint,
                     associated_remote_urls,
                     latest_git_commit_hash,
                 },
