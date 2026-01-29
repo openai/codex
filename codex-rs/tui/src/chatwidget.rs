@@ -2818,7 +2818,7 @@ impl ChatWidget {
                     self.add_error_message("Thread name cannot be empty.".to_string());
                     return;
                 };
-                let cell = Self::rename_confirmation_cell(&name);
+                let cell = Self::rename_confirmation_cell(&name, self.thread_id);
                 self.add_boxed_history(Box::new(cell));
                 self.request_redraw();
                 self.app_event_tx
@@ -2855,6 +2855,7 @@ impl ChatWidget {
         } else {
             "Name thread"
         };
+        let thread_id = self.thread_id;
         let view = CustomPromptView::new(
             title.to_string(),
             "Type a name and press Enter".to_string(),
@@ -2866,7 +2867,7 @@ impl ChatWidget {
                     )));
                     return;
                 };
-                let cell = Self::rename_confirmation_cell(&name);
+                let cell = Self::rename_confirmation_cell(&name, thread_id);
                 tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
                 tx.send(AppEvent::CodexOp(Op::SetThreadName { name }));
             }),
@@ -5205,8 +5206,8 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn rename_confirmation_cell(name: &str) -> PlainHistoryCell {
-        let resume_cmd = codex_core::util::resume_command(Some(name), None)
+    fn rename_confirmation_cell(name: &str, thread_id: Option<ThreadId>) -> PlainHistoryCell {
+        let resume_cmd = codex_core::util::resume_command(Some(name), thread_id)
             .unwrap_or_else(|| format!("codex resume {name}"));
         let name = name.to_string();
         let line = vec![

@@ -113,6 +113,8 @@ async fn find_locates_rollout_file_written_by_recorder() -> std::io::Result<()> 
             SessionSource::Exec,
             BaseInstructions::default(),
         ),
+        None,
+        None,
     )
     .await?;
     recorder.flush().await?;
