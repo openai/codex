@@ -25,6 +25,7 @@ use tracing::warn;
 use super::SecretListEntry;
 use super::SecretName;
 use super::SecretScope;
+use super::SecretsBackend;
 use super::compute_keyring_account;
 use super::keyring_service;
 
@@ -166,6 +167,24 @@ impl LocalSecretsBackend {
                 Ok(generated)
             }
         }
+    }
+}
+
+impl SecretsBackend for LocalSecretsBackend {
+    fn set(&self, scope: &SecretScope, name: &SecretName, value: &str) -> Result<()> {
+        LocalSecretsBackend::set(self, scope, name, value)
+    }
+
+    fn get(&self, scope: &SecretScope, name: &SecretName) -> Result<Option<String>> {
+        LocalSecretsBackend::get(self, scope, name)
+    }
+
+    fn delete(&self, scope: &SecretScope, name: &SecretName) -> Result<bool> {
+        LocalSecretsBackend::delete(self, scope, name)
+    }
+
+    fn list(&self, scope_filter: Option<&SecretScope>) -> Result<Vec<SecretListEntry>> {
+        LocalSecretsBackend::list(self, scope_filter)
     }
 }
 

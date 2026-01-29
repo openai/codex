@@ -88,9 +88,16 @@ impl Default for SecretsBackendKind {
     }
 }
 
-#[derive(Debug, Clone)]
+pub trait SecretsBackend: Send + Sync {
+    fn set(&self, scope: &SecretScope, name: &SecretName, value: &str) -> Result<()>;
+    fn get(&self, scope: &SecretScope, name: &SecretName) -> Result<Option<String>>;
+    fn delete(&self, scope: &SecretScope, name: &SecretName) -> Result<bool>;
+    fn list(&self, scope_filter: Option<&SecretScope>) -> Result<Vec<SecretListEntry>>;
+}
+
+#[derive(Clone)]
 pub struct SecretsManager {
-    backend: Arc<LocalSecretsBackend>,
+    backend: Arc<dyn SecretsBackend>,
 }
 
 impl SecretsManager {
@@ -104,11 +111,12 @@ impl SecretsManager {
         backend_kind: SecretsBackendKind,
         keyring_store: Arc<dyn KeyringStore>,
     ) -> Self {
-        match backend_kind {
-            SecretsBackendKind::Local => Self {
-                backend: Arc::new(LocalSecretsBackend::new(codex_home, keyring_store)),
-            },
-        }
+        let backend: Arc<dyn SecretsBackend> = match backend_kind {
+            SecretsBackendKind::Local => {
+                Arc::new(LocalSecretsBackend::new(codex_home, keyring_store))
+            }
+        };
+        Self { backend }
     }
 
     pub fn set(&self, scope: &SecretScope, name: &SecretName, value: &str) -> Result<()> {
