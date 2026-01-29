@@ -607,7 +607,7 @@ mod tests {
     fn collect_explicit_skill_mentions_skips_ambiguous_name() {
         let alpha = make_skill("demo-skill", "/tmp/alpha");
         let beta = make_skill("demo-skill", "/tmp/beta");
-        let skills = vec![alpha.clone(), beta];
+        let skills = vec![alpha, beta];
         let inputs = vec![UserInput::Text {
             text: "use $demo-skill and again $demo-skill".to_string(),
             text_elements: Vec::new(),
@@ -702,7 +702,7 @@ mod tests {
     fn collect_explicit_skill_mentions_skips_missing_path_with_no_fallback() {
         let alpha = make_skill("demo-skill", "/tmp/alpha");
         let beta = make_skill("demo-skill", "/tmp/beta");
-        let skills = vec![alpha.clone(), beta];
+        let skills = vec![alpha, beta];
         let inputs = vec![UserInput::Text {
             text: "use [$demo-skill](/tmp/missing)".to_string(),
             text_elements: Vec::new(),
