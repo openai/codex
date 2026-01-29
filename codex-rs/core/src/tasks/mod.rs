@@ -14,7 +14,7 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::Instrument;
-use tracing::info_span;
+use tracing::Span;
 use tracing::trace;
 use tracing::warn;
 
@@ -132,8 +132,7 @@ impl Session {
             let ctx = Arc::clone(&turn_context);
             let task_for_run = Arc::clone(&task);
             let task_cancellation_token = cancellation_token.child_token();
-            let thread_id = self.conversation_id;
-            let session_span = info_span!("session_task", thread_id = %thread_id);
+            let session_span = Span::current();
             tokio::spawn(
                 async move {
                     let ctx_for_finish = Arc::clone(&ctx);

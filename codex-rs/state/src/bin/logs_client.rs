@@ -230,7 +230,7 @@ fn format_row(row: &LogRow) -> String {
     let level_colored = color_level(level);
     let timestamp_colored = timestamp.dimmed().to_string();
     let thread_id = row.thread_id.as_deref().unwrap_or("-");
-    let thread_id_colored = thread_id.yellow().to_string();
+    let thread_id_colored = thread_id.blue().dimmed().to_string();
     let location_colored = location.dimmed().to_string();
     let message_colored = message.bold().to_string();
     format!(
