@@ -2268,7 +2268,7 @@ pub struct TurnTodosUpdatedNotification {
     pub todo: Vec<TurnTodoStep>,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema, TS)]
+#[derive(Serialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 /// Wire type that keeps serde, schemars, and ts-rs aligned on legacy aliases.
@@ -2280,6 +2280,42 @@ struct TurnTodosUpdatedNotificationWire {
     todo: Vec<TurnTodoStep>,
     #[serde(default)]
     plan: Vec<TurnTodoStep>,
+}
+
+impl<'de> Deserialize<'de> for TurnTodosUpdatedNotificationWire {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // Use Option<Vec<_>> so we can detect whether fields are present and
+        // error if clients send both legacy aliases at once.
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct WireIn {
+            thread_id: String,
+            turn_id: String,
+            explanation: Option<String>,
+            #[serde(default)]
+            todo: Option<Vec<TurnTodoStep>>,
+            #[serde(default)]
+            plan: Option<Vec<TurnTodoStep>>,
+        }
+
+        let wire = WireIn::deserialize(deserializer)?;
+        if wire.todo.is_some() && wire.plan.is_some() {
+            return Err(serde::de::Error::custom(
+                "todo and plan cannot both be provided; prefer todo",
+            ));
+        }
+        let todo = wire.todo.or(wire.plan).unwrap_or_default();
+        Ok(Self {
+            thread_id: wire.thread_id,
+            turn_id: wire.turn_id,
+            explanation: wire.explanation,
+            todo,
+            plan: Vec::new(),
+        })
+    }
 }
 
 impl Serialize for TurnTodosUpdatedNotification {
@@ -2304,29 +2340,12 @@ impl<'de> Deserialize<'de> for TurnTodosUpdatedNotification {
     where
         D: Deserializer<'de>,
     {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct WireIn {
-            thread_id: String,
-            turn_id: String,
-            explanation: Option<String>,
-            #[serde(default)]
-            todo: Option<Vec<TurnTodoStep>>,
-            #[serde(default)]
-            plan: Option<Vec<TurnTodoStep>>,
-        }
-
-        let wire = WireIn::deserialize(deserializer)?;
-        let todo = match wire.todo {
-            // `todo` is authoritative when present, even if it's an empty list.
-            Some(todo) => todo,
-            None => wire.plan.unwrap_or_default(),
-        };
+        let wire = TurnTodosUpdatedNotificationWire::deserialize(deserializer)?;
         Ok(Self {
             thread_id: wire.thread_id,
             turn_id: wire.turn_id,
             explanation: wire.explanation,
-            todo,
+            todo: wire.todo,
         })
     }
 }
@@ -2942,7 +2961,7 @@ mod tests {
     }
 
     #[test]
-    fn turn_todos_updated_deserialize_prefers_todo_even_when_empty() {
+    fn turn_todos_updated_deserialize_errors_when_both_todo_and_plan_present() {
         let value = json!({
             "threadId": "thread-1",
             "turnId": "turn-1",
@@ -2950,7 +2969,11 @@ mod tests {
             "plan": [{ "step": "stale", "status": "pending" }],
         });
 
-        let notification: TurnTodosUpdatedNotification = serde_json::from_value(value).unwrap();
-        assert_eq!(notification.todo, Vec::<TurnTodoStep>::new());
+        let err = serde_json::from_value::<TurnTodosUpdatedNotification>(value).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("todo and plan cannot both be provided"),
+            "{err}"
+        );
     }
 }
