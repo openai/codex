@@ -982,8 +982,7 @@ impl AuthManager {
         self.forced_chatgpt_workspace_id
             .read()
             .ok()
-            .map(|guard| guard.clone())
-            .flatten()
+            .and_then(|guard| guard.clone())
     }
 
     pub fn has_external_auth_refresher(&self) -> bool {
