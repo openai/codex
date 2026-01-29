@@ -249,6 +249,62 @@ fn maybe_push_chat_wire_api_deprecation(
     });
 }
 
+// Shell usage example consts to provide shell-specific prompting on command usage. Prevents model from attempting to execute incorrect commands for the platform.
+const SHELL_COMMANDS_SEARCH_BULLET_PLACEHOLDER: &str = "{{SHELL_COMMANDS_SEARCH_BULLET}}";
+const SHELL_COMMANDS_PARALLELIZE_BULLET_PLACEHOLDER: &str = "{{SHELL_COMMANDS_PARALLELIZE_BULLET}}";
+
+const SHELL_COMMANDS_SEARCH_BULLET_POWERSHELL: &str = "- When searching for text or files in PowerShell, prefer using `Get-ChildItem -Recurse | Select-String -Pattern` for text search and `Get-ChildItem -Recurse -File` for file listing.";
+const SHELL_COMMANDS_PARALLELIZE_BULLET_POWERSHELL: &str = "- Parallelize tool calls whenever possible - especially file reads, such as `Get-ChildItem`, `Select-String`, `Get-Content`, `git show`, `nl`, `wc`. Use `multi_tool_use.parallel` to parallelize tool calls and only this.";
+
+const SHELL_COMMANDS_SEARCH_BULLET_CMD: &str = "- When searching for text or files in cmd, prefer using `findstr /S /N /I` for text search and `dir /s /b` for file listing.";
+const SHELL_COMMANDS_PARALLELIZE_BULLET_CMD: &str = "- Parallelize tool calls whenever possible - especially file reads, such as `dir /s /b`, `findstr /S /N /I`, `type`, `git show`, `nl`, `wc`. Use `multi_tool_use.parallel` to parallelize tool calls and only this.";
+
+const SHELL_COMMANDS_SEARCH_BULLET_BASH_ZSH: &str = "- When searching for text or files, prefer using `rg` or `rg --files` respectively because `rg` is much faster than alternatives like `grep`. (If the `rg` command is not found, then use alternatives.)";
+const SHELL_COMMANDS_PARALLELIZE_BULLET_BASH_ZSH: &str = "- Parallelize tool calls whenever possible - especially file reads, such as `cat`, `rg`, `sed`, `ls`, `git show`, `nl`, `wc`. Use `multi_tool_use.parallel` to parallelize tool calls and only this.";
+
+fn render_base_instructions(base_instructions: String) -> String {
+    let shell_type = shell::default_user_shell().shell_type;
+    let (search_bullet, parallelize_bullet) = match shell_type {
+        shell::ShellType::PowerShell => (
+            SHELL_COMMANDS_SEARCH_BULLET_POWERSHELL,
+            SHELL_COMMANDS_PARALLELIZE_BULLET_POWERSHELL,
+        ),
+        shell::ShellType::Cmd => (
+            SHELL_COMMANDS_SEARCH_BULLET_CMD,
+            SHELL_COMMANDS_PARALLELIZE_BULLET_CMD,
+        ),
+        shell::ShellType::Zsh | shell::ShellType::Bash | shell::ShellType::Sh => (
+            SHELL_COMMANDS_SEARCH_BULLET_BASH_ZSH,
+            SHELL_COMMANDS_PARALLELIZE_BULLET_BASH_ZSH,
+        ),
+    };
+
+    base_instructions
+        .replace(SHELL_COMMANDS_SEARCH_BULLET_PLACEHOLDER, search_bullet)
+        .replace(
+            SHELL_COMMANDS_PARALLELIZE_BULLET_PLACEHOLDER,
+            parallelize_bullet,
+        )
+}
+
+// Resolves base instructions with env-aware shell command usage tips.
+pub(crate) fn resolve_base_instructions(
+    config: &Config,
+    conversation_history: Option<&InitialHistory>,
+    model_info: &ModelInfo,
+    personality: Option<Personality>,
+) -> String {
+    let personality = personality.or(config.model_personality);
+    let base_instructions = config
+        .base_instructions
+        .clone()
+        .or_else(|| {
+            conversation_history.and_then(|history| history.get_base_instructions().map(|s| s.text))
+        })
+        .unwrap_or_else(|| model_info.get_model_instructions(personality));
+    render_base_instructions(base_instructions)
+}
+
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
     #[allow(clippy::too_many_arguments)]
@@ -306,13 +362,14 @@ impl Codex {
         // Resolve base instructions for the session. Priority order:
         // 1. config.base_instructions override
         // 2. conversation history => session_meta.base_instructions
-        // 3. base_intructions for current model
+        // 3. base_instructions for current model
         let model_info = models_manager.get_model_info(model.as_str(), &config).await;
-        let base_instructions = config
-            .base_instructions
-            .clone()
-            .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
-            .unwrap_or_else(|| model_info.get_model_instructions(config.model_personality));
+        let base_instructions = resolve_base_instructions(
+            config.as_ref(),
+            Some(&conversation_history),
+            &model_info,
+            config.model_personality,
+        );
 
         // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.collaboration_mode
         // to avoid extracting these fields separately and constructing CollaborationMode here.
@@ -3898,14 +3955,15 @@ mod tests {
                 );
             }
 
+            let resolved_base_instructions =
+                resolve_base_instructions(&config, None, &model_info, config.model_personality);
             {
                 let mut state = session.state.lock().await;
-                state.session_configuration.base_instructions =
-                    model_info.base_instructions.clone();
+                state.session_configuration.base_instructions = resolved_base_instructions.clone();
             }
 
             let base_instructions = session.get_base_instructions().await;
-            assert_eq!(base_instructions.text, model_info.base_instructions);
+            assert_eq!(base_instructions.text, resolved_base_instructions);
         }
     }
 
@@ -4208,10 +4266,12 @@ mod tests {
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
             personality: config.model_personality,
-            base_instructions: config
-                .base_instructions
-                .clone()
-                .unwrap_or_else(|| model_info.get_model_instructions(config.model_personality)),
+            base_instructions: resolve_base_instructions(
+                config.as_ref(),
+                None,
+                &model_info,
+                config.model_personality,
+            ),
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
@@ -4289,10 +4349,12 @@ mod tests {
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
             personality: config.model_personality,
-            base_instructions: config
-                .base_instructions
-                .clone()
-                .unwrap_or_else(|| model_info.get_model_instructions(config.model_personality)),
+            base_instructions: resolve_base_instructions(
+                config.as_ref(),
+                None,
+                &model_info,
+                config.model_personality,
+            ),
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
@@ -4554,10 +4616,12 @@ mod tests {
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
             personality: config.model_personality,
-            base_instructions: config
-                .base_instructions
-                .clone()
-                .unwrap_or_else(|| model_info.get_model_instructions(config.model_personality)),
+            base_instructions: resolve_base_instructions(
+                config.as_ref(),
+                None,
+                &model_info,
+                config.model_personality,
+            ),
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
@@ -4666,10 +4730,12 @@ mod tests {
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
             personality: config.model_personality,
-            base_instructions: config
-                .base_instructions
-                .clone()
-                .unwrap_or_else(|| model_info.get_model_instructions(config.model_personality)),
+            base_instructions: resolve_base_instructions(
+                config.as_ref(),
+                None,
+                &model_info,
+                config.model_personality,
+            ),
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),

@@ -247,9 +247,9 @@ For casual greetings, acknowledgements, or other one-off conversational messages
 
 When using the shell, you must adhere to the following guidelines:
 
-- When searching for text or files, prefer using `rg` or `rg --files` respectively because `rg` is much faster than alternatives like `grep`. (If the `rg` command is not found, then use alternatives.)
+{{SHELL_COMMANDS_SEARCH_BULLET}}
 - Do not use python scripts to attempt to output larger chunks of a file.
-- Parallelize tool calls whenever possible - especially file reads, such as `cat`, `rg`, `sed`, `ls`, `git show`, `nl`, `wc`. Use `multi_tool_use.parallel` to parallelize tool calls and only this.
+{{SHELL_COMMANDS_PARALLELIZE_BULLET}}
 
 ## apply_patch
 
