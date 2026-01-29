@@ -21,6 +21,22 @@ pub(crate) struct TrackEventsContext {
     pub(crate) product_client_id: String,
 }
 
+pub(crate) fn build_track_events_context(
+    auth: Option<CodexAuth>,
+    model_slug: String,
+    conversation_id: String,
+    session_source: SessionSource,
+    product_client_id: String,
+) -> TrackEventsContext {
+    TrackEventsContext {
+        auth,
+        model_slug,
+        conversation_id,
+        session_source,
+        product_client_id,
+    }
+}
+
 pub(crate) struct SkillInvocation {
     pub(crate) skill_name: String,
     pub(crate) skill_scope: SkillScope,
@@ -228,6 +244,21 @@ mod tests {
         let skill_path = PathBuf::from("/etc/codex/skills/doc/SKILL.md");
 
         let path = normalize_path_for_skill_id(None, None, skill_path.as_path());
+        let expected = expected_absolute_path(&skill_path);
+
+        assert_eq!(path, expected);
+    }
+
+    #[test]
+    fn normalize_path_for_skill_id_repo_root_not_in_skill_path_uses_absolute_path() {
+        let repo_root = PathBuf::from("/repo/root");
+        let skill_path = PathBuf::from("/other/path/.codex/skills/doc/SKILL.md");
+
+        let path = normalize_path_for_skill_id(
+            Some("https://example.com/repo.git"),
+            Some(repo_root.as_path()),
+            skill_path.as_path(),
+        );
         let expected = expected_absolute_path(&skill_path);
 
         assert_eq!(path, expected);

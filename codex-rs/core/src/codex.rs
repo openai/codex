@@ -14,6 +14,7 @@ use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
 use crate::agent::MAX_THREAD_SPAWN_DEPTH;
 use crate::agent::agent_status_from_event;
+use crate::analytics_client::build_track_events_context;
 use crate::compact;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
@@ -90,7 +91,6 @@ use tracing::warn;
 
 use crate::ModelProviderInfo;
 use crate::WireApi;
-use crate::analytics_client::TrackEventsContext;
 use crate::client::ModelClient;
 use crate::client::ModelClientSession;
 use crate::client_common::Prompt;
@@ -3185,13 +3185,13 @@ pub(crate) async fn run_turn(
         None => None,
     };
     let config = sess.get_config().await;
-    let tracking = TrackEventsContext {
+    let tracking = build_track_events_context(
         auth,
-        model_slug: turn_context.client.get_model(),
-        conversation_id: sess.conversation_id.to_string(),
-        session_source: turn_context.client.get_session_source(),
-        product_client_id: crate::default_client::originator().value,
-    };
+        turn_context.client.get_model(),
+        sess.conversation_id.to_string(),
+        turn_context.client.get_session_source(),
+        crate::default_client::originator().value,
+    );
     let SkillInjections {
         items: skill_items,
         warnings: skill_warnings,
