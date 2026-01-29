@@ -256,12 +256,12 @@ jobs:
               if [[ "${ID-}" == "ubuntu" ]]; then
                 codename="${VERSION_CODENAME:-}"
                 if [[ -n "$codename" ]]; then
-                  cat >/etc/apt/sources.list <<EOF
-deb http://ports.ubuntu.com/ubuntu-ports ${codename} main
-deb http://ports.ubuntu.com/ubuntu-ports ${codename}-updates main
-deb http://ports.ubuntu.com/ubuntu-ports ${codename}-backports main
-deb http://ports.ubuntu.com/ubuntu-ports ${codename}-security main
-EOF
+                  printf '%s\n' \
+                    "deb http://ports.ubuntu.com/ubuntu-ports ${codename} main" \
+                    "deb http://ports.ubuntu.com/ubuntu-ports ${codename}-updates main" \
+                    "deb http://ports.ubuntu.com/ubuntu-ports ${codename}-backports main" \
+                    "deb http://ports.ubuntu.com/ubuntu-ports ${codename}-security main" \
+                    >/etc/apt/sources.list
                 fi
               fi
             fi
