@@ -968,6 +968,17 @@ fn command_execution_output_delta_updates_item_progress() {
     let out_delta = ep.collect_thread_events(&delta);
     assert_eq!(out_delta, Vec::<ThreadEvent>::new());
 
+    let delta_two = event(
+        "d2b",
+        EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
+            call_id: "delta-1".to_string(),
+            stream: ExecOutputStream::Stderr,
+            chunk: b"second chunk\n".to_vec(),
+        }),
+    );
+    let out_delta_two = ep.collect_thread_events(&delta_two);
+    assert_eq!(out_delta_two, Vec::<ThreadEvent>::new());
+
     let end = event(
         "d3",
         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
@@ -995,7 +1006,7 @@ fn command_execution_output_delta_updates_item_progress() {
                 id: "item_0".to_string(),
                 details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
                     command: "bash -lc 'echo delta'".to_string(),
-                    aggregated_output: String::new(),
+                    aggregated_output: "partial output\nsecond chunk\n".to_string(),
                     exit_code: Some(0),
                     status: CommandExecutionStatus::Completed,
                 }),

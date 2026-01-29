@@ -234,9 +234,13 @@ impl EventProcessorWithJsonOutput {
         vec![ThreadEvent::ItemCompleted(ItemCompletedEvent { item })]
     }
 
-    fn handle_output_chunk(&mut self, _call_id: &str, _chunk: &[u8]) -> Vec<ThreadEvent> {
-        //TODO see how we want to process them
-        vec![]
+    fn handle_output_chunk(&mut self, call_id: &str, chunk: &[u8]) -> Vec<ThreadEvent> {
+        if let Some(running) = self.running_commands.get_mut(call_id) {
+            running
+                .aggregated_output
+                .push_str(&String::from_utf8_lossy(chunk));
+        }
+        Vec::new()
     }
 
     fn handle_terminal_interaction(
