@@ -64,9 +64,9 @@ use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnDiffUpdatedNotification;
 use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptResponse;
-use codex_app_server_protocol::TurnPlanUpdatedNotification as TurnTodoUpdatedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::TurnTodoStep;
+use codex_app_server_protocol::TurnTodosUpdatedNotification as TurnTodoUpdatedNotification;
 use codex_app_server_protocol::build_turns_from_event_msgs;
 use codex_core::CodexThread;
 use codex_core::parse_command::shlex_join;
@@ -1148,18 +1148,17 @@ async fn handle_turn_todo_update(
     outgoing: &OutgoingMessageSender,
 ) {
     if let ApiVersion::V2 = api_version {
-        // NOTE: The protocol keeps plan-named fields/events for compatibility; this is the todo list update.
+        // NOTE: The protocol keeps legacy plan aliases for compatibility; this is the todo list update.
         let (explanation, todo_items) = todo_update_event.into_parts();
         let steps: Vec<TurnTodoStep> = todo_items.into_iter().map(TurnTodoStep::from).collect();
         let notification = TurnTodoUpdatedNotification {
             thread_id: conversation_id.to_string(),
             turn_id: event_turn_id.to_string(),
             explanation,
-            todo: steps.clone(),
-            plan: steps,
+            todo: steps,
         };
         outgoing
-            .send_server_notification(ServerNotification::TurnPlanUpdated(notification))
+            .send_server_notification(ServerNotification::TurnTodosUpdated(notification))
             .await;
     }
 }
@@ -1819,6 +1818,7 @@ mod tests {
     use mcp_types::TextContent;
     use pretty_assertions::assert_eq;
     use serde_json::Value as JsonValue;
+    use serde_json::to_value;
     use std::collections::HashMap;
     use std::time::Duration;
     use tokio::sync::Mutex;
@@ -2021,11 +2021,16 @@ mod tests {
             .await
             .ok_or_else(|| anyhow!("should send one notification"))?;
         match msg {
-            OutgoingMessage::AppServerNotification(ServerNotification::TurnPlanUpdated(n)) => {
+            OutgoingMessage::AppServerNotification(ServerNotification::TurnTodosUpdated(n)) => {
                 assert_eq!(n.thread_id, conversation_id.to_string());
                 assert_eq!(n.turn_id, "turn-123");
                 assert_eq!(n.explanation.as_deref(), Some("need todo list"));
-                assert_eq!(n.todo, n.plan, "legacy plan alias should mirror todo");
+                let json = to_value(&n)?;
+                assert_eq!(
+                    json.get("todo"),
+                    json.get("plan"),
+                    "legacy plan alias should mirror todo"
+                );
                 assert_eq!(n.todo.len(), 2);
                 assert_eq!(n.todo[0].step, "first");
                 assert_eq!(n.todo[0].status, TurnTodoStepStatus::Pending);

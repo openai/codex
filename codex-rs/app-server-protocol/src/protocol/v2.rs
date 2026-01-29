@@ -46,7 +46,9 @@ use mcp_types::ResourceTemplate as McpResourceTemplate;
 use mcp_types::Tool as McpTool;
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
+use serde::Serializer;
 use serde_json::Value as JsonValue;
 use thiserror::Error;
 use ts_rs::TS;
@@ -2253,18 +2255,86 @@ pub struct TurnDiffUpdatedNotification {
     pub diff: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[schemars(schema_with = "turn_todos_updated_schema")]
 #[ts(export_to = "v2/")]
+#[ts(as = "TurnTodosUpdatedNotificationWire")]
 /// Todo list update from the todo_write tool. `todo` is preferred; `plan` is a legacy alias.
-pub struct TurnPlanUpdatedNotification {
+pub struct TurnTodosUpdatedNotification {
     pub thread_id: String,
     pub turn_id: String,
     pub explanation: Option<String>,
     #[serde(default)]
     pub todo: Vec<TurnTodoStep>,
+}
+
+#[allow(dead_code)]
+#[derive(Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// Wire type that keeps serde, schemars, and ts-rs aligned on legacy aliases.
+struct TurnTodosUpdatedNotificationWire {
+    thread_id: String,
+    turn_id: String,
+    explanation: Option<String>,
     #[serde(default)]
-    pub plan: Vec<TurnTodoStep>,
+    todo: Vec<TurnTodoStep>,
+    #[serde(default)]
+    plan: Vec<TurnTodoStep>,
+}
+
+#[allow(dead_code)]
+fn turn_todos_updated_schema(
+    generator: &mut schemars::r#gen::SchemaGenerator,
+) -> schemars::schema::Schema {
+    TurnTodosUpdatedNotificationWire::json_schema(generator)
+}
+
+impl Serialize for TurnTodosUpdatedNotification {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Wire<'a> {
+            thread_id: &'a str,
+            turn_id: &'a str,
+            explanation: Option<&'a str>,
+            todo: &'a [TurnTodoStep],
+            plan: &'a [TurnTodoStep],
+        }
+
+        // Emit both `todo` and the legacy `plan` alias with identical data.
+        Wire {
+            thread_id: &self.thread_id,
+            turn_id: &self.turn_id,
+            explanation: self.explanation.as_deref(),
+            todo: &self.todo,
+            plan: &self.todo,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for TurnTodosUpdatedNotification {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = TurnTodosUpdatedNotificationWire::deserialize(deserializer)?;
+        let todo = if wire.todo.is_empty() {
+            wire.plan
+        } else {
+            wire.todo
+        };
+        Ok(Self {
+            thread_id: wire.thread_id,
+            turn_id: wire.turn_id,
+            explanation: wire.explanation,
+            todo,
+        })
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
