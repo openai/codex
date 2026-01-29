@@ -82,6 +82,7 @@ impl StatusLineRunner {
                 let mut update = None;
                 let mut rerun = false;
                 let mut emit_timeout_warning = None;
+                let mut emit_error_warning = None;
 
                 {
                     let mut state = state.lock().expect("status line lock poisoned");
@@ -107,6 +108,11 @@ impl StatusLineRunner {
                                 emit_timeout_warning = Some(AppEvent::StatusLineTimeoutWarning {
                                     timeout_ms: request.timeout.as_millis() as u64,
                                 });
+                            } else if err != TIMEOUT_ERR && !state.warned_error {
+                                state.warned_error = true;
+                                emit_error_warning = Some(AppEvent::StatusLineErrorWarning {
+                                    message: err.clone(),
+                                });
                             }
                             state.last_error = Some(err);
                         }
@@ -121,6 +127,10 @@ impl StatusLineRunner {
                 }
 
                 if let Some(event) = emit_timeout_warning {
+                    app_tx.send(event);
+                }
+
+                if let Some(event) = emit_error_warning {
                     app_tx.send(event);
                 }
 
@@ -172,19 +182,8 @@ struct StatusLine {
     pending: bool,
     /// whether a timeout warning has been emitted
     warned_timeout: bool,
-    // nice to haves
-    //  - last_error: Option<String>
-    //      - Script failure/timeout; used for fallback or logs.
-    //  - last_exit_status: Option<i32>
-    //      - Helpful for diagnostics.
-    //  - last_run_duration: Option<Duration>
-    //      - For metrics + timeout tuning.
-    //  - timeout_count: u64 / error_count: u64
-    //      - Backoff decisions.
-    //  - last_payload_hash: Option<u64>
-    //      - Skip runs when payload hasn’t changed.
-    //  - last_trigger: Option<StatusLineTrigger>
-    //      - Which event caused the refresh (token update, cwd change, etc.)
+    /// whether an error warning has been emitted
+    warned_error: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -244,7 +243,10 @@ async fn run_request(request: &StatusLineRequest) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_core::config::ConfigBuilder;
     use pretty_assertions::assert_eq;
+    use tempfile::tempdir;
+    use tokio::{sync::mpsc::unbounded_channel, time::timeout};
 
     fn request(command: &[&str], payload: &str) -> StatusLineRequest {
         StatusLineRequest {
@@ -268,5 +270,42 @@ mod tests {
         let req = request(&["/bin/sh", "-c", "echo fail 1>&2; exit 2"], "");
         let err = run_request(&req).await.expect_err("expected error");
         assert!(err.contains("status line command failed"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn request_update_emits_error_warning_on_failure() {
+        let temp_home = tempdir().expect("temp home");
+        let mut config = ConfigBuilder::default()
+            .codex_home(temp_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("config");
+
+        config.tui_status_line = Some(vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "echo fail 1>&2; exit 2".to_string(),
+        ]);
+
+        let (tx, mut rx) = unbounded_channel();
+        let runner = StatusLineRunner::new(config, AppEventSender::new(tx));
+
+        runner
+            .update_payload("{\"ok\":true}".to_string())
+            .expect("payload");
+        runner.request_update().expect("request update");
+
+        let event = timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timeout waiting for status line event")
+            .expect("missing event");
+
+        match event {
+            AppEvent::StatusLineErrorWarning { message } => {
+                assert!(message.contains("status line command failed"));
+            }
+            other => panic!("expected StatusLineErrorWarning, got {other:?}"),
+        }
     }
 }

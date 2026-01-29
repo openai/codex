@@ -2232,6 +2232,10 @@ impl App {
                     None,
                 );
             }
+            AppEvent::StatusLineErrorWarning { message } => {
+                self.chat_widget
+                    .add_error_message(format!("Status line command failed. Check tui.status_line in your config.toml. Error: {message}"));
+            }
         }
         Ok(AppRunControl::Continue)
     }
