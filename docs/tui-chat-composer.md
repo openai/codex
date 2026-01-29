@@ -49,6 +49,19 @@ The solution is to detect paste-like _bursts_ and buffer them into a single expl
 - After handling the key, `sync_popups()` runs so popup visibility/filters stay consistent with the
   latest text + cursor.
 
+### History navigation (↑/↓)
+
+Up/Down recall is handled by `ChatComposerHistory` and merges two sources:
+
+- **Persistent history** (cross-session, fetched from `~/.codex/history.jsonl`): text-only. It
+  does **not** carry text element ranges or local image attachments, so recalling one of these
+  entries only restores the text.
+- **Local history** (current session): stores the full submission payload, including text
+  elements and local image paths. Recalling a local entry rehydrates placeholders and attachments.
+
+This distinction keeps the on-disk history backward compatible and avoids persisting attachments,
+while still providing a richer recall experience for in-session edits.
+
 ## Config gating for reuse
 
 `ChatComposer` now supports feature gating via `ChatComposerConfig`

@@ -43,18 +43,10 @@ impl FileSearchPopup {
             return;
         }
 
-        // Determine if current matches are still relevant.
-        let keep_existing = query.starts_with(&self.display_query);
-
         self.pending_query.clear();
         self.pending_query.push_str(query);
 
         self.waiting = true; // waiting for new results
-
-        if !keep_existing {
-            self.matches.clear();
-            self.state.reset();
-        }
     }
 
     /// Put the popup into an "idle" state used for an empty query (just "@").

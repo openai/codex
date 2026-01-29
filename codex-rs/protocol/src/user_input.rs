@@ -29,6 +29,8 @@ pub enum UserInput {
         name: String,
         path: std::path::PathBuf,
     },
+    /// Explicit mention selected by the user (name + app://connector id).
+    Mention { name: String, path: String },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS, JsonSchema)]

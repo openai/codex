@@ -32,7 +32,9 @@ pub(crate) struct CommandPopup {
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct CommandPopupFlags {
     pub(crate) collaboration_modes_enabled: bool,
+    pub(crate) connectors_enabled: bool,
     pub(crate) personality_command_enabled: bool,
+    pub(crate) windows_degraded_sandbox_active: bool,
 }
 
 impl CommandPopup {
@@ -40,7 +42,9 @@ impl CommandPopup {
         // Keep built-in availability in sync with the composer.
         let builtins = slash_commands::builtins_for_input(
             flags.collaboration_modes_enabled,
+            flags.connectors_enabled,
             flags.personality_command_enabled,
+            flags.windows_degraded_sandbox_active,
         );
         // Exclude prompts that collide with builtin command names and sort by name.
         let exclude: HashSet<String> = builtins.iter().map(|(n, _)| (*n).to_string()).collect();
@@ -118,6 +122,10 @@ impl CommandPopup {
         if filter.is_empty() {
             // Built-ins first, in presentation order.
             for (_, cmd) in self.builtins.iter() {
+                // Skipping quit as it's a duplicate of exit.
+                if *cmd == SlashCommand::Quit {
+                    continue;
+                }
                 out.push((CommandItem::Builtin(*cmd), None));
             }
             // Then prompts, already sorted by name.
@@ -436,6 +444,18 @@ mod tests {
     }
 
     #[test]
+    fn quit_hidden_in_empty_filter_but_shown_for_prefix() {
+        let mut popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
+        popup.on_composer_text_change("/".to_string());
+        let items = popup.filtered_items();
+        assert!(!items.contains(&CommandItem::Builtin(SlashCommand::Quit)));
+
+        popup.on_composer_text_change("/qu".to_string());
+        let items = popup.filtered_items();
+        assert!(items.contains(&CommandItem::Builtin(SlashCommand::Quit)));
+    }
+
+    #[test]
     fn collab_command_hidden_when_collaboration_modes_disabled() {
         let mut popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
         popup.on_composer_text_change("/coll".to_string());
@@ -460,7 +480,9 @@ mod tests {
             Vec::new(),
             CommandPopupFlags {
                 collaboration_modes_enabled: true,
+                connectors_enabled: false,
                 personality_command_enabled: true,
+                windows_degraded_sandbox_active: false,
             },
         );
         popup.on_composer_text_change("/collab".to_string());
@@ -477,7 +499,9 @@ mod tests {
             Vec::new(),
             CommandPopupFlags {
                 collaboration_modes_enabled: true,
+                connectors_enabled: false,
                 personality_command_enabled: false,
+                windows_degraded_sandbox_active: false,
             },
         );
         popup.on_composer_text_change("/pers".to_string());
@@ -502,7 +526,9 @@ mod tests {
             Vec::new(),
             CommandPopupFlags {
                 collaboration_modes_enabled: true,
+                connectors_enabled: false,
                 personality_command_enabled: true,
+                windows_degraded_sandbox_active: false,
             },
         );
         popup.on_composer_text_change("/personality".to_string());

@@ -2,6 +2,7 @@ mod account;
 mod analytics;
 mod app_list;
 mod collaboration_mode_list;
+mod compaction;
 mod config_rpc;
 mod dynamic_tools;
 mod initialize;
