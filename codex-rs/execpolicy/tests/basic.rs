@@ -6,6 +6,9 @@ use anyhow::Result;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Error;
 use codex_execpolicy::Evaluation;
+use codex_execpolicy::NetworkRule;
+use codex_execpolicy::NetworkRuleDecision;
+use codex_execpolicy::NetworkRuleProtocol;
 use codex_execpolicy::Policy;
 use codex_execpolicy::PolicyParser;
 use codex_execpolicy::RuleMatch;
@@ -68,6 +71,33 @@ prefix_rule(
             }],
         },
         evaluation
+    );
+    Ok(())
+}
+
+#[test]
+fn parses_network_rule() -> Result<()> {
+    let policy_src = r#"
+network_rule(
+    host = "api.example.com",
+    protocol = "https",
+    decision = "allow",
+    justification = "Allow API calls",
+)
+    "#;
+
+    let mut parser = PolicyParser::new();
+    parser.parse("test.rules", policy_src)?;
+    let policy = parser.build();
+
+    assert_eq!(
+        policy.network_rules(),
+        &[NetworkRule {
+            host: "api.example.com".to_string(),
+            protocol: NetworkRuleProtocol::Https,
+            decision: NetworkRuleDecision::Allow,
+            justification: Some("Allow API calls".to_string()),
+        }]
     );
     Ok(())
 }
