@@ -69,6 +69,7 @@ impl MessageProcessor {
             auth_manager.clone(),
             SessionSource::VSCode,
         ));
+
         // Watch for on-disk skill changes and reinject the updated skills into
         // subsequent requests.
         let initialized_flag = Arc::new(AtomicBool::new(false));
