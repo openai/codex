@@ -577,6 +577,12 @@ pub struct NetworkConfigToml {
     /// Allow non-loopback binding for admin listener (dangerous).
     pub dangerously_allow_non_loopback_admin: Option<bool>,
 
+    /// HTTP proxy listener port (loopback).
+    pub http_port: Option<u16>,
+
+    /// SOCKS5 proxy listener port (loopback).
+    pub socks_port: Option<u16>,
+
     /// Policy configuration.
     #[serde(default)]
     pub policy: Option<NetworkPolicyToml>,
@@ -591,6 +597,8 @@ pub struct NetworkConfig {
     pub allow_upstream_proxy: bool,
     pub dangerously_allow_non_loopback_proxy: bool,
     pub dangerously_allow_non_loopback_admin: bool,
+    pub http_port: Option<u16>,
+    pub socks_port: Option<u16>,
     pub policy: NetworkPolicy,
 }
 

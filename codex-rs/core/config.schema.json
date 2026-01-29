@@ -475,6 +475,12 @@
           "description": "Enable proxy configuration for sandboxed tool execution.",
           "type": "boolean"
         },
+        "http_port": {
+          "description": "HTTP proxy listener port (loopback).",
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
         "mode": {
           "allOf": [
             {
@@ -491,6 +497,12 @@
           ],
           "default": null,
           "description": "Policy configuration."
+        },
+        "socks_port": {
+          "description": "SOCKS5 proxy listener port (loopback).",
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
         }
       },
       "type": "object"

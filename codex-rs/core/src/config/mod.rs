@@ -1267,6 +1267,12 @@ fn resolve_network_config(entries: &[NetworkConfigToml]) -> std::io::Result<Netw
         if let Some(value) = entry.dangerously_allow_non_loopback_admin {
             resolved.dangerously_allow_non_loopback_admin = value;
         }
+        if let Some(http_port) = entry.http_port {
+            resolved.http_port = Some(http_port);
+        }
+        if let Some(socks_port) = entry.socks_port {
+            resolved.socks_port = Some(socks_port);
+        }
         if let Some(policy) = entry.policy.as_ref() {
             if let Some(allowed_domains) = policy.allowed_domains.as_ref() {
                 resolved.policy.allowed_domains = allowed_domains.clone();
@@ -1912,6 +1918,7 @@ persistence = "none"
 [[network]]
 enabled = false
 allow_upstream_proxy = false
+http_port = 8080
 [network.policy]
 allowed_domains = ["example.com"]
 allow_local_binding = false
@@ -1920,6 +1927,7 @@ allow_local_binding = false
 enabled = true
 mode = "limited"
 allow_upstream_proxy = true
+socks_port = 1080
 [network.policy]
 denied_domains = ["internal.local"]
 allow_unix_sockets = ["/var/run/docker.sock"]
@@ -1937,6 +1945,8 @@ allow_unix_sockets = ["/var/run/docker.sock"]
                 allow_upstream_proxy: true,
                 dangerously_allow_non_loopback_proxy: false,
                 dangerously_allow_non_loopback_admin: false,
+                http_port: Some(8080),
+                socks_port: Some(1080),
                 policy: crate::config::types::NetworkPolicy {
                     allowed_domains: vec!["example.com".to_string()],
                     denied_domains: vec!["internal.local".to_string()],
