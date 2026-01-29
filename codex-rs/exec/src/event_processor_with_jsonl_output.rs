@@ -75,7 +75,7 @@ pub struct EventProcessorWithJsonOutput {
 struct RunningCommand {
     command: String,
     item_id: String,
-    aggregated_output: String,
+    aggregated_output: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -236,9 +236,7 @@ impl EventProcessorWithJsonOutput {
 
     fn handle_output_chunk(&mut self, call_id: &str, chunk: &[u8]) -> Vec<ThreadEvent> {
         if let Some(running) = self.running_commands.get_mut(call_id) {
-            running
-                .aggregated_output
-                .push_str(&String::from_utf8_lossy(chunk));
+            running.aggregated_output.extend_from_slice(chunk);
         }
         Vec::new()
     }
@@ -296,7 +294,7 @@ impl EventProcessorWithJsonOutput {
             RunningCommand {
                 command: command_string.clone(),
                 item_id: item_id.clone(),
-                aggregated_output: String::new(),
+                aggregated_output: Vec::new(),
             },
         );
 
@@ -686,7 +684,7 @@ impl EventProcessorWithJsonOutput {
             CommandExecutionStatus::Failed
         };
         let aggregated_output = if ev.aggregated_output.is_empty() {
-            aggregated_output
+            String::from_utf8_lossy(&aggregated_output).into_owned()
         } else {
             ev.aggregated_output.clone()
         };
@@ -772,7 +770,8 @@ impl EventProcessorWithJsonOutput {
                     id: running.item_id,
                     details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
                         command: running.command,
-                        aggregated_output: running.aggregated_output,
+                        aggregated_output: String::from_utf8_lossy(&running.aggregated_output)
+                            .into_owned(),
                         exit_code: None,
                         status: CommandExecutionStatus::Completed,
                     }),

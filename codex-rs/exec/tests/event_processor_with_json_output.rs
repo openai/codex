@@ -1016,6 +1016,93 @@ fn command_execution_output_delta_updates_item_progress() {
 }
 
 #[test]
+fn command_execution_output_delta_preserves_utf8_across_chunks() {
+    let mut ep = EventProcessorWithJsonOutput::new(None);
+    let command = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        "echo snowman".to_string(),
+    ];
+    let cwd = std::env::current_dir().unwrap();
+    let parsed_cmd = Vec::new();
+
+    let begin = event(
+        "u1",
+        EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id: "utf8-1".to_string(),
+            process_id: Some("42".to_string()),
+            turn_id: "turn-1".to_string(),
+            command: command.clone(),
+            cwd: cwd.clone(),
+            parsed_cmd: parsed_cmd.clone(),
+            source: ExecCommandSource::Agent,
+            interaction_input: None,
+        }),
+    );
+    let out_begin = ep.collect_thread_events(&begin);
+    assert_eq!(out_begin.len(), 1);
+
+    let snowman_bytes = vec![0xE2, 0x98, 0x83];
+    let delta = event(
+        "u2",
+        EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
+            call_id: "utf8-1".to_string(),
+            stream: ExecOutputStream::Stdout,
+            chunk: vec![snowman_bytes[0]],
+        }),
+    );
+    let out_delta = ep.collect_thread_events(&delta);
+    assert_eq!(out_delta, Vec::<ThreadEvent>::new());
+
+    let delta_two = event(
+        "u2b",
+        EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
+            call_id: "utf8-1".to_string(),
+            stream: ExecOutputStream::Stdout,
+            chunk: snowman_bytes[1..].to_vec(),
+        }),
+    );
+    let out_delta_two = ep.collect_thread_events(&delta_two);
+    assert_eq!(out_delta_two, Vec::<ThreadEvent>::new());
+
+    let end = event(
+        "u3",
+        EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+            call_id: "utf8-1".to_string(),
+            process_id: Some("42".to_string()),
+            turn_id: "turn-1".to_string(),
+            command,
+            cwd,
+            parsed_cmd,
+            source: ExecCommandSource::Agent,
+            interaction_input: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            aggregated_output: String::new(),
+            exit_code: 0,
+            duration: Duration::from_millis(3),
+            formatted_output: String::new(),
+        }),
+    );
+    let out_end = ep.collect_thread_events(&end);
+    let expected = String::from_utf8(snowman_bytes).unwrap();
+    assert_eq!(
+        out_end,
+        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+            item: ThreadItem {
+                id: "item_0".to_string(),
+                details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
+                    command: "bash -lc 'echo snowman'".to_string(),
+                    aggregated_output: expected,
+                    exit_code: Some(0),
+                    status: CommandExecutionStatus::Completed,
+                }),
+            },
+        })]
+    );
+}
+
+#[test]
 fn exec_command_end_failure_produces_failed_command_item() {
     let mut ep = EventProcessorWithJsonOutput::new(None);
     let command = vec!["sh".to_string(), "-c".to_string(), "exit 1".to_string()];
