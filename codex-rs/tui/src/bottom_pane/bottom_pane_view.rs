@@ -21,6 +21,12 @@ pub(crate) trait BottomPaneView: Renderable {
         CancellationEvent::NotHandled
     }
 
+    /// Return true if Esc should be routed through `handle_key_event` instead
+    /// of the `on_ctrl_c` cancellation path.
+    fn prefer_esc_to_handle_key_event(&self) -> bool {
+        false
+    }
+
     /// Optional paste handler. Return true if the view modified its state and
     /// needs a redraw.
     fn handle_paste(&mut self, _pasted: String) -> bool {
