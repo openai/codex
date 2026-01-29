@@ -155,6 +155,9 @@ impl LocalSecretsBackend {
         {
             Some(existing) => Ok(SecretString::from(existing)),
             None => {
+                // Generate a high-entropy key and persist it in the OS keyring.
+                // This keeps secrets out of plaintext config while remaining
+                // fully local/offline for the MVP.
                 let generated = generate_passphrase()?;
                 self.keyring_store
                     .save(keyring_service(), &account, generated.expose_secret())
@@ -171,6 +174,7 @@ fn generate_passphrase() -> Result<SecretString> {
     let mut rng = OsRng;
     rng.try_fill_bytes(&mut bytes)
         .context("failed to generate random secrets key")?;
+    // Base64 keeps the keyring payload ASCII-safe without reducing entropy.
     let encoded = BASE64_STANDARD.encode(bytes);
     wipe_bytes(&mut bytes);
     Ok(SecretString::from(encoded))
