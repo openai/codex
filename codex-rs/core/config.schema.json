@@ -207,6 +207,9 @@
             "shell_tool": {
               "type": "boolean"
             },
+            "skill_env_var_dependency_prompt": {
+              "type": "boolean"
+            },
             "skill_mcp_dependency_install": {
               "type": "boolean"
             },
@@ -1229,6 +1232,9 @@
           "type": "boolean"
         },
         "shell_tool": {
+          "type": "boolean"
+        },
+        "skill_env_var_dependency_prompt": {
           "type": "boolean"
         },
         "skill_mcp_dependency_install": {

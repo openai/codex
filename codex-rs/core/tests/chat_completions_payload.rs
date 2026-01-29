@@ -11,6 +11,7 @@ use codex_core::ModelClient;
 use codex_core::ModelProviderInfo;
 use codex_core::Prompt;
 use codex_core::ResponseItem;
+use codex_core::TransportManager;
 use codex_core::WireApi;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_otel::OtelManager;
@@ -98,6 +99,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
         summary,
         conversation_id,
         SessionSource::Exec,
+        TransportManager::new(),
     )
     .new_session();
 

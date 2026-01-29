@@ -8,6 +8,7 @@ use codex_core::ModelProviderInfo;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
+use codex_core::TransportManager;
 use codex_core::WireApi;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::SessionSource;
@@ -228,6 +229,7 @@ async fn websocket_harness(server: &WebSocketTestServer) -> WebsocketTestHarness
         ReasoningSummary::Auto,
         conversation_id,
         SessionSource::Exec,
+        TransportManager::new(),
     );
 
     WebsocketTestHarness {
