@@ -282,11 +282,8 @@ mod tests {
             },
         );
         let workspace_configuration = WorkspaceConfiguration { workspaces };
-        let context = EnvironmentContext::new(
-            Some(cwd.clone()),
-            fake_shell(),
-            Some(workspace_configuration),
-        );
+        let context =
+            EnvironmentContext::new(Some(cwd), fake_shell(), Some(workspace_configuration));
 
         let expected = r#"<environment_context>
   <cwd>/repo</cwd>
