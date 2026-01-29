@@ -5,6 +5,7 @@ use rand::RngCore;
 use rand::SeedableRng;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -13,6 +14,13 @@ use std::path::PathBuf;
 pub struct CapSids {
     pub workspace: String,
     pub readonly: String,
+    /// Per-workspace capability SIDs keyed by canonicalized CWD string.
+    ///
+    /// This is used to isolate workspaces from other workspace sandbox writes and to
+    /// apply per-workspace denies (e.g. protect `CWD/.codex`)
+    /// without permanently affecting other workspaces.
+    #[serde(default)]
+    pub workspace_by_cwd: HashMap<String, String>,
 }
 
 pub fn cap_sid_file(codex_home: &Path) -> PathBuf {
@@ -30,8 +38,7 @@ fn make_random_cap_sid_string() -> String {
 
 fn persist_caps(path: &Path, caps: &CapSids) -> Result<()> {
     if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir)
-            .with_context(|| format!("create cap sid dir {}", dir.display()))?;
+        fs::create_dir_all(dir).with_context(|| format!("create cap sid dir {}", dir.display()))?;
     }
     let json = serde_json::to_string(caps)?;
     fs::write(path, json).with_context(|| format!("write cap sid file {}", path.display()))?;
@@ -52,6 +59,7 @@ pub fn load_or_create_cap_sids(codex_home: &Path) -> Result<CapSids> {
             let caps = CapSids {
                 workspace: t.to_string(),
                 readonly: make_random_cap_sid_string(),
+                workspace_by_cwd: HashMap::new(),
             };
             persist_caps(&path, &caps)?;
             return Ok(caps);
@@ -60,7 +68,30 @@ pub fn load_or_create_cap_sids(codex_home: &Path) -> Result<CapSids> {
     let caps = CapSids {
         workspace: make_random_cap_sid_string(),
         readonly: make_random_cap_sid_string(),
+        workspace_by_cwd: HashMap::new(),
     };
     persist_caps(&path, &caps)?;
     Ok(caps)
+}
+
+fn canonical_cwd_key(cwd: &Path) -> String {
+    let canonical = dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    canonical
+        .to_string_lossy()
+        .replace('\\', "/")
+        .to_ascii_lowercase()
+}
+
+/// Returns the workspace-specific capability SID for `cwd`, creating and persisting it if missing.
+pub fn workspace_cap_sid_for_cwd(codex_home: &Path, cwd: &Path) -> Result<String> {
+    let path = cap_sid_file(codex_home);
+    let mut caps = load_or_create_cap_sids(codex_home)?;
+    let key = canonical_cwd_key(cwd);
+    if let Some(sid) = caps.workspace_by_cwd.get(&key) {
+        return Ok(sid.clone());
+    }
+    let sid = make_random_cap_sid_string();
+    caps.workspace_by_cwd.insert(key, sid.clone());
+    let _ = persist_caps(&path, &caps);
+    Ok(sid)
 }

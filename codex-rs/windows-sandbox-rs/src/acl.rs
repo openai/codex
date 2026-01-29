@@ -233,7 +233,9 @@ pub unsafe fn dacl_has_write_deny_for_sid(p_dacl: *mut ACL, psid: *mut c_void) -
         | FILE_APPEND_DATA
         | FILE_WRITE_EA
         | FILE_WRITE_ATTRIBUTES
-        | GENERIC_WRITE_MASK;
+        | GENERIC_WRITE_MASK
+        | DELETE
+        | FILE_DELETE_CHILD;
     for i in 0..info.AceCount {
         let mut p_ace: *mut c_void = std::ptr::null_mut();
         if GetAce(p_dacl as *const ACL, i, &mut p_ace) == 0 {
@@ -477,7 +479,9 @@ pub unsafe fn add_deny_write_ace(path: &Path, psid: *mut c_void) -> Result<bool>
             | FILE_APPEND_DATA
             | FILE_WRITE_EA
             | FILE_WRITE_ATTRIBUTES
-            | GENERIC_WRITE_MASK;
+            | GENERIC_WRITE_MASK
+            | DELETE
+            | FILE_DELETE_CHILD;
         explicit.grfAccessMode = DENY_ACCESS;
         explicit.grfInheritance = CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE;
         explicit.Trustee = trustee;
