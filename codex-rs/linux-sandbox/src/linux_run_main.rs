@@ -5,7 +5,6 @@ use std::path::PathBuf;
 
 use crate::bwrap::BwrapOptions;
 use crate::bwrap::create_bwrap_command_args;
-use crate::bwrap::create_bwrap_command_args_vendored;
 use crate::landlock::apply_sandbox_policy_to_current_thread;
 use crate::vendored_bwrap::exec_vendored_bwrap;
 
@@ -107,25 +106,13 @@ pub fn run_main() -> ! {
         let options = BwrapOptions {
             mount_proc: !no_proc,
         };
-        let vendored_available = cfg!(vendored_bwrap_available);
-        if use_vendored_bwrap && vendored_available {
-            let mut argv = vec!["bwrap".to_string()];
-            argv.extend(
-                create_bwrap_command_args_vendored(
-                    inner,
-                    &sandbox_policy,
-                    &sandbox_policy_cwd,
-                    options,
-                )
-                .unwrap_or_else(|err| {
-                    panic!("error building build-time bubblewrap command: {err:?}")
-                }),
-            );
-            exec_vendored_bwrap(argv);
-        }
-        ensure_bwrap_available();
-        create_bwrap_command_args(inner, &sandbox_policy, &sandbox_policy_cwd, options)
-            .unwrap_or_else(|err| panic!("error building bubblewrap command: {err:?}"))
+        // Vendored bwrap is now required for the bubblewrap pipeline.
+        let mut argv = vec!["bwrap".to_string()];
+        argv.extend(
+            create_bwrap_command_args(inner, &sandbox_policy, &sandbox_policy_cwd, options)
+                .unwrap_or_else(|err| panic!("error building bubblewrap command: {err:?}")),
+        );
+        exec_vendored_bwrap(argv);
     } else {
         // Legacy path: Landlock enforcement only.
         if let Err(e) =
@@ -192,20 +179,4 @@ fn exec_or_panic(command: Vec<String>) -> ! {
     // If execvp returns, there was an error.
     let err = std::io::Error::last_os_error();
     panic!("Failed to execvp {}: {err}", command[0].as_str());
-}
-
-/// Ensure the `bwrap` binary is available when the sandbox needs it.
-fn ensure_bwrap_available() {
-    if which::which("bwrap").is_ok() {
-        return;
-    }
-
-    panic!(
-        "bubblewrap (bwrap) is required for Linux filesystem sandboxing but was not found on PATH.\n\
-Install it and retry. Examples:\n\
-- Debian/Ubuntu: apt-get install bubblewrap\n\
-- Fedora/RHEL: dnf install bubblewrap\n\
-- Arch: pacman -S bubblewrap\n\
-Alternatively, rebuild codex-linux-sandbox with CODEX_BWRAP_ENABLE_FFI=1 to use the vendored bubblewrap path."
-    );
 }

@@ -2,15 +2,14 @@
 
 The Linux sandbox helper (`codex-linux-sandbox`) supports two filesystem
 pipelines:
-- Vendored bubblewrap (default when available): bubblewrap (`bwrap`) for
-  filesystem isolation plus seccomp.
+- Vendored bubblewrap (default): bubblewrap (`bwrap`) for filesystem isolation
+  plus seccomp.
 - Legacy: mount-based protections plus Landlock enforcement.
 
 ## Requirements
 
-- Vendored bubblewrap requires a Linux build that enables the FFI path.
-- When the vendored bubblewrap path is not available at runtime, the helper
-  falls back to an external `bwrap` on `PATH`.
+- The bubblewrap pipeline requires a Linux build that enables the vendored
+  bubblewrap FFI path.
 
 ## Filesystem Semantics (bubblewrap pipeline)
 

@@ -7,14 +7,12 @@ This crate is responsible for producing:
   - the `codex-exec` CLI can check if its arg0 is `codex-linux-sandbox` and, if so, execute as if it were `codex-linux-sandbox`
   - this should also be true of the `codex` multitool CLI
 
-On Linux, the bubblewrap pipeline prefers the vendored bubblewrap path when it
-is compiled into the binary. If that path is not available at runtime, it
-falls back to an external `bwrap` (bubblewrap) on `PATH`.
+On Linux, the bubblewrap pipeline uses the vendored bubblewrap path compiled
+into this binary.
 
 **Current Behavior**
 - Legacy Landlock + mount protections remain available as the legacy pipeline.
-- The bubblewrap pipeline is now standardized on the vendored path when
-  available.
+- The bubblewrap pipeline is standardized on the vendored path.
 - When enabled, the bubblewrap pipeline applies `PR_SET_NO_NEW_PRIVS` and a
   seccomp network filter in-process.
 - When enabled, the filesystem is read-only by default via `--ro-bind / /`.

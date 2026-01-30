@@ -18,7 +18,6 @@ set -euo pipefail
 #   CODEX_LINUX_SANDBOX_DEBUG=1      # default: 0 (pass debug env var through)
 #   CODEX_LINUX_SANDBOX_USE_BWRAP=1  # default: 1 (run the bwrap suite)
 #   CODEX_LINUX_SANDBOX_USE_LEGACY=1 # default: 0 (run the legacy suite)
-#   CODEX_LINUX_SANDBOX_USE_VENDORED=1 # default: 1 (prefer build-time bwrap FFI)
 
 if [[ "$(uname -s)" != "Linux" ]]; then
   echo "This script is intended to run on Linux." >&2
@@ -33,7 +32,6 @@ NO_PROC="${CODEX_LINUX_SANDBOX_NO_PROC:-1}"
 DEBUG="${CODEX_LINUX_SANDBOX_DEBUG:-0}"
 USE_BWRAP_SUITE="${CODEX_LINUX_SANDBOX_USE_BWRAP:-1}"
 USE_LEGACY_SUITE="${CODEX_LINUX_SANDBOX_USE_LEGACY:-0}"
-USE_VENDORED="${CODEX_LINUX_SANDBOX_USE_VENDORED:-1}"
 
 SANDBOX_BIN="${CODEX_RS_DIR}/target/debug/codex-linux-sandbox"
 tmp_root=""
@@ -66,10 +64,7 @@ run_sandbox() {
 
   local bwrap_flag=()
   if [[ "${use_bwrap}" == "1" ]]; then
-    bwrap_flag=(--use-bwrap-sandbox)
-    if [[ "${USE_VENDORED}" == "1" ]]; then
-      bwrap_flag+=(--use-vendored-bwrap)
-    fi
+    bwrap_flag=(--use-bwrap-sandbox --use-vendored-bwrap)
   fi
 
   "${debug_env[@]}" "${SANDBOX_BIN}" \
