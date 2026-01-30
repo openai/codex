@@ -1400,6 +1400,7 @@ dependencies = [
  "codex-state",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
+ "codex-utils-home-dir",
  "codex-utils-pty",
  "codex-utils-readiness",
  "codex-utils-string",
@@ -1407,7 +1408,6 @@ dependencies = [
  "core-foundation 0.9.4",
  "core_test_support",
  "ctor 0.6.3",
- "dirs",
  "dunce",
  "encoding_rs",
  "env-flags",
@@ -1842,7 +1842,7 @@ dependencies = [
  "codex-keyring-store",
  "codex-protocol",
  "codex-utils-cargo-bin",
- "dirs",
+ "codex-utils-home-dir",
  "futures",
  "keyring",
  "mcp-types",
@@ -2005,6 +2005,15 @@ dependencies = [
  "assert_cmd",
  "runfiles",
  "thiserror 2.0.17",
+]
+
+[[package]]
+name = "codex-utils-home-dir"
+version = "0.0.0"
+dependencies = [
+ "dirs",
+ "pretty_assertions",
+ "tempfile",
 ]
 
 [[package]]
