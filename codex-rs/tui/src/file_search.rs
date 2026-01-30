@@ -6,7 +6,6 @@
 //! on every keystroke, and drops the session when the query becomes empty.
 
 use codex_file_search as file_search;
-use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
