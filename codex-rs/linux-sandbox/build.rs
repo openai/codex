@@ -1,7 +1,6 @@
 use std::env;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
 
 fn main() {
     // Tell rustc/clippy that this is an expected cfg value.
@@ -25,8 +24,10 @@ fn main() {
 }
 
 fn try_build_vendored_bwrap() -> Result<(), String> {
+    let manifest_dir =
+        PathBuf::from(env::var("CARGO_MANIFEST_DIR").map_err(|err| err.to_string())?);
     let out_dir = PathBuf::from(env::var("OUT_DIR").map_err(|err| err.to_string())?);
-    let src_dir = resolve_bwrap_source_dir(&out_dir)?;
+    let src_dir = resolve_bwrap_source_dir(&manifest_dir)?;
 
     let libcap = pkg_config::Config::new()
         .probe("libcap")
@@ -64,9 +65,8 @@ fn try_build_vendored_bwrap() -> Result<(), String> {
 ///
 /// Priority:
 /// 1. `CODEX_BWRAP_SOURCE_DIR` points at an existing bubblewrap checkout.
-/// 2. `CODEX_BWRAP_FETCH=1` triggers a build-time shallow git clone into
-///    `OUT_DIR`.
-fn resolve_bwrap_source_dir(out_dir: &Path) -> Result<PathBuf, String> {
+/// 2. The vendored bubblewrap tree under `codex-rs/vendor/bubblewrap`.
+fn resolve_bwrap_source_dir(manifest_dir: &Path) -> Result<PathBuf, String> {
     if let Ok(path) = env::var("CODEX_BWRAP_SOURCE_DIR") {
         let src_dir = PathBuf::from(path);
         if src_dir.exists() {
@@ -78,35 +78,14 @@ fn resolve_bwrap_source_dir(out_dir: &Path) -> Result<PathBuf, String> {
         ));
     }
 
-    let fetch = matches!(env::var("CODEX_BWRAP_FETCH"), Ok(value) if value == "1");
-    if !fetch {
-        return Err(
-            "no bwrap source available: set CODEX_BWRAP_SOURCE_DIR or CODEX_BWRAP_FETCH=1"
-                .to_string(),
-        );
-    }
-
-    let fetch_ref = env::var("CODEX_BWRAP_FETCH_REF").unwrap_or_else(|_| "v0.11.0".to_string());
-    let src_dir = out_dir.join("bubblewrap-src");
-    if src_dir.exists() {
-        return Ok(src_dir);
-    }
-
-    let status = Command::new("git")
-        .arg("clone")
-        .arg("--depth")
-        .arg("1")
-        .arg("--branch")
-        .arg(&fetch_ref)
-        .arg("https://github.com/containers/bubblewrap")
-        .arg(&src_dir)
-        .status()
-        .map_err(|err| format!("failed to spawn git clone: {err}"))?;
-    if status.success() {
-        return Ok(src_dir);
+    let vendor_dir = manifest_dir.join("../vendor/bubblewrap");
+    if vendor_dir.exists() {
+        return Ok(vendor_dir);
     }
 
     Err(format!(
-        "git clone bubblewrap ({fetch_ref}) failed with status: {status}"
+        "expected vendored bubblewrap at {}, but it was not found.\n\
+Set CODEX_BWRAP_SOURCE_DIR to an existing checkout or vendor bubblewrap under codex-rs/vendor.",
+        vendor_dir.display()
     ))
 }
