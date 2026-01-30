@@ -1905,9 +1905,18 @@ impl HistoryCell for FinalMessageSeparator {
             };
             let response_wait = format_duration(timing.response_wait_duration);
 
-            let summary = format!(
-                "─ Local tools: {tool_calls} {tool_label}, {tool_duration} • Inference: {inference_calls} {inference_label}, {response_wait} wait ─"
-            );
+            let summary = if let Some(elapsed_seconds) = self
+                .elapsed_seconds
+                .map(super::status_indicator_widget::fmt_elapsed_compact)
+            {
+                format!(
+                    "─ Worked for {elapsed_seconds} • Local tools: {tool_calls} {tool_label}, {tool_duration} • Inference: {inference_calls} {inference_label}, {response_wait} wait ─"
+                )
+            } else {
+                format!(
+                    "─ Local tools: {tool_calls} {tool_label}, {tool_duration} • Inference: {inference_calls} {inference_label}, {response_wait} wait ─"
+                )
+            };
             let summary_width = summary.width();
             vec![
                 Line::from_iter([
