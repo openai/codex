@@ -123,7 +123,7 @@ pub(crate) async fn track_skill_invocations(
             event_params: TrackEventParams {
                 skill_id,
                 skill_scope: skill_scope.to_string(),
-                product_surface: tracking.session_source.to_string(),
+                product_surface: "codex",
                 product_client_id: tracking.product_client_id.clone(),
                 model_slug: tracking.model_slug.clone(),
                 conversation_id: tracking.conversation_id.clone(),
