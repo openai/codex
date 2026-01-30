@@ -3089,7 +3089,7 @@ mod tests {
                 message: "plan".to_string(),
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
-                collaboration_mode: Some(plan_mask.clone()),
+                collaboration_mode: Some(plan_mask),
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(
                 vec![Line::from("plan response")],
@@ -3169,7 +3169,7 @@ mod tests {
                 message: "plan".to_string(),
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
-                collaboration_mode: Some(plan_mask.clone()),
+                collaboration_mode: Some(plan_mask),
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(
                 vec![Line::from("plan response")],
@@ -3333,7 +3333,7 @@ mod tests {
                 message: "plan".to_string(),
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
-                collaboration_mode: Some(plan_mask.clone()),
+                collaboration_mode: Some(plan_mask),
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(
                 vec![Line::from("plan response")],
