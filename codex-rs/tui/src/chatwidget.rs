@@ -1577,19 +1577,27 @@ impl ChatWidget {
                     .insert(call_id, args.questions);
             }
             ResponseItem::FunctionCallOutput { call_id, output } => {
-                let Some(questions) = self.request_user_input_questions.remove(&call_id) else {
+                let Some(questions) = self.request_user_input_questions.get(&call_id).cloned()
+                else {
                     return;
                 };
                 let response: RequestUserInputResponse = match serde_json::from_str(&output.content)
                 {
                     Ok(response) => response,
                     Err(err) => {
+                        if output.content
+                            == "request_user_input was cancelled before receiving a response"
+                        {
+                            return;
+                        }
+                        self.request_user_input_questions.remove(&call_id);
                         tracing::warn!(
                             "failed to parse request_user_input response for call_id {call_id}: {err}"
                         );
                         return;
                     }
                 };
+                self.request_user_input_questions.remove(&call_id);
                 let (answers, interrupted) = split_request_user_input_answers(response.answers);
                 self.add_to_history(history_cell::new_request_user_input_result(
                     questions,
