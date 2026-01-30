@@ -137,6 +137,7 @@ fn get_shell_path(
     let default_shell_path = get_user_shell_path();
     if let Some(default_shell_path) = default_shell_path
         && detect_shell_type(&default_shell_path) == Some(shell_type)
+        && file_exists(&default_shell_path).is_some()
     {
         return Some(default_shell_path);
     }

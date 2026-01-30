@@ -64,7 +64,9 @@ async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
     if let Some(parent) = abs_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let image = ImageBuffer::from_pixel(4096, 1024, Rgba([20u8, 40, 60, 255]));
+    let original_width = 2304;
+    let original_height = 864;
+    let image = ImageBuffer::from_pixel(original_width, original_height, Rgba([20u8, 40, 60, 255]));
     image.save(&abs_path)?;
 
     let response = sse(vec![
@@ -93,7 +95,13 @@ async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_event_with_timeout(
+        &codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        // Empirically, image attachment can be slow under Bazel/RBE.
+        Duration::from_secs(10),
+    )
+    .await;
 
     let body = mock.single_request().body_json();
     let image_message =
@@ -124,8 +132,8 @@ async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
     let (width, height) = resized.dimensions();
     assert!(width <= 2048);
     assert!(height <= 768);
-    assert!(width < 4096);
-    assert!(height < 1024);
+    assert!(width < original_width);
+    assert!(height < original_height);
 
     Ok(())
 }
@@ -148,7 +156,9 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
     if let Some(parent) = abs_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let image = ImageBuffer::from_pixel(4096, 1024, Rgba([255u8, 0, 0, 255]));
+    let original_width = 2304;
+    let original_height = 864;
+    let image = ImageBuffer::from_pixel(original_width, original_height, Rgba([255u8, 0, 0, 255]));
     image.save(&abs_path)?;
 
     let call_id = "view-image-call";
@@ -261,8 +271,8 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
     let (resized_width, resized_height) = resized.dimensions();
     assert!(resized_width <= 2048);
     assert!(resized_height <= 768);
-    assert!(resized_width < 4096);
-    assert!(resized_height < 1024);
+    assert!(resized_width < original_width);
+    assert!(resized_height < original_height);
 
     Ok(())
 }

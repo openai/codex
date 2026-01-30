@@ -13,6 +13,7 @@
 - [Events](#events)
 - [Approvals](#approvals)
 - [Skills](#skills)
+- [Apps](#apps)
 - [Auth endpoints](#auth-endpoints)
 
 ## Protocol
@@ -81,6 +82,7 @@ Example (from OpenAI's official VSCode extension):
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`.
 - `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success.
+- `thread/name/set` — set or update a thread’s user-facing name; returns `{}` on success. Thread names are not required to be unique; name lookups resolve to the most recently updated thread.
 - `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications.
@@ -296,6 +298,26 @@ Invoke a skill explicitly by including `$<skill-name>` in the text input and add
 } } }
 ```
 
+### Example: Start a turn (invoke an app)
+
+Invoke an app by including `$<app-slug>` in the text input and adding a `mention` input item with the app id in `app://<connector-id>` form.
+
+```json
+{ "method": "turn/start", "id": 34, "params": {
+    "threadId": "thr_123",
+    "input": [
+        { "type": "text", "text": "$demo-app Summarize the latest updates." },
+        { "type": "mention", "name": "Demo App", "path": "app://demo-app" }
+    ]
+} }
+{ "id": 34, "result": { "turn": {
+    "id": "turn_458",
+    "status": "inProgress",
+    "items": [],
+    "error": null
+} } }
+```
+
 ### Example: Interrupt an active turn
 
 You can cancel a running Turn with `turn/interrupt`.
@@ -431,7 +453,8 @@ Today both notifications carry an empty `items` array even when item events were
 - `imageView` — `{id, path}` emitted when the agent invokes the image viewer tool.
 - `enteredReviewMode` — `{id, review}` sent when the reviewer starts; `review` is a short user-facing label such as `"current changes"` or the requested target description.
 - `exitedReviewMode` — `{id, review}` emitted when the reviewer finishes; `review` is the full plain-text review (usually, overall notes plus bullet point findings).
-- `compacted` - `{threadId, turnId}` when codex compacts the conversation history. This can happen automatically.
+- `contextCompaction` — `{id}` emitted when codex compacts the conversation history. This can happen automatically.
+- `compacted` - `{threadId, turnId}` when codex compacts the conversation history. This can happen automatically. **Deprecated:** Use `contextCompaction` instead.
 
 All items emit two shared lifecycle events:
 
@@ -582,14 +605,72 @@ To enable or disable a skill by path:
 }
 ```
 
+## Apps
+
+Use `app/list` to fetch available apps (connectors). Each entry includes metadata like the app `id`, display `name`, `installUrl`, and whether it is currently accessible.
+
+```json
+{ "method": "app/list", "id": 50, "params": {
+    "cursor": null,
+    "limit": 50
+} }
+{ "id": 50, "result": {
+    "data": [
+        {
+            "id": "demo-app",
+            "name": "Demo App",
+            "description": "Example connector for documentation.",
+            "logoUrl": "https://example.com/demo-app.png",
+            "logoUrlDark": null,
+            "distributionChannel": null,
+            "installUrl": "https://chatgpt.com/apps/demo-app/demo-app",
+            "isAccessible": true
+        }
+    ],
+    "nextCursor": null
+} }
+```
+
+Invoke an app by inserting `$<app-slug>` in the text input. The slug is derived from the app name and lowercased with non-alphanumeric characters replaced by `-` (for example, "Demo App" becomes `$demo-app`). Add a `mention` input item (recommended) so the server uses the exact `app://<connector-id>` path rather than guessing by name.
+
+Example:
+
+```
+$demo-app Pull the latest updates from the team.
+```
+
+```json
+{
+  "method": "turn/start",
+  "id": 51,
+  "params": {
+    "threadId": "thread-1",
+    "input": [
+      {
+        "type": "text",
+        "text": "$demo-app Pull the latest updates from the team."
+      },
+      { "type": "mention", "name": "Demo App", "path": "app://demo-app" }
+    ]
+  }
+}
+```
+
 ## Auth endpoints
 
 The JSON-RPC auth/account surface exposes request/response methods plus server-initiated notifications (no `id`). Use these to determine auth state, start or cancel logins, logout, and inspect ChatGPT rate limits.
 
+### Authentication modes
+
+Codex supports these authentication modes. The current mode is surfaced in `account/updated` (`authMode`) and can be inferred from `account/read`.
+
+- **API key (`apiKey`)**: Caller supplies an OpenAI API key via `account/login/start` with `type: "apiKey"`. The API key is saved and used for API requests.
+- **ChatGPT managed (`chatgpt`)** (recommended): Codex owns the ChatGPT OAuth flow and refresh tokens. Start via `account/login/start` with `type: "chatgpt"`; Codex persists tokens to disk and refreshes them automatically.
+
 ### API Overview
 
 - `account/read` — fetch current account info; optionally refresh tokens.
-- `account/login/start` — begin login (`apiKey` or `chatgpt`).
+- `account/login/start` — begin login (`apiKey`, `chatgpt`).
 - `account/login/completed` (notify) — emitted when a login attempt finishes (success or error).
 - `account/login/cancel` — cancel a pending ChatGPT login by `loginId`.
 - `account/logout` — sign out; triggers `account/updated`.

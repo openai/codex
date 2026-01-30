@@ -7,6 +7,7 @@ use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerDisabledReason;
 use crate::config::types::McpServerTransportConfig;
 use crate::config::types::Notice;
+use crate::config::types::NotificationMethod;
 use crate::config::types::Notifications;
 use crate::config::types::OtelConfig;
 use crate::config::types::OtelConfigToml;
@@ -17,6 +18,7 @@ use crate::config::types::ShellEnvironmentPolicyToml;
 use crate::config::types::SkillsConfig;
 use crate::config::types::Tui;
 use crate::config::types::UriBasedFileOpener;
+use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::LoaderOverrides;
@@ -192,9 +194,12 @@ pub struct Config {
     /// If unset the feature is disabled.
     pub notify: Option<Vec<String>>,
 
-    /// TUI notifications preference. When set, the TUI will send OSC 9 notifications on approvals
-    /// and turn completions when not focused.
+    /// TUI notifications preference. When set, the TUI will send terminal notifications on
+    /// approvals and turn completions when not focused.
     pub tui_notifications: Notifications,
+
+    /// Notification method for terminal notifications (osc9 or bel).
+    pub tui_notification_method: NotificationMethod,
 
     /// Enable ASCII animations and shimmer effects in the TUI.
     pub animations: bool,
@@ -362,6 +367,7 @@ pub struct ConfigBuilder {
     cli_overrides: Option<Vec<(String, TomlValue)>>,
     harness_overrides: Option<ConfigOverrides>,
     loader_overrides: Option<LoaderOverrides>,
+    cloud_requirements: Option<CloudRequirementsLoader>,
     fallback_cwd: Option<PathBuf>,
 }
 
@@ -386,6 +392,11 @@ impl ConfigBuilder {
         self
     }
 
+    pub fn cloud_requirements(mut self, cloud_requirements: CloudRequirementsLoader) -> Self {
+        self.cloud_requirements = Some(cloud_requirements);
+        self
+    }
+
     pub fn fallback_cwd(mut self, fallback_cwd: Option<PathBuf>) -> Self {
         self.fallback_cwd = fallback_cwd;
         self
@@ -397,6 +408,7 @@ impl ConfigBuilder {
             cli_overrides,
             harness_overrides,
             loader_overrides,
+            cloud_requirements,
             fallback_cwd,
         } = self;
         let codex_home = codex_home.map_or_else(find_codex_home, std::io::Result::Ok)?;
@@ -409,9 +421,14 @@ impl ConfigBuilder {
             None => AbsolutePathBuf::current_dir()?,
         };
         harness_overrides.cwd = Some(cwd.to_path_buf());
-        let config_layer_stack =
-            load_config_layers_state(&codex_home, Some(cwd), &cli_overrides, loader_overrides)
-                .await?;
+        let config_layer_stack = load_config_layers_state(
+            &codex_home,
+            Some(cwd),
+            &cli_overrides,
+            loader_overrides,
+            cloud_requirements,
+        )
+        .await?;
         let merged_toml = config_layer_stack.effective_config();
 
         // Note that each layer in ConfigLayerStack should have resolved
@@ -507,6 +524,7 @@ pub async fn load_config_as_toml_with_cli_overrides(
         Some(cwd.clone()),
         &cli_overrides,
         LoaderOverrides::default(),
+        None,
     )
     .await?;
 
@@ -605,9 +623,14 @@ pub async fn load_global_mcp_servers(
     // There is no cwd/project context for this query, so this will not include
     // MCP servers defined in in-repo .codex/ folders.
     let cwd: Option<AbsolutePathBuf> = None;
-    let config_layer_stack =
-        load_config_layers_state(codex_home, cwd, &cli_overrides, LoaderOverrides::default())
-            .await?;
+    let config_layer_stack = load_config_layers_state(
+        codex_home,
+        cwd,
+        &cli_overrides,
+        LoaderOverrides::default(),
+        None,
+    )
+    .await?;
     let merged_toml = config_layer_stack.effective_config();
     let Some(servers_value) = merged_toml.get("mcp_servers") else {
         return Ok(BTreeMap::new());
@@ -1368,12 +1391,6 @@ impl Config {
             || cfg.sandbox_mode.is_some();
 
         let mut model_providers = built_in_model_providers();
-        if features.enabled(Feature::ResponsesWebsockets)
-            && let Some(provider) = model_providers.get_mut("openai")
-            && provider.is_openai()
-        {
-            provider.wire_api = crate::model_provider_info::WireApi::ResponsesWebsocket;
-        }
         // Merge user-defined providers into the built-in list.
         for (key, provider) in cfg.model_providers.into_iter() {
             model_providers.entry(key).or_insert(provider);
@@ -1607,6 +1624,11 @@ impl Config {
                 .as_ref()
                 .map(|t| t.notifications.clone())
                 .unwrap_or_default(),
+            tui_notification_method: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.notification_method)
+                .unwrap_or_default(),
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
             show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
             experimental_mode: cfg.tui.as_ref().and_then(|t| t.experimental_mode),
@@ -1679,18 +1701,19 @@ impl Config {
         }
     }
 
-    pub fn set_windows_sandbox_globally(&mut self, value: bool) {
+    pub fn set_windows_sandbox_enabled(&mut self, value: bool) {
         if value {
             self.features.enable(Feature::WindowsSandbox);
+            self.forced_auto_mode_downgraded_on_windows = false;
         } else {
             self.features.disable(Feature::WindowsSandbox);
         }
-        self.forced_auto_mode_downgraded_on_windows = !value;
     }
 
-    pub fn set_windows_elevated_sandbox_globally(&mut self, value: bool) {
+    pub fn set_windows_elevated_sandbox_enabled(&mut self, value: bool) {
         if value {
             self.features.enable(Feature::WindowsSandboxElevated);
+            self.forced_auto_mode_downgraded_on_windows = false;
         } else {
             self.features.disable(Feature::WindowsSandboxElevated);
         }
@@ -1764,6 +1787,7 @@ mod tests {
     use crate::config::types::FeedbackConfigToml;
     use crate::config::types::HistoryPersistence;
     use crate::config::types::McpServerTransportConfig;
+    use crate::config::types::NotificationMethod;
     use crate::config::types::Notifications;
     use crate::config_loader::RequirementSource;
     use crate::features::Feature;
@@ -1860,6 +1884,7 @@ persistence = "none"
             tui,
             Tui {
                 notifications: Notifications::Enabled(true),
+                notification_method: NotificationMethod::Auto,
                 animations: true,
                 show_tooltips: true,
                 experimental_mode: None,
@@ -2543,7 +2568,7 @@ profile = "project"
     }
 
     #[test]
-    fn responses_websockets_feature_updates_openai_provider() -> std::io::Result<()> {
+    fn responses_websockets_feature_does_not_change_wire_api() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let mut entries = BTreeMap::new();
         entries.insert("responses_websockets".to_string(), true);
@@ -2560,7 +2585,7 @@ profile = "project"
 
         assert_eq!(
             config.model_provider.wire_api,
-            crate::model_provider_info::WireApi::ResponsesWebsocket
+            crate::model_provider_info::WireApi::Responses
         );
 
         Ok(())
@@ -2606,7 +2631,8 @@ profile = "project"
 
         let cwd = AbsolutePathBuf::try_from(codex_home.path())?;
         let config_layer_stack =
-            load_config_layers_state(codex_home.path(), Some(cwd), &Vec::new(), overrides).await?;
+            load_config_layers_state(codex_home.path(), Some(cwd), &Vec::new(), overrides, None)
+                .await?;
         let cfg = deserialize_config_toml_with_base(
             config_layer_stack.effective_config(),
             codex_home.path(),
@@ -2733,6 +2759,7 @@ profile = "project"
             Some(cwd),
             &[("model".to_string(), TomlValue::String("cli".to_string()))],
             overrides,
+            None,
         )
         .await?;
 
@@ -3680,6 +3707,7 @@ model_verbosity = "high"
             stream_max_retries: Some(10),
             stream_idle_timeout_ms: Some(300_000),
             requires_openai_auth: false,
+            supports_websockets: false,
         };
         let model_provider_map = {
             let mut model_provider_map = built_in_model_providers();
@@ -3788,6 +3816,7 @@ model_verbosity = "high"
                 check_for_update_on_startup: true,
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
+                tui_notification_method: Default::default(),
                 animations: true,
                 show_tooltips: true,
                 experimental_mode: None,
@@ -3871,6 +3900,7 @@ model_verbosity = "high"
             check_for_update_on_startup: true,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
             experimental_mode: None,
@@ -3969,6 +3999,7 @@ model_verbosity = "high"
             check_for_update_on_startup: true,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
             experimental_mode: None,
@@ -4053,6 +4084,7 @@ model_verbosity = "high"
             check_for_update_on_startup: true,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
             experimental_mode: None,
@@ -4410,13 +4442,17 @@ mcp_oauth_callback_port = 5678
 
 #[cfg(test)]
 mod notifications_tests {
+    use crate::config::types::NotificationMethod;
     use crate::config::types::Notifications;
     use assert_matches::assert_matches;
     use serde::Deserialize;
 
     #[derive(Deserialize, Debug, PartialEq)]
     struct TuiTomlTest {
+        #[serde(default)]
         notifications: Notifications,
+        #[serde(default)]
+        notification_method: NotificationMethod,
     }
 
     #[derive(Deserialize, Debug, PartialEq)]
@@ -4446,5 +4482,16 @@ mod notifications_tests {
             parsed.tui.notifications,
             Notifications::Custom(ref v) if v == &vec!["foo".to_string()]
         );
+    }
+
+    #[test]
+    fn test_tui_notification_method() {
+        let toml = r#"
+            [tui]
+            notification_method = "bel"
+        "#;
+        let parsed: RootTomlTest =
+            toml::from_str(toml).expect("deserialize notification_method=\"bel\"");
+        assert_eq!(parsed.tui.notification_method, NotificationMethod::Bel);
     }
 }

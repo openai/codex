@@ -4,11 +4,15 @@ use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigBuilder;
 use crate::config::ConfigOverrides;
 use crate::config::ConfigToml;
+use crate::config::ConstraintError;
 use crate::config::ProjectConfig;
+use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigLoadError;
 use crate::config_loader::ConfigRequirements;
+use crate::config_loader::ConfigRequirementsToml;
 use crate::config_loader::config_requirements::ConfigRequirementsWithSources;
+use crate::config_loader::config_requirements::RequirementSource;
 use crate::config_loader::fingerprint::version_for_toml;
 use crate::config_loader::load_requirements_toml;
 use codex_protocol::config_types::TrustLevel;
@@ -65,6 +69,7 @@ async fn returns_config_error_for_invalid_user_config_toml() {
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
+        None,
     )
     .await
     .expect_err("expected error");
@@ -94,6 +99,7 @@ async fn returns_config_error_for_invalid_managed_config_toml() {
         Some(cwd),
         &[] as &[(String, TomlValue)],
         overrides,
+        None,
     )
     .await
     .expect_err("expected error");
@@ -182,6 +188,7 @@ extra = true
         Some(cwd),
         &[] as &[(String, TomlValue)],
         overrides,
+        None,
     )
     .await
     .expect("load config");
@@ -218,6 +225,7 @@ async fn returns_empty_when_all_layers_missing() {
         Some(cwd),
         &[] as &[(String, TomlValue)],
         overrides,
+        None,
     )
     .await
     .expect("load layers");
@@ -315,6 +323,7 @@ flag = false
         Some(cwd),
         &[] as &[(String, TomlValue)],
         overrides,
+        None,
     )
     .await
     .expect("load config");
@@ -354,6 +363,7 @@ allowed_sandbox_modes = ["read-only"]
                 ),
             ),
         },
+        None,
     )
     .await?;
 
@@ -414,6 +424,7 @@ allowed_approval_policies = ["never"]
                 ),
             ),
         },
+        None,
     )
     .await?;
 
@@ -472,6 +483,91 @@ allowed_approval_policies = ["never", "on-request"]
     Ok(())
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn cloud_requirements_are_not_overwritten_by_system_requirements() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let requirements_file = tmp.path().join("requirements.toml");
+    tokio::fs::write(
+        &requirements_file,
+        r#"
+allowed_approval_policies = ["on-request"]
+"#,
+    )
+    .await?;
+
+    let mut config_requirements_toml = ConfigRequirementsWithSources::default();
+    config_requirements_toml.merge_unset_fields(
+        RequirementSource::CloudRequirements,
+        ConfigRequirementsToml {
+            allowed_approval_policies: Some(vec![AskForApproval::Never]),
+            allowed_sandbox_modes: None,
+            mcp_servers: None,
+        },
+    );
+    load_requirements_toml(&mut config_requirements_toml, &requirements_file).await?;
+
+    assert_eq!(
+        config_requirements_toml
+            .allowed_approval_policies
+            .as_ref()
+            .map(|sourced| sourced.value.clone()),
+        Some(vec![AskForApproval::Never])
+    );
+    assert_eq!(
+        config_requirements_toml
+            .allowed_approval_policies
+            .as_ref()
+            .map(|sourced| sourced.source.clone()),
+        Some(RequirementSource::CloudRequirements)
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    let cwd = AbsolutePathBuf::from_absolute_path(tmp.path())?;
+
+    let requirements = ConfigRequirementsToml {
+        allowed_approval_policies: Some(vec![AskForApproval::Never]),
+        allowed_sandbox_modes: None,
+        mcp_servers: None,
+    };
+    let expected = requirements.clone();
+    let cloud_requirements = CloudRequirementsLoader::new(async move { Some(requirements) });
+
+    let layers = load_config_layers_state(
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        Some(cloud_requirements),
+    )
+    .await?;
+
+    assert_eq!(
+        layers.requirements_toml().allowed_approval_policies,
+        expected.allowed_approval_policies
+    );
+    assert_eq!(
+        layers
+            .requirements()
+            .approval_policy
+            .can_set(&AskForApproval::OnRequest),
+        Err(ConstraintError::InvalidValue {
+            field_name: "approval_policy",
+            candidate: "OnRequest".into(),
+            allowed: "[Never]".into(),
+            requirement_source: RequirementSource::CloudRequirements,
+        })
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn project_layers_prefer_closest_cwd() -> std::io::Result<()> {
     let tmp = tempdir()?;
@@ -501,6 +597,7 @@ async fn project_layers_prefer_closest_cwd() -> std::io::Result<()> {
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
+        None,
     )
     .await?;
 
@@ -632,6 +729,7 @@ async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> s
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
+        None,
     )
     .await?;
 
@@ -691,6 +789,7 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
         Some(cwd.clone()),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
+        None,
     )
     .await?;
     let project_layers_untrusted: Vec<_> = layers_untrusted
@@ -728,6 +827,7 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
+        None,
     )
     .await?;
     let project_layers_unknown: Vec<_> = layers_unknown
@@ -788,6 +888,7 @@ async fn invalid_project_config_ignored_when_untrusted_or_unknown() -> std::io::
             Some(cwd.clone()),
             &[] as &[(String, TomlValue)],
             LoaderOverrides::default(),
+            None,
         )
         .await?;
         let project_layers: Vec<_> = layers
@@ -843,6 +944,7 @@ async fn cli_overrides_with_relative_paths_do_not_break_trust_check() -> std::io
         Some(cwd),
         &cli_overrides,
         LoaderOverrides::default(),
+        None,
     )
     .await?;
 
@@ -884,6 +986,7 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
+        None,
     )
     .await?;
 

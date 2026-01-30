@@ -34,6 +34,8 @@ use tracing::debug;
 
 const ENV_ATTRIBUTE: &str = "env";
 const METER_NAME: &str = "codex";
+const DURATION_UNIT: &str = "ms";
+const DURATION_DESCRIPTION: &str = "Duration in milliseconds.";
 
 #[derive(Debug)]
 struct MetricsClientInner {
@@ -41,6 +43,7 @@ struct MetricsClientInner {
     meter: Meter,
     counters: Mutex<HashMap<String, Counter<u64>>>,
     histograms: Mutex<HashMap<String, Histogram<f64>>>,
+    duration_histograms: Mutex<HashMap<String, Histogram<f64>>>,
     default_tags: BTreeMap<String, String>,
 }
 
@@ -77,6 +80,25 @@ impl MetricsClientInner {
         let histogram = histograms
             .entry(name.to_string())
             .or_insert_with(|| self.meter.f64_histogram(name.to_string()).build());
+        histogram.record(value as f64, &attributes);
+        Ok(())
+    }
+
+    fn duration_histogram(&self, name: &str, value: i64, tags: &[(&str, &str)]) -> Result<()> {
+        validate_metric_name(name)?;
+        let attributes = self.attributes(tags)?;
+
+        let mut histograms = self
+            .duration_histograms
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let histogram = histograms.entry(name.to_string()).or_insert_with(|| {
+            self.meter
+                .f64_histogram(name.to_string())
+                .with_unit(DURATION_UNIT)
+                .with_description(DURATION_DESCRIPTION)
+                .build()
+        });
         histogram.record(value as f64, &attributes);
         Ok(())
     }
@@ -150,6 +172,7 @@ impl MetricsClient {
             meter,
             counters: Mutex::new(HashMap::new()),
             histograms: Mutex::new(HashMap::new()),
+            duration_histograms: Mutex::new(HashMap::new()),
             default_tags: config.default_tags,
         })))
     }
@@ -171,7 +194,7 @@ impl MetricsClient {
         duration: Duration,
         tags: &[(&str, &str)],
     ) -> Result<()> {
-        self.histogram(
+        self.0.duration_histogram(
             name,
             duration.as_millis().min(i64::MAX as u128) as i64,
             tags,
