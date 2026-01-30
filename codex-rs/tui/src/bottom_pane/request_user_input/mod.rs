@@ -692,11 +692,7 @@ impl RequestUserInputOverlay {
         } else {
             None
         };
-        let draft = if idx == self.current_index() {
-            self.capture_composer_draft()
-        } else {
-            answer_state.draft.clone()
-        };
+        let draft = answer_state.draft.clone();
         let notes = draft.text_with_pending().trim().to_string();
         let selected_label = selected_idx
             .and_then(|selected_idx| Self::option_label_for_index(question, selected_idx));
