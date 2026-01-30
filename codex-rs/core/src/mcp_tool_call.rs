@@ -312,19 +312,18 @@ fn parse_mcp_tool_approval_response(
         .answers
         .get(question_id)
         .map(|answer| answer.answers.as_slice());
-    if answers.is_some_and(|answers| {
-        answers
-            .iter()
-            .any(|answer| answer == MCP_TOOL_APPROVAL_ACCEPT)
-    }) {
+    let Some(answers) = answers else {
+        return McpToolApprovalDecision::Cancel;
+    };
+    if answers
+        .iter()
+        .any(|answer| answer == MCP_TOOL_APPROVAL_ACCEPT)
+    {
         McpToolApprovalDecision::Accept
-    } else if answers.is_some_and(|answers| {
-        answers
-            .iter()
-            .any(|answer| answer == MCP_TOOL_APPROVAL_CANCEL)
-    }) {
-        McpToolApprovalDecision::Cancel
-    } else if answers.is_none() {
+    } else if answers
+        .iter()
+        .any(|answer| answer == MCP_TOOL_APPROVAL_CANCEL)
+    {
         McpToolApprovalDecision::Cancel
     } else {
         McpToolApprovalDecision::Decline
