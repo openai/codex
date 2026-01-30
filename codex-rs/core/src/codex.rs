@@ -513,6 +513,8 @@ pub(crate) struct TurnContext {
     pub(crate) turn_metadata_header: Option<String>,
 }
 
+const TURN_METADATA_TIMEOUT: TokioDuration = TokioDuration::from_millis(150);
+
 impl TurnContext {
     pub(crate) fn resolve_path(&self, path: Option<String>) -> PathBuf {
         path.as_ref()
@@ -734,7 +736,7 @@ impl Session {
         // On some CI environments (notably Windows), git commands can hang
         // until their timeout elapses. Cap the total time we spend gathering
         // optional metadata so turn startup stays responsive.
-        timeout(TokioDuration::from_millis(750), async {
+        timeout(TURN_METADATA_TIMEOUT, async {
             let git_info = collect_git_info(cwd).await?;
             let latest_git_commit_hash = git_info.commit_hash;
             let associated_remote_urls = get_git_remote_urls(cwd).await;
@@ -755,6 +757,20 @@ impl Session {
         .await
         .ok()
         .flatten()
+    }
+
+    async fn get_or_build_turn_metadata_header(&self, cwd: &Path) -> Option<String> {
+        if let Some(cached) = {
+            let state = self.state.lock().await;
+            state.cached_turn_metadata_header(cwd)
+        } {
+            return cached;
+        }
+
+        let header = Self::build_turn_metadata_header(cwd).await;
+        let mut state = self.state.lock().await;
+        state.set_turn_metadata_header_cache(cwd, header.clone());
+        header
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1293,8 +1309,9 @@ impl Session {
         if let Some(final_schema) = final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
         }
-        turn_context.turn_metadata_header =
-            Self::build_turn_metadata_header(turn_context.cwd.as_path()).await;
+        turn_context.turn_metadata_header = self
+            .get_or_build_turn_metadata_header(turn_context.cwd.as_path())
+            .await;
         Arc::new(turn_context)
     }
 
@@ -3250,8 +3267,9 @@ async fn spawn_review_thread(
         parent_turn_context.client.transport_manager(),
     );
 
-    let turn_metadata_header =
-        Session::build_turn_metadata_header(parent_turn_context.cwd.as_path()).await;
+    let turn_metadata_header = sess
+        .get_or_build_turn_metadata_header(parent_turn_context.cwd.as_path())
+        .await;
     let review_turn_context = TurnContext {
         sub_id: sub_id.to_string(),
         client,

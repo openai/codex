@@ -3,6 +3,7 @@
 use codex_protocol::models::ResponseItem;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Path;
 
 use crate::codex::SessionConfiguration;
 use crate::context_manager::ContextManager;
@@ -19,6 +20,7 @@ pub(crate) struct SessionState {
     pub(crate) server_reasoning_included: bool,
     pub(crate) dependency_env: HashMap<String, String>,
     pub(crate) mcp_dependency_prompted: HashSet<String>,
+    pub(crate) turn_metadata_header_cache: HashMap<String, Option<String>>,
     /// Whether the session's initial context has been seeded into history.
     ///
     /// TODO(owen): This is a temporary solution to avoid updating a thread's updated_at
@@ -37,6 +39,7 @@ impl SessionState {
             server_reasoning_included: false,
             dependency_env: HashMap::new(),
             mcp_dependency_prompted: HashSet::new(),
+            turn_metadata_header_cache: HashMap::new(),
             initial_context_seeded: false,
         }
     }
@@ -124,6 +127,16 @@ impl SessionState {
 
     pub(crate) fn dependency_env(&self) -> HashMap<String, String> {
         self.dependency_env.clone()
+    }
+
+    pub(crate) fn cached_turn_metadata_header(&self, cwd: &Path) -> Option<Option<String>> {
+        let key = cwd.to_string_lossy().into_owned();
+        self.turn_metadata_header_cache.get(&key).cloned()
+    }
+
+    pub(crate) fn set_turn_metadata_header_cache(&mut self, cwd: &Path, header: Option<String>) {
+        let key = cwd.to_string_lossy().into_owned();
+        self.turn_metadata_header_cache.insert(key, header);
     }
 }
 

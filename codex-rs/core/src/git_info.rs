@@ -128,11 +128,19 @@ pub async fn get_git_remote_urls(cwd: &Path) -> Option<BTreeMap<String, String>>
     let stdout = String::from_utf8(output.stdout).ok()?;
     let mut remotes = BTreeMap::new();
     for line in stdout.lines() {
-        if !line.contains("(fetch)") {
+        let Some(fetch_line) = line.strip_suffix(" (fetch)") else {
             continue;
-        }
-        let mut parts = line.split_whitespace();
-        if let (Some(name), Some(url)) = (parts.next(), parts.next()) {
+        };
+
+        let Some((name, url_part)) = fetch_line
+            .split_once('\t')
+            .or_else(|| fetch_line.split_once(' '))
+        else {
+            continue;
+        };
+
+        let url = url_part.trim_start();
+        if !url.is_empty() {
             remotes.insert(name.to_string(), url.to_string());
         }
     }
@@ -220,11 +228,10 @@ pub async fn git_diff_to_remote(cwd: &Path) -> Option<GitDiffToRemote> {
 
 /// Run a git command with a timeout to prevent blocking on large repositories
 async fn run_git_command_with_timeout(args: &[&str], cwd: &Path) -> Option<std::process::Output> {
-    let result = timeout(
-        GIT_COMMAND_TIMEOUT,
-        Command::new("git").args(args).current_dir(cwd).output(),
-    )
-    .await;
+    let mut command = Command::new("git");
+    command.args(args).current_dir(cwd);
+    command.kill_on_drop(true);
+    let result = timeout(GIT_COMMAND_TIMEOUT, command.output()).await;
 
     match result {
         Ok(Ok(output)) => Some(output),
