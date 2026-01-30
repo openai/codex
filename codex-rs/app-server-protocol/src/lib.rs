@@ -1,9 +1,14 @@
+mod experimental_api;
 mod export;
 mod jsonrpc_lite;
 mod protocol;
 
+pub use experimental_api::*;
+pub use export::GenerateTsOptions;
 pub use export::generate_json;
+pub use export::generate_json_with_experimental;
 pub use export::generate_ts;
+pub use export::generate_ts_with_options;
 pub use export::generate_types;
 pub use jsonrpc_lite::*;
 pub use protocol::common::*;
