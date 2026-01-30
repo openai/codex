@@ -106,7 +106,7 @@ fn is_dangerous_to_call_with_exec(command: &[String]) -> bool {
     match cmd0 {
         Some(cmd) if cmd.ends_with("git") || cmd.ends_with("/git") => {
             let Some((subcommand_idx, subcommand)) =
-                find_git_subcommand(command, &["reset", "rm", "branch"])
+                find_git_subcommand(command, &["reset", "rm", "branch", "push", "clean"])
             else {
                 return false;
             };
@@ -114,6 +114,8 @@ fn is_dangerous_to_call_with_exec(command: &[String]) -> bool {
             match subcommand {
                 "reset" | "rm" => true,
                 "branch" => git_branch_is_delete(&command[subcommand_idx + 1..]),
+                "push" => git_push_is_force(&command[subcommand_idx + 1..]),
+                "clean" => git_clean_is_force(&command[subcommand_idx + 1..]),
                 other => {
                     debug_assert!(false, "unexpected git subcommand from matcher: {other}");
                     false
@@ -137,6 +139,29 @@ fn git_branch_is_delete(branch_args: &[String]) -> bool {
             || arg.starts_with("--delete=")
             || (arg.starts_with("-d") && arg != "-d")
             || (arg.starts_with("-D") && arg != "-D")
+    })
+}
+
+fn short_flag_group_contains(arg: &str, target: char) -> bool {
+    arg.starts_with('-') && !arg.starts_with("--") && arg.chars().skip(1).any(|c| c == target)
+}
+
+fn git_push_is_force(push_args: &[String]) -> bool {
+    push_args.iter().map(String::as_str).any(|arg| {
+        matches!(
+            arg,
+            "--force" | "--force-with-lease" | "--force-if-includes" | "-f"
+        ) || arg.starts_with("--force-with-lease=")
+            || arg.starts_with("--force-if-includes=")
+            || short_flag_group_contains(arg, 'f')
+    })
+}
+
+fn git_clean_is_force(clean_args: &[String]) -> bool {
+    clean_args.iter().map(String::as_str).any(|arg| {
+        matches!(arg, "--force" | "-f")
+            || arg.starts_with("--force=")
+            || short_flag_group_contains(arg, 'f')
     })
 }
 
@@ -242,6 +267,45 @@ mod tests {
         // like branch names must not be treated as subcommands.
         assert!(!command_might_be_dangerous(&vec_str(&[
             "git", "checkout", "reset",
+        ])));
+    }
+
+    #[test]
+    fn git_push_force_is_dangerous() {
+        assert!(command_might_be_dangerous(&vec_str(&[
+            "git", "push", "--force", "origin", "main",
+        ])));
+        assert!(command_might_be_dangerous(&vec_str(&[
+            "git", "push", "-f", "origin", "main",
+        ])));
+        assert!(command_might_be_dangerous(&vec_str(&[
+            "git",
+            "-C",
+            ".",
+            "push",
+            "--force-with-lease",
+            "origin",
+            "main",
+        ])));
+    }
+
+    #[test]
+    fn git_push_without_force_is_not_dangerous() {
+        assert!(!command_might_be_dangerous(&vec_str(&[
+            "git", "push", "origin", "main",
+        ])));
+    }
+
+    #[test]
+    fn git_clean_force_is_dangerous_even_when_f_is_not_first_flag() {
+        assert!(command_might_be_dangerous(&vec_str(&[
+            "git", "clean", "-fdx",
+        ])));
+        assert!(command_might_be_dangerous(&vec_str(&[
+            "git", "clean", "-xdf",
+        ])));
+        assert!(command_might_be_dangerous(&vec_str(&[
+            "git", "clean", "--force",
         ])));
     }
 
