@@ -49,6 +49,7 @@ use codex_core::protocol::AgentReasoningRawContentDeltaEvent;
 use codex_core::protocol::AgentReasoningRawContentEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::BackgroundEventEvent;
+use codex_core::protocol::CodexErrorInfo;
 use codex_core::protocol::CreditsSnapshot;
 use codex_core::protocol::DeprecationNoticeEvent;
 use codex_core::protocol::ErrorEvent;
@@ -146,6 +147,7 @@ use crate::bottom_pane::CollaborationModeIndicator;
 use crate::bottom_pane::DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED;
 use crate::bottom_pane::ExperimentalFeatureItem;
 use crate::bottom_pane::ExperimentalFeaturesView;
+use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::QUIT_SHORTCUT_TIMEOUT;
@@ -378,6 +380,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) models_manager: Arc<ModelsManager>,
     pub(crate) feedback: codex_feedback::CodexFeedback,
     pub(crate) is_first_run: bool,
+    pub(crate) feedback_audience: FeedbackAudience,
     pub(crate) model: Option<String>,
     pub(crate) otel_manager: OtelManager,
 }
@@ -397,6 +400,33 @@ enum ConnectorsCacheState {
     Loading,
     Ready(ConnectorsSnapshot),
     Failed(String),
+}
+
+#[derive(Debug)]
+enum RateLimitErrorKind {
+    ModelCap {
+        model: String,
+        reset_after_seconds: Option<u64>,
+    },
+    UsageLimit,
+    Generic,
+}
+
+fn rate_limit_error_kind(info: &CodexErrorInfo) -> Option<RateLimitErrorKind> {
+    match info {
+        CodexErrorInfo::ModelCap {
+            model,
+            reset_after_seconds,
+        } => Some(RateLimitErrorKind::ModelCap {
+            model: model.clone(),
+            reset_after_seconds: *reset_after_seconds,
+        }),
+        CodexErrorInfo::UsageLimitExceeded => Some(RateLimitErrorKind::UsageLimit),
+        CodexErrorInfo::ResponseTooManyFailedAttempts {
+            http_status_code: Some(429),
+        } => Some(RateLimitErrorKind::Generic),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -530,6 +560,7 @@ pub(crate) struct ChatWidget {
     last_rendered_width: std::cell::Cell<Option<usize>>,
     // Feedback sink for /feedback
     feedback: codex_feedback::CodexFeedback,
+    feedback_audience: FeedbackAudience,
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
     external_editor_state: ExternalEditorState,
@@ -817,6 +848,7 @@ impl ChatWidget {
             rollout,
             self.app_event_tx.clone(),
             include_logs,
+            self.feedback_audience,
         );
         self.bottom_pane.show_view(Box::new(view));
         self.request_redraw();
@@ -1154,6 +1186,24 @@ impl ChatWidget {
         self.clear_unified_exec_processes();
         self.stream_controller = None;
         self.maybe_show_pending_rate_limit_prompt();
+    }
+
+    fn on_model_cap_error(&mut self, model: String, reset_after_seconds: Option<u64>) {
+        self.finalize_turn();
+
+        let mut message = format!("Model {model} is at capacity. Please try a different model.");
+        if let Some(seconds) = reset_after_seconds {
+            message.push_str(&format!(
+                " Try again in {}.",
+                format_duration_short(seconds)
+            ));
+        } else {
+            message.push_str(" Try again later.");
+        }
+
+        self.add_to_history(history_cell::new_warning_event(message));
+        self.request_redraw();
+        self.maybe_send_next_queued_input();
     }
 
     fn on_error(&mut self, message: String) {
@@ -2001,6 +2051,7 @@ impl ChatWidget {
             models_manager,
             feedback,
             is_first_run,
+            feedback_audience,
             model,
             otel_manager,
         } = common;
@@ -2097,6 +2148,7 @@ impl ChatWidget {
             last_separator_elapsed_secs: None,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
+            feedback_audience,
             current_rollout_path: None,
             external_editor_state: ExternalEditorState::Closed,
         };
@@ -2140,6 +2192,7 @@ impl ChatWidget {
             models_manager,
             feedback,
             is_first_run,
+            feedback_audience,
             model,
             otel_manager,
         } = common;
@@ -2235,6 +2288,7 @@ impl ChatWidget {
             last_separator_elapsed_secs: None,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
+            feedback_audience,
             current_rollout_path: None,
             external_editor_state: ExternalEditorState::Closed,
         };
@@ -2266,6 +2320,7 @@ impl ChatWidget {
             auth_manager,
             models_manager,
             feedback,
+            feedback_audience,
             model,
             otel_manager,
             ..
@@ -2362,6 +2417,7 @@ impl ChatWidget {
             last_separator_elapsed_secs: None,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
+            feedback_audience,
             current_rollout_path: None,
             external_editor_state: ExternalEditorState::Closed,
         };
@@ -2617,10 +2673,29 @@ impl ChatWidget {
             SlashCommand::Personality => {
                 self.open_personality_popup();
             }
-            SlashCommand::Collab => {
-                if self.collaboration_modes_enabled() {
-                    self.open_collaboration_modes_popup();
+            SlashCommand::Plan => {
+                if !self.collaboration_modes_enabled() {
+                    self.add_info_message(
+                        "Collaboration modes are disabled.".to_string(),
+                        Some("Enable collaboration modes to use /plan.".to_string()),
+                    );
+                    return;
                 }
+                if let Some(mask) = collaboration_modes::plan_mask(self.models_manager.as_ref()) {
+                    self.set_collaboration_mask(mask);
+                } else {
+                    self.add_info_message("Plan mode unavailable right now.".to_string(), None);
+                }
+            }
+            SlashCommand::Collab => {
+                if !self.collaboration_modes_enabled() {
+                    self.add_info_message(
+                        "Collaboration modes are disabled.".to_string(),
+                        Some("Enable collaboration modes to use /collab.".to_string()),
+                    );
+                    return;
+                }
+                self.open_collaboration_modes_popup();
             }
             SlashCommand::Agent => {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
@@ -2793,11 +2868,9 @@ impl ChatWidget {
 
         let trimmed = args.trim();
         match cmd {
-            SlashCommand::Collab => {
+            SlashCommand::Collab | SlashCommand::Plan => {
                 let _ = trimmed;
-                if self.collaboration_modes_enabled() {
-                    self.open_collaboration_modes_popup();
-                }
+                self.dispatch_command(cmd);
             }
             SlashCommand::Review if !trimmed.is_empty() => {
                 self.submit_op(Op::Review {
@@ -3087,7 +3160,26 @@ impl ChatWidget {
                 self.on_rate_limit_snapshot(ev.rate_limits);
             }
             EventMsg::Warning(WarningEvent { message }) => self.on_warning(message),
-            EventMsg::Error(ErrorEvent { message, .. }) => self.on_error(message),
+            EventMsg::Error(ErrorEvent {
+                message,
+                codex_error_info,
+            }) => {
+                if let Some(info) = codex_error_info
+                    && let Some(kind) = rate_limit_error_kind(&info)
+                {
+                    match kind {
+                        RateLimitErrorKind::ModelCap {
+                            model,
+                            reset_after_seconds,
+                        } => self.on_model_cap_error(model, reset_after_seconds),
+                        RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
+                            self.on_error(message)
+                        }
+                    }
+                } else {
+                    self.on_error(message);
+                }
+            }
             EventMsg::McpStartupUpdate(ev) => self.on_mcp_startup_update(ev),
             EventMsg::McpStartupComplete(ev) => self.on_mcp_startup_complete(ev),
             EventMsg::TurnAborted(ev) => match ev.reason {
@@ -3396,7 +3488,10 @@ impl ChatWidget {
     fn prefetch_rate_limits(&mut self) {
         self.stop_rate_limit_poller();
 
-        if self.auth_manager.auth_cached().map(|auth| auth.mode) != Some(AuthMode::ChatGPT) {
+        if !matches!(
+            self.auth_manager.auth_cached().map(|auth| auth.mode),
+            Some(AuthMode::ChatGPT | AuthMode::ChatgptAuthTokens)
+        ) {
             return;
         }
 
@@ -3409,7 +3504,7 @@ impl ChatWidget {
 
             loop {
                 if let Some(auth) = auth_manager.auth().await
-                    && auth.mode == AuthMode::ChatGPT
+                    && matches!(auth.mode, AuthMode::ChatGPT | AuthMode::ChatgptAuthTokens)
                     && let Some(snapshot) = fetch_rate_limits(base_url.clone(), auth).await
                 {
                     app_event_tx.send(AppEvent::RateLimitSnapshotFetched(snapshot));
@@ -5913,6 +6008,18 @@ pub(crate) fn show_review_commit_picker_with_entries(
         search_placeholder: Some("Type to search commits".to_string()),
         ..Default::default()
     });
+}
+
+fn format_duration_short(seconds: u64) -> String {
+    if seconds < 60 {
+        "less than a minute".to_string()
+    } else if seconds < 3600 {
+        format!("{}m", seconds / 60)
+    } else if seconds < 86_400 {
+        format!("{}h", seconds / 3600)
+    } else {
+        format!("{}d", seconds / 86_400)
+    }
 }
 
 #[cfg(test)]

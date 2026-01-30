@@ -18,7 +18,10 @@ pub(crate) fn builtins_for_input(
     built_in_slash_commands()
         .into_iter()
         .filter(|(_, cmd)| allow_elevate_sandbox || *cmd != SlashCommand::ElevateSandbox)
-        .filter(|(_, cmd)| collaboration_modes_enabled || *cmd != SlashCommand::Collab)
+        .filter(|(_, cmd)| {
+            collaboration_modes_enabled
+                || !matches!(*cmd, SlashCommand::Collab | SlashCommand::Plan)
+        })
         .filter(|(_, cmd)| connectors_enabled || *cmd != SlashCommand::Apps)
         .filter(|(_, cmd)| personality_command_enabled || *cmd != SlashCommand::Personality)
         .collect()
