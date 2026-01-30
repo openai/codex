@@ -1297,6 +1297,7 @@ dependencies = [
 name = "codex-cloud-requirements"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "base64",
  "codex-backend-client",
@@ -1306,6 +1307,7 @@ dependencies = [
  "pretty_assertions",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.17",
  "tokio",
  "toml 0.9.5",
  "tracing",
