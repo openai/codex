@@ -7084,6 +7084,43 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_s_stashes_message_with_pending_paste() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let large_content = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 5);
+        composer.handle_paste(large_content.clone());
+        let placeholder = composer
+            .pending_pastes
+            .first()
+            .expect("expected pending paste")
+            .0
+            .clone();
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+
+        let InputResult::Stashed(stash) = result else {
+            panic!("expected stashed result, got {result:?}");
+        };
+
+        assert_eq!(stash.text, placeholder);
+        assert_eq!(
+            stash.pending_pastes,
+            vec![(stash.text.clone(), large_content)]
+        );
+        assert!(composer.textarea.is_empty());
+        assert!(composer.pending_pastes.is_empty());
+    }
+
+    #[test]
     fn has_draft_detects_text_images_and_pending_pastes() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
