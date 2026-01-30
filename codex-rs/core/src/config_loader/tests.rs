@@ -69,7 +69,7 @@ async fn returns_config_error_for_invalid_user_config_toml() {
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await
     .expect_err("expected error");
@@ -99,7 +99,7 @@ async fn returns_config_error_for_invalid_managed_config_toml() {
         Some(cwd),
         &[] as &[(String, TomlValue)],
         overrides,
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await
     .expect_err("expected error");
@@ -188,7 +188,7 @@ extra = true
         Some(cwd),
         &[] as &[(String, TomlValue)],
         overrides,
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await
     .expect("load config");
@@ -225,7 +225,7 @@ async fn returns_empty_when_all_layers_missing() {
         Some(cwd),
         &[] as &[(String, TomlValue)],
         overrides,
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await
     .expect("load layers");
@@ -323,7 +323,7 @@ flag = false
         Some(cwd),
         &[] as &[(String, TomlValue)],
         overrides,
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await
     .expect("load config");
@@ -363,7 +363,7 @@ allowed_sandbox_modes = ["read-only"]
                 ),
             ),
         },
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await?;
 
@@ -424,7 +424,7 @@ allowed_approval_policies = ["never"]
                 ),
             ),
         },
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await?;
 
@@ -546,7 +546,7 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
-        Some(cloud_requirements),
+        cloud_requirements,
     )
     .await?;
 
@@ -599,7 +599,7 @@ async fn project_layers_prefer_closest_cwd() -> std::io::Result<()> {
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await?;
 
@@ -731,7 +731,7 @@ async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> s
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await?;
 
@@ -769,7 +769,7 @@ async fn codex_home_is_not_loaded_as_project_layer_from_home_dir() -> std::io::R
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await?;
 
@@ -819,7 +819,7 @@ async fn codex_home_within_project_tree_is_not_double_loaded() -> std::io::Resul
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await?;
 
@@ -888,7 +888,7 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
         Some(cwd.clone()),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await?;
     let project_layers_untrusted: Vec<_> = layers_untrusted
@@ -926,7 +926,7 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await?;
     let project_layers_unknown: Vec<_> = layers_unknown
@@ -987,7 +987,7 @@ async fn invalid_project_config_ignored_when_untrusted_or_unknown() -> std::io::
             Some(cwd.clone()),
             &[] as &[(String, TomlValue)],
             LoaderOverrides::default(),
-            None,
+            CloudRequirementsLoader::default(),
         )
         .await?;
         let project_layers: Vec<_> = layers
@@ -1043,7 +1043,7 @@ async fn cli_overrides_with_relative_paths_do_not_break_trust_check() -> std::io
         Some(cwd),
         &cli_overrides,
         LoaderOverrides::default(),
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await?;
 
@@ -1085,7 +1085,7 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await?;
 

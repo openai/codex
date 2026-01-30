@@ -19,6 +19,7 @@ workspace = true
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 codex-arg0 = { workspace = true }
+codex-cloud-requirements = { workspace = true }
 codex-common = { workspace = true, features = ["cli"] }
 codex-core = { workspace = true }
 codex-backend-client = { workspace = true }

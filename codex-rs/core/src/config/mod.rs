@@ -367,7 +367,7 @@ pub struct ConfigBuilder {
     cli_overrides: Option<Vec<(String, TomlValue)>>,
     harness_overrides: Option<ConfigOverrides>,
     loader_overrides: Option<LoaderOverrides>,
-    cloud_requirements: Option<CloudRequirementsLoader>,
+    cloud_requirements: CloudRequirementsLoader,
     fallback_cwd: Option<PathBuf>,
 }
 
@@ -393,7 +393,7 @@ impl ConfigBuilder {
     }
 
     pub fn cloud_requirements(mut self, cloud_requirements: CloudRequirementsLoader) -> Self {
-        self.cloud_requirements = Some(cloud_requirements);
+        self.cloud_requirements = cloud_requirements;
         self
     }
 
@@ -524,7 +524,7 @@ pub async fn load_config_as_toml_with_cli_overrides(
         Some(cwd.clone()),
         &cli_overrides,
         LoaderOverrides::default(),
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await?;
 
@@ -628,7 +628,7 @@ pub async fn load_global_mcp_servers(
         cwd,
         &cli_overrides,
         LoaderOverrides::default(),
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await?;
     let merged_toml = config_layer_stack.effective_config();
@@ -2643,9 +2643,14 @@ profile = "project"
         };
 
         let cwd = AbsolutePathBuf::try_from(codex_home.path())?;
-        let config_layer_stack =
-            load_config_layers_state(codex_home.path(), Some(cwd), &Vec::new(), overrides, None)
-                .await?;
+        let config_layer_stack = load_config_layers_state(
+            codex_home.path(),
+            Some(cwd),
+            &Vec::new(),
+            overrides,
+            CloudRequirementsLoader::default(),
+        )
+        .await?;
         let cfg = deserialize_config_toml_with_base(
             config_layer_stack.effective_config(),
             codex_home.path(),
@@ -2772,7 +2777,7 @@ profile = "project"
             Some(cwd),
             &[("model".to_string(), TomlValue::String("cli".to_string()))],
             overrides,
-            None,
+            CloudRequirementsLoader::default(),
         )
         .await?;
 
