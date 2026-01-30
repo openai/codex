@@ -1732,7 +1732,7 @@ impl Session {
                         ..Default::default()
                     },
                 };
-                let turn_context = self.new_default_turn().await;
+                let turn_context = self.new_default_turn_with_sub_id(sub_id.to_string()).await;
                 self.record_conversation_items(&turn_context, &[response_item])
                     .await;
             }
