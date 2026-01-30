@@ -191,7 +191,7 @@ pub(crate) fn truncate_rollout_drop_last_n_user_turns(
 
     let n_from_end = usize::try_from(num_turns).unwrap_or(usize::MAX);
     if n_from_end >= user_turns.len() {
-        let Some(first_user_idx) = user_message_positions_in_rollout(items).first().copied() else {
+        let Some(first_user_idx) = user_turns.first().map(|turn| turn.source_index) else {
             return items.to_vec();
         };
         return items[..first_user_idx].to_vec();
