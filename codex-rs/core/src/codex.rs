@@ -966,8 +966,7 @@ impl Session {
         });
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
-        // If resuming, include converted initial messages in the payload so UIs can render them immediately.
-        let initial_messages = initial_messages_from_history(&initial_history);
+        let initial_messages = initial_history.get_event_msgs();
         let events = std::iter::once(Event {
             id: INITIAL_SUBMIT_ID.to_owned(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
@@ -4185,40 +4184,6 @@ async fn handle_assistant_item_done_in_plan_mode(
         return true;
     }
     false
-}
-fn initial_messages_from_history(initial_history: &InitialHistory) -> Option<Vec<EventMsg>> {
-    let mut events = Vec::new();
-    for item in initial_history.get_rollout_items() {
-        match item {
-            RolloutItem::EventMsg(event) => {
-                if !matches!(event, EventMsg::RawResponseItem(_)) {
-                    events.push(event);
-                }
-            }
-            RolloutItem::ResponseItem(response_item) => {
-                if matches!(
-                    response_item,
-                    ResponseItem::FunctionCall { .. } | ResponseItem::FunctionCallOutput { .. }
-                ) {
-                    events.push(EventMsg::RawResponseItem(RawResponseItemEvent {
-                        item: response_item,
-                    }));
-                }
-            }
-            _ => {}
-        }
-    }
-
-    match initial_history {
-        InitialHistory::New => {
-            if events.is_empty() {
-                None
-            } else {
-                Some(events)
-            }
-        }
-        InitialHistory::Resumed(_) | InitialHistory::Forked(_) => Some(events),
-    }
 }
 async fn drain_in_flight(
     in_flight: &mut FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>>,
