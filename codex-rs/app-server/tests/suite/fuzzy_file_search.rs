@@ -125,3 +125,98 @@ async fn test_fuzzy_file_search_accepts_cancellation_token() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_fuzzy_file_search_session_streams_updates() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let root = TempDir::new()?;
+
+    std::fs::write(root.path().join("alpha.txt"), "contents")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let root_path = root.path().to_string_lossy().to_string();
+    let session_id = "session-1";
+
+    let start_request_id = mcp
+        .send_fuzzy_file_search_session_start_request(session_id, vec![root_path.clone()])
+        .await?;
+    let _start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_request_id)),
+    )
+    .await??;
+
+    let update_request_id = mcp
+        .send_fuzzy_file_search_session_update_request(session_id, "alp")
+        .await?;
+    let _update_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(update_request_id)),
+    )
+    .await??;
+
+    let mut matched = false;
+    for _ in 0..5 {
+        let notif = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_notification_message("fuzzyFileSearch/sessionUpdated"),
+        )
+        .await??;
+
+        let params = notif
+            .params
+            .ok_or_else(|| anyhow!("missing notification params"))?;
+        assert_eq!(params["sessionId"], session_id);
+        assert_eq!(params["query"], "alp");
+        let files = params["files"]
+            .as_array()
+            .ok_or_else(|| anyhow!("files not array"))?;
+        if files.is_empty() {
+            continue;
+        }
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0]["root"], root_path);
+        assert_eq!(files[0]["path"], "alpha.txt");
+        matched = true;
+        break;
+    }
+    assert_eq!(matched, true);
+
+    let stop_request_id = mcp
+        .send_fuzzy_file_search_session_stop_request(session_id)
+        .await?;
+    let _stop_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(stop_request_id)),
+    )
+    .await??;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_fuzzy_file_search_session_update_before_start_errors() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_fuzzy_file_search_session_update_request("missing", "alp")
+        .await?;
+
+    let err = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(err.error.code, -32600);
+    assert_eq!(
+        err.error.message,
+        "fuzzy file search session not found: missing"
+    );
+
+    Ok(())
+}
