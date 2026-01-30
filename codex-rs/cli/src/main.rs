@@ -287,10 +287,10 @@ struct AppServerCommand {
 
 #[derive(Debug, clap::Subcommand)]
 enum AppServerSubcommand {
-    /// [experimental] Generate TypeScript bindings for the app server protocol.
+    /// Generate TypeScript bindings for the app server protocol (stable by default; use --experimental to regenerate including experimental APIs).
     GenerateTs(GenerateTsCommand),
 
-    /// [experimental] Generate JSON Schema for the app server protocol.
+    /// Generate JSON Schema for the app server protocol (stable by default; use --experimental to regenerate including experimental APIs).
     GenerateJsonSchema(GenerateJsonSchemaCommand),
 }
 
@@ -303,6 +303,10 @@ struct GenerateTsCommand {
     /// Optional path to the Prettier executable to format generated files
     #[arg(short = 'p', long = "prettier", value_name = "PRETTIER_BIN")]
     prettier: Option<PathBuf>,
+
+    /// Regenerate from source, including experimental APIs
+    #[arg(long = "experimental")]
+    experimental: bool,
 }
 
 #[derive(Debug, Args)]
@@ -310,6 +314,10 @@ struct GenerateJsonSchemaCommand {
     /// Output directory where the schema bundle will be written
     #[arg(short = 'o', long = "out", value_name = "DIR")]
     out_dir: PathBuf,
+
+    /// Regenerate from source, including experimental APIs
+    #[arg(long = "experimental")]
+    experimental: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -537,13 +545,21 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 .await?;
             }
             Some(AppServerSubcommand::GenerateTs(gen_cli)) => {
-                codex_app_server_protocol::generate_ts(
-                    &gen_cli.out_dir,
-                    gen_cli.prettier.as_deref(),
-                )?;
+                if gen_cli.experimental {
+                    codex_app_server_protocol::generate_ts(
+                        &gen_cli.out_dir,
+                        gen_cli.prettier.as_deref(),
+                    )?;
+                } else {
+                    codex_app_server_ts_types::write_stable_ts_types(&gen_cli.out_dir)?;
+                }
             }
             Some(AppServerSubcommand::GenerateJsonSchema(gen_cli)) => {
-                codex_app_server_protocol::generate_json(&gen_cli.out_dir)?;
+                if gen_cli.experimental {
+                    codex_app_server_protocol::generate_json(&gen_cli.out_dir)?;
+                } else {
+                    codex_app_server_json_schema::write_stable_json_schema(&gen_cli.out_dir)?;
+                }
             }
         },
         Some(Subcommand::Resume(ResumeCommand {

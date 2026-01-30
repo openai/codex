@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use crate::protocol::common::AuthMode;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
+#[cfg(feature = "codex-experimental-api")]
 use codex_protocol::config_types::CollaborationMode;
+#[cfg(feature = "codex-experimental-api")]
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
@@ -835,6 +837,7 @@ pub enum LoginAccountParams {
     #[serde(rename = "chatgpt")]
     #[ts(rename = "chatgpt")]
     Chatgpt,
+    #[cfg(feature = "codex-experimental-api")]
     /// [UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.
     /// The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.
     #[serde(rename = "chatgptAuthTokens")]
@@ -872,6 +875,7 @@ pub enum LoginAccountResponse {
         /// URL the client should open in a browser to initiate the OAuth flow.
         auth_url: String,
     },
+    #[cfg(feature = "codex-experimental-api")]
     #[serde(rename = "chatgptAuthTokens", rename_all = "camelCase")]
     #[ts(rename = "chatgptAuthTokens", rename_all = "camelCase")]
     ChatgptAuthTokens {},
@@ -905,6 +909,7 @@ pub struct CancelLoginAccountResponse {
 #[ts(export_to = "v2/")]
 pub struct LogoutAccountResponse {}
 
+#[cfg(feature = "codex-experimental-api")]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -913,6 +918,7 @@ pub enum ChatgptAuthTokensRefreshReason {
     Unauthorized,
 }
 
+#[cfg(feature = "codex-experimental-api")]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -928,6 +934,7 @@ pub struct ChatgptAuthTokensRefreshParams {
     pub previous_account_id: Option<String>,
 }
 
+#[cfg(feature = "codex-experimental-api")]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -1008,12 +1015,14 @@ pub struct ModelListResponse {
     pub next_cursor: Option<String>,
 }
 
+#[cfg(feature = "codex-experimental-api")]
 /// EXPERIMENTAL - list collaboration mode presets.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct CollaborationModeListParams {}
 
+#[cfg(feature = "codex-experimental-api")]
 /// EXPERIMENTAL - collaboration mode presets response.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -1172,6 +1181,7 @@ pub struct ThreadStartParams {
     pub personality: Option<Personality>,
     pub ephemeral: Option<bool>,
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
+    #[cfg(feature = "codex-experimental-api")]
     /// If true, opt into emitting raw response items on the event stream.
     ///
     /// This is for internal use only (e.g. Codex Cloud).
@@ -1208,11 +1218,13 @@ pub struct ThreadStartResponse {
 pub struct ThreadResumeParams {
     pub thread_id: String,
 
+    #[cfg(feature = "codex-experimental-api")]
     /// [UNSTABLE] FOR CODEX CLOUD - DO NOT USE.
     /// If specified, the thread will be resumed with the provided history
     /// instead of loaded from disk.
     pub history: Option<Vec<ResponseItem>>,
 
+    #[cfg(feature = "codex-experimental-api")]
     /// [UNSTABLE] Specify the rollout path to resume from.
     /// If specified, the thread_id param will be ignored.
     pub path: Option<PathBuf>,
@@ -1255,6 +1267,7 @@ pub struct ThreadResumeResponse {
 pub struct ThreadForkParams {
     pub thread_id: String,
 
+    #[cfg(feature = "codex-experimental-api")]
     /// [UNSTABLE] Specify the rollout path to fork from.
     /// If specified, the thread_id param will be ignored.
     pub path: Option<PathBuf>,
@@ -1647,6 +1660,7 @@ pub struct Thread {
     /// Unix timestamp (in seconds) when the thread was last updated.
     #[ts(type = "number")]
     pub updated_at: i64,
+    #[cfg(feature = "codex-experimental-api")]
     /// [UNSTABLE] Path to the thread on disk.
     pub path: Option<PathBuf>,
     /// Working directory captured for the thread.
@@ -1800,6 +1814,7 @@ pub struct TurnStartParams {
     /// Optional JSON Schema used to constrain the final assistant message for this turn.
     pub output_schema: Option<JsonValue>,
 
+    #[cfg(feature = "codex-experimental-api")]
     /// EXPERIMENTAL - set a pre-set collaboration mode.
     /// Takes precedence over model, reasoning_effort, and developer instructions if set.
     pub collaboration_mode: Option<CollaborationMode>,
@@ -2551,6 +2566,7 @@ pub struct FileChangeRequestApprovalParams {
     pub item_id: String,
     /// Optional explanatory reason (e.g. request for extra write access).
     pub reason: Option<String>,
+    #[cfg(feature = "codex-experimental-api")]
     /// [UNSTABLE] When set, the agent is asking the user to allow writes under this root
     /// for the remainder of the session (unclear if this is honored today).
     pub grant_root: Option<PathBuf>,
@@ -2581,6 +2597,7 @@ pub struct DynamicToolCallResponse {
     pub success: bool,
 }
 
+#[cfg(feature = "codex-experimental-api")]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -2590,6 +2607,7 @@ pub struct ToolRequestUserInputOption {
     pub description: String,
 }
 
+#[cfg(feature = "codex-experimental-api")]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -2605,6 +2623,7 @@ pub struct ToolRequestUserInputQuestion {
     pub options: Option<Vec<ToolRequestUserInputOption>>,
 }
 
+#[cfg(feature = "codex-experimental-api")]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -2616,6 +2635,7 @@ pub struct ToolRequestUserInputParams {
     pub questions: Vec<ToolRequestUserInputQuestion>,
 }
 
+#[cfg(feature = "codex-experimental-api")]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -2624,6 +2644,7 @@ pub struct ToolRequestUserInputAnswer {
     pub answers: Vec<String>,
 }
 
+#[cfg(feature = "codex-experimental-api")]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

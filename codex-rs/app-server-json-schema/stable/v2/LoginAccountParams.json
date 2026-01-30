@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "oneOf": [
+    {
+      "properties": {
+        "apiKey": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "apiKey"
+          ],
+          "title": "ApiKeyv2::LoginAccountParamsType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "apiKey",
+        "type"
+      ],
+      "title": "ApiKeyv2::LoginAccountParams",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "type": {
+          "enum": [
+            "chatgpt"
+          ],
+          "title": "Chatgptv2::LoginAccountParamsType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Chatgptv2::LoginAccountParams",
+      "type": "object"
+    }
+  ],
+  "title": "LoginAccountParams"
+}

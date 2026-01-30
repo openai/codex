@@ -1,0 +1,17 @@
+[package]
+name = "codex-app-server-protocol-stable-export"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "codex-app-server-protocol-stable-export"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+codex-app-server-protocol = { path = "../app-server-protocol", default-features = false }

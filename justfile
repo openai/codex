@@ -68,6 +68,10 @@ mcp-server-run *args:
 write-config-schema:
     cargo run -p codex-core --bin codex-write-config-schema
 
+# Regenerate bundled stable app-server protocol artifacts.
+write-app-server-protocol-stable:
+    bash scripts/write-app-server-protocol-stable.sh
+
 # Tail logs from the state SQLite database
 log *args:
     if [ "${1:-}" = "--" ]; then shift; fi; cargo run -p codex-state --bin logs_client -- "$@"

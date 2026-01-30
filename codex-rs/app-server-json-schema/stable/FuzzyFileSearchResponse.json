@@ -1,0 +1,55 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "FuzzyFileSearchResult": {
+      "description": "Superset of [`codex_file_search::FileMatch`]",
+      "properties": {
+        "file_name": {
+          "type": "string"
+        },
+        "indices": {
+          "items": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "root": {
+          "type": "string"
+        },
+        "score": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "file_name",
+        "path",
+        "root",
+        "score"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "files": {
+      "items": {
+        "$ref": "#/definitions/FuzzyFileSearchResult"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "files"
+  ],
+  "title": "FuzzyFileSearchResponse",
+  "type": "object"
+}

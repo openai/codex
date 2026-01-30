@@ -1,0 +1,85 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ThreadSortKey": {
+      "enum": [
+        "created_at",
+        "updated_at"
+      ],
+      "type": "string"
+    },
+    "ThreadSourceKind": {
+      "enum": [
+        "cli",
+        "vscode",
+        "exec",
+        "appServer",
+        "subAgent",
+        "subAgentReview",
+        "subAgentCompact",
+        "subAgentThreadSpawn",
+        "subAgentOther",
+        "unknown"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "archived": {
+      "description": "Optional archived filter; when set to true, only archived threads are returned. If false or null, only non-archived threads are returned.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "cursor": {
+      "description": "Opaque pagination cursor returned by a previous call.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "limit": {
+      "description": "Optional page size; defaults to a reasonable server-side value.",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "modelProviders": {
+      "description": "Optional provider filter; when set, only sessions recorded under these providers are returned. When present but empty, includes all providers.",
+      "items": {
+        "type": "string"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "sortKey": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ThreadSortKey"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional sort key; defaults to created_at."
+    },
+    "sourceKinds": {
+      "description": "Optional source filter; when set, only sessions from these source kinds are returned. When omitted or empty, defaults to interactive sources.",
+      "items": {
+        "$ref": "#/definitions/ThreadSourceKind"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    }
+  },
+  "title": "ThreadListParams",
+  "type": "object"
+}

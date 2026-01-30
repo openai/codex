@@ -1,8 +1,8 @@
 load("@crates//:data.bzl", "DEP_DATA")
 load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_platform//platform_data:defs.bzl", "platform_data")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("@rules_rust//cargo/private:cargo_build_script_wrapper.bzl", "cargo_build_script")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 PLATFORMS = [
     "linux_arm64_musl",
@@ -39,6 +39,8 @@ def codex_rust_crate(
         lib_data_extra = [],
         rustc_env = {},
         deps_extra = [],
+        alt_rules = {},
+        alt_deps = {},
         integration_deps_extra = [],
         integration_compile_data_extra = [],
         test_data_extra = [],
@@ -69,6 +71,13 @@ def codex_rust_crate(
         rustc_env: Extra rustc_env entries to merge with defaults.
         deps_extra: Extra normal deps beyond @crates resolution.
             Typically only needed when features add additional deps.
+        alt_rules: A dictionary of alternative rust_library rules to define
+            alongside the main one. Each key is the alternative target name,
+            and each value is a dictionary of keyword arguments that override
+            the defaults defined by this macro.
+        alt_deps: A dictionary mapping dependency labels to alternative labels.
+            This is used to swap out dependencies for alternative versions,
+            e.g. stable vs experimental versions of a crate.
         integration_deps_extra: Extra deps for integration tests only.
         integration_compile_data_extra: Extra compile_data for integration tests.
         test_data_extra: Extra runtime data for tests.
@@ -77,7 +86,8 @@ def codex_rust_crate(
         extra_binaries: Additional binary labels to surface as test data and
             `CARGO_BIN_EXE_*` environment variables. These are only needed for binaries from a different crate.
     """
-    deps = all_crate_deps(normal = True) + deps_extra
+    original_deps = all_crate_deps(normal = True) + deps_extra
+    deps = [alt_deps.get(dep, dep) for dep in original_deps]
     dev_deps = all_crate_deps(normal_dev = True)
     proc_macro_deps = all_crate_deps(proc_macro = True)
     proc_macro_dev_deps = all_crate_deps(proc_macro_dev = True)
@@ -109,19 +119,33 @@ def codex_rust_crate(
         deps = deps + [name + "-build-script"]
 
     if lib_srcs:
+        library_kwargs = {
+            "name": name,
+            "crate_name": crate_name,
+            "crate_features": crate_features,
+            "deps": deps,
+            "proc_macro_deps": proc_macro_deps,
+            "compile_data": compile_data,
+            "data": lib_data_extra,
+            "srcs": lib_srcs,
+            "edition": crate_edition,
+            "rustc_env": rustc_env,
+            "visibility": ["//visibility:public"],
+        }
+
         rust_library(
-            name = name,
-            crate_name = crate_name,
-            crate_features = crate_features,
-            deps = deps,
-            proc_macro_deps = proc_macro_deps,
-            compile_data = compile_data,
-            data = lib_data_extra,
-            srcs = lib_srcs,
-            edition = crate_edition,
-            rustc_env = rustc_env,
-            visibility = ["//visibility:public"],
+            **library_kwargs
         )
+
+        if alt_rules:
+            for alt_name, alt_kwargs in alt_rules.items():
+                rust_library(
+                    **dict(
+                        library_kwargs,
+                        name = alt_name,
+                        **alt_kwargs
+                    )
+                )
 
         rust_test(
             name = name + "-unit-tests",

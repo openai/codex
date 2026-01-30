@@ -1,0 +1,21 @@
+load("//:defs.bzl", "codex_rust_crate")
+
+stable_files = glob(
+    include = ["stable/**"],
+    allow_empty = True,
+    exclude = [
+        "**/* *",
+        "BUILD.bazel",
+        "Cargo.toml",
+    ],
+)
+
+codex_rust_crate(
+    name = "app-server-json-schema",
+    compile_data = stable_files,
+    crate_name = "codex_app_server_json_schema",
+    extra_binaries = [
+        "//codex-rs/app-server-protocol-stable-export:codex-app-server-protocol-stable-export",
+    ],
+    test_data_extra = stable_files,
+)

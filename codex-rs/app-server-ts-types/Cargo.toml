@@ -1,0 +1,17 @@
+[package]
+name = "codex-app-server-ts-types"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+include_dir = { workspace = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+codex-utils-cargo-bin = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }

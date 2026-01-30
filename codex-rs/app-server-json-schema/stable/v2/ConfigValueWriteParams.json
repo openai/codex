@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "MergeStrategy": {
+      "enum": [
+        "replace",
+        "upsert"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "expectedVersion": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "filePath": {
+      "description": "Path to the config file to write; defaults to the user's `config.toml` when omitted.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "keyPath": {
+      "type": "string"
+    },
+    "mergeStrategy": {
+      "$ref": "#/definitions/MergeStrategy"
+    },
+    "value": true
+  },
+  "required": [
+    "keyPath",
+    "mergeStrategy",
+    "value"
+  ],
+  "title": "ConfigValueWriteParams",
+  "type": "object"
+}
