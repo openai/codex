@@ -6,16 +6,12 @@
 //! on every keystroke, and drops the session when the query becomes empty.
 
 use codex_file_search as file_search;
-use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
-
-const MAX_FILE_SEARCH_RESULTS: NonZeroUsize = NonZeroUsize::new(20).unwrap();
-const NUM_FILE_SEARCH_THREADS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 
 pub(crate) struct FileSearchManager {
     state: Arc<Mutex<SearchState>>,
@@ -75,12 +71,9 @@ impl FileSearchManager {
         });
         let session = file_search::create_session(
             &self.search_dir,
-            file_search::SessionOptions {
-                limit: MAX_FILE_SEARCH_RESULTS,
-                exclude: Vec::new(),
-                threads: NUM_FILE_SEARCH_THREADS,
+            file_search::FileSearchOptions {
                 compute_indices: true,
-                respect_gitignore: true,
+                ..Default::default()
             },
             reporter,
         );
