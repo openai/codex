@@ -976,11 +976,6 @@ pub(crate) fn new_session_info(
             ]),
             Line::from(vec![
                 "  ".into(),
-                "/approvals".into(),
-                " - choose what Codex can do without approval".dim(),
-            ]),
-            Line::from(vec![
-                "  ".into(),
                 "/permissions".into(),
                 " - choose what Codex is allowed to do".dim(),
             ]),
