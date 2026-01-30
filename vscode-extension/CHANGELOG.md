@@ -4,7 +4,8 @@
 
 ## Unreleased
 
-（なし）
+- **Sessions / Tabs**
+  - セッションタブを backendId（opencode / codez）でフィルタリング。アクティブセッションと同じ backend のセッションのみ表示されるように変更
 
 ## 0.2.7
 

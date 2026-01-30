@@ -933,7 +933,7 @@ function main(): void {
       o.value = opt.value;
       o.textContent =
         opt.value === "default"
-          ? opts?.defaultLabel ?? "default (CLI config)"
+          ? (opts?.defaultLabel ?? "default (CLI config)")
           : opt.label;
       if (opt.value === v) o.selected = true;
       el.appendChild(o);
@@ -2905,7 +2905,9 @@ function main(): void {
     const det = document.createElement("details");
     det.className = className;
     det.open = isOpen(onToggleKey, openDefault);
-    det.addEventListener("toggle", () => saveDetailsState(onToggleKey, det.open));
+    det.addEventListener("toggle", () =>
+      saveDetailsState(onToggleKey, det.open),
+    );
     const sum = document.createElement("summary");
     const txt = document.createElement("span");
     txt.dataset.k = "summaryText";
@@ -3605,13 +3607,16 @@ function main(): void {
       };
       const provider = d.provider ? String(d.provider).trim() : "";
       const model = d.model ? String(d.model).trim() : "";
-      if (provider && model) return `default (CLI config: ${provider} / ${model})`;
+      if (provider && model)
+        return `default (CLI config: ${provider} / ${model})`;
       if (provider) return `default (CLI config: ${provider} / default)`;
       if (model) return `default (CLI config: ${model})`;
       const backendDefault = models.find((m) => Boolean(m.isDefault));
       if (backendDefault) {
         const label = String(
-          backendDefault.displayName || backendDefault.model || backendDefault.id,
+          backendDefault.displayName ||
+            backendDefault.model ||
+            backendDefault.id,
         );
         return `default (${backendId || "backend"}: ${label})`;
       }
@@ -3802,7 +3807,14 @@ function main(): void {
       const groupTabsElByWorkspaceUri = new Map<string, HTMLDivElement>();
       const groupOrder: string[] = [];
 
+      // Get the backendId of the active session to filter sessions
+      const activeBackendId = s.activeSession?.backendId;
+
       sessionsList.forEach((sess, idx) => {
+        // Filter sessions by backendId: only show sessions with the same backendId as the active session
+        if (activeBackendId && sess.backendId !== activeBackendId) {
+          return;
+        }
         wanted.add(sess.id);
         const isUnread = unread.has(sess.id);
         const isRunning = running.has(sess.id);
@@ -4078,7 +4090,8 @@ function main(): void {
         const hasStatus = Boolean(block.status);
         if (!hasText && !hasStatus) {
           const existing = blockElByKey.get(key);
-          if (existing?.parentElement) existing.parentElement.removeChild(existing);
+          if (existing?.parentElement)
+            existing.parentElement.removeChild(existing);
           blockElByKey.delete(key);
           delete detailsState[key];
           continue;
@@ -4632,8 +4645,10 @@ function main(): void {
 
         const meta = ensureMeta(det, "meta");
         const metaParts: string[] = [];
-        if (block.snapshot) metaParts.push("snapshot=" + block.snapshot.slice(0, 8));
-        if (typeof block.cost === "number") metaParts.push("cost=" + String(block.cost));
+        if (block.snapshot)
+          metaParts.push("snapshot=" + block.snapshot.slice(0, 8));
+        if (typeof block.cost === "number")
+          metaParts.push("cost=" + String(block.cost));
         if (block.tokens) {
           if (typeof block.tokens.input === "number")
             metaParts.push("in=" + String(block.tokens.input));
@@ -4668,7 +4683,9 @@ function main(): void {
               ? String((t as any).inputPreview || "").trim()
               : "";
           const suffix = inputPreview ? truncateOneLine(inputPreview, 80) : "";
-          const toolSummary = suffix ? `${t.tool}: ${t.title} — ${suffix}` : `${t.tool}: ${t.title}`;
+          const toolSummary = suffix
+            ? `${t.tool}: ${t.title} — ${suffix}`
+            : `${t.tool}: ${t.title}`;
           const toolDet = ensureNestedDetailsWithStatusIcon(
             det,
             toolId,
