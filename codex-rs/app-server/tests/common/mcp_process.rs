@@ -736,6 +736,10 @@ impl McpProcess {
         Ok(notification)
     }
 
+    pub async fn read_next_message(&mut self) -> anyhow::Result<JSONRPCMessage> {
+        self.read_stream_until_message(|_| true).await
+    }
+
     /// Clears any buffered messages so future reads only consider new stream items.
     ///
     /// We call this when e.g. we want to validate against the next turn and no longer care about
