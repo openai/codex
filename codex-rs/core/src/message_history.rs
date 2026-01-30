@@ -69,11 +69,7 @@ fn history_filepath(config: &Config) -> PathBuf {
 /// Append a `text` entry associated with `conversation_id` to the history file. Uses
 /// advisory file locking to ensure that concurrent writes do not interleave,
 /// which entails a small amount of blocking I/O internally.
-pub(crate) async fn append_entry(
-    text: &str,
-    conversation_id: &ThreadId,
-    config: &Config,
-) -> Result<()> {
+pub async fn append_entry(text: &str, conversation_id: &ThreadId, config: &Config) -> Result<()> {
     match config.history.persistence {
         HistoryPersistence::SaveAll => {
             // Save everything: proceed.
@@ -245,7 +241,7 @@ fn trim_target_bytes(max_bytes: u64, newest_entry_len: u64) -> u64 {
 
 /// Asynchronously fetch the history file's *identifier* (inode on Unix) and
 /// the current number of entries by counting newline characters.
-pub(crate) async fn history_metadata(config: &Config) -> (u64, usize) {
+pub async fn history_metadata(config: &Config) -> (u64, usize) {
     let path = history_filepath(config);
     history_metadata_for_file(&path).await
 }
@@ -258,7 +254,7 @@ pub(crate) async fn history_metadata(config: &Config) -> (u64, usize) {
 ///
 /// Note this function is not async because it uses a sync advisory file
 /// locking API.
-pub(crate) fn lookup(log_id: u64, offset: usize, config: &Config) -> Option<HistoryEntry> {
+pub fn lookup(log_id: u64, offset: usize, config: &Config) -> Option<HistoryEntry> {
     let path = history_filepath(config);
     lookup_history_entry(&path, log_id, offset)
 }

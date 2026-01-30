@@ -14,19 +14,27 @@ use codex_chatgpt::connectors::AppInfo;
 use codex_common::approval_presets::ApprovalPreset;
 use codex_core::protocol::Event;
 use codex_core::protocol::RateLimitSnapshot;
+use codex_core::protocol::ReviewDecision;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::request_user_input::RequestUserInputResponse;
+use codex_protocol::user_input::UserInput;
 
 use crate::bottom_pane::ApprovalRequest;
 use crate::history_cell::HistoryCell;
 
 use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
+use codex_core::protocol::ElicitationAction;
 use codex_core::protocol::SandboxPolicy;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::openai_models::ReasoningEffort;
+use serde::Serialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -46,10 +54,80 @@ pub(crate) struct ConnectorsSnapshot {
     pub(crate) connectors: Vec<AppInfo>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub(crate) struct TurnStartRequest {
+    pub(crate) items: Vec<UserInput>,
+    pub(crate) cwd: PathBuf,
+    pub(crate) approval_policy: AskForApproval,
+    pub(crate) sandbox_policy: SandboxPolicy,
+    pub(crate) windows_sandbox_level: WindowsSandboxLevel,
+    pub(crate) model: String,
+    pub(crate) effort: Option<ReasoningEffort>,
+    pub(crate) summary: Option<ReasoningSummary>,
+    pub(crate) collaboration_mode: Option<CollaborationMode>,
+    pub(crate) personality: Option<Personality>,
+    pub(crate) output_schema: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub(crate) enum AppServerAction {
+    TurnStart(TurnStartRequest),
+    ReviewStart {
+        review_request: codex_core::protocol::ReviewRequest,
+    },
+    Interrupt,
+    Shutdown,
+    Compact,
+    ThreadRollback {
+        num_turns: u32,
+    },
+    ListSkills {
+        cwds: Vec<PathBuf>,
+        force_reload: bool,
+    },
+    #[allow(dead_code)]
+    RefreshMcpServers {
+        config: codex_protocol::protocol::McpServerRefreshConfig,
+    },
+    ListMcpTools,
+    ListCustomPrompts,
+    RunUserShellCommand {
+        command: String,
+    },
+    AddToHistory {
+        text: String,
+    },
+    GetHistoryEntry {
+        log_id: u64,
+        offset: usize,
+    },
+    ExecApproval {
+        call_id: String,
+        decision: ReviewDecision,
+    },
+    PatchApproval {
+        call_id: String,
+        decision: ReviewDecision,
+    },
+    UserInputAnswer {
+        call_id: String,
+        response: RequestUserInputResponse,
+    },
+    ResolveElicitation {
+        server_name: String,
+        request_id: mcp_types::RequestId,
+        decision: ElicitationAction,
+    },
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum AppEvent {
     CodexEvent(Event),
+    CodexThreadEvent {
+        thread_id: ThreadId,
+        event: Event,
+    },
     /// Open the agent picker for switching active threads.
     OpenAgentPicker,
     /// Switch the active thread to the selected agent.
@@ -73,11 +151,12 @@ pub(crate) enum AppEvent {
     Exit(ExitMode),
 
     /// Request to exit the application due to a fatal error.
+    #[allow(dead_code)]
     FatalExitRequest(String),
 
-    /// Forward an `Op` to the Agent. Using an `AppEvent` for this avoids
+    /// Forward a command to the app server. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
-    CodexOp(codex_core::protocol::Op),
+    AppServerAction(AppServerAction),
 
     /// Kick off an asynchronous file search for the given query (text after
     /// the `@`). Previous searches may be cancelled by the app layer so there
@@ -305,8 +384,9 @@ pub(crate) enum ExitMode {
     ShutdownFirst,
     /// Exit the UI loop immediately without waiting for shutdown.
     ///
-    /// This skips `Op::Shutdown`, so any in-flight work may be dropped and
-    /// cleanup that normally runs before `ShutdownComplete` can be missed.
+    /// This skips the app-server shutdown request, so any in-flight work may be
+    /// dropped and cleanup that normally runs before `ShutdownComplete` can be
+    /// missed.
     Immediate,
 }
 

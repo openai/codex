@@ -37,12 +37,16 @@ model_provider = "ollama"
     let CodexCliOutput { exit_code, output } = run_codex_cli(codex_home, cwd).await?;
     assert_ne!(0, exit_code, "Codex CLI should exit nonzero.");
     assert!(
-        output.contains("ERROR: Failed to initialize codex:"),
+        output.contains("Error: app server error -32603"),
         "expected startup error in output, got: {output}"
     );
+    let expected_error = format!(
+        "Fatal error: failed to load rules: failed to read rules files from {}",
+        codex_home.join("rules").canonicalize()?.display()
+    );
     assert!(
-        output.contains("failed to read rules files"),
-        "expected rules read error in output, got: {output}"
+        output.contains(&expected_error),
+        "expected:\n{expected_error}\nin output, got:\n{output}"
     );
     Ok(())
 }

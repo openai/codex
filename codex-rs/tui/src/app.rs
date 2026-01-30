@@ -1,11 +1,13 @@
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
+use crate::app_event::AppServerAction;
 use crate::app_event::ExitMode;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxFallbackReason;
 use crate::app_event_sender::AppEventSender;
+use crate::app_server_client::AppServerClient;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::SelectionItem;
@@ -34,15 +36,19 @@ use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::ThreadItem as V2ThreadItem;
+use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
-use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config_loader::ConfigLayerStackOrdering;
+use codex_core::config_loader::LoaderOverrides;
+#[cfg(target_os = "windows")]
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
@@ -51,9 +57,13 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::DeprecationNoticeEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
+use codex_core::protocol::ExecCommandBeginEvent;
+use codex_core::protocol::ExecCommandEndEvent;
+use codex_core::protocol::ExecCommandOutputDeltaEvent;
+use codex_core::protocol::ExecCommandSource;
+use codex_core::protocol::ExecOutputStream;
 use codex_core::protocol::FinalOutput;
 use codex_core::protocol::ListSkillsResponseEvent;
-use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::SkillErrorInfo;
@@ -65,7 +75,12 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::Personality;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::items::AgentMessageContent;
+use codex_protocol::items::AgentMessageItem;
+use codex_protocol::items::ContextCompactionItem;
+use codex_protocol::items::ReasoningItem;
 use codex_protocol::items::TurnItem;
+use codex_protocol::items::UserMessageItem;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -94,7 +109,6 @@ use std::time::Duration;
 use std::time::Instant;
 use tokio::select;
 use tokio::sync::Mutex;
-use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::error::TrySendError;
@@ -103,6 +117,7 @@ use toml::Value as TomlValue;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
+const SHUTDOWN_FALLBACK_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
@@ -230,6 +245,98 @@ fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) 
     )));
 }
 
+fn app_server_error(err: JSONRPCErrorError) -> color_eyre::Report {
+    let details = err
+        .data
+        .as_ref()
+        .map(|data| format!(" (data: {data})"))
+        .unwrap_or_default();
+    color_eyre::eyre::eyre!("app server error {}: {}{details}", err.code, err.message)
+}
+
+fn map_skills_list_entry(
+    entry: codex_app_server_protocol::SkillsListEntry,
+) -> codex_core::protocol::SkillsListEntry {
+    codex_core::protocol::SkillsListEntry {
+        cwd: entry.cwd,
+        skills: entry.skills.into_iter().map(map_skill_metadata).collect(),
+        errors: entry.errors.into_iter().map(map_skill_error).collect(),
+    }
+}
+
+fn map_skill_metadata(
+    value: codex_app_server_protocol::SkillMetadata,
+) -> codex_core::protocol::SkillMetadata {
+    codex_core::protocol::SkillMetadata {
+        name: value.name,
+        description: value.description,
+        short_description: value.short_description,
+        interface: value.interface.map(map_skill_interface),
+        dependencies: value.dependencies.map(map_skill_dependencies),
+        path: value.path,
+        scope: map_skill_scope(value.scope),
+        enabled: value.enabled,
+    }
+}
+
+fn map_skill_interface(
+    value: codex_app_server_protocol::SkillInterface,
+) -> codex_core::protocol::SkillInterface {
+    codex_core::protocol::SkillInterface {
+        display_name: value.display_name,
+        short_description: value.short_description,
+        icon_small: value.icon_small,
+        icon_large: value.icon_large,
+        brand_color: value.brand_color,
+        default_prompt: value.default_prompt,
+    }
+}
+
+fn map_skill_dependencies(
+    value: codex_app_server_protocol::SkillDependencies,
+) -> codex_core::protocol::SkillDependencies {
+    codex_core::protocol::SkillDependencies {
+        tools: value
+            .tools
+            .into_iter()
+            .map(map_skill_tool_dependency)
+            .collect(),
+    }
+}
+
+fn map_skill_tool_dependency(
+    value: codex_app_server_protocol::SkillToolDependency,
+) -> codex_core::protocol::SkillToolDependency {
+    codex_core::protocol::SkillToolDependency {
+        r#type: value.r#type,
+        value: value.value,
+        description: value.description,
+        transport: value.transport,
+        command: value.command,
+        url: value.url,
+    }
+}
+
+fn map_skill_error(
+    value: codex_app_server_protocol::SkillErrorInfo,
+) -> codex_core::protocol::SkillErrorInfo {
+    codex_core::protocol::SkillErrorInfo {
+        path: value.path,
+        message: value.message,
+    }
+}
+
+fn map_skill_scope(
+    scope: codex_app_server_protocol::SkillScope,
+) -> codex_core::protocol::SkillScope {
+    match scope {
+        codex_app_server_protocol::SkillScope::User => codex_core::protocol::SkillScope::User,
+        codex_app_server_protocol::SkillScope::Repo => codex_core::protocol::SkillScope::Repo,
+        codex_app_server_protocol::SkillScope::System => codex_core::protocol::SkillScope::System,
+        codex_app_server_protocol::SkillScope::Admin => codex_core::protocol::SkillScope::Admin,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SessionSummary {
     usage_line: String,
@@ -240,6 +347,12 @@ struct SessionSummary {
 struct ThreadEventSnapshot {
     session_configured: Option<Event>,
     events: Vec<Event>,
+}
+
+#[derive(Debug, Clone)]
+struct ThreadBootstrap {
+    thread_id: ThreadId,
+    session_event: Event,
 }
 
 #[derive(Debug)]
@@ -262,6 +375,7 @@ impl ThreadEventStore {
         }
     }
 
+    #[allow(dead_code)]
     fn new_with_session_configured(capacity: usize, event: Event) -> Self {
         let mut store = Self::new(capacity);
         store.session_configured = Some(event);
@@ -335,6 +449,7 @@ impl ThreadEventChannel {
         }
     }
 
+    #[allow(dead_code)]
     fn new_with_session_configured(capacity: usize, event: Event) -> Self {
         let (sender, receiver) = mpsc::channel(capacity);
         Self {
@@ -507,7 +622,8 @@ async fn handle_model_migration_prompt_if_needed(
 }
 
 pub(crate) struct App {
-    pub(crate) server: Arc<ThreadManager>,
+    pub(crate) app_server: AppServerClient,
+    pub(crate) models_manager: Arc<codex_core::models_manager::manager::ModelsManager>,
     pub(crate) otel_manager: OtelManager,
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) chat_widget: ChatWidget,
@@ -585,6 +701,14 @@ fn normalize_harness_overrides_for_cwd(
 }
 
 impl App {
+    fn arm_shutdown_exit_fallback(&self) {
+        let tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(SHUTDOWN_FALLBACK_TIMEOUT).await;
+            tx.send(AppEvent::Exit(ExitMode::Immediate));
+        });
+    }
+
     pub fn chatwidget_init_for_forked_or_resumed_thread(
         &self,
         tui: &mut tui::Tui,
@@ -598,7 +722,7 @@ impl App {
             initial_user_message: None,
             enhanced_keys_supported: self.enhanced_keys_supported,
             auth_manager: self.auth_manager.clone(),
-            models_manager: self.server.get_models_manager(),
+            models_manager: self.models_manager.clone(),
             feedback: self.feedback.clone(),
             is_first_run: false,
             feedback_audience: self.feedback_audience,
@@ -644,9 +768,227 @@ impl App {
             // Clear any in-flight rollback guard when switching threads.
             self.backtrack.pending_rollback = None;
             self.suppress_shutdown_complete = true;
-            self.chat_widget.submit_op(Op::Shutdown);
-            self.server.remove_thread(&thread_id).await;
+            let params = codex_app_server_protocol::ThreadShutdownParams {
+                thread_id: thread_id.to_string(),
+            };
+            if let Ok(pending) = self
+                .app_server
+                .request(
+                    |id| codex_app_server_protocol::ClientRequest::ThreadShutdown {
+                        request_id: id,
+                        params,
+                    },
+                )
+                .await
+            {
+                let _ = pending.discard().await;
+            }
         }
+    }
+
+    fn sandbox_mode_override(
+        policy: &codex_core::protocol::SandboxPolicy,
+    ) -> Option<codex_app_server_protocol::SandboxMode> {
+        match policy {
+            codex_core::protocol::SandboxPolicy::DangerFullAccess => {
+                Some(codex_app_server_protocol::SandboxMode::DangerFullAccess)
+            }
+            codex_core::protocol::SandboxPolicy::ReadOnly => {
+                Some(codex_app_server_protocol::SandboxMode::ReadOnly)
+            }
+            codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. } => {
+                Some(codex_app_server_protocol::SandboxMode::WorkspaceWrite)
+            }
+            codex_core::protocol::SandboxPolicy::ExternalSandbox { .. } => None,
+        }
+    }
+
+    fn build_thread_start_params(
+        &self,
+        config: &Config,
+    ) -> codex_app_server_protocol::ThreadStartParams {
+        codex_app_server_protocol::ThreadStartParams {
+            model: config.model.clone(),
+            model_provider: Some(config.model_provider_id.clone()),
+            cwd: Some(config.cwd.display().to_string()),
+            approval_policy: Some(codex_app_server_protocol::AskForApproval::from(
+                *config.approval_policy.get(),
+            )),
+            sandbox: Self::sandbox_mode_override(config.sandbox_policy.get()),
+            config: None,
+            base_instructions: None,
+            developer_instructions: None,
+            dynamic_tools: None,
+            experimental_raw_events: false,
+            personality: config.model_personality,
+            ephemeral: None,
+        }
+    }
+
+    fn build_thread_resume_params(
+        &self,
+        config: &Config,
+        path: &Path,
+    ) -> codex_app_server_protocol::ThreadResumeParams {
+        codex_app_server_protocol::ThreadResumeParams {
+            thread_id: String::new(),
+            history: None,
+            path: Some(path.to_path_buf()),
+            model: config.model.clone(),
+            model_provider: Some(config.model_provider_id.clone()),
+            cwd: Some(config.cwd.display().to_string()),
+            approval_policy: Some(codex_app_server_protocol::AskForApproval::from(
+                *config.approval_policy.get(),
+            )),
+            sandbox: Self::sandbox_mode_override(config.sandbox_policy.get()),
+            config: None,
+            base_instructions: None,
+            developer_instructions: None,
+            personality: config.model_personality,
+        }
+    }
+
+    fn build_thread_fork_params(
+        &self,
+        config: &Config,
+        path: &Path,
+    ) -> codex_app_server_protocol::ThreadForkParams {
+        codex_app_server_protocol::ThreadForkParams {
+            thread_id: String::new(),
+            path: Some(path.to_path_buf()),
+            model: config.model.clone(),
+            model_provider: Some(config.model_provider_id.clone()),
+            cwd: Some(config.cwd.display().to_string()),
+            approval_policy: Some(codex_app_server_protocol::AskForApproval::from(
+                *config.approval_policy.get(),
+            )),
+            sandbox: Self::sandbox_mode_override(config.sandbox_policy.get()),
+            config: None,
+            base_instructions: None,
+            developer_instructions: None,
+        }
+    }
+
+    async fn set_primary_thread(&mut self, thread_id: ThreadId) {
+        self.primary_thread_id = Some(thread_id);
+        self.ensure_thread_channel(thread_id);
+        self.activate_thread_channel(thread_id).await;
+    }
+
+    async fn start_thread_for_config(&mut self, config: &Config) -> Result<ThreadId> {
+        let params = self.build_thread_start_params(config);
+        let pending = self
+            .app_server
+            .request(
+                |request_id| codex_app_server_protocol::ClientRequest::ThreadStart {
+                    request_id,
+                    params,
+                },
+            )
+            .await
+            .map_err(app_server_error)?;
+        let response: codex_app_server_protocol::ThreadStartResponse =
+            pending.into_typed().await.map_err(app_server_error)?;
+        let thread_id = ThreadId::from_string(&response.thread.id)
+            .map_err(|err| color_eyre::eyre::eyre!("invalid thread id: {err}"))?;
+        self.set_primary_thread(thread_id).await;
+        if self.chat_widget.thread_id().is_none() {
+            let event = session_configured_from_thread_response(
+                thread_id,
+                response.model,
+                response.model_provider,
+                response.approval_policy,
+                response.sandbox,
+                response.cwd,
+                response.reasoning_effort,
+                response.thread.path.clone(),
+                None,
+            );
+            self.enqueue_thread_event(thread_id, event).await?;
+        }
+        Ok(thread_id)
+    }
+
+    async fn resume_thread_from_path(
+        &mut self,
+        config: &Config,
+        path: &Path,
+    ) -> Result<ThreadBootstrap> {
+        let params = self.build_thread_resume_params(config, path);
+        let pending = self
+            .app_server
+            .request(
+                |request_id| codex_app_server_protocol::ClientRequest::ThreadResume {
+                    request_id,
+                    params,
+                },
+            )
+            .await
+            .map_err(app_server_error)?;
+        let response: codex_app_server_protocol::ThreadResumeResponse =
+            pending.into_typed().await.map_err(app_server_error)?;
+        let thread_id = ThreadId::from_string(&response.thread.id)
+            .map_err(|err| color_eyre::eyre::eyre!("invalid thread id: {err}"))?;
+        let initial_messages = thread_turns_to_initial_messages(
+            &response.thread.turns,
+            self.config.show_raw_agent_reasoning,
+        );
+        let session_event = session_configured_from_thread_response(
+            thread_id,
+            response.model,
+            response.model_provider,
+            response.approval_policy,
+            response.sandbox,
+            response.cwd,
+            response.reasoning_effort,
+            response.thread.path,
+            initial_messages,
+        );
+        Ok(ThreadBootstrap {
+            thread_id,
+            session_event,
+        })
+    }
+
+    async fn fork_thread_from_path(
+        &mut self,
+        config: &Config,
+        path: &Path,
+    ) -> Result<ThreadBootstrap> {
+        let params = self.build_thread_fork_params(config, path);
+        let pending = self
+            .app_server
+            .request(
+                |request_id| codex_app_server_protocol::ClientRequest::ThreadFork {
+                    request_id,
+                    params,
+                },
+            )
+            .await
+            .map_err(app_server_error)?;
+        let response: codex_app_server_protocol::ThreadForkResponse =
+            pending.into_typed().await.map_err(app_server_error)?;
+        let thread_id = ThreadId::from_string(&response.thread.id)
+            .map_err(|err| color_eyre::eyre::eyre!("invalid thread id: {err}"))?;
+        let initial_messages = thread_turns_to_initial_messages(
+            &response.thread.turns,
+            self.config.show_raw_agent_reasoning,
+        );
+        let session_event = session_configured_from_thread_response(
+            thread_id,
+            response.model,
+            response.model_provider,
+            response.approval_policy,
+            response.sandbox,
+            response.cwd,
+            response.reasoning_effort,
+            response.thread.path,
+            initial_messages,
+        );
+        Ok(ThreadBootstrap {
+            thread_id,
+            session_event,
+        })
     }
 
     fn ensure_thread_channel(&mut self, thread_id: ThreadId) -> &mut ThreadEventChannel {
@@ -765,6 +1107,32 @@ impl App {
         Ok(())
     }
 
+    async fn enqueue_thread_event_with_primary(
+        &mut self,
+        thread_id: ThreadId,
+        event: Event,
+    ) -> Result<()> {
+        if self.primary_thread_id.is_some() {
+            return self.enqueue_thread_event(thread_id, event).await;
+        }
+
+        if let EventMsg::SessionConfigured(session) = &event.msg {
+            self.primary_thread_id = Some(thread_id);
+            self.primary_session_configured = Some(session.clone());
+            self.ensure_thread_channel(thread_id);
+            self.activate_thread_channel(thread_id).await;
+
+            let pending = std::mem::take(&mut self.pending_primary_events);
+            for pending_event in pending {
+                self.enqueue_thread_event(thread_id, pending_event).await?;
+            }
+            self.enqueue_thread_event(thread_id, event).await?;
+        } else {
+            self.pending_primary_events.push_back(event);
+        }
+        Ok(())
+    }
+
     fn open_agent_picker(&mut self) {
         if self.thread_event_channels.is_empty() {
             self.chat_widget
@@ -812,16 +1180,6 @@ impl App {
             return Ok(());
         }
 
-        let thread = match self.server.get_thread(thread_id).await {
-            Ok(thread) => thread,
-            Err(err) => {
-                self.chat_widget.add_error_message(format!(
-                    "Failed to attach to agent thread {thread_id}: {err}"
-                ));
-                return Ok(());
-            }
-        };
-
         let previous_thread_id = self.active_thread_id;
         self.store_active_thread_receiver().await;
         self.active_thread_id = None;
@@ -838,8 +1196,7 @@ impl App {
         self.active_thread_rx = Some(receiver);
 
         let init = self.chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
-        let codex_op_tx = crate::chatwidget::spawn_op_forwarder(thread);
-        self.chat_widget = ChatWidget::new_with_op_sender(init, codex_op_tx);
+        self.chat_widget = ChatWidget::new(init);
 
         self.reset_for_thread_switch(tui)?;
         self.replay_thread_snapshot(snapshot);
@@ -930,17 +1287,14 @@ impl App {
 
         let harness_overrides =
             normalize_harness_overrides_for_cwd(harness_overrides, &config.cwd)?;
-        let thread_manager = Arc::new(ThreadManager::new(
+        let models_manager = Arc::new(codex_core::models_manager::manager::ModelsManager::new(
             config.codex_home.clone(),
             auth_manager.clone(),
-            SessionSource::Cli,
         ));
-        let mut model = thread_manager
-            .get_models_manager()
+        let mut model = models_manager
             .get_default_model(&config.model, &config, RefreshStrategy::Offline)
             .await;
-        let available_models = thread_manager
-            .get_models_manager()
+        let available_models = models_manager
             .list_models(&config, RefreshStrategy::Offline)
             .await;
         let exit_info = handle_model_migration_prompt_if_needed(
@@ -984,88 +1338,65 @@ impl App {
         );
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
-        let mut chat_widget = match session_selection {
-            SessionSelection::StartFresh | SessionSelection::Exit => {
-                let init = crate::chatwidget::ChatWidgetInit {
-                    config: config.clone(),
-                    frame_requester: tui.frame_requester(),
-                    app_event_tx: app_event_tx.clone(),
-                    initial_user_message: crate::chatwidget::create_initial_user_message(
-                        initial_prompt.clone(),
-                        initial_images.clone(),
-                        // CLI prompt args are plain strings, so they don't provide element ranges.
-                        Vec::new(),
-                    ),
-                    enhanced_keys_supported,
-                    auth_manager: auth_manager.clone(),
-                    models_manager: thread_manager.get_models_manager(),
-                    feedback: feedback.clone(),
-                    is_first_run,
-                    feedback_audience,
-                    model: Some(model.clone()),
-                    otel_manager: otel_manager.clone(),
-                };
-                ChatWidget::new(init, thread_manager.clone())
-            }
-            SessionSelection::Resume(path) => {
-                let resumed = thread_manager
-                    .resume_thread_from_rollout(config.clone(), path.clone(), auth_manager.clone())
-                    .await
-                    .wrap_err_with(|| {
-                        let path_display = path.display();
-                        format!("Failed to resume session from {path_display}")
-                    })?;
-                let init = crate::chatwidget::ChatWidgetInit {
-                    config: config.clone(),
-                    frame_requester: tui.frame_requester(),
-                    app_event_tx: app_event_tx.clone(),
-                    initial_user_message: crate::chatwidget::create_initial_user_message(
-                        initial_prompt.clone(),
-                        initial_images.clone(),
-                        // CLI prompt args are plain strings, so they don't provide element ranges.
-                        Vec::new(),
-                    ),
-                    enhanced_keys_supported,
-                    auth_manager: auth_manager.clone(),
-                    models_manager: thread_manager.get_models_manager(),
-                    feedback: feedback.clone(),
-                    is_first_run,
-                    feedback_audience,
-                    model: config.model.clone(),
-                    otel_manager: otel_manager.clone(),
-                };
-                ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
-            }
-            SessionSelection::Fork(path) => {
-                let forked = thread_manager
-                    .fork_thread(usize::MAX, config.clone(), path.clone())
-                    .await
-                    .wrap_err_with(|| {
-                        let path_display = path.display();
-                        format!("Failed to fork session from {path_display}")
-                    })?;
-                let init = crate::chatwidget::ChatWidgetInit {
-                    config: config.clone(),
-                    frame_requester: tui.frame_requester(),
-                    app_event_tx: app_event_tx.clone(),
-                    initial_user_message: crate::chatwidget::create_initial_user_message(
-                        initial_prompt.clone(),
-                        initial_images.clone(),
-                        // CLI prompt args are plain strings, so they don't provide element ranges.
-                        Vec::new(),
-                    ),
-                    enhanced_keys_supported,
-                    auth_manager: auth_manager.clone(),
-                    models_manager: thread_manager.get_models_manager(),
-                    feedback: feedback.clone(),
-                    is_first_run,
-                    feedback_audience,
-                    model: config.model.clone(),
-                    otel_manager: otel_manager.clone(),
-                };
-                ChatWidget::new_from_existing(init, forked.thread, forked.session_configured)
-            }
+        let app_server = AppServerClient::spawn(
+            app_event_tx.clone(),
+            Arc::new(config.clone()),
+            cli_kv_overrides.clone(),
+            LoaderOverrides::default(),
+            feedback.clone(),
+            Vec::new(),
+            SessionSource::Cli,
+        );
+        let init_params = codex_app_server_protocol::InitializeParams {
+            client_info: codex_app_server_protocol::ClientInfo {
+                name: "codex_tui".to_string(),
+                title: Some("Codex TUI".to_string()),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+            },
         };
+        match app_server
+            .request(
+                |request_id| codex_app_server_protocol::ClientRequest::Initialize {
+                    request_id,
+                    params: init_params,
+                },
+            )
+            .await
+        {
+            Ok(pending) => {
+                pending.discard().await.map_err(app_server_error)?;
+                app_server
+                    .send_notification(codex_app_server_protocol::ClientNotification::Initialized)
+                    .await
+                    .map_err(app_server_error)?;
+            }
+            Err(err) => {
+                return Ok(AppExitInfo::fatal(format!(
+                    "Failed to initialize app server: {err:?}"
+                )));
+            }
+        }
+
+        let init = crate::chatwidget::ChatWidgetInit {
+            config: config.clone(),
+            frame_requester: tui.frame_requester(),
+            app_event_tx: app_event_tx.clone(),
+            initial_user_message: crate::chatwidget::create_initial_user_message(
+                initial_prompt.clone(),
+                initial_images.clone(),
+                // CLI prompt args are plain strings, so they don't provide element ranges.
+                Vec::new(),
+            ),
+            enhanced_keys_supported,
+            auth_manager: auth_manager.clone(),
+            models_manager: models_manager.clone(),
+            feedback: feedback.clone(),
+            is_first_run,
+            feedback_audience,
+            model: Some(model.clone()),
+            otel_manager: otel_manager.clone(),
+        };
+        let mut chat_widget = ChatWidget::new(init);
 
         chat_widget.maybe_prompt_windows_sandbox_enable();
 
@@ -1074,7 +1405,8 @@ impl App {
         let upgrade_version = crate::updates::get_upgrade_version(&config);
 
         let mut app = Self {
-            server: thread_manager.clone(),
+            app_server,
+            models_manager,
             otel_manager: otel_manager.clone(),
             app_event_tx,
             chat_widget,
@@ -1106,6 +1438,39 @@ impl App {
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
         };
+
+        match session_selection {
+            SessionSelection::Resume(path) => {
+                let config = app.config.clone();
+                let bootstrap = app
+                    .resume_thread_from_path(&config, &path)
+                    .await
+                    .wrap_err_with(|| {
+                        let path_display = path.display();
+                        format!("Failed to resume session from {path_display}")
+                    })?;
+                app.set_primary_thread(bootstrap.thread_id).await;
+                app.enqueue_thread_event(bootstrap.thread_id, bootstrap.session_event)
+                    .await?;
+            }
+            SessionSelection::Fork(path) => {
+                let config = app.config.clone();
+                let bootstrap = app
+                    .fork_thread_from_path(&config, &path)
+                    .await
+                    .wrap_err_with(|| {
+                        let path_display = path.display();
+                        format!("Failed to fork session from {path_display}")
+                    })?;
+                app.set_primary_thread(bootstrap.thread_id).await;
+                app.enqueue_thread_event(bootstrap.thread_id, bootstrap.session_event)
+                    .await?;
+            }
+            SessionSelection::StartFresh | SessionSelection::Exit => {
+                let config = app.config.clone();
+                app.start_thread_for_config(&config).await?;
+            }
+        }
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
@@ -1158,9 +1523,6 @@ impl App {
 
         tui.frame_requester().schedule_frame();
 
-        let mut thread_created_rx = thread_manager.subscribe_thread_created();
-        let mut listen_for_threads = true;
-
         let exit_reason = loop {
             let control = select! {
                 Some(event) = app_event_rx.recv() => {
@@ -1182,21 +1544,6 @@ impl App {
                 }
                 Some(event) = tui_events.next() => {
                     app.handle_tui_event(tui, event).await?
-                }
-                // Listen on new thread creation due to collab tools.
-                created = thread_created_rx.recv(), if listen_for_threads => {
-                    match created {
-                        Ok(thread_id) => {
-                            app.handle_thread_created(thread_id).await?;
-                        }
-                        Err(broadcast::error::RecvError::Lagged(_)) => {
-                            tracing::warn!("thread_created receiver lagged; skipping resync");
-                        }
-                        Err(broadcast::error::RecvError::Closed) => {
-                            listen_for_threads = false;
-                        }
-                    }
-                    AppRunControl::Continue
                 }
             };
             match control {
@@ -1272,9 +1619,7 @@ impl App {
                 let summary =
                     session_summary(self.chat_widget.token_usage(), self.chat_widget.thread_id());
                 self.shutdown_current_thread().await;
-                if let Err(err) = self.server.remove_and_close_all_threads().await {
-                    tracing::warn!(error = %err, "failed to close all threads");
-                }
+                self.reset_thread_event_state();
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: self.config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -1283,15 +1628,19 @@ impl App {
                     initial_user_message: None,
                     enhanced_keys_supported: self.enhanced_keys_supported,
                     auth_manager: self.auth_manager.clone(),
-                    models_manager: self.server.get_models_manager(),
+                    models_manager: self.models_manager.clone(),
                     feedback: self.feedback.clone(),
                     is_first_run: false,
                     feedback_audience: self.feedback_audience,
                     model: Some(model),
                     otel_manager: self.otel_manager.clone(),
                 };
-                self.chat_widget = ChatWidget::new(init, self.server.clone());
-                self.reset_thread_event_state();
+                self.chat_widget = ChatWidget::new(init);
+                let config = self.config.clone();
+                if let Err(err) = self.start_thread_for_config(&config).await {
+                    self.chat_widget
+                        .add_error_message(format!("Failed to start new session: {err}"));
+                }
                 if let Some(summary) = summary {
                     let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
                     if let Some(command) = summary.resume_command {
@@ -1344,16 +1693,8 @@ impl App {
                             self.chat_widget.token_usage(),
                             self.chat_widget.thread_id(),
                         );
-                        match self
-                            .server
-                            .resume_thread_from_rollout(
-                                resume_config.clone(),
-                                path.clone(),
-                                self.auth_manager.clone(),
-                            )
-                            .await
-                        {
-                            Ok(resumed) => {
+                        match self.resume_thread_from_path(&resume_config, &path).await {
+                            Ok(bootstrap) => {
                                 self.shutdown_current_thread().await;
                                 self.config = resume_config;
                                 tui.set_notification_method(self.config.tui_notification_method);
@@ -1365,12 +1706,14 @@ impl App {
                                     tui,
                                     self.config.clone(),
                                 );
-                                self.chat_widget = ChatWidget::new_from_existing(
-                                    init,
-                                    resumed.thread,
-                                    resumed.session_configured,
-                                );
+                                self.chat_widget = ChatWidget::new(init);
                                 self.reset_thread_event_state();
+                                self.set_primary_thread(bootstrap.thread_id).await;
+                                self.enqueue_thread_event(
+                                    bootstrap.thread_id,
+                                    bootstrap.session_event,
+                                )
+                                .await?;
                                 if let Some(summary) = summary {
                                     let mut lines: Vec<Line<'static>> =
                                         vec![summary.usage_line.clone().into()];
@@ -1404,23 +1747,19 @@ impl App {
                 let summary =
                     session_summary(self.chat_widget.token_usage(), self.chat_widget.thread_id());
                 if let Some(path) = self.chat_widget.rollout_path() {
-                    match self
-                        .server
-                        .fork_thread(usize::MAX, self.config.clone(), path.clone())
-                        .await
-                    {
-                        Ok(forked) => {
+                    let config = self.config.clone();
+                    match self.fork_thread_from_path(&config, &path).await {
+                        Ok(bootstrap) => {
                             self.shutdown_current_thread().await;
                             let init = self.chatwidget_init_for_forked_or_resumed_thread(
                                 tui,
                                 self.config.clone(),
                             );
-                            self.chat_widget = ChatWidget::new_from_existing(
-                                init,
-                                forked.thread,
-                                forked.session_configured,
-                            );
+                            self.chat_widget = ChatWidget::new(init);
                             self.reset_thread_event_state();
+                            self.set_primary_thread(bootstrap.thread_id).await;
+                            self.enqueue_thread_event(bootstrap.thread_id, bootstrap.session_event)
+                                .await?;
                             if let Some(summary) = summary {
                                 let mut lines: Vec<Line<'static>> =
                                     vec![summary.usage_line.clone().into()];
@@ -1499,8 +1838,20 @@ impl App {
             AppEvent::CodexEvent(event) => {
                 self.enqueue_primary_event(event).await?;
             }
+            AppEvent::CodexThreadEvent { thread_id, event } => {
+                self.enqueue_thread_event_with_primary(thread_id, event)
+                    .await?;
+            }
             AppEvent::Exit(mode) => match mode {
-                ExitMode::ShutdownFirst => self.chat_widget.submit_op(Op::Shutdown),
+                ExitMode::ShutdownFirst => {
+                    self.suppress_shutdown_complete = false;
+                    if self.chat_widget.thread_id().is_none() {
+                        return Ok(AppRunControl::Exit(ExitReason::UserRequested));
+                    }
+                    self.handle_app_server_action(AppServerAction::Shutdown)
+                        .await?;
+                    self.arm_shutdown_exit_fallback();
+                }
                 ExitMode::Immediate => {
                     return Ok(AppRunControl::Exit(ExitReason::UserRequested));
                 }
@@ -1508,8 +1859,8 @@ impl App {
             AppEvent::FatalExitRequest(message) => {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
-            AppEvent::CodexOp(op) => {
-                self.chat_widget.submit_op(op);
+            AppEvent::AppServerAction(action) => {
+                self.handle_app_server_action(action).await?;
             }
             AppEvent::DiffResult(text) => {
                 // Clear the in-progress state in the bottom pane
@@ -1748,24 +2099,9 @@ impl App {
                                     .set_feature_enabled(Feature::WindowsSandboxElevated, false);
                             }
                             self.chat_widget.clear_forced_auto_mode_downgrade();
-                            let windows_sandbox_level =
-                                WindowsSandboxLevel::from_config(&self.config);
                             if let Some((sample_paths, extra_count, failed_scan)) =
                                 self.chat_widget.world_writable_warning_details()
                             {
-                                self.app_event_tx.send(AppEvent::CodexOp(
-                                    Op::OverrideTurnContext {
-                                        cwd: None,
-                                        approval_policy: None,
-                                        sandbox_policy: None,
-                                        windows_sandbox_level: Some(windows_sandbox_level),
-                                        model: None,
-                                        effort: None,
-                                        summary: None,
-                                        collaboration_mode: None,
-                                        personality: None,
-                                    },
-                                ));
                                 self.app_event_tx.send(
                                     AppEvent::OpenWorldWritableWarningConfirmation {
                                         preset: Some(preset.clone()),
@@ -1775,19 +2111,6 @@ impl App {
                                     },
                                 );
                             } else {
-                                self.app_event_tx.send(AppEvent::CodexOp(
-                                    Op::OverrideTurnContext {
-                                        cwd: None,
-                                        approval_policy: Some(preset.approval),
-                                        sandbox_policy: Some(preset.sandbox.clone()),
-                                        windows_sandbox_level: Some(windows_sandbox_level),
-                                        model: None,
-                                        effort: None,
-                                        summary: None,
-                                        collaboration_mode: None,
-                                        personality: None,
-                                    },
-                                ));
                                 self.app_event_tx
                                     .send(AppEvent::UpdateAskForApprovalPolicy(preset.approval));
                                 self.app_event_tx
@@ -1967,12 +2290,6 @@ impl App {
                 if updates.is_empty() {
                     return Ok(AppRunControl::Continue);
                 }
-                let windows_sandbox_changed = updates.iter().any(|(feature, _)| {
-                    matches!(
-                        feature,
-                        Feature::WindowsSandbox | Feature::WindowsSandboxElevated
-                    )
-                });
                 let mut builder = ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_profile(self.active_profile.as_deref());
                 for (feature, enabled) in &updates {
@@ -1996,24 +2313,6 @@ impl App {
                                 segments: vec!["features".to_string(), feature_key.to_string()],
                             }]);
                         }
-                    }
-                }
-                if windows_sandbox_changed {
-                    #[cfg(target_os = "windows")]
-                    {
-                        let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
-                        self.app_event_tx
-                            .send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                                cwd: None,
-                                approval_policy: None,
-                                sandbox_policy: None,
-                                windows_sandbox_level: Some(windows_sandbox_level),
-                                model: None,
-                                effort: None,
-                                summary: None,
-                                collaboration_mode: None,
-                                personality: None,
-                            }));
                     }
                 }
                 if let Err(err) = builder.apply().await {
@@ -2197,6 +2496,411 @@ impl App {
         Ok(AppRunControl::Continue)
     }
 
+    async fn handle_app_server_action(&mut self, action: AppServerAction) -> Result<()> {
+        match action {
+            AppServerAction::TurnStart(request) => {
+                let Some(thread_id) = self.chat_widget.thread_id() else {
+                    return Ok(());
+                };
+                let params = codex_app_server_protocol::TurnStartParams {
+                    thread_id: thread_id.to_string(),
+                    input: request.items.into_iter().map(Into::into).collect(),
+                    cwd: Some(request.cwd),
+                    approval_policy: Some(codex_app_server_protocol::AskForApproval::from(
+                        request.approval_policy,
+                    )),
+                    sandbox_policy: Some(request.sandbox_policy.into()),
+                    windows_sandbox_level: Some(request.windows_sandbox_level),
+                    model: Some(request.model),
+                    effort: request.effort,
+                    summary: request.summary,
+                    personality: request.personality,
+                    output_schema: request.output_schema,
+                    collaboration_mode: request.collaboration_mode,
+                };
+                let pending = self
+                    .app_server
+                    .request(
+                        |request_id| codex_app_server_protocol::ClientRequest::TurnStart {
+                            request_id,
+                            params,
+                        },
+                    )
+                    .await
+                    .map_err(app_server_error)?;
+                pending.discard().await.map_err(app_server_error)?;
+            }
+            AppServerAction::ReviewStart { review_request } => {
+                let Some(thread_id) = self.chat_widget.thread_id() else {
+                    return Ok(());
+                };
+                let target = match review_request.target {
+                    codex_protocol::protocol::ReviewTarget::UncommittedChanges => {
+                        codex_app_server_protocol::ReviewTarget::UncommittedChanges
+                    }
+                    codex_protocol::protocol::ReviewTarget::BaseBranch { branch } => {
+                        codex_app_server_protocol::ReviewTarget::BaseBranch { branch }
+                    }
+                    codex_protocol::protocol::ReviewTarget::Commit { sha, title } => {
+                        codex_app_server_protocol::ReviewTarget::Commit { sha, title }
+                    }
+                    codex_protocol::protocol::ReviewTarget::Custom { instructions } => {
+                        codex_app_server_protocol::ReviewTarget::Custom { instructions }
+                    }
+                };
+                let params = codex_app_server_protocol::ReviewStartParams {
+                    thread_id: thread_id.to_string(),
+                    target,
+                    delivery: None,
+                };
+                let pending = self
+                    .app_server
+                    .request(
+                        |request_id| codex_app_server_protocol::ClientRequest::ReviewStart {
+                            request_id,
+                            params,
+                        },
+                    )
+                    .await
+                    .map_err(app_server_error)?;
+                pending.discard().await.map_err(app_server_error)?;
+            }
+            AppServerAction::Interrupt => {
+                if let Some(thread_id) = self.chat_widget.thread_id() {
+                    self.app_server
+                        .interrupt_current_turn(thread_id)
+                        .await
+                        .map_err(app_server_error)?;
+                }
+            }
+            AppServerAction::Shutdown => {
+                if let Some(thread_id) = self.chat_widget.thread_id() {
+                    let params = codex_app_server_protocol::ThreadShutdownParams {
+                        thread_id: thread_id.to_string(),
+                    };
+                    let pending = self
+                        .app_server
+                        .request(|request_id| {
+                            codex_app_server_protocol::ClientRequest::ThreadShutdown {
+                                request_id,
+                                params,
+                            }
+                        })
+                        .await
+                        .map_err(app_server_error)?;
+                    pending.discard().await.map_err(app_server_error)?;
+                }
+            }
+            AppServerAction::Compact => {
+                if let Some(thread_id) = self.chat_widget.thread_id() {
+                    let params = codex_app_server_protocol::ThreadCompactParams {
+                        thread_id: thread_id.to_string(),
+                    };
+                    let pending = self
+                        .app_server
+                        .request(|request_id| {
+                            codex_app_server_protocol::ClientRequest::ThreadCompact {
+                                request_id,
+                                params,
+                            }
+                        })
+                        .await
+                        .map_err(app_server_error)?;
+                    pending.discard().await.map_err(app_server_error)?;
+                }
+            }
+            AppServerAction::ThreadRollback { num_turns } => {
+                if let Some(thread_id) = self.chat_widget.thread_id() {
+                    let params = codex_app_server_protocol::ThreadRollbackParams {
+                        thread_id: thread_id.to_string(),
+                        num_turns,
+                    };
+                    let pending = self
+                        .app_server
+                        .request(|request_id| {
+                            codex_app_server_protocol::ClientRequest::ThreadRollback {
+                                request_id,
+                                params,
+                            }
+                        })
+                        .await
+                        .map_err(app_server_error)?;
+                    pending.discard().await.map_err(app_server_error)?;
+                }
+            }
+            AppServerAction::ListSkills { cwds, force_reload } => {
+                let params = codex_app_server_protocol::SkillsListParams { cwds, force_reload };
+                let pending = self
+                    .app_server
+                    .request(
+                        |request_id| codex_app_server_protocol::ClientRequest::SkillsList {
+                            request_id,
+                            params,
+                        },
+                    )
+                    .await
+                    .map_err(app_server_error)?;
+                let response: codex_app_server_protocol::SkillsListResponse =
+                    pending.into_typed().await.map_err(app_server_error)?;
+                let skills = response
+                    .data
+                    .into_iter()
+                    .map(map_skills_list_entry)
+                    .collect();
+                let event = Event {
+                    id: String::new(),
+                    msg: EventMsg::ListSkillsResponse(ListSkillsResponseEvent { skills }),
+                };
+                if let Some(thread_id) = self.chat_widget.thread_id() {
+                    self.enqueue_thread_event(thread_id, event).await?;
+                } else {
+                    self.enqueue_primary_event(event).await?;
+                }
+            }
+            AppServerAction::RefreshMcpServers { config: _ } => {
+                let pending = self
+                    .app_server
+                    .request(|request_id| {
+                        codex_app_server_protocol::ClientRequest::McpServerRefresh {
+                            request_id,
+                            params: None,
+                        }
+                    })
+                    .await
+                    .map_err(app_server_error)?;
+                pending.discard().await.map_err(app_server_error)?;
+            }
+            AppServerAction::ListMcpTools => {
+                let params = codex_app_server_protocol::ListMcpServerStatusParams {
+                    cursor: None,
+                    limit: None,
+                };
+                let pending = self
+                    .app_server
+                    .request(|request_id| {
+                        codex_app_server_protocol::ClientRequest::McpServerStatusList {
+                            request_id,
+                            params,
+                        }
+                    })
+                    .await
+                    .map_err(app_server_error)?;
+                let response: codex_app_server_protocol::ListMcpServerStatusResponse =
+                    pending.into_typed().await.map_err(app_server_error)?;
+                let mut tools = HashMap::new();
+                let mut resources = HashMap::new();
+                let mut resource_templates = HashMap::new();
+                let mut auth_statuses = HashMap::new();
+                for server in response.data {
+                    let server_name = server.name.clone();
+                    auth_statuses.insert(server_name.clone(), server.auth_status.to_core());
+                    resources.insert(server_name.clone(), server.resources);
+                    resource_templates.insert(server_name.clone(), server.resource_templates);
+                    for (tool_name, tool) in server.tools {
+                        let qualified = format!("mcp__{server_name}__{tool_name}");
+                        tools.insert(qualified, tool);
+                    }
+                }
+                let event = Event {
+                    id: String::new(),
+                    msg: EventMsg::McpListToolsResponse(
+                        codex_core::protocol::McpListToolsResponseEvent {
+                            tools,
+                            resources,
+                            resource_templates,
+                            auth_statuses,
+                        },
+                    ),
+                };
+                if let Some(thread_id) = self.chat_widget.thread_id() {
+                    self.enqueue_thread_event(thread_id, event).await?;
+                } else {
+                    self.enqueue_primary_event(event).await?;
+                }
+            }
+            AppServerAction::ListCustomPrompts => {
+                let custom_prompts =
+                    if let Some(dir) = codex_core::custom_prompts::default_prompts_dir() {
+                        codex_core::custom_prompts::discover_prompts_in(&dir).await
+                    } else {
+                        Vec::new()
+                    };
+                let event = Event {
+                    id: String::new(),
+                    msg: EventMsg::ListCustomPromptsResponse(
+                        codex_core::protocol::ListCustomPromptsResponseEvent { custom_prompts },
+                    ),
+                };
+                if let Some(thread_id) = self.chat_widget.thread_id() {
+                    self.enqueue_thread_event(thread_id, event).await?;
+                } else {
+                    self.enqueue_primary_event(event).await?;
+                }
+            }
+            AppServerAction::RunUserShellCommand { command } => {
+                let Some(thread_id) = self.chat_widget.thread_id() else {
+                    return Ok(());
+                };
+                let shell = codex_core::shell::default_user_shell();
+                let command_args = shell.derive_exec_args(&command, true);
+                let parsed_cmd = codex_core::parse_command::parse_command(&command_args);
+                let call_id = uuid::Uuid::new_v4().to_string();
+                let turn_id = uuid::Uuid::new_v4().to_string();
+                let cwd = self.config.cwd.clone();
+                let begin_event = Event {
+                    id: String::new(),
+                    msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+                        call_id: call_id.clone(),
+                        process_id: None,
+                        turn_id: turn_id.clone(),
+                        command: command_args.clone(),
+                        cwd: cwd.clone(),
+                        parsed_cmd: parsed_cmd.clone(),
+                        source: ExecCommandSource::UserShell,
+                        interaction_input: None,
+                    }),
+                };
+                self.enqueue_thread_event(thread_id, begin_event).await?;
+
+                let started_at = Instant::now();
+                let params = codex_app_server_protocol::CommandExecParams {
+                    command: command_args.clone(),
+                    timeout_ms: None,
+                    cwd: Some(cwd.clone()),
+                    sandbox_policy: Some(self.config.sandbox_policy.get().clone().into()),
+                };
+                let pending = self
+                    .app_server
+                    .request(|request_id| {
+                        codex_app_server_protocol::ClientRequest::OneOffCommandExec {
+                            request_id,
+                            params,
+                        }
+                    })
+                    .await
+                    .map_err(app_server_error)?;
+                let response: codex_app_server_protocol::CommandExecResponse =
+                    pending.into_typed().await.map_err(app_server_error)?;
+                let duration = started_at.elapsed();
+                if !response.stdout.is_empty() {
+                    let delta = Event {
+                        id: String::new(),
+                        msg: EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
+                            call_id: call_id.clone(),
+                            stream: ExecOutputStream::Stdout,
+                            chunk: response.stdout.as_bytes().to_vec(),
+                        }),
+                    };
+                    self.enqueue_thread_event(thread_id, delta).await?;
+                }
+                if !response.stderr.is_empty() {
+                    let delta = Event {
+                        id: String::new(),
+                        msg: EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
+                            call_id: call_id.clone(),
+                            stream: ExecOutputStream::Stderr,
+                            chunk: response.stderr.as_bytes().to_vec(),
+                        }),
+                    };
+                    self.enqueue_thread_event(thread_id, delta).await?;
+                }
+                let aggregated_output = format!("{}{}", response.stdout, response.stderr);
+                let exec_output = codex_core::exec::ExecToolCallOutput {
+                    exit_code: response.exit_code,
+                    stdout: codex_core::exec::StreamOutput::new(response.stdout.clone()),
+                    stderr: codex_core::exec::StreamOutput::new(response.stderr.clone()),
+                    aggregated_output: codex_core::exec::StreamOutput::new(
+                        aggregated_output.clone(),
+                    ),
+                    duration,
+                    timed_out: false,
+                };
+                let formatted_output = codex_core::format_exec_output_str(
+                    &exec_output,
+                    codex_core::TruncationPolicy::Bytes(10_000),
+                );
+                let end_event = Event {
+                    id: String::new(),
+                    msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+                        call_id,
+                        process_id: None,
+                        turn_id,
+                        command: command_args,
+                        cwd,
+                        parsed_cmd,
+                        source: ExecCommandSource::UserShell,
+                        interaction_input: None,
+                        stdout: response.stdout,
+                        stderr: response.stderr,
+                        aggregated_output,
+                        exit_code: response.exit_code,
+                        duration,
+                        formatted_output,
+                    }),
+                };
+                self.enqueue_thread_event(thread_id, end_event).await?;
+            }
+            AppServerAction::AddToHistory { text } => {
+                if let Some(thread_id) = self.chat_widget.thread_id()
+                    && let Err(err) =
+                        codex_core::message_history::append_entry(&text, &thread_id, &self.config)
+                            .await
+                {
+                    tracing::warn!(error = %err, "failed to append history entry");
+                }
+            }
+            AppServerAction::GetHistoryEntry { log_id, offset } => {
+                let entry = codex_core::message_history::lookup(log_id, offset, &self.config).map(
+                    |entry| codex_protocol::message_history::HistoryEntry {
+                        conversation_id: entry.session_id,
+                        ts: entry.ts,
+                        text: entry.text,
+                    },
+                );
+                let event = Event {
+                    id: String::new(),
+                    msg: EventMsg::GetHistoryEntryResponse(
+                        codex_core::protocol::GetHistoryEntryResponseEvent {
+                            offset,
+                            log_id,
+                            entry,
+                        },
+                    ),
+                };
+                self.enqueue_primary_event(event).await?;
+            }
+            AppServerAction::ExecApproval { call_id, decision } => {
+                self.app_server
+                    .respond_exec_approval(call_id, decision)
+                    .await
+                    .map_err(app_server_error)?;
+            }
+            AppServerAction::PatchApproval { call_id, decision } => {
+                self.app_server
+                    .respond_patch_approval(call_id, decision)
+                    .await
+                    .map_err(app_server_error)?;
+            }
+            AppServerAction::UserInputAnswer { call_id, response } => {
+                self.app_server
+                    .respond_user_input(call_id, response)
+                    .await
+                    .map_err(app_server_error)?;
+            }
+            AppServerAction::ResolveElicitation {
+                server_name,
+                request_id,
+                decision,
+            } => {
+                self.app_server
+                    .respond_elicitation(server_name, request_id, decision)
+                    .await
+                    .map_err(app_server_error)?;
+            }
+        }
+        Ok(())
+    }
+
     fn handle_codex_event_now(&mut self, event: Event) {
         if self.suppress_shutdown_complete && matches!(event.msg, EventMsg::ShutdownComplete) {
             self.suppress_shutdown_complete = false;
@@ -2221,63 +2925,6 @@ impl App {
         if self.backtrack_render_pending {
             tui.frame_requester().schedule_frame();
         }
-        Ok(())
-    }
-
-    async fn handle_thread_created(&mut self, thread_id: ThreadId) -> Result<()> {
-        if self.thread_event_channels.contains_key(&thread_id) {
-            return Ok(());
-        }
-        let thread = match self.server.get_thread(thread_id).await {
-            Ok(thread) => thread,
-            Err(err) => {
-                tracing::warn!("failed to attach listener for thread {thread_id}: {err}");
-                return Ok(());
-            }
-        };
-        let config_snapshot = thread.config_snapshot().await;
-        let event = Event {
-            id: String::new(),
-            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                session_id: thread_id,
-                forked_from_id: None,
-                model: config_snapshot.model,
-                model_provider_id: config_snapshot.model_provider_id,
-                approval_policy: config_snapshot.approval_policy,
-                sandbox_policy: config_snapshot.sandbox_policy,
-                cwd: config_snapshot.cwd,
-                reasoning_effort: config_snapshot.reasoning_effort,
-                history_log_id: 0,
-                history_entry_count: 0,
-                initial_messages: None,
-                rollout_path: thread.rollout_path(),
-            }),
-        };
-        let channel =
-            ThreadEventChannel::new_with_session_configured(THREAD_EVENT_CHANNEL_CAPACITY, event);
-        let sender = channel.sender.clone();
-        let store = Arc::clone(&channel.store);
-        self.thread_event_channels.insert(thread_id, channel);
-        tokio::spawn(async move {
-            loop {
-                let event = match thread.next_event().await {
-                    Ok(event) => event,
-                    Err(err) => {
-                        tracing::debug!("external thread {thread_id} listener stopped: {err}");
-                        break;
-                    }
-                };
-                let should_send = {
-                    let mut guard = store.lock().await;
-                    guard.push_event(event.clone());
-                    guard.active
-                };
-                if should_send && let Err(err) = sender.send(event).await {
-                    tracing::debug!("external thread {thread_id} channel closed: {err}");
-                    break;
-                }
-            }
-        });
         Ok(())
     }
 
@@ -2490,6 +3137,87 @@ impl App {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn session_configured_from_thread_response(
+    thread_id: ThreadId,
+    model: String,
+    model_provider: String,
+    approval_policy: codex_app_server_protocol::AskForApproval,
+    sandbox: codex_app_server_protocol::SandboxPolicy,
+    cwd: PathBuf,
+    reasoning_effort: Option<ReasoningEffortConfig>,
+    rollout_path: Option<PathBuf>,
+    initial_messages: Option<Vec<EventMsg>>,
+) -> Event {
+    Event {
+        id: String::new(),
+        msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+            session_id: thread_id,
+            forked_from_id: None,
+            model,
+            model_provider_id: model_provider,
+            approval_policy: approval_policy.to_core(),
+            sandbox_policy: sandbox.to_core(),
+            cwd,
+            reasoning_effort,
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages,
+            rollout_path,
+        }),
+    }
+}
+
+fn thread_turns_to_initial_messages(
+    turns: &[codex_app_server_protocol::Turn],
+    show_raw_agent_reasoning: bool,
+) -> Option<Vec<EventMsg>> {
+    let mut events = Vec::new();
+    for turn in turns {
+        for item in &turn.items {
+            if let Some(turn_item) = thread_item_to_turn_item(item) {
+                events.extend(turn_item.as_legacy_events(show_raw_agent_reasoning));
+            }
+        }
+    }
+    (!events.is_empty()).then_some(events)
+}
+
+fn thread_item_to_turn_item(item: &V2ThreadItem) -> Option<TurnItem> {
+    match item {
+        V2ThreadItem::UserMessage { id, content } => {
+            let content = content
+                .iter()
+                .cloned()
+                .map(V2UserInput::into_core)
+                .collect();
+            Some(TurnItem::UserMessage(UserMessageItem {
+                id: id.clone(),
+                content,
+            }))
+        }
+        V2ThreadItem::AgentMessage { id, text } => Some(TurnItem::AgentMessage(AgentMessageItem {
+            id: id.clone(),
+            content: vec![AgentMessageContent::Text { text: text.clone() }],
+        })),
+        V2ThreadItem::Reasoning {
+            id,
+            summary,
+            content,
+        } => Some(TurnItem::Reasoning(ReasoningItem {
+            id: id.clone(),
+            summary_text: summary.clone(),
+            raw_content: content.clone(),
+        })),
+        V2ThreadItem::ContextCompaction { id } => {
+            Some(TurnItem::ContextCompaction(ContextCompactionItem {
+                id: id.clone(),
+            }))
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2503,9 +3231,9 @@ mod tests {
     use crate::history_cell::new_session_info;
     use codex_core::AuthManager;
     use codex_core::CodexAuth;
-    use codex_core::ThreadManager;
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
+    use codex_core::config_loader::LoaderOverrides;
     use codex_core::models_manager::manager::ModelsManager;
     use codex_core::protocol::AskForApproval;
     use codex_core::protocol::Event;
@@ -2586,20 +3314,31 @@ mod tests {
     }
 
     async fn make_test_app() -> App {
-        let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
+        let (chat_widget, app_event_tx, _rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
-        let server = Arc::new(ThreadManager::with_models_provider(
-            CodexAuth::from_api_key("Test API Key"),
-            config.model_provider.clone(),
-        ));
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let models_manager = Arc::new(ModelsManager::new(
+            config.codex_home.clone(),
+            auth_manager.clone(),
+        ));
+        let feedback = codex_feedback::CodexFeedback::new();
+        let app_server = AppServerClient::spawn(
+            app_event_tx.clone(),
+            Arc::new(config.clone()),
+            Vec::new(),
+            LoaderOverrides::default(),
+            feedback.clone(),
+            Vec::new(),
+            SessionSource::Cli,
+        );
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let otel_manager = test_otel_manager(&config, model.as_str());
 
         App {
-            server,
+            app_server,
+            models_manager,
             otel_manager,
             app_event_tx,
             chat_widget,
@@ -2619,7 +3358,7 @@ mod tests {
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
-            feedback: codex_feedback::CodexFeedback::new(),
+            feedback,
             feedback_audience: FeedbackAudience::External,
             pending_update_action: None,
             suppress_shutdown_complete: false,
@@ -2633,26 +3372,34 @@ mod tests {
         }
     }
 
-    async fn make_test_app_with_channels() -> (
-        App,
-        tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
-        tokio::sync::mpsc::UnboundedReceiver<Op>,
-    ) {
-        let (chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender().await;
+    async fn make_test_app_with_channels() -> (App, tokio::sync::mpsc::UnboundedReceiver<AppEvent>)
+    {
+        let (chat_widget, app_event_tx, rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
-        let server = Arc::new(ThreadManager::with_models_provider(
-            CodexAuth::from_api_key("Test API Key"),
-            config.model_provider.clone(),
-        ));
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let models_manager = Arc::new(ModelsManager::new(
+            config.codex_home.clone(),
+            auth_manager.clone(),
+        ));
+        let feedback = codex_feedback::CodexFeedback::new();
+        let app_server = AppServerClient::spawn(
+            app_event_tx.clone(),
+            Arc::new(config.clone()),
+            Vec::new(),
+            LoaderOverrides::default(),
+            feedback.clone(),
+            Vec::new(),
+            SessionSource::Cli,
+        );
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let otel_manager = test_otel_manager(&config, model.as_str());
 
         (
             App {
-                server,
+                app_server,
+                models_manager,
                 otel_manager,
                 app_event_tx,
                 chat_widget,
@@ -2672,7 +3419,7 @@ mod tests {
                 commit_anim_running: Arc::new(AtomicBool::new(false)),
                 backtrack: BacktrackState::default(),
                 backtrack_render_pending: false,
-                feedback: codex_feedback::CodexFeedback::new(),
+                feedback,
                 feedback_audience: FeedbackAudience::External,
                 pending_update_action: None,
                 suppress_shutdown_complete: false,
@@ -2685,7 +3432,6 @@ mod tests {
                 pending_primary_events: VecDeque::new(),
             },
             rx,
-            op_rx,
         )
     }
 
@@ -2885,7 +3631,7 @@ mod tests {
 
     #[tokio::test]
     async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
-        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        let (mut app, mut app_event_rx) = make_test_app_with_channels().await;
 
         let user_cell = |text: &str,
                          text_elements: Vec<TextElement>,
@@ -2988,8 +3734,9 @@ mod tests {
         app.apply_backtrack_rollback(selection);
 
         let mut rollback_turns = None;
-        while let Ok(op) = op_rx.try_recv() {
-            if let Op::ThreadRollback { num_turns } = op {
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::AppServerAction(AppServerAction::ThreadRollback { num_turns }) = event
+            {
                 rollback_turns = Some(num_turns);
             }
         }
@@ -2998,8 +3745,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn new_session_requests_shutdown_for_previous_conversation() {
-        let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+    async fn shutdown_current_thread_sets_suppress_flag() {
+        let (mut app, _app_event_rx) = make_test_app_with_channels().await;
 
         let thread_id = ThreadId::new();
         let event = SessionConfiguredEvent {
@@ -3022,16 +3769,12 @@ mod tests {
             msg: EventMsg::SessionConfigured(event),
         });
 
-        while app_event_rx.try_recv().is_ok() {}
-        while op_rx.try_recv().is_ok() {}
-
         app.shutdown_current_thread().await;
 
-        match op_rx.try_recv() {
-            Ok(Op::Shutdown) => {}
-            Ok(other) => panic!("expected Op::Shutdown, got {other:?}"),
-            Err(_) => panic!("expected shutdown op to be sent"),
-        }
+        assert!(
+            app.suppress_shutdown_complete,
+            "shutdown should set suppress_shutdown_complete"
+        );
     }
 
     #[tokio::test]
