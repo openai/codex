@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
@@ -5,6 +6,7 @@ use crate::api_bridge::CoreAuthProvider;
 use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::map_api_error;
 use crate::auth::UnauthorizedRecovery;
+use crate::turn_metadata::build_turn_metadata_header;
 use codex_api::AggregateStreamExt;
 use codex_api::ChatClient as ApiChatClient;
 use codex_api::CompactClient as ApiCompactClient;
@@ -108,6 +110,8 @@ pub struct ModelClientSession {
     turn_state: Arc<OnceLock<String>>,
     /// Turn-scoped metadata attached to every request in the turn.
     turn_metadata_header: Option<HeaderValue>,
+    /// Working directory used to lazily compute turn metadata at send time.
+    turn_metadata_cwd: Option<PathBuf>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -141,12 +145,20 @@ impl ModelClient {
     }
 
     pub fn new_session(&self) -> ModelClientSession {
-        self.new_session_with_turn_metadata(None)
+        self.new_session_with_turn_metadata_and_cwd(None, None)
     }
 
     pub fn new_session_with_turn_metadata(
         &self,
         turn_metadata_header: Option<String>,
+    ) -> ModelClientSession {
+        self.new_session_with_turn_metadata_and_cwd(turn_metadata_header, None)
+    }
+
+    pub fn new_session_with_turn_metadata_and_cwd(
+        &self,
+        turn_metadata_header: Option<String>,
+        turn_metadata_cwd: Option<PathBuf>,
     ) -> ModelClientSession {
         let turn_metadata_header =
             turn_metadata_header.and_then(|value| HeaderValue::from_str(&value).ok());
@@ -157,6 +169,7 @@ impl ModelClient {
             transport_manager: self.state.transport_manager.clone(),
             turn_state: Arc::new(OnceLock::new()),
             turn_metadata_header,
+            turn_metadata_cwd,
         }
     }
 }
@@ -267,6 +280,21 @@ impl ModelClient {
 }
 
 impl ModelClientSession {
+    async fn ensure_turn_metadata_header(&mut self) {
+        if self.turn_metadata_header.is_some() {
+            return;
+        }
+        let Some(cwd) = self.turn_metadata_cwd.as_deref() else {
+            return;
+        };
+        let Some(value) = build_turn_metadata_header(cwd).await else {
+            return;
+        };
+        if let Ok(header_value) = HeaderValue::from_str(value.as_str()) {
+            self.turn_metadata_header = Some(header_value);
+        }
+    }
+
     /// Streams a single model turn using either the Responses or Chat
     /// Completions wire API, depending on the configured provider.
     ///
@@ -274,6 +302,9 @@ impl ModelClientSession {
     /// based on the `show_raw_agent_reasoning` flag in the config.
     pub async fn stream(&mut self, prompt: &Prompt) -> Result<ResponseStream> {
         let wire_api = self.state.provider.wire_api;
+        if matches!(wire_api, WireApi::Responses) {
+            self.ensure_turn_metadata_header().await;
+        }
         match wire_api {
             WireApi::Responses => {
                 let websocket_enabled = self.responses_websocket_enabled()

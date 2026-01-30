@@ -120,12 +120,37 @@ pub async fn get_git_remote_urls(cwd: &Path) -> Option<BTreeMap<String, String>>
         return None;
     }
 
+    get_git_remote_urls_assume_git_repo(cwd).await
+}
+
+/// Collect fetch remotes without checking whether `cwd` is in a git repo.
+pub async fn get_git_remote_urls_assume_git_repo(cwd: &Path) -> Option<BTreeMap<String, String>> {
     let output = run_git_command_with_timeout(&["remote", "-v"], cwd).await?;
     if !output.status.success() {
         return None;
     }
 
     let stdout = String::from_utf8(output.stdout).ok()?;
+    parse_git_remote_urls(stdout.as_str())
+}
+
+/// Return the current HEAD commit hash without checking whether `cwd` is in a git repo.
+pub async fn get_head_commit_hash(cwd: &Path) -> Option<String> {
+    let output = run_git_command_with_timeout(&["rev-parse", "HEAD"], cwd).await?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    let hash = stdout.trim();
+    if hash.is_empty() {
+        None
+    } else {
+        Some(hash.to_string())
+    }
+}
+
+fn parse_git_remote_urls(stdout: &str) -> Option<BTreeMap<String, String>> {
     let mut remotes = BTreeMap::new();
     for line in stdout.lines() {
         let Some(fetch_line) = line.strip_suffix(" (fetch)") else {

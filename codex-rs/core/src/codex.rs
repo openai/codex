@@ -1,8 +1,6 @@
-use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -79,14 +77,11 @@ use mcp_types::ListResourcesResult;
 use mcp_types::ReadResourceRequestParams;
 use mcp_types::ReadResourceResult;
 use mcp_types::RequestId;
-use serde::Serialize;
 use serde_json;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot;
-use tokio::time::Duration as TokioDuration;
-use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::debug;
@@ -121,8 +116,6 @@ use crate::error::Result as CodexResult;
 use crate::exec::StreamOutput;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::feedback_tags;
-use crate::git_info::collect_git_info;
-use crate::git_info::get_git_remote_urls;
 use crate::git_info::get_git_repo_root;
 use crate::instructions::UserInstructions;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -512,9 +505,6 @@ pub(crate) struct TurnContext {
     /// Per-turn metadata serialized as a header value for outbound model requests.
     pub(crate) turn_metadata_header: Option<String>,
 }
-
-const TURN_METADATA_TIMEOUT: TokioDuration = TokioDuration::from_millis(150);
-
 impl TurnContext {
     pub(crate) fn resolve_path(&self, path: Option<String>) -> PathBuf {
         path.as_ref()
@@ -716,47 +706,6 @@ impl Session {
             dynamic_tools: session_configuration.dynamic_tools.clone(),
             turn_metadata_header: None,
         }
-    }
-
-    async fn build_turn_metadata_header(cwd: &Path) -> Option<String> {
-        #[derive(Serialize)]
-        struct TurnMetadataWorkspace {
-            #[serde(skip_serializing_if = "Option::is_none")]
-            associated_remote_urls: Option<BTreeMap<String, String>>,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            latest_git_commit_hash: Option<String>,
-        }
-
-        #[derive(Serialize)]
-        struct TurnMetadata {
-            workspaces: BTreeMap<String, TurnMetadataWorkspace>,
-        }
-
-        get_git_repo_root(cwd)?;
-        // On some CI environments (notably Windows), git commands can hang
-        // until their timeout elapses. Cap the total time we spend gathering
-        // optional metadata so turn startup stays responsive.
-        timeout(TURN_METADATA_TIMEOUT, async {
-            let git_info = collect_git_info(cwd).await?;
-            let latest_git_commit_hash = git_info.commit_hash;
-            let associated_remote_urls = get_git_remote_urls(cwd).await;
-            if latest_git_commit_hash.is_none() && associated_remote_urls.is_none() {
-                return None;
-            }
-
-            let mut workspaces = BTreeMap::new();
-            workspaces.insert(
-                cwd.to_string_lossy().into_owned(),
-                TurnMetadataWorkspace {
-                    associated_remote_urls,
-                    latest_git_commit_hash,
-                },
-            );
-            serde_json::to_string(&TurnMetadata { workspaces }).ok()
-        })
-        .await
-        .ok()
-        .flatten()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1295,8 +1244,6 @@ impl Session {
         if let Some(final_schema) = final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
         }
-        turn_context.turn_metadata_header =
-            Self::build_turn_metadata_header(turn_context.cwd.as_path()).await;
         Arc::new(turn_context)
     }
 
@@ -3252,8 +3199,6 @@ async fn spawn_review_thread(
         parent_turn_context.client.transport_manager(),
     );
 
-    let turn_metadata_header =
-        Session::build_turn_metadata_header(parent_turn_context.cwd.as_path()).await;
     let review_turn_context = TurnContext {
         sub_id: sub_id.to_string(),
         client,
@@ -3274,7 +3219,7 @@ async fn spawn_review_thread(
         tool_call_gate: Arc::new(ReadinessFlag::new()),
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         truncation_policy: model_info.truncation_policy.into(),
-        turn_metadata_header,
+        turn_metadata_header: None,
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -3470,9 +3415,10 @@ pub(crate) async fn run_turn(
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
 
-    let mut client_session = turn_context
-        .client
-        .new_session_with_turn_metadata(turn_context.turn_metadata_header.clone());
+    let mut client_session = turn_context.client.new_session_with_turn_metadata_and_cwd(
+        turn_context.turn_metadata_header.clone(),
+        Some(turn_context.cwd.clone()),
+    );
 
     loop {
         // Note that pending_input would be something like a message the user
