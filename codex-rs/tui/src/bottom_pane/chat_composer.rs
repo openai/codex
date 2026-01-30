@@ -257,10 +257,19 @@ enum PrepareMode {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+/// Snapshot of composer state prepared for stashing or submission.
+///
+/// This captures the rendered text plus the associated text elements, local
+/// image attachments, and any pending paste payloads so the state can be
+/// restored later.
 pub(crate) struct PreparedDraft {
+    /// Composer text after any preprocessing (e.g., prompt expansion).
     pub(crate) text: String,
+    /// Text elements corresponding to placeholders within `text`.
     pub(crate) text_elements: Vec<TextElement>,
+    /// Local image attachments paired with their placeholder labels.
     pub(crate) local_images: Vec<LocalImageAttachment>,
+    /// Pending paste payloads keyed by placeholder inserted into `text`.
     pub(crate) pending_pastes: Vec<(String, String)>,
 }
 pub(crate) struct ChatComposer {
