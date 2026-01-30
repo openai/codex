@@ -283,6 +283,10 @@ struct AppServerCommand {
     /// See https://developers.openai.com/codex/config-advanced/#metrics for more details.
     #[arg(long = "analytics-default-enabled")]
     analytics_default_enabled: bool,
+
+    /// Seed ChatGPT proxy auth (tokenless) on startup when no auth is present.
+    #[arg(long = "default-chatgpt-proxy-auth")]
+    default_chatgpt_proxy_auth: bool,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -533,6 +537,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                     root_config_overrides,
                     codex_core::config_loader::LoaderOverrides::default(),
                     app_server_cli.analytics_default_enabled,
+                    app_server_cli.default_chatgpt_proxy_auth,
                 )
                 .await?;
             }
@@ -1239,6 +1244,19 @@ mod tests {
         let app_server =
             app_server_from_args(["codex", "app-server", "--analytics-default-enabled"].as_ref());
         assert!(app_server.analytics_default_enabled);
+    }
+
+    #[test]
+    fn app_server_default_chatgpt_proxy_auth_disabled_without_flag() {
+        let app_server = app_server_from_args(["codex", "app-server"].as_ref());
+        assert!(!app_server.default_chatgpt_proxy_auth);
+    }
+
+    #[test]
+    fn app_server_default_chatgpt_proxy_auth_enabled_with_flag() {
+        let app_server =
+            app_server_from_args(["codex", "app-server", "--default-chatgpt-proxy-auth"].as_ref());
+        assert!(app_server.default_chatgpt_proxy_auth);
     }
 
     #[test]

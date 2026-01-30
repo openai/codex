@@ -168,6 +168,7 @@ pub async fn run_main(
     cli_config_overrides: CliConfigOverrides,
     loader_overrides: LoaderOverrides,
     default_analytics_enabled: bool,
+    default_chatgpt_proxy_auth: bool,
 ) -> IoResult<()> {
     // Set up channels.
     let (incoming_tx, mut incoming_rx) = mpsc::channel::<JSONRPCMessage>(CHANNEL_CAPACITY);
@@ -296,6 +297,7 @@ pub async fn run_main(
             std::sync::Arc::new(config),
             cli_overrides,
             loader_overrides,
+            default_chatgpt_proxy_auth,
             feedback.clone(),
             config_warnings,
         );

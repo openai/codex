@@ -835,6 +835,20 @@ pub enum LoginAccountParams {
     #[serde(rename = "chatgpt")]
     #[ts(rename = "chatgpt")]
     Chatgpt,
+    /// Tokenless ChatGPT auth via a trusted proxy.
+    ///
+    /// The proxy is expected to inject the Authorization header, so Codex
+    /// should not set a bearer token on outgoing requests.
+    #[serde(rename = "chatgptProxy", rename_all = "camelCase")]
+    #[ts(rename = "chatgptProxy", rename_all = "camelCase")]
+    ChatgptProxy {
+        /// ChatGPT workspace/account identifier.
+        account_id: Option<String>,
+        /// Account email address.
+        email: Option<String>,
+        /// Account plan type.
+        plan_type: Option<PlanType>,
+    },
     /// [UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.
     /// The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.
     #[serde(rename = "chatgptAuthTokens")]
@@ -872,6 +886,9 @@ pub enum LoginAccountResponse {
         /// URL the client should open in a browser to initiate the OAuth flow.
         auth_url: String,
     },
+    #[serde(rename = "chatgptProxy", rename_all = "camelCase")]
+    #[ts(rename = "chatgptProxy", rename_all = "camelCase")]
+    ChatgptProxy {},
     #[serde(rename = "chatgptAuthTokens", rename_all = "camelCase")]
     #[ts(rename = "chatgptAuthTokens", rename_all = "camelCase")]
     ChatgptAuthTokens {},
