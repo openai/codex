@@ -223,11 +223,11 @@ impl ModelInfo {
     }
 
     pub fn get_model_instructions(&self, personality: Option<Personality>) -> String {
-        if let Some(model_instructions_spec) = &self.model_messages
-            && let Some(template) = &model_instructions_spec.instructions_template
+        if let Some(model_messages) = &self.model_messages
+            && let Some(template) = &model_messages.instructions_template
         {
             // if we have a template, always use it
-            let personality_message = model_instructions_spec
+            let personality_message = model_messages
                 .get_personality_message(personality)
                 .unwrap_or_default();
             template.replace(PERSONALITY_PLACEHOLDER, personality_message.as_str())
@@ -235,7 +235,7 @@ impl ModelInfo {
             warn!(
                 model = %self.slug,
                 %personality,
-                "Model personality requested but model_instructions_spec is missing, falling back to base instructions."
+                "Model personality requested but model_messages is missing, falling back to base instructions."
             );
             self.base_instructions.clone()
         } else {
