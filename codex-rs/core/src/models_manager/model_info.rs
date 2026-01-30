@@ -1,10 +1,8 @@
 use std::collections::BTreeMap;
 
-use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::openai_models::ApplyPatchToolType;
-use codex_protocol::openai_models::CollaborationModesMessages;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelInstructionsTemplate;
@@ -115,19 +113,6 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             base_instructions: BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string(),
             supports_reasoning_summaries: true,
             context_window: Some(200_000),
-        )
-    } else if slug.starts_with("test-collab-template") {
-        model_info!(
-            slug,
-            base_instructions: BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string(),
-            model_instructions_template: Some(ModelInstructionsTemplate {
-                template: "template".to_string(),
-                personality_messages: None,
-                collaboration_modes_messages: Some(CollaborationModesMessages(BTreeMap::from([(
-                    ModeKind::Custom,
-                    "model fallback".to_string(),
-                )]))),
-            }),
         )
     } else if slug.starts_with("codex-mini-latest") {
         model_info!(

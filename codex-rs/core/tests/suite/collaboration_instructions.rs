@@ -1,4 +1,11 @@
+use std::collections::BTreeMap;
+use std::path::Path;
+
 use anyhow::Result;
+use chrono::DateTime;
+use chrono::Utc;
+use codex_core::CodexAuth;
+use codex_core::features::Feature;
 use codex_core::protocol::COLLABORATION_MODE_CLOSE_TAG;
 use codex_core::protocol::COLLABORATION_MODE_OPEN_TAG;
 use codex_core::protocol::EventMsg;
@@ -6,6 +13,14 @@ use codex_core::protocol::Op;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::openai_models::CollaborationModesMessages;
+use codex_protocol::openai_models::ConfigShellToolType;
+use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelInstructionsTemplate;
+use codex_protocol::openai_models::ModelVisibility;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
@@ -13,9 +28,11 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
+use serde::Serialize;
 use serde_json::Value;
 
 fn sse_completed(id: &str) -> String {
@@ -24,6 +41,78 @@ fn sse_completed(id: &str) -> String {
 
 const TEST_COLLAB_MODEL: &str = "test-collab-template";
 const MODEL_FALLBACK_TEXT: &str = "model fallback";
+const CACHE_FILE: &str = "models_cache.json";
+
+fn cached_collab_builder() -> TestCodexBuilder {
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model(TEST_COLLAB_MODEL)
+        .with_config(|config| {
+            config.features.enable(Feature::RemoteModels);
+            config.model_provider.request_max_retries = Some(0);
+            config.model_provider.stream_max_retries = Some(0);
+        });
+    builder = builder.with_pre_build_hook(|home| {
+        write_models_cache(home).expect("models cache should be written");
+    });
+    builder
+}
+
+fn write_models_cache(home: &Path) -> Result<()> {
+    let cache = ModelsCache {
+        fetched_at: Utc::now(),
+        etag: None,
+        models: vec![test_collab_model(TEST_COLLAB_MODEL)],
+    };
+    let contents = serde_json::to_vec_pretty(&cache)?;
+    std::fs::write(home.join(CACHE_FILE), contents)?;
+    Ok(())
+}
+
+fn test_collab_model(slug: &str) -> ModelInfo {
+    ModelInfo {
+        slug: slug.to_string(),
+        display_name: "Test collab model".to_string(),
+        description: Some("test collab model".to_string()),
+        default_reasoning_level: Some(ReasoningEffort::Medium),
+        supported_reasoning_levels: vec![ReasoningEffortPreset {
+            effort: ReasoningEffort::Medium,
+            description: "medium".to_string(),
+        }],
+        shell_type: ConfigShellToolType::ShellCommand,
+        visibility: ModelVisibility::List,
+        supported_in_api: true,
+        priority: 1,
+        upgrade: None,
+        base_instructions: "base instructions".to_string(),
+        model_instructions_template: Some(ModelInstructionsTemplate {
+            template: "template".to_string(),
+            personality_messages: None,
+            collaboration_modes_messages: Some(CollaborationModesMessages(BTreeMap::from([(
+                ModeKind::Custom,
+                MODEL_FALLBACK_TEXT.to_string(),
+            )]))),
+        }),
+        supports_reasoning_summaries: false,
+        support_verbosity: false,
+        default_verbosity: None,
+        apply_patch_tool_type: None,
+        truncation_policy: TruncationPolicyConfig::bytes(10_000),
+        supports_parallel_tool_calls: false,
+        context_window: Some(272_000),
+        auto_compact_token_limit: None,
+        effective_context_window_percent: 95,
+        experimental_supported_tools: Vec::new(),
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ModelsCache {
+    fetched_at: DateTime<Utc>,
+    #[serde(default)]
+    etag: Option<String>,
+    models: Vec<ModelInfo>,
+}
 
 fn collab_mode_with_instructions(instructions: Option<&str>) -> CollaborationMode {
     collab_mode_with_model("gpt-5.1", instructions)
@@ -542,7 +631,7 @@ async fn collaboration_instructions_precedence_mode_overrides_model_template() -
     let server = start_mock_server().await;
     let req = mount_sse_once(&server, sse_completed("resp-1")).await;
 
-    let mut builder = test_codex().with_model(TEST_COLLAB_MODEL);
+    let mut builder = cached_collab_builder();
     let test = builder.build(&server).await?;
 
     let mode_text = "mode instructions";
@@ -593,7 +682,7 @@ async fn collaboration_instructions_fall_back_to_model_template_when_mode_empty(
     let server = start_mock_server().await;
     let req = mount_sse_once(&server, sse_completed("resp-1")).await;
 
-    let mut builder = test_codex().with_model(TEST_COLLAB_MODEL);
+    let mut builder = cached_collab_builder();
     let test = builder.build(&server).await?;
 
     let collaboration_mode = collab_mode_with_model(TEST_COLLAB_MODEL, None);
