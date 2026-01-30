@@ -966,6 +966,7 @@ impl Session {
         });
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
+        // If resuming, include converted initial messages in the payload so UIs can render them immediately.
         let initial_messages = initial_history.get_event_msgs();
         let events = std::iter::once(Event {
             id: INITIAL_SUBMIT_ID.to_owned(),
@@ -1738,7 +1739,7 @@ impl Session {
         }
     }
 
-    pub async fn cancel_pending_user_input(&self, sub_id: &str) {
+    pub async fn cancel_request_user_input(&self, sub_id: &str) {
         let _ = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
@@ -4185,6 +4186,7 @@ async fn handle_assistant_item_done_in_plan_mode(
     }
     false
 }
+
 async fn drain_in_flight(
     in_flight: &mut FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>>,
     sess: Arc<Session>,

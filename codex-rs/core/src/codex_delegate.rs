@@ -405,7 +405,7 @@ where
             let empty = RequestUserInputResponse {
                 answers: HashMap::new(),
             };
-            parent_session.cancel_pending_user_input(sub_id).await;
+            parent_session.cancel_request_user_input(sub_id).await;
             empty
         }
         response = fut => response.unwrap_or_else(|| RequestUserInputResponse {
@@ -527,7 +527,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancel_pending_user_input_clears_session_buffer() {
+    async fn cancel_request_user_input_clears_session_buffer() {
         let (session, ctx, _rx_evt) = crate::codex::make_session_and_context_with_rx().await;
 
         let (tx, rx) = oneshot::channel();
@@ -542,7 +542,7 @@ mod tests {
             *active = Some(turn);
         }
 
-        session.cancel_pending_user_input(&ctx.sub_id).await;
+        session.cancel_request_user_input(&ctx.sub_id).await;
 
         assert!(rx.await.is_err(), "sender should be dropped on cancel");
     }
