@@ -26,6 +26,7 @@ use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::ForkConversationParams;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAuthStatusParams;
+use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::InterruptConversationParams;
 use codex_app_server_protocol::JSONRPCError;
@@ -164,7 +165,12 @@ impl McpProcess {
         &mut self,
         client_info: ClientInfo,
     ) -> anyhow::Result<JSONRPCMessage> {
-        let params = Some(serde_json::to_value(InitializeParams { client_info })?);
+        let params = Some(serde_json::to_value(InitializeParams {
+            client_info,
+            capabilities: Some(InitializeCapabilities {
+                experimental_api: true,
+            }),
+        })?);
         let request_id = self.send_request("initialize", params).await?;
         let message = self.read_jsonrpc_message().await?;
         match message {

@@ -2,6 +2,7 @@ use crate::ClientNotification;
 use crate::ClientRequest;
 use crate::ServerNotification;
 use crate::ServerRequest;
+use crate::experimental_api::experimental_fields;
 use crate::export_client_notification_schemas;
 use crate::export_client_param_schemas;
 use crate::export_client_response_schemas;
@@ -10,6 +11,7 @@ use crate::export_server_notification_schemas;
 use crate::export_server_param_schemas;
 use crate::export_server_response_schemas;
 use crate::export_server_responses;
+use crate::protocol::common::EXPERIMENTAL_CLIENT_METHODS;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -67,6 +69,7 @@ pub struct GenerateTsOptions {
     pub generate_indices: bool,
     pub ensure_headers: bool,
     pub run_prettier: bool,
+    pub experimental_api: bool,
 }
 
 impl Default for GenerateTsOptions {
@@ -75,6 +78,7 @@ impl Default for GenerateTsOptions {
             generate_indices: true,
             ensure_headers: true,
             run_prettier: true,
+            experimental_api: false,
         }
     }
 }
@@ -99,6 +103,10 @@ pub fn generate_ts_with_options(
     ServerRequest::export_all_to(out_dir)?;
     export_server_responses(out_dir)?;
     ServerNotification::export_all_to(out_dir)?;
+
+    if !options.experimental_api {
+        filter_experimental_ts(out_dir)?;
+    }
 
     if options.generate_indices {
         generate_index_ts(out_dir)?;
@@ -140,8 +148,12 @@ pub fn generate_ts_with_options(
 }
 
 pub fn generate_json(out_dir: &Path) -> Result<()> {
+    generate_json_with_experimental(out_dir, false)
+}
+
+pub fn generate_json_with_experimental(out_dir: &Path, experimental_api: bool) -> Result<()> {
     ensure_dir(out_dir)?;
-    let envelope_emitters: &[JsonSchemaEmitter] = &[
+    let envelope_emitters: Vec<JsonSchemaEmitter> = vec![
         |d| write_json_schema_with_return::<crate::RequestId>(d, "RequestId"),
         |d| write_json_schema_with_return::<crate::JSONRPCMessage>(d, "JSONRPCMessage"),
         |d| write_json_schema_with_return::<crate::JSONRPCRequest>(d, "JSONRPCRequest"),
@@ -157,7 +169,7 @@ pub fn generate_json(out_dir: &Path) -> Result<()> {
     ];
 
     let mut schemas: Vec<GeneratedSchema> = Vec::new();
-    for emit in envelope_emitters {
+    for emit in &envelope_emitters {
         schemas.push(emit(out_dir)?);
     }
 
@@ -168,13 +180,483 @@ pub fn generate_json(out_dir: &Path) -> Result<()> {
     schemas.extend(export_client_notification_schemas(out_dir)?);
     schemas.extend(export_server_notification_schemas(out_dir)?);
 
-    let bundle = build_schema_bundle(schemas)?;
+    let mut bundle = build_schema_bundle(schemas)?;
+    if !experimental_api {
+        filter_experimental_schema(&mut bundle)?;
+    }
     write_pretty_json(
         out_dir.join("codex_app_server_protocol.schemas.json"),
         &bundle,
     )?;
 
+    if !experimental_api {
+        filter_experimental_json_files(out_dir)?;
+    }
+
     Ok(())
+}
+
+fn filter_experimental_ts(out_dir: &Path) -> Result<()> {
+    let registered_fields = experimental_fields();
+    filter_client_request_ts(out_dir, EXPERIMENTAL_CLIENT_METHODS)?;
+    filter_thread_start_params_ts(out_dir, &registered_fields)?;
+    Ok(())
+}
+
+fn filter_client_request_ts(out_dir: &Path, experimental_methods: &[&str]) -> Result<()> {
+    let path = out_dir.join("ClientRequest.ts");
+    if !path.exists() {
+        return Ok(());
+    }
+    let mut content =
+        fs::read_to_string(&path).with_context(|| format!("Failed to read {}", path.display()))?;
+
+    let Some((prefix, body, suffix)) = split_type_alias(&content) else {
+        return Ok(());
+    };
+    let experimental_methods: HashSet<&str> = experimental_methods
+        .iter()
+        .copied()
+        .filter(|method| !method.is_empty())
+        .collect();
+    let arms = split_top_level(&body, '|');
+    let filtered_arms: Vec<String> = arms
+        .into_iter()
+        .filter(|arm| {
+            extract_method_from_arm(arm)
+                .is_none_or(|method| !experimental_methods.contains(method.as_str()))
+        })
+        .collect();
+    let new_body = filtered_arms.join(" | ");
+    content = format!("{prefix}{new_body}{suffix}");
+
+    fs::write(&path, content).with_context(|| format!("Failed to write {}", path.display()))?;
+    Ok(())
+}
+
+fn filter_thread_start_params_ts(
+    out_dir: &Path,
+    experimental_fields: &[&'static crate::experimental_api::ExperimentalField],
+) -> Result<()> {
+    let path = out_dir.join("v2").join("ThreadStartParams.ts");
+    if !path.exists() {
+        return Ok(());
+    }
+    let mut content =
+        fs::read_to_string(&path).with_context(|| format!("Failed to read {}", path.display()))?;
+
+    let Some((_eq_index, open_brace, close_brace)) = type_alias_brace_span(&content) else {
+        return Ok(());
+    };
+    let inner = &content[open_brace + 1..close_brace];
+    let experimental_field_names: HashSet<&str> = experimental_fields
+        .iter()
+        .filter(|field| field.type_name == "ThreadStartParams")
+        .map(|field| field.field_name)
+        .collect();
+    let fields = split_top_level(inner, ',');
+    let filtered_fields: Vec<String> = fields
+        .into_iter()
+        .filter(|field| {
+            parse_property_name(field)
+                .is_none_or(|name| !experimental_field_names.contains(name.as_str()))
+        })
+        .collect();
+    let new_inner = filtered_fields.join(", ");
+    let prefix = &content[..open_brace + 1];
+    let suffix = &content[close_brace..];
+    content = format!("{prefix}{new_inner}{suffix}");
+
+    fs::write(&path, content).with_context(|| format!("Failed to write {}", path.display()))?;
+    Ok(())
+}
+
+fn filter_experimental_schema(bundle: &mut Value) -> Result<()> {
+    let registered_fields = experimental_fields();
+    filter_experimental_fields_in_root(bundle, &registered_fields);
+    filter_experimental_fields_in_definitions(bundle, &registered_fields);
+    prune_experimental_methods(bundle, EXPERIMENTAL_CLIENT_METHODS);
+    Ok(())
+}
+
+fn filter_experimental_fields_in_root(
+    schema: &mut Value,
+    experimental_fields: &[&'static crate::experimental_api::ExperimentalField],
+) {
+    let Some(title) = schema.get("title").and_then(Value::as_str) else {
+        return;
+    };
+    let title = title.to_string();
+
+    for field in experimental_fields {
+        if title != field.type_name {
+            continue;
+        }
+        remove_property_from_schema(schema, field.field_name);
+    }
+}
+
+fn filter_experimental_fields_in_definitions(
+    bundle: &mut Value,
+    experimental_fields: &[&'static crate::experimental_api::ExperimentalField],
+) {
+    let Some(definitions) = bundle.get_mut("definitions").and_then(Value::as_object_mut) else {
+        return;
+    };
+
+    filter_experimental_fields_in_definitions_map(definitions, experimental_fields);
+}
+
+fn filter_experimental_fields_in_definitions_map(
+    definitions: &mut Map<String, Value>,
+    experimental_fields: &[&'static crate::experimental_api::ExperimentalField],
+) {
+    for (def_name, def_schema) in definitions.iter_mut() {
+        if is_namespace_map(def_schema) {
+            if let Some(namespace_defs) = def_schema.as_object_mut() {
+                filter_experimental_fields_in_definitions_map(namespace_defs, experimental_fields);
+            }
+            continue;
+        }
+
+        for field in experimental_fields {
+            if !definition_matches_type(def_name, field.type_name) {
+                continue;
+            }
+            remove_property_from_schema(def_schema, field.field_name);
+        }
+    }
+}
+
+fn is_namespace_map(value: &Value) -> bool {
+    let Value::Object(map) = value else {
+        return false;
+    };
+
+    if map.keys().any(|key| key.starts_with('$')) {
+        return false;
+    }
+
+    let looks_like_schema = map.contains_key("type")
+        || map.contains_key("properties")
+        || map.contains_key("anyOf")
+        || map.contains_key("oneOf")
+        || map.contains_key("allOf");
+
+    !looks_like_schema && map.values().all(Value::is_object)
+}
+
+fn definition_matches_type(def_name: &str, type_name: &str) -> bool {
+    def_name == type_name || def_name.ends_with(&format!("::{type_name}"))
+}
+
+fn remove_property_from_schema(schema: &mut Value, field_name: &str) {
+    if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
+        properties.remove(field_name);
+    }
+
+    if let Some(required) = schema.get_mut("required").and_then(Value::as_array_mut) {
+        required.retain(|entry| entry.as_str() != Some(field_name));
+    }
+
+    if let Some(inner_schema) = schema.get_mut("schema") {
+        remove_property_from_schema(inner_schema, field_name);
+    }
+}
+
+fn prune_experimental_methods(bundle: &mut Value, experimental_methods: &[&str]) {
+    let experimental_methods: HashSet<&str> = experimental_methods
+        .iter()
+        .copied()
+        .filter(|method| !method.is_empty())
+        .collect();
+    prune_experimental_methods_inner(bundle, &experimental_methods);
+}
+
+fn prune_experimental_methods_inner(value: &mut Value, experimental_methods: &HashSet<&str>) {
+    match value {
+        Value::Array(items) => {
+            items.retain(|item| !is_experimental_method_variant(item, experimental_methods));
+            for item in items {
+                prune_experimental_methods_inner(item, experimental_methods);
+            }
+        }
+        Value::Object(map) => {
+            for entry in map.values_mut() {
+                prune_experimental_methods_inner(entry, experimental_methods);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
+}
+
+fn is_experimental_method_variant(value: &Value, experimental_methods: &HashSet<&str>) -> bool {
+    let Value::Object(map) = value else {
+        return false;
+    };
+    let Some(properties) = map.get("properties").and_then(Value::as_object) else {
+        return false;
+    };
+    let Some(method_schema) = properties.get("method").and_then(Value::as_object) else {
+        return false;
+    };
+
+    if let Some(method) = method_schema.get("const").and_then(Value::as_str) {
+        return experimental_methods.contains(method);
+    }
+
+    if let Some(values) = method_schema.get("enum").and_then(Value::as_array)
+        && values.len() == 1
+        && let Some(method) = values[0].as_str()
+    {
+        return experimental_methods.contains(method);
+    }
+
+    false
+}
+
+fn filter_experimental_json_files(out_dir: &Path) -> Result<()> {
+    for path in json_files_in_recursive(out_dir)? {
+        let mut value = read_json_value(&path)?;
+        filter_experimental_schema(&mut value)?;
+        write_pretty_json(path, &value)?;
+    }
+    Ok(())
+}
+
+fn json_files_in_recursive(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        for entry in fs::read_dir(&current)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if matches!(path.extension().and_then(|ext| ext.to_str()), Some("json")) {
+                out.push(path);
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn read_json_value(path: &Path) -> Result<Value> {
+    let content =
+        fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
+    serde_json::from_str(&content).with_context(|| format!("Failed to parse {}", path.display()))
+}
+
+fn split_type_alias(content: &str) -> Option<(String, String, String)> {
+    let eq_index = content.find('=')?;
+    let semi_index = content.rfind(';')?;
+    if semi_index <= eq_index {
+        return None;
+    }
+    let prefix = content[..eq_index + 1].to_string();
+    let body = content[eq_index + 1..semi_index].to_string();
+    let suffix = content[semi_index..].to_string();
+    Some((prefix, body, suffix))
+}
+
+fn type_alias_brace_span(content: &str) -> Option<(usize, usize, usize)> {
+    let eq_index = content.find('=')?;
+    let after_eq = &content[eq_index + 1..];
+    let (open_rel, close_rel) = find_top_level_brace_span(after_eq)?;
+    Some((eq_index, eq_index + 1 + open_rel, eq_index + 1 + close_rel))
+}
+
+fn find_top_level_brace_span(input: &str) -> Option<(usize, usize)> {
+    let mut state = ScanState::default();
+    let mut open_index = None;
+    for (index, ch) in input.char_indices() {
+        if !state.in_string() && ch == '{' && state.depth.is_top_level() {
+            open_index = Some(index);
+        }
+        state.observe(ch);
+        if !state.in_string()
+            && ch == '}'
+            && state.depth.is_top_level()
+            && let Some(open) = open_index
+        {
+            return Some((open, index));
+        }
+    }
+    None
+}
+
+fn split_top_level(input: &str, delimiter: char) -> Vec<String> {
+    let mut state = ScanState::default();
+    let mut start = 0usize;
+    let mut parts = Vec::new();
+    for (index, ch) in input.char_indices() {
+        if !state.in_string() && ch == delimiter && state.depth.is_top_level() {
+            let part = input[start..index].trim();
+            if !part.is_empty() {
+                parts.push(part.to_string());
+            }
+            start = index + ch.len_utf8();
+        }
+        state.observe(ch);
+    }
+    let tail = input[start..].trim();
+    if !tail.is_empty() {
+        parts.push(tail.to_string());
+    }
+    parts
+}
+
+fn extract_method_from_arm(arm: &str) -> Option<String> {
+    let (open, close) = find_top_level_brace_span(arm)?;
+    let inner = &arm[open + 1..close];
+    for field in split_top_level(inner, ',') {
+        let Some((name, value)) = parse_property(field.as_str()) else {
+            continue;
+        };
+        if name != "method" {
+            continue;
+        }
+        let value = value.trim_start();
+        let (literal, _) = parse_string_literal(value)?;
+        return Some(literal);
+    }
+    None
+}
+
+fn parse_property(input: &str) -> Option<(String, &str)> {
+    let name = parse_property_name(input)?;
+    let colon_index = input.find(':')?;
+    Some((name, input[colon_index + 1..].trim_start()))
+}
+
+fn parse_property_name(input: &str) -> Option<String> {
+    let trimmed = input.trim_start();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some((literal, consumed)) = parse_string_literal(trimmed) {
+        let rest = trimmed[consumed..].trim_start();
+        if rest.starts_with(':') {
+            return Some(literal);
+        }
+        return None;
+    }
+
+    let mut end = 0usize;
+    for (index, ch) in trimmed.char_indices() {
+        if !is_ident_char(ch) {
+            break;
+        }
+        end = index + ch.len_utf8();
+    }
+    if end == 0 {
+        return None;
+    }
+    let name = &trimmed[..end];
+    let rest = trimmed[end..].trim_start();
+    let rest = if let Some(stripped) = rest.strip_prefix('?') {
+        stripped.trim_start()
+    } else {
+        rest
+    };
+    if rest.starts_with(':') {
+        return Some(name.to_string());
+    }
+    None
+}
+
+fn parse_string_literal(input: &str) -> Option<(String, usize)> {
+    let mut chars = input.char_indices();
+    let (start_index, quote) = chars.next()?;
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
+    let mut escape = false;
+    for (index, ch) in chars {
+        if escape {
+            escape = false;
+            continue;
+        }
+        if ch == '\\' {
+            escape = true;
+            continue;
+        }
+        if ch == quote {
+            let literal = input[start_index + 1..index].to_string();
+            let consumed = index + ch.len_utf8();
+            return Some((literal, consumed));
+        }
+    }
+    None
+}
+
+fn is_ident_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '_'
+}
+
+#[derive(Default)]
+struct ScanState {
+    depth: Depth,
+    string_delim: Option<char>,
+    escape: bool,
+}
+
+impl ScanState {
+    fn observe(&mut self, ch: char) {
+        if let Some(delim) = self.string_delim {
+            if self.escape {
+                self.escape = false;
+                return;
+            }
+            if ch == '\\' {
+                self.escape = true;
+                return;
+            }
+            if ch == delim {
+                self.string_delim = None;
+            }
+            return;
+        }
+
+        match ch {
+            '"' | '\'' => {
+                self.string_delim = Some(ch);
+            }
+            '{' => self.depth.brace += 1,
+            '}' => self.depth.brace = (self.depth.brace - 1).max(0),
+            '[' => self.depth.bracket += 1,
+            ']' => self.depth.bracket = (self.depth.bracket - 1).max(0),
+            '(' => self.depth.paren += 1,
+            ')' => self.depth.paren = (self.depth.paren - 1).max(0),
+            '<' => self.depth.angle += 1,
+            '>' => {
+                if self.depth.angle > 0 {
+                    self.depth.angle -= 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn in_string(&self) -> bool {
+        self.string_delim.is_some()
+    }
+}
+
+#[derive(Default)]
+struct Depth {
+    brace: i32,
+    bracket: i32,
+    paren: i32,
+    angle: i32,
+}
+
+impl Depth {
+    fn is_top_level(&self) -> bool {
+        self.brace == 0 && self.bracket == 0 && self.paren == 0 && self.angle == 0
+    }
 }
 
 fn build_schema_bundle(schemas: Vec<GeneratedSchema>) -> Result<Value> {
@@ -740,7 +1222,10 @@ fn generate_index_ts(out_dir: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::common::EXPERIMENTAL_CLIENT_METHODS;
+    use crate::protocol::v2;
     use anyhow::Result;
+    use pretty_assertions::assert_eq;
     use std::collections::BTreeSet;
     use std::fs;
     use std::path::PathBuf;
@@ -767,8 +1252,15 @@ mod tests {
             generate_indices: false,
             ensure_headers: false,
             run_prettier: false,
+            experimental_api: false,
         };
         generate_ts_with_options(&output_dir, None, options)?;
+
+        let client_request_ts = fs::read_to_string(output_dir.join("ClientRequest.ts"))?;
+        assert_eq!(client_request_ts.contains("collaborationMode/list"), false);
+        let thread_start_ts =
+            fs::read_to_string(output_dir.join("v2").join("ThreadStartParams.ts"))?;
+        assert_eq!(thread_start_ts.contains("dynamicTools"), false);
 
         let mut undefined_offenders = Vec::new();
         let mut optional_nullable_offenders = BTreeSet::new();
@@ -941,6 +1433,80 @@ mod tests {
             "Generated TypeScript has optional fields with nullable types (disallowed '?: T | null'), add #[ts(optional)] to fix:\n{optional_nullable_offenders:?}"
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn stable_schema_filter_removes_dynamic_tools() -> Result<()> {
+        let output_dir = std::env::temp_dir().join(format!("codex_schema_{}", Uuid::now_v7()));
+        fs::create_dir(&output_dir)?;
+        let schema = write_json_schema_with_return::<v2::ThreadStartParams>(
+            &output_dir,
+            "ThreadStartParams",
+        )?;
+        let mut bundle = build_schema_bundle(vec![schema])?;
+        filter_experimental_schema(&mut bundle)?;
+
+        let definitions = bundle["definitions"]
+            .as_object()
+            .expect("schema bundle should include definitions");
+        let (_, def_schema) = definitions
+            .iter()
+            .find(|(name, _)| definition_matches_type(name, "ThreadStartParams"))
+            .expect("ThreadStartParams definition should exist");
+        let properties = def_schema["properties"]
+            .as_object()
+            .expect("ThreadStartParams should have properties");
+        assert_eq!(properties.contains_key("dynamicTools"), false);
+        let _cleanup = fs::remove_dir_all(&output_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn stable_schema_filter_removes_experimental_methods() -> Result<()> {
+        let output_dir = std::env::temp_dir().join(format!("codex_schema_{}", Uuid::now_v7()));
+        fs::create_dir(&output_dir)?;
+        let schema =
+            write_json_schema_with_return::<crate::ClientRequest>(&output_dir, "ClientRequest")?;
+        let mut bundle = build_schema_bundle(vec![schema])?;
+        filter_experimental_schema(&mut bundle)?;
+
+        let bundle_str = serde_json::to_string(&bundle)?;
+        for method in EXPERIMENTAL_CLIENT_METHODS
+            .iter()
+            .copied()
+            .filter(|method| !method.is_empty())
+        {
+            assert_eq!(bundle_str.contains(method), false);
+        }
+        let _cleanup = fs::remove_dir_all(&output_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn generate_json_filters_experimental_fields_and_methods() -> Result<()> {
+        let output_dir = std::env::temp_dir().join(format!("codex_schema_{}", Uuid::now_v7()));
+        fs::create_dir(&output_dir)?;
+        generate_json_with_experimental(&output_dir, false)?;
+
+        let thread_start_json =
+            fs::read_to_string(output_dir.join("v2").join("ThreadStartParams.json"))?;
+        assert_eq!(thread_start_json.contains("dynamicTools"), false);
+
+        let client_request_json = fs::read_to_string(output_dir.join("ClientRequest.json"))?;
+        for method in EXPERIMENTAL_CLIENT_METHODS
+            .iter()
+            .copied()
+            .filter(|method| !method.is_empty())
+        {
+            assert_eq!(client_request_json.contains(method), false);
+        }
+
+        let bundle_json =
+            fs::read_to_string(output_dir.join("codex_app_server_protocol.schemas.json"))?;
+        assert_eq!(bundle_json.contains("dynamicTools"), false);
+
+        let _cleanup = fs::remove_dir_all(&output_dir);
         Ok(())
     }
 }

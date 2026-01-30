@@ -45,12 +45,38 @@ pub enum AuthMode {
 /// client can send to the server. Each variant has associated `params` and
 /// `response` types. Also generates a `export_client_responses()` function to
 /// export all response types to TypeScript.
+macro_rules! experimental_reason_expr {
+    (#[experimental($reason:expr)] $params:ident $(, $inspect_params:tt)?) => {
+        Some($reason)
+    };
+    ($params:ident, true) => {
+        crate::experimental_api::ExperimentalApi::experimental_reason($params)
+    };
+    ($params:ident $(, $inspect_params:tt)?) => {
+        None
+    };
+}
+
+macro_rules! experimental_method_entry {
+    (#[experimental($reason:expr)] => $wire:literal) => {
+        $wire
+    };
+    (#[experimental($reason:expr)]) => {
+        $reason
+    };
+    ($($tt:tt)*) => {
+        ""
+    };
+}
+
 macro_rules! client_request_definitions {
     (
         $(
-            $(#[$variant_meta:meta])*
+            $(#[experimental($reason:expr)])?
+            $(#[doc = $variant_doc:literal])*
             $variant:ident $(=> $wire:literal)? {
                 params: $(#[$params_meta:meta])* $params:ty,
+                $(inspect_params: $inspect_params:tt,)?
                 response: $response:ty,
             }
         ),* $(,)?
@@ -60,7 +86,7 @@ macro_rules! client_request_definitions {
         #[serde(tag = "method", rename_all = "camelCase")]
         pub enum ClientRequest {
             $(
-                $(#[$variant_meta])*
+                $(#[doc = $variant_doc])*
                 $(#[serde(rename = $wire)] #[ts(rename = $wire)])?
                 $variant {
                     #[serde(rename = "id")]
@@ -70,6 +96,28 @@ macro_rules! client_request_definitions {
                 },
             )*
         }
+
+        impl crate::experimental_api::ExperimentalApi for ClientRequest {
+            fn experimental_reason(&self) -> Option<&'static str> {
+                match self {
+                    $(
+                        Self::$variant { params: _params, .. } => {
+                            experimental_reason_expr!(
+                                $(#[experimental($reason)])?
+                                _params
+                                $(, $inspect_params)?
+                            )
+                        }
+                    )*
+                }
+            }
+        }
+
+        pub(crate) const EXPERIMENTAL_CLIENT_METHODS: &[&str] = &[
+            $(
+                experimental_method_entry!($(#[experimental($reason)])? $(=> $wire)?),
+            )*
+        ];
 
         pub fn export_client_responses(
             out_dir: &::std::path::Path,
@@ -114,6 +162,7 @@ client_request_definitions! {
     // Thread lifecycle
     ThreadStart => "thread/start" {
         params: v2::ThreadStartParams,
+        inspect_params: true,
         response: v2::ThreadStartResponse,
     },
     ThreadResume => "thread/resume" {
@@ -181,6 +230,7 @@ client_request_definitions! {
         params: v2::ModelListParams,
         response: v2::ModelListResponse,
     },
+    #[experimental("collaborationMode/list")]
     /// EXPERIMENTAL - list collaboration mode presets.
     CollaborationModeList => "collaborationMode/list" {
         params: v2::CollaborationModeListParams,
@@ -994,5 +1044,32 @@ mod tests {
             serde_json::to_value(&request)?,
         );
         Ok(())
+    }
+
+    #[test]
+    fn collaboration_mode_list_is_marked_experimental() {
+        let request = ClientRequest::CollaborationModeList {
+            request_id: RequestId::Integer(1),
+            params: v2::CollaborationModeListParams::default(),
+        };
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
+        assert_eq!(reason, Some("collaborationMode/list"));
+    }
+
+    #[test]
+    fn thread_start_dynamic_tools_is_marked_experimental() {
+        let request = ClientRequest::ThreadStart {
+            request_id: RequestId::Integer(1),
+            params: v2::ThreadStartParams {
+                dynamic_tools: Some(vec![v2::DynamicToolSpec {
+                    name: "tool".to_string(),
+                    description: "desc".to_string(),
+                    input_schema: json!({"type": "object"}),
+                }]),
+                ..Default::default()
+            },
+        };
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
+        assert_eq!(reason, Some("thread/start.dynamicTools"));
     }
 }

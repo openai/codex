@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::protocol::common::AuthMode;
+use codex_experimental_api_macros::ExperimentalApi;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
 use codex_protocol::config_types::CollaborationMode;
@@ -1165,7 +1166,9 @@ pub struct CommandExecResponse {
 
 // === Threads, Turns, and Items ===
 // Thread APIs
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
+#[derive(
+    Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS, ExperimentalApi,
+)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadStartParams {
@@ -1179,6 +1182,7 @@ pub struct ThreadStartParams {
     pub developer_instructions: Option<String>,
     pub personality: Option<Personality>,
     pub ephemeral: Option<bool>,
+    #[experimental("thread/start.dynamicTools")]
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
     /// If true, opt into emitting raw response items on the event stream.
     ///
