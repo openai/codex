@@ -133,6 +133,7 @@ use codex_app_server_protocol::build_turns_from_event_msgs;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
 use codex_core::AuthManager;
+use codex_core::CodexAuth;
 use codex_core::CodexThread;
 use codex_core::Cursor as RolloutCursor;
 use codex_core::InitialHistory;
@@ -686,7 +687,11 @@ impl CodexMessageProcessor {
                     .await;
 
                 let payload = AuthStatusChangeNotification {
-                    auth_method: self.auth_manager.auth_cached().map(|auth| auth.mode),
+                    auth_method: self
+                        .auth_manager
+                        .auth_cached()
+                        .as_ref()
+                        .map(CodexAuth::api_auth_mode),
                 };
                 self.outgoing
                     .send_server_notification(ServerNotification::AuthStatusChange(payload))
@@ -716,7 +721,11 @@ impl CodexMessageProcessor {
                     .await;
 
                 let payload_v2 = AccountUpdatedNotification {
-                    auth_mode: self.auth_manager.auth_cached().map(|auth| auth.mode),
+                    auth_mode: self
+                        .auth_manager
+                        .auth_cached()
+                        .as_ref()
+                        .map(CodexAuth::api_auth_mode),
                 };
                 self.outgoing
                     .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
@@ -812,7 +821,10 @@ impl CodexMessageProcessor {
                             auth_manager.reload();
 
                             // Notify clients with the actual current auth mode.
-                            let current_auth_method = auth_manager.auth_cached().map(|a| a.mode);
+                            let current_auth_method = auth_manager
+                                .auth_cached()
+                                .as_ref()
+                                .map(CodexAuth::api_auth_mode);
                             let payload = AuthStatusChangeNotification {
                                 auth_method: current_auth_method,
                             };
@@ -902,7 +914,10 @@ impl CodexMessageProcessor {
                             auth_manager.reload();
 
                             // Notify clients with the actual current auth mode.
-                            let current_auth_method = auth_manager.auth_cached().map(|a| a.mode);
+                            let current_auth_method = auth_manager
+                                .auth_cached()
+                                .as_ref()
+                                .map(CodexAuth::api_auth_mode);
                             let payload_v2 = AccountUpdatedNotification {
                                 auth_mode: current_auth_method,
                             };
@@ -1106,7 +1121,11 @@ impl CodexMessageProcessor {
         }
 
         // Reflect the current auth method after logout (likely None).
-        Ok(self.auth_manager.auth_cached().map(|auth| auth.mode))
+        Ok(self
+            .auth_manager
+            .auth_cached()
+            .as_ref()
+            .map(CodexAuth::api_auth_mode))
     }
 
     async fn logout_v1(&mut self, request_id: RequestId) {
@@ -1178,7 +1197,7 @@ impl CodexMessageProcessor {
         } else {
             match self.auth_manager.auth().await {
                 Some(auth) => {
-                    let auth_mode = auth.mode;
+                    let auth_mode = auth.api_auth_mode();
                     let (reported_auth_method, token_opt) = match auth.get_token() {
                         Ok(token) if !token.is_empty() => {
                             let tok = if include_token { Some(token) } else { None };
@@ -1225,9 +1244,9 @@ impl CodexMessageProcessor {
         }
 
         let account = match self.auth_manager.auth_cached() {
-            Some(auth) => Some(match auth.mode {
-                AuthMode::ApiKey => Account::ApiKey {},
-                AuthMode::ChatGPT | AuthMode::ChatgptAuthTokens => {
+            Some(auth) => Some(match auth {
+                CodexAuth::ApiKey(_) => Account::ApiKey {},
+                CodexAuth::ChatGpt(_) | CodexAuth::ChatGptAuthTokens(_) => {
                     let email = auth.get_account_email();
                     let plan_type = auth.account_plan_type();
 
@@ -1286,7 +1305,7 @@ impl CodexMessageProcessor {
             });
         };
 
-        if !matches!(auth.mode, AuthMode::ChatGPT | AuthMode::ChatgptAuthTokens) {
+        if !auth.is_chatgpt_auth() {
             return Err(JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
                 message: "chatgpt authentication required to read rate limits".to_string(),

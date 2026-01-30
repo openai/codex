@@ -3,8 +3,6 @@ use std::time::Duration;
 
 use anyhow::Context;
 use chrono::DateTime;
-use chrono::SecondsFormat;
-use chrono::Utc;
 use clap::Parser;
 use codex_state::LogQuery;
 use codex_state::LogRow;
@@ -37,17 +35,21 @@ struct Args {
     #[arg(long, value_name = "RFC3339|UNIX")]
     to: Option<String>,
 
-    /// Substring match on module_path.
-    #[arg(long)]
-    module: Option<String>,
+    /// Substring match on module_path. Repeat to include multiple substrings.
+    #[arg(long = "module")]
+    module: Vec<String>,
 
-    /// Substring match on file path.
-    #[arg(long)]
-    file: Option<String>,
+    /// Substring match on file path. Repeat to include multiple substrings.
+    #[arg(long = "file")]
+    file: Vec<String>,
 
-    /// Match a specific thread id.
+    /// Match one or more thread ids. Repeat to include multiple threads.
+    #[arg(long = "thread-id")]
+    thread_id: Vec<String>,
+
+    /// Include logs that do not have a thread id.
     #[arg(long)]
-    thread_id: Option<String>,
+    threadless: bool,
 
     /// Number of matching rows to show before tailing.
     #[arg(long, default_value_t = 200)]
@@ -63,9 +65,10 @@ struct LogFilter {
     level_upper: Option<String>,
     from_ts: Option<i64>,
     to_ts: Option<i64>,
-    module_like: Option<String>,
-    file_like: Option<String>,
-    thread_id: Option<String>,
+    module_like: Vec<String>,
+    file_like: Vec<String>,
+    thread_ids: Vec<String>,
+    include_threadless: bool,
 }
 
 #[tokio::main]
@@ -126,14 +129,33 @@ fn build_filter(args: &Args) -> anyhow::Result<LogFilter> {
         .context("failed to parse --to")?;
 
     let level_upper = args.level.as_ref().map(|level| level.to_ascii_uppercase());
+    let module_like = args
+        .module
+        .iter()
+        .filter(|module| !module.is_empty())
+        .cloned()
+        .collect::<Vec<_>>();
+    let file_like = args
+        .file
+        .iter()
+        .filter(|file| !file.is_empty())
+        .cloned()
+        .collect::<Vec<_>>();
+    let thread_ids = args
+        .thread_id
+        .iter()
+        .filter(|thread_id| !thread_id.is_empty())
+        .cloned()
+        .collect::<Vec<_>>();
 
     Ok(LogFilter {
         level_upper,
         from_ts,
         to_ts,
-        module_like: args.module.clone(),
-        file_like: args.file.clone(),
-        thread_id: args.thread_id.clone(),
+        module_like,
+        file_like,
+        thread_ids,
+        include_threadless: args.threadless,
     })
 }
 
@@ -211,7 +233,8 @@ fn to_log_query(
         to_ts: filter.to_ts,
         module_like: filter.module_like.clone(),
         file_like: filter.file_like.clone(),
-        thread_id: filter.thread_id.clone(),
+        thread_ids: filter.thread_ids.clone(),
+        include_threadless: filter.include_threadless,
         after_id,
         limit,
         descending,
@@ -219,45 +242,82 @@ fn to_log_query(
 }
 
 fn format_row(row: &LogRow) -> String {
-    let timestamp = format_timestamp(row.ts, row.ts_nanos);
+    let timestamp = formatter::ts(row.ts, row.ts_nanos);
     let level = row.level.as_str();
     let target = row.target.as_str();
     let message = row.message.as_deref().unwrap_or("");
-    let level_colored = color_level(level);
+    let level_colored = formatter::level(level);
     let timestamp_colored = timestamp.dimmed().to_string();
     let thread_id = row.thread_id.as_deref().unwrap_or("-");
     let thread_id_colored = thread_id.blue().dimmed().to_string();
     let target_colored = target.dimmed().to_string();
-    let message_colored = message.bold().to_string();
+    let message_colored = heuristic_formatting(message);
     format!(
         "{timestamp_colored} {level_colored} [{thread_id_colored}] {target_colored} - {message_colored}"
     )
 }
 
-fn color_level(level: &str) -> String {
-    let padded = format!("{level:<5}");
-    if level.eq_ignore_ascii_case("error") {
-        return padded.red().bold().to_string();
+fn heuristic_formatting(message: &str) -> String {
+    if matcher::apply_patch(message) {
+        formatter::apply_patch(message)
+    } else {
+        message.bold().to_string()
     }
-    if level.eq_ignore_ascii_case("warn") {
-        return padded.yellow().bold().to_string();
-    }
-    if level.eq_ignore_ascii_case("info") {
-        return padded.green().bold().to_string();
-    }
-    if level.eq_ignore_ascii_case("debug") {
-        return padded.blue().bold().to_string();
-    }
-    if level.eq_ignore_ascii_case("trace") {
-        return padded.magenta().bold().to_string();
-    }
-    padded.bold().to_string()
 }
 
-fn format_timestamp(ts: i64, ts_nanos: i64) -> String {
-    let nanos = u32::try_from(ts_nanos).unwrap_or(0);
-    match DateTime::<Utc>::from_timestamp(ts, nanos) {
-        Some(dt) => dt.to_rfc3339_opts(SecondsFormat::Millis, true),
-        None => format!("{ts}.{ts_nanos:09}Z"),
+mod matcher {
+    pub(super) fn apply_patch(message: &str) -> bool {
+        message.starts_with("ToolCall: apply_patch")
+    }
+}
+
+mod formatter {
+    use chrono::DateTime;
+    use chrono::SecondsFormat;
+    use chrono::Utc;
+    use owo_colors::OwoColorize;
+
+    pub(super) fn apply_patch(message: &str) -> String {
+        message
+            .lines()
+            .map(|line| {
+                if line.starts_with('+') {
+                    line.green().bold().to_string()
+                } else if line.starts_with('-') {
+                    line.red().bold().to_string()
+                } else {
+                    line.bold().to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    pub(super) fn ts(ts: i64, ts_nanos: i64) -> String {
+        let nanos = u32::try_from(ts_nanos).unwrap_or(0);
+        match DateTime::<Utc>::from_timestamp(ts, nanos) {
+            Some(dt) => dt.to_rfc3339_opts(SecondsFormat::Millis, true),
+            None => format!("{ts}.{ts_nanos:09}Z"),
+        }
+    }
+
+    pub(super) fn level(level: &str) -> String {
+        let padded = format!("{level:<5}");
+        if level.eq_ignore_ascii_case("error") {
+            return padded.red().bold().to_string();
+        }
+        if level.eq_ignore_ascii_case("warn") {
+            return padded.yellow().bold().to_string();
+        }
+        if level.eq_ignore_ascii_case("info") {
+            return padded.green().bold().to_string();
+        }
+        if level.eq_ignore_ascii_case("debug") {
+            return padded.blue().bold().to_string();
+        }
+        if level.eq_ignore_ascii_case("trace") {
+            return padded.magenta().bold().to_string();
+        }
+        padded.bold().to_string()
     }
 }
