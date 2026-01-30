@@ -1299,7 +1299,6 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "base64",
- "codex-app-server-protocol",
  "codex-backend-client",
  "codex-core",
  "codex-otel",
