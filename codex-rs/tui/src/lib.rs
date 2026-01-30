@@ -406,15 +406,14 @@ async fn find_rollout_path_by_name(
     name: &str,
     archived_only: Option<bool>,
 ) -> std::io::Result<Option<PathBuf>> {
-    if let Some(db) = state_db::get_state_db(config, None).await {
-        if let Some(path) = db
+    if let Some(db) = state_db::get_state_db(config, None).await
+        && let Some(path) = db
             .find_rollout_path_by_name(name, archived_only)
             .await
             .ok()
             .flatten()
-        {
-            return Ok(Some(path));
-        }
+    {
+        return Ok(Some(path));
     }
 
     find_thread_path_by_name_str(&config.codex_home, name).await
