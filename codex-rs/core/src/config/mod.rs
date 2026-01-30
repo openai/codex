@@ -1372,12 +1372,6 @@ impl Config {
             || cfg.sandbox_mode.is_some();
 
         let mut model_providers = built_in_model_providers();
-        if features.enabled(Feature::ResponsesWebsockets)
-            && let Some(provider) = model_providers.get_mut("openai")
-            && provider.is_openai()
-        {
-            provider.wire_api = crate::model_provider_info::WireApi::ResponsesWebsocket;
-        }
         // Merge user-defined providers into the built-in list.
         for (key, provider) in cfg.model_providers.into_iter() {
             model_providers.entry(key).or_insert(provider);
@@ -2555,7 +2549,7 @@ profile = "project"
     }
 
     #[test]
-    fn responses_websockets_feature_updates_openai_provider() -> std::io::Result<()> {
+    fn responses_websockets_feature_does_not_change_wire_api() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let mut entries = BTreeMap::new();
         entries.insert("responses_websockets".to_string(), true);
@@ -2572,7 +2566,7 @@ profile = "project"
 
         assert_eq!(
             config.model_provider.wire_api,
-            crate::model_provider_info::WireApi::ResponsesWebsocket
+            crate::model_provider_info::WireApi::Responses
         );
 
         Ok(())
@@ -3692,6 +3686,7 @@ model_verbosity = "high"
             stream_max_retries: Some(10),
             stream_idle_timeout_ms: Some(300_000),
             requires_openai_auth: false,
+            supports_websockets: false,
         };
         let model_provider_map = {
             let mut model_provider_map = built_in_model_providers();

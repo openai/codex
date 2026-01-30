@@ -39,6 +39,9 @@ use crate::mcp_cmd::McpCli;
 
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::edit::ConfigEditsBuilder;
+use codex_core::config::find_codex_home;
+use codex_core::features::Stage;
 use codex_core::features::is_known_feature_key;
 use codex_core::terminal::TerminalName;
 
@@ -448,6 +451,16 @@ struct FeaturesCli {
 enum FeaturesSubcommand {
     /// List known features with their stage and effective state.
     List,
+    /// Enable a feature in config.toml.
+    Enable(FeatureSetArgs),
+    /// Disable a feature in config.toml.
+    Disable(FeatureSetArgs),
+}
+
+#[derive(Debug, Parser)]
+struct FeatureSetArgs {
+    /// Feature key to update (for example: unified_exec).
+    feature: String,
 }
 
 fn stage_str(stage: codex_core::features::Stage) -> &'static str {
@@ -711,10 +724,67 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                     println!("{name:<name_width$}  {stage:<stage_width$}  {enabled}");
                 }
             }
+            FeaturesSubcommand::Enable(FeatureSetArgs { feature }) => {
+                enable_feature_in_config(&interactive, &feature).await?;
+            }
+            FeaturesSubcommand::Disable(FeatureSetArgs { feature }) => {
+                disable_feature_in_config(&interactive, &feature).await?;
+            }
         },
     }
 
     Ok(())
+}
+
+async fn enable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow::Result<()> {
+    FeatureToggles::validate_feature(feature)?;
+    let codex_home = find_codex_home()?;
+    ConfigEditsBuilder::new(&codex_home)
+        .with_profile(interactive.config_profile.as_deref())
+        .set_feature_enabled(feature, true)
+        .apply()
+        .await?;
+    println!("Enabled feature `{feature}` in config.toml.");
+    maybe_print_under_development_feature_warning(&codex_home, interactive, feature);
+    Ok(())
+}
+
+async fn disable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow::Result<()> {
+    FeatureToggles::validate_feature(feature)?;
+    let codex_home = find_codex_home()?;
+    ConfigEditsBuilder::new(&codex_home)
+        .with_profile(interactive.config_profile.as_deref())
+        .set_feature_enabled(feature, false)
+        .apply()
+        .await?;
+    println!("Disabled feature `{feature}` in config.toml.");
+    Ok(())
+}
+
+fn maybe_print_under_development_feature_warning(
+    codex_home: &std::path::Path,
+    interactive: &TuiCli,
+    feature: &str,
+) {
+    if interactive.config_profile.is_some() {
+        return;
+    }
+
+    let Some(spec) = codex_core::features::FEATURES
+        .iter()
+        .find(|spec| spec.key == feature)
+    else {
+        return;
+    };
+    if !matches!(spec.stage, Stage::UnderDevelopment) {
+        return;
+    }
+
+    let config_path = codex_home.join(codex_core::config::CONFIG_TOML_FILE);
+    eprintln!(
+        "Under-development features enabled: {feature}. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in {}.",
+        config_path.display()
+    );
 }
 
 /// Prepend root-level overrides so they have lower precedence than
@@ -1169,6 +1239,32 @@ mod tests {
         let app_server =
             app_server_from_args(["codex", "app-server", "--analytics-default-enabled"].as_ref());
         assert!(app_server.analytics_default_enabled);
+    }
+
+    #[test]
+    fn features_enable_parses_feature_name() {
+        let cli = MultitoolCli::try_parse_from(["codex", "features", "enable", "unified_exec"])
+            .expect("parse should succeed");
+        let Some(Subcommand::Features(FeaturesCli { sub })) = cli.subcommand else {
+            panic!("expected features subcommand");
+        };
+        let FeaturesSubcommand::Enable(FeatureSetArgs { feature }) = sub else {
+            panic!("expected features enable");
+        };
+        assert_eq!(feature, "unified_exec");
+    }
+
+    #[test]
+    fn features_disable_parses_feature_name() {
+        let cli = MultitoolCli::try_parse_from(["codex", "features", "disable", "shell_tool"])
+            .expect("parse should succeed");
+        let Some(Subcommand::Features(FeaturesCli { sub })) = cli.subcommand else {
+            panic!("expected features subcommand");
+        };
+        let FeaturesSubcommand::Disable(FeatureSetArgs { feature }) = sub else {
+            panic!("expected features disable");
+        };
+        assert_eq!(feature, "shell_tool");
     }
 
     #[test]

@@ -303,6 +303,7 @@ mod tests {
             source: SessionSource::default(),
             model_provider: Some("openai".to_string()),
             base_instructions: None,
+            dynamic_tools: None,
         };
         let session_meta_line = SessionMetaLine {
             meta: session_meta,
