@@ -28,6 +28,7 @@ impl EnvironmentContext {
             cwd,
             // should compare all fields except shell
             shell: _,
+            ..
         } = other;
 
         self.cwd == *cwd
@@ -66,6 +67,7 @@ impl EnvironmentContext {
 
         let shell_name = self.shell.name();
         lines.push(format!("  <shell>{shell_name}</shell>"));
+
         lines.push(ENVIRONMENT_CONTEXT_CLOSE_TAG.to_string());
         lines.join("\n")
     }

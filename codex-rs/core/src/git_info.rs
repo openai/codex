@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
@@ -109,6 +110,92 @@ pub async fn collect_git_info(cwd: &Path) -> Option<GitInfo> {
     Some(git_info)
 }
 
+/// Collect fetch remotes in a multi-root-friendly format: {"origin": "https://..."}.
+pub async fn get_git_remote_urls(cwd: &Path) -> Option<BTreeMap<String, String>> {
+    let is_git_repo = run_git_command_with_timeout(&["rev-parse", "--git-dir"], cwd)
+        .await?
+        .status
+        .success();
+    if !is_git_repo {
+        return None;
+    }
+
+    get_git_remote_urls_assume_git_repo(cwd).await
+}
+
+/// Collect fetch remotes without checking whether `cwd` is in a git repo.
+pub async fn get_git_remote_urls_assume_git_repo(cwd: &Path) -> Option<BTreeMap<String, String>> {
+    get_git_remote_urls_assume_git_repo_with_timeout(cwd, GIT_COMMAND_TIMEOUT).await
+}
+
+/// Collect fetch remotes without checking whether `cwd` is in a git repo,
+/// using the provided timeout.
+pub async fn get_git_remote_urls_assume_git_repo_with_timeout(
+    cwd: &Path,
+    timeout_dur: TokioDuration,
+) -> Option<BTreeMap<String, String>> {
+    let output = run_git_command_with_timeout_override(&["remote", "-v"], cwd, timeout_dur).await?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    parse_git_remote_urls(stdout.as_str())
+}
+
+/// Return the current HEAD commit hash without checking whether `cwd` is in a git repo.
+pub async fn get_head_commit_hash(cwd: &Path) -> Option<String> {
+    get_head_commit_hash_with_timeout(cwd, GIT_COMMAND_TIMEOUT).await
+}
+
+/// Return the current HEAD commit hash without checking whether `cwd` is in a
+/// git repo, using the provided timeout.
+pub async fn get_head_commit_hash_with_timeout(
+    cwd: &Path,
+    timeout_dur: TokioDuration,
+) -> Option<String> {
+    let output =
+        run_git_command_with_timeout_override(&["rev-parse", "HEAD"], cwd, timeout_dur).await?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    let hash = stdout.trim();
+    if hash.is_empty() {
+        None
+    } else {
+        Some(hash.to_string())
+    }
+}
+
+fn parse_git_remote_urls(stdout: &str) -> Option<BTreeMap<String, String>> {
+    let mut remotes = BTreeMap::new();
+    for line in stdout.lines() {
+        let Some(fetch_line) = line.strip_suffix(" (fetch)") else {
+            continue;
+        };
+
+        let Some((name, url_part)) = fetch_line
+            .split_once('\t')
+            .or_else(|| fetch_line.split_once(' '))
+        else {
+            continue;
+        };
+
+        let url = url_part.trim_start();
+        if !url.is_empty() {
+            remotes.insert(name.to_string(), url.to_string());
+        }
+    }
+
+    if remotes.is_empty() {
+        None
+    } else {
+        Some(remotes)
+    }
+}
+
 /// A minimal commit summary entry used for pickers (subject + timestamp + sha).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CommitLogEntry {
@@ -185,11 +272,19 @@ pub async fn git_diff_to_remote(cwd: &Path) -> Option<GitDiffToRemote> {
 
 /// Run a git command with a timeout to prevent blocking on large repositories
 async fn run_git_command_with_timeout(args: &[&str], cwd: &Path) -> Option<std::process::Output> {
-    let result = timeout(
-        GIT_COMMAND_TIMEOUT,
-        Command::new("git").args(args).current_dir(cwd).output(),
-    )
-    .await;
+    run_git_command_with_timeout_override(args, cwd, GIT_COMMAND_TIMEOUT).await
+}
+
+/// Run a git command with a caller-provided timeout.
+async fn run_git_command_with_timeout_override(
+    args: &[&str],
+    cwd: &Path,
+    timeout_dur: TokioDuration,
+) -> Option<std::process::Output> {
+    let mut command = Command::new("git");
+    command.args(args).current_dir(cwd);
+    command.kill_on_drop(true);
+    let result = timeout(timeout_dur, command.output()).await;
 
     match result {
         Ok(Ok(output)) => Some(output),

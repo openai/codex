@@ -335,7 +335,10 @@ async fn drain_to_completed(
     turn_context: &TurnContext,
     prompt: &Prompt,
 ) -> CodexResult<()> {
-    let mut client_session = turn_context.client.new_session();
+    let mut client_session = turn_context.client.new_session_with_turn_metadata_and_cwd(
+        turn_context.turn_metadata_header.clone(),
+        Some(turn_context.cwd.clone()),
+    );
     let mut stream = client_session.stream(prompt).await?;
     loop {
         let maybe_event = stream.next().await;
