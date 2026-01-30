@@ -3,11 +3,10 @@ use std::path::Path;
 
 use serde::Serialize;
 use tokio::time::Duration as TokioDuration;
-use tokio::time::timeout;
 
-use crate::git_info::get_git_remote_urls_assume_git_repo;
+use crate::git_info::get_git_remote_urls_assume_git_repo_with_timeout;
 use crate::git_info::get_git_repo_root;
-use crate::git_info::get_head_commit_hash;
+use crate::git_info::get_head_commit_hash_with_timeout;
 
 const TURN_METADATA_TIMEOUT: TokioDuration = TokioDuration::from_millis(150);
 
@@ -31,28 +30,23 @@ struct TurnMetadata {
 pub(crate) async fn build_turn_metadata_header(cwd: &Path) -> Option<String> {
     let repo_root = get_git_repo_root(cwd)?;
 
-    // Cap the total time we spend gathering optional metadata so turn startup
-    // stays responsive even when git is slow in certain environments.
-    timeout(TURN_METADATA_TIMEOUT, async {
-        let (latest_git_commit_hash, associated_remote_urls) = tokio::join!(
-            get_head_commit_hash(cwd),
-            get_git_remote_urls_assume_git_repo(cwd)
-        );
-        if latest_git_commit_hash.is_none() && associated_remote_urls.is_none() {
-            return None;
-        }
+    // Keep git subprocess work bounded per command, without wrapping the
+    // entire metadata build in a separate timeout.
+    let (latest_git_commit_hash, associated_remote_urls) = tokio::join!(
+        get_head_commit_hash_with_timeout(cwd, TURN_METADATA_TIMEOUT),
+        get_git_remote_urls_assume_git_repo_with_timeout(cwd, TURN_METADATA_TIMEOUT)
+    );
+    if latest_git_commit_hash.is_none() && associated_remote_urls.is_none() {
+        return None;
+    }
 
-        let mut workspaces = BTreeMap::new();
-        workspaces.insert(
-            repo_root.to_string_lossy().into_owned(),
-            TurnMetadataWorkspace {
-                associated_remote_urls,
-                latest_git_commit_hash,
-            },
-        );
-        serde_json::to_string(&TurnMetadata { workspaces }).ok()
-    })
-    .await
-    .ok()
-    .flatten()
+    let mut workspaces = BTreeMap::new();
+    workspaces.insert(
+        repo_root.to_string_lossy().into_owned(),
+        TurnMetadataWorkspace {
+            associated_remote_urls,
+            latest_git_commit_hash,
+        },
+    );
+    serde_json::to_string(&TurnMetadata { workspaces }).ok()
 }

@@ -125,7 +125,16 @@ pub async fn get_git_remote_urls(cwd: &Path) -> Option<BTreeMap<String, String>>
 
 /// Collect fetch remotes without checking whether `cwd` is in a git repo.
 pub async fn get_git_remote_urls_assume_git_repo(cwd: &Path) -> Option<BTreeMap<String, String>> {
-    let output = run_git_command_with_timeout(&["remote", "-v"], cwd).await?;
+    get_git_remote_urls_assume_git_repo_with_timeout(cwd, GIT_COMMAND_TIMEOUT).await
+}
+
+/// Collect fetch remotes without checking whether `cwd` is in a git repo,
+/// using the provided timeout.
+pub async fn get_git_remote_urls_assume_git_repo_with_timeout(
+    cwd: &Path,
+    timeout_dur: TokioDuration,
+) -> Option<BTreeMap<String, String>> {
+    let output = run_git_command_with_timeout_override(&["remote", "-v"], cwd, timeout_dur).await?;
     if !output.status.success() {
         return None;
     }
@@ -136,7 +145,17 @@ pub async fn get_git_remote_urls_assume_git_repo(cwd: &Path) -> Option<BTreeMap<
 
 /// Return the current HEAD commit hash without checking whether `cwd` is in a git repo.
 pub async fn get_head_commit_hash(cwd: &Path) -> Option<String> {
-    let output = run_git_command_with_timeout(&["rev-parse", "HEAD"], cwd).await?;
+    get_head_commit_hash_with_timeout(cwd, GIT_COMMAND_TIMEOUT).await
+}
+
+/// Return the current HEAD commit hash without checking whether `cwd` is in a
+/// git repo, using the provided timeout.
+pub async fn get_head_commit_hash_with_timeout(
+    cwd: &Path,
+    timeout_dur: TokioDuration,
+) -> Option<String> {
+    let output =
+        run_git_command_with_timeout_override(&["rev-parse", "HEAD"], cwd, timeout_dur).await?;
     if !output.status.success() {
         return None;
     }
@@ -253,10 +272,19 @@ pub async fn git_diff_to_remote(cwd: &Path) -> Option<GitDiffToRemote> {
 
 /// Run a git command with a timeout to prevent blocking on large repositories
 async fn run_git_command_with_timeout(args: &[&str], cwd: &Path) -> Option<std::process::Output> {
+    run_git_command_with_timeout_override(args, cwd, GIT_COMMAND_TIMEOUT).await
+}
+
+/// Run a git command with a caller-provided timeout.
+async fn run_git_command_with_timeout_override(
+    args: &[&str],
+    cwd: &Path,
+    timeout_dur: TokioDuration,
+) -> Option<std::process::Output> {
     let mut command = Command::new("git");
     command.args(args).current_dir(cwd);
     command.kill_on_drop(true);
-    let result = timeout(GIT_COMMAND_TIMEOUT, command.output()).await;
+    let result = timeout(timeout_dur, command.output()).await;
 
     match result {
         Ok(Ok(output)) => Some(output),
