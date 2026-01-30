@@ -97,7 +97,7 @@ Only output the final plan when it is decision complete and leaves no decisions 
 The final plan must be plan-only human and agent digestable and include:
 
 * A clear title
-* tldr section at the end. don't necessary call it tldr.
+* tldr section. don't necessary call it tldr.
 * Important changes or additions of signatures, structs, types.
 * Test cases and scenarios
 * Explicit assumptions and defaults chosen where needed
