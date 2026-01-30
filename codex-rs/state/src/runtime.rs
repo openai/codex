@@ -457,18 +457,8 @@ fn push_log_filters<'a>(builder: &mut QueryBuilder<'a, Sqlite>, query: &'a LogQu
     if let Some(to_ts) = query.to_ts {
         builder.push(" AND ts <= ").push_bind(to_ts);
     }
-    if let Some(module_like) = query.module_like.as_ref() {
-        builder
-            .push(" AND module_path LIKE '%' || ")
-            .push_bind(module_like.as_str())
-            .push(" || '%'");
-    }
-    if let Some(file_like) = query.file_like.as_ref() {
-        builder
-            .push(" AND file LIKE '%' || ")
-            .push_bind(file_like.as_str())
-            .push(" || '%'");
-    }
+    push_like_filters(builder, "module_path", &query.module_like);
+    push_like_filters(builder, "file", &query.file_like);
     let has_thread_filter = !query.thread_ids.is_empty() || query.include_threadless;
     if has_thread_filter {
         builder.push(" AND (");
@@ -491,6 +481,28 @@ fn push_log_filters<'a>(builder: &mut QueryBuilder<'a, Sqlite>, query: &'a LogQu
     if let Some(after_id) = query.after_id {
         builder.push(" AND id > ").push_bind(after_id);
     }
+}
+
+fn push_like_filters<'a>(
+    builder: &mut QueryBuilder<'a, Sqlite>,
+    column: &str,
+    filters: &'a [String],
+) {
+    if filters.is_empty() {
+        return;
+    }
+    builder.push(" AND (");
+    for (idx, filter) in filters.iter().enumerate() {
+        if idx > 0 {
+            builder.push(" OR ");
+        }
+        builder
+            .push(column)
+            .push(" LIKE '%' || ")
+            .push_bind(filter.as_str())
+            .push(" || '%'");
+    }
+    builder.push(")");
 }
 
 async fn open_sqlite(path: &Path) -> anyhow::Result<SqlitePool> {

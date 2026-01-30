@@ -37,13 +37,13 @@ struct Args {
     #[arg(long, value_name = "RFC3339|UNIX")]
     to: Option<String>,
 
-    /// Substring match on module_path.
-    #[arg(long)]
-    module: Option<String>,
+    /// Substring match on module_path. Repeat to include multiple substrings.
+    #[arg(long = "module")]
+    module: Vec<String>,
 
-    /// Substring match on file path.
-    #[arg(long)]
-    file: Option<String>,
+    /// Substring match on file path. Repeat to include multiple substrings.
+    #[arg(long = "file")]
+    file: Vec<String>,
 
     /// Match one or more thread ids. Repeat to include multiple threads.
     #[arg(long = "thread-id")]
@@ -67,8 +67,8 @@ struct LogFilter {
     level_upper: Option<String>,
     from_ts: Option<i64>,
     to_ts: Option<i64>,
-    module_like: Option<String>,
-    file_like: Option<String>,
+    module_like: Vec<String>,
+    file_like: Vec<String>,
     thread_ids: Vec<String>,
     include_threadless: bool,
 }
@@ -131,6 +131,18 @@ fn build_filter(args: &Args) -> anyhow::Result<LogFilter> {
         .context("failed to parse --to")?;
 
     let level_upper = args.level.as_ref().map(|level| level.to_ascii_uppercase());
+    let module_like = args
+        .module
+        .iter()
+        .filter(|module| !module.is_empty())
+        .cloned()
+        .collect::<Vec<_>>();
+    let file_like = args
+        .file
+        .iter()
+        .filter(|file| !file.is_empty())
+        .cloned()
+        .collect::<Vec<_>>();
     let thread_ids = args
         .thread_id
         .iter()
@@ -142,8 +154,8 @@ fn build_filter(args: &Args) -> anyhow::Result<LogFilter> {
         level_upper,
         from_ts,
         to_ts,
-        module_like: args.module.clone(),
-        file_like: args.file.clone(),
+        module_like,
+        file_like,
         thread_ids,
         include_threadless: args.threadless,
     })
@@ -241,10 +253,40 @@ fn format_row(row: &LogRow) -> String {
     let thread_id = row.thread_id.as_deref().unwrap_or("-");
     let thread_id_colored = thread_id.blue().dimmed().to_string();
     let target_colored = target.dimmed().to_string();
-    let message_colored = message.bold().to_string();
+    let message_colored = heuristic_formatting(message);
     format!(
         "{timestamp_colored} {level_colored} [{thread_id_colored}] {target_colored} - {message_colored}"
     )
+}
+
+fn heuristic_formatting(message: &str) -> String {
+    if matches_apply_patch(message) {
+        format_apply_patch(message)
+    } else {
+        message.bold().to_string()
+    }
+}
+
+fn matches_apply_patch(message: &str) -> bool {
+    message.starts_with("ToolCall: apply_patch")
+}
+
+fn format_apply_patch(message: &str) -> String {
+    message
+        .lines()
+        .map(format_apply_patch_line)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_apply_patch_line(line: &str) -> String {
+    if line.starts_with('+') {
+        line.green().bold().to_string()
+    } else if line.starts_with('-') {
+        line.red().bold().to_string()
+    } else {
+        line.bold().to_string()
+    }
 }
 
 fn color_level(level: &str) -> String {
