@@ -116,7 +116,7 @@ pub enum WebSearchMode {
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum ForcedLoginMethod {
-    Chatgpt,
+    ChatGpt,
     Api,
 }
 

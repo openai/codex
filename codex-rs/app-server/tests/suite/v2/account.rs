@@ -213,7 +213,7 @@ async fn set_auth_token_updates_account_and_notifies() -> Result<()> {
     assert_eq!(
         account,
         GetAccountResponse {
-            account: Some(Account::Chatgpt {
+            account: Some(Account::ChatGpt {
                 email: "embedded@example.com".to_string(),
                 plan_type: AccountPlanType::Pro,
             }),
@@ -276,7 +276,7 @@ async fn account_read_refresh_token_is_noop_in_external_mode() -> Result<()> {
     assert_eq!(
         account,
         GetAccountResponse {
-            account: Some(Account::Chatgpt {
+            account: Some(Account::ChatGpt {
                 email: "embedded@example.com".to_string(),
                 plan_type: AccountPlanType::Pro,
             }),
@@ -1186,7 +1186,7 @@ async fn get_account_with_chatgpt() -> Result<()> {
     let received: GetAccountResponse = to_response(resp)?;
 
     let expected = GetAccountResponse {
-        account: Some(Account::Chatgpt {
+        account: Some(Account::ChatGpt {
             email: "user@example.com".to_string(),
             plan_type: AccountPlanType::Pro,
         }),

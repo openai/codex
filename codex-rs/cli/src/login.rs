@@ -78,7 +78,7 @@ pub async fn run_login_with_api_key(
 ) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
 
-    if matches!(config.forced_login_method, Some(ForcedLoginMethod::Chatgpt)) {
+    if matches!(config.forced_login_method, Some(ForcedLoginMethod::ChatGpt)) {
         eprintln!("{API_KEY_LOGIN_DISABLED_MESSAGE}");
         std::process::exit(1);
     }
@@ -236,7 +236,7 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
                     std::process::exit(1);
                 }
             },
-            AuthMode::ChatGPT => {
+            AuthMode::Chatgpt => {
                 eprintln!("Logged in using ChatGPT");
                 std::process::exit(0);
             }

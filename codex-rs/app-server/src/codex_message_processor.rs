@@ -645,7 +645,7 @@ impl CodexMessageProcessor {
 
         if matches!(
             self.config.forced_login_method,
-            Some(ForcedLoginMethod::Chatgpt)
+            Some(ForcedLoginMethod::ChatGpt)
         ) {
             return Err(JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
@@ -1246,12 +1246,12 @@ impl CodexMessageProcessor {
         let account = match self.auth_manager.auth_cached() {
             Some(auth) => Some(match auth {
                 CodexAuth::ApiKey(_) => Account::ApiKey {},
-                CodexAuth::ChatGpt(_) | CodexAuth::ChatGptAuthTokens(_) => {
+                CodexAuth::Chatgpt(_) | CodexAuth::ChatgptAuthTokens(_) => {
                     let email = auth.get_account_email();
                     let plan_type = auth.account_plan_type();
 
                     match (email, plan_type) {
-                        (Some(email), Some(plan_type)) => Account::Chatgpt { email, plan_type },
+                        (Some(email), Some(plan_type)) => Account::ChatGpt { email, plan_type },
                         _ => {
                             let error = JSONRPCErrorError {
                                 code: INVALID_REQUEST_ERROR_CODE,
