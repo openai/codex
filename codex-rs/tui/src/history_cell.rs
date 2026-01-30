@@ -1839,18 +1839,16 @@ impl HistoryCell for RequestUserInputResultCell {
                 ));
             }
             if let Some(note) = note {
-                let (label, continuation) = if question.options.is_some() {
-                    ("    note: ".dim(), "          ".dim())
+                let (label, continuation, style) = if question.options.is_some() {
+                    (
+                        "    note: ".dim(),
+                        "          ".dim(),
+                        Style::default().add_modifier(Modifier::DIM),
+                    )
                 } else {
-                    ("    answer: ".dim(), "            ".dim())
+                    ("    answer: ".dim(), "            ".dim(), Style::default())
                 };
-                lines.extend(wrap_with_prefix(
-                    &note,
-                    width,
-                    label,
-                    continuation,
-                    Style::default().add_modifier(Modifier::DIM),
-                ));
+                lines.extend(wrap_with_prefix(&note, width, label, continuation, style));
             }
         }
 
