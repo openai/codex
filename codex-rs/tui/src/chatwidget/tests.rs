@@ -834,6 +834,7 @@ async fn make_chatwidget_manual(
         queued_user_messages: VecDeque::new(),
         pending_request_user_input_answers: VecDeque::new(),
         request_user_input_questions: HashMap::new(),
+        pending_replay_turn_aborts: Vec::new(),
         suppress_session_configured_redraw: false,
         pending_notification: None,
         quit_shortcut_expires_at: None,
