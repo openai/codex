@@ -48,6 +48,7 @@ fn sse_completed(id: &str) -> String {
 async fn model_personality_does_not_mutate_base_instructions_without_template() {
     let codex_home = TempDir::new().expect("create temp dir");
     let mut config = load_default_config_for_test(&codex_home).await;
+    config.features.enable(Feature::Personality);
     config.model_personality = Some(Personality::Friendly);
 
     let model_info = ModelsManager::construct_model_info_offline("gpt-5.1", &config);
@@ -61,6 +62,7 @@ async fn model_personality_does_not_mutate_base_instructions_without_template() 
 async fn base_instructions_override_disables_personality_template() {
     let codex_home = TempDir::new().expect("create temp dir");
     let mut config = load_default_config_for_test(&codex_home).await;
+    config.features.enable(Feature::Personality);
     config.model_personality = Some(Personality::Friendly);
     config.base_instructions = Some("override instructions".to_string());
 
@@ -79,7 +81,12 @@ async fn user_turn_personality_none_does_not_add_update_message() -> anyhow::Res
 
     let server = start_mock_server().await;
     let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
-    let mut builder = test_codex().with_model("gpt-5.2-codex");
+    let mut builder = test_codex()
+        .with_model("gpt-5.2-codex")
+        .with_config(|config| {
+            config.features.disable(Feature::RemoteModels);
+            config.features.enable(Feature::Personality);
+        });
     let test = builder.build(&server).await?;
 
     test.codex
@@ -121,10 +128,11 @@ async fn config_personality_some_sets_instructions_template() -> anyhow::Result<
     let server = start_mock_server().await;
     let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
     let mut builder = test_codex()
-        .with_model("exp-codex-personality")
+        .with_model("gpt-5.2-codex")
         .with_config(|config| {
-            config.model_personality = Some(Personality::Friendly);
             config.features.disable(Feature::RemoteModels);
+            config.features.enable(Feature::Personality);
+            config.model_personality = Some(Personality::Friendly);
         });
     let test = builder.build(&server).await?;
 
@@ -181,6 +189,7 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
         .with_model("exp-codex-personality")
         .with_config(|config| {
             config.features.disable(Feature::RemoteModels);
+            config.features.enable(Feature::Personality);
         });
     let test = builder.build(&server).await?;
 
@@ -263,7 +272,7 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn instructions_use_base_if_feature_disabled() -> anyhow::Result<()> {
+async fn instructions_uses_base_if_feature_disabled() -> anyhow::Result<()> {
     let codex_home = TempDir::new().expect("create temp dir");
     let mut config = load_default_config_for_test(&codex_home).await;
     config.features.disable(Feature::Personality);
@@ -368,7 +377,7 @@ async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()>
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_personality_remote_model_legacy_placeholder_instructions() -> anyhow::Result<()> {
+async fn ignores_remote_model_personality_if_feature_disabled() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = MockServer::builder()
@@ -376,12 +385,12 @@ async fn config_personality_remote_model_legacy_placeholder_instructions() -> an
         .start()
         .await;
 
-    let remote_slug = "codex-remote-legacy-personality";
-    let remote_personality_message = "Friendly from legacy remote template";
+    let remote_slug = "codex-remote-personality";
+    let remote_personality_message = "Friendly from remote template";
     let remote_model = ModelInfo {
         slug: remote_slug.to_string(),
-        display_name: "Remote legacy personality test".to_string(),
-        description: Some("Remote model with legacy personality template".to_string()),
+        display_name: "Remote personality test".to_string(),
+        description: Some("Remote model with personality template".to_string()),
         default_reasoning_level: Some(ReasoningEffort::Medium),
         supported_reasoning_levels: vec![ReasoningEffortPreset {
             effort: ReasoningEffort::Medium,
@@ -427,6 +436,7 @@ async fn config_personality_remote_model_legacy_placeholder_instructions() -> an
         .with_auth(codex_core::CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
             config.features.enable(Feature::RemoteModels);
+            config.features.disable(Feature::Personality);
             config.model = Some(remote_slug.to_string());
             config.model_personality = Some(Personality::Friendly);
         });
@@ -463,19 +473,19 @@ async fn config_personality_remote_model_legacy_placeholder_instructions() -> an
     let instructions_text = request.instructions_text();
 
     assert!(
-        instructions_text.contains(remote_personality_message),
-        "expected instructions to include the remote legacy personality template, got: {instructions_text:?}"
+        instructions_text.contains("base instructions"),
+        "expected instructions to use base instructions, got: {instructions_text:?}"
     );
     assert!(
-        !instructions_text.contains("{{ personality_message }}"),
-        "expected legacy personality placeholder to be replaced, got: {instructions_text:?}"
+        !instructions_text.contains("Friendly from remote"),
+        "expected friendly instructions to be ignored, got: {instructions_text:?}"
     );
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_model_default_personality_instructions() -> anyhow::Result<()> {
+async fn remote_model_default_personality_instructions_with_feature() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = MockServer::builder()
@@ -534,6 +544,7 @@ async fn remote_model_default_personality_instructions() -> anyhow::Result<()> {
         .with_auth(codex_core::CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
             config.features.enable(Feature::RemoteModels);
+            config.features.enable(Feature::Personality);
             config.model = Some(remote_slug.to_string());
         });
     let test = builder.build(&server).await?;
@@ -641,6 +652,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
         .with_auth(codex_core::CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
             config.features.enable(Feature::RemoteModels);
+            config.features.enable(Feature::Personality);
             config.model = Some("gpt-5.2-codex".to_string());
         });
     let test = builder.build(&server).await?;

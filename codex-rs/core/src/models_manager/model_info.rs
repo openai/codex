@@ -11,6 +11,7 @@ use codex_protocol::openai_models::TruncationMode;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 
 use crate::config::Config;
+use crate::features::Feature;
 use crate::truncate::approx_bytes_for_tokens;
 use tracing::warn;
 
@@ -103,7 +104,10 @@ pub(crate) fn with_config_overrides(mut model: ModelInfo, config: &Config) -> Mo
     if let Some(base_instructions) = &config.base_instructions {
         model.base_instructions = base_instructions.clone();
         model.model_instructions_spec = None;
+    } else if !config.features.enabled(Feature::Personality) {
+        model.model_instructions_spec = None;
     }
+
     model
 }
 
