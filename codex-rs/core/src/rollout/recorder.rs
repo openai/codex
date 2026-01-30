@@ -428,7 +428,7 @@ impl RolloutRecorder {
                     }
                 },
                 Err(e) => {
-                    warn!("failed to parse rollout line: {v:?}, error: {e}");
+                    warn!("failed to parse rollout line: {e}");
                     parse_errors = parse_errors.saturating_add(1);
                 }
             }
