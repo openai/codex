@@ -50,12 +50,10 @@ impl ToolHandler for RequestUserInputHandler {
         }
 
         let mut args: RequestUserInputArgs = parse_arguments(&arguments)?;
-        let missing_options = args.questions.iter().any(|question| {
-            question
-                .options
-                .as_ref()
-                .map_or(true, std::vec::Vec::is_empty)
-        });
+        let missing_options = args
+            .questions
+            .iter()
+            .any(|question| question.options.as_ref().is_none_or(Vec::is_empty));
         if missing_options {
             return Err(FunctionCallError::RespondToModel(
                 "request_user_input requires non-empty options for every question".to_string(),

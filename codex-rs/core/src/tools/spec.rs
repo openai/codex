@@ -602,14 +602,6 @@ fn create_request_user_input_tool() -> ToolSpec {
             description: Some("Single-sentence prompt shown to the user.".to_string()),
         },
     );
-    question_props.insert(
-        "isOther".to_string(),
-        JsonSchema::Boolean {
-            description: Some(
-                "Always true. The client will include a free-form \"Other\" option.".to_string(),
-            ),
-        },
-    );
     question_props.insert("options".to_string(), options_schema);
 
     let questions_schema = JsonSchema::Array {
@@ -620,7 +612,6 @@ fn create_request_user_input_tool() -> ToolSpec {
                 "id".to_string(),
                 "header".to_string(),
                 "question".to_string(),
-                "isOther".to_string(),
                 "options".to_string(),
             ]),
             additional_properties: Some(false.into()),
