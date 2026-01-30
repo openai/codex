@@ -78,6 +78,7 @@ pub(crate) enum CollaborationModeIndicator {
 }
 
 const MODE_CYCLE_HINT: &str = "shift+tab to cycle";
+const FOOTER_CONTEXT_GAP_COLS: u16 = 1;
 
 impl CollaborationModeIndicator {
     fn label(self, show_cycle_hint: bool) -> String {
@@ -472,7 +473,10 @@ pub(crate) fn can_show_left_with_context(area: Rect, left_width: u16, context_wi
     let Some(context_x) = right_aligned_x(area, context_width) else {
         return true;
     };
-    let left_extent = FOOTER_INDENT_COLS as u16 + left_width;
+    if left_width == 0 {
+        return true;
+    }
+    let left_extent = FOOTER_INDENT_COLS as u16 + left_width + FOOTER_CONTEXT_GAP_COLS;
     left_extent <= context_x.saturating_sub(area.x)
 }
 
