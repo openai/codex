@@ -3192,20 +3192,15 @@ impl ChatComposer {
                     ))
                 };
                 let right_width = right_line.as_ref().map(|l| l.width() as u16).unwrap_or(0);
-                if footer_props.status_line_enabled {
-                    if let Some(max_left) = max_left_width_for_right(hint_rect, right_width) {
-                        if left_width > max_left {
-                            if let Some(line) = status_line.as_ref().map(|line| {
-                                truncate_line_with_ellipsis_if_overflow(
-                                    line.clone(),
-                                    max_left as usize,
-                                )
-                            }) {
-                                left_width = line.width() as u16;
-                                truncated_status_line = Some(line);
-                            }
-                        }
-                    }
+                if footer_props.status_line_enabled
+                    && let Some(max_left) = max_left_width_for_right(hint_rect, right_width)
+                    && left_width > max_left
+                    && let Some(line) = status_line.as_ref().map(|line| {
+                        truncate_line_with_ellipsis_if_overflow(line.clone(), max_left as usize)
+                    })
+                {
+                    left_width = line.width() as u16;
+                    truncated_status_line = Some(line);
                 }
                 let can_show_left_and_context =
                     can_show_left_with_context(hint_rect, left_width, right_width);
@@ -3304,10 +3299,8 @@ impl ChatComposer {
                     );
                 }
 
-                if show_right {
-                    if let Some(line) = &right_line {
-                        render_context_right(hint_rect, buf, line);
-                    }
+                if show_right && let Some(line) = &right_line {
+                    render_context_right(hint_rect, buf, line);
                 }
             }
         }

@@ -6419,7 +6419,7 @@ pub fn build_status_line_payload(chat: &ChatWidget, config: &Config) -> serde_js
     );
     payload.insert("cwd".to_string(), cwd.to_string_lossy().to_string().into());
 
-    let project_dir = codex_core::git_info::resolve_root_git_project_for_trust(&cwd)
+    let project_dir = codex_core::git_info::resolve_root_git_project_for_trust(cwd)
         .unwrap_or_else(|| cwd.clone());
 
     let workspace = serde_json::json!({
