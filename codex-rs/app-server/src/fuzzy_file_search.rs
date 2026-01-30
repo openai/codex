@@ -7,7 +7,7 @@ use codex_app_server_protocol::FuzzyFileSearchResult;
 use codex_file_search as file_search;
 use tracing::warn;
 
-const LIMIT_PER_ROOT: usize = 50;
+const MATCH_LIMIT: usize = 50;
 const MAX_THREADS: usize = 12;
 const COMPUTE_INDICES: bool = true;
 
@@ -21,8 +21,7 @@ pub(crate) async fn run_fuzzy_file_search(
     }
 
     #[expect(clippy::expect_used)]
-    let limit_per_root =
-        NonZero::new(LIMIT_PER_ROOT).expect("LIMIT_PER_ROOT should be a valid non-zero usize");
+    let limit = NonZero::new(MATCH_LIMIT).expect("MATCH_LIMIT should be a valid non-zero usize");
 
     let cores = std::thread::available_parallelism()
         .map(std::num::NonZero::get)
@@ -35,7 +34,7 @@ pub(crate) async fn run_fuzzy_file_search(
     let mut files = match tokio::task::spawn_blocking(move || {
         file_search::run(
             query.as_str(),
-            limit_per_root,
+            limit,
             search_dirs,
             Vec::new(),
             threads,
