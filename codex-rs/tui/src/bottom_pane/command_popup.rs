@@ -14,6 +14,11 @@ use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 use std::collections::HashSet;
 
+// Hide alias commands in the default popup list so each unique action appears once.
+// `quit` is an alias of `exit`, so we skip `quit` here.
+// `approvals` is an alias of `permissions`.
+const ALIAS_COMMANDS: &[SlashCommand] = &[SlashCommand::Quit, SlashCommand::Approvals];
+
 /// A selectable item in the popup: either a built-in command or a user prompt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CommandItem {
@@ -122,9 +127,7 @@ impl CommandPopup {
         if filter.is_empty() {
             // Built-ins first, in presentation order.
             for (_, cmd) in self.builtins.iter() {
-                // Hide alias commands in the default popup list so each unique action appears once.
-                // `quit` is an alias of `exit`, so we skip `quit` here.
-                if *cmd == SlashCommand::Quit {
+                if ALIAS_COMMANDS.contains(cmd) {
                     continue;
                 }
                 out.push((CommandItem::Builtin(*cmd), None));
