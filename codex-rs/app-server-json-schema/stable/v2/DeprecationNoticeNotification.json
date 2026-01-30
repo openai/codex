@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "details": {
+      "description": "Optional extra guidance, such as migration steps or rationale.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "summary": {
+      "description": "Concise summary of what is deprecated.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "summary"
+  ],
+  "title": "DeprecationNoticeNotification",
+  "type": "object"
+}

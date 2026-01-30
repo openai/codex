@@ -1,0 +1,23 @@
+load("//:defs.bzl", "codex_rust_crate")
+
+stable_files = glob(
+    include = ["stable/**"],
+    exclude = [
+        "**/* *",
+        "BUILD.bazel",
+        "Cargo.toml",
+    ],
+    allow_empty = True,
+)
+
+codex_rust_crate(
+    name = "app-server-ts-types",
+    crate_name = "codex_app_server_ts_types",
+    compile_data = stable_files,
+    test_data_extra = stable_files + [
+        "//codex-rs/utils/cargo-bin:repo_root.marker",
+    ],
+    extra_binaries = [
+        "//codex-rs/app-server-protocol-stable-export:codex-app-server-protocol-stable-export",
+    ],
+)

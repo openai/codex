@@ -16,7 +16,6 @@ use anyhow::anyhow;
 use codex_protocol::protocol::EventMsg;
 use schemars::JsonSchema;
 use schemars::schema_for;
-use serde::Serialize;
 use serde_json::Map;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -328,11 +327,36 @@ where
     write_json_schema_with_return::<T>(out_dir, name)
 }
 
-fn write_pretty_json(path: PathBuf, value: &impl Serialize) -> Result<()> {
-    let json = serde_json::to_vec_pretty(value)
+fn write_pretty_json(path: PathBuf, value: &Value) -> Result<()> {
+    let mut canonical = value.clone();
+    sort_json_value(&mut canonical);
+    let json = serde_json::to_vec_pretty(&canonical)
         .with_context(|| format!("Failed to serialize JSON schema to {}", path.display()))?;
     fs::write(&path, json).with_context(|| format!("Failed to write {}", path.display()))?;
     Ok(())
+}
+
+/// Sort JSON object keys recursively to produce deterministic output even when
+/// serde_json is built with `preserve_order`.
+fn sort_json_value(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            for child in map.values_mut() {
+                sort_json_value(child);
+            }
+            let mut entries: Vec<(String, Value)> = std::mem::take(map).into_iter().collect();
+            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+            for (key, value) in entries {
+                map.insert(key, value);
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                sort_json_value(child);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Split a fully-qualified type name like "v2::Type" into its namespace and logical name.

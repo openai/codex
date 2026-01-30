@@ -11,6 +11,10 @@ path = "src/lib.rs"
 [lints]
 workspace = true
 
+[features]
+default = ["codex-experimental-api"]
+codex-experimental-api = []
+
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
