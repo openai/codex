@@ -658,7 +658,7 @@ fn esc_hint_line(esc_backtrack_hint: bool) -> Line<'static> {
 
 fn show_stash_preserved_hint_line() -> Line<'static> {
     Line::from(vec![
-        "Stash preserved — clear input and press Ctrl+S to restore".dim(),
+        "Stash preserved — submit current message to auto-restore, or clear input and press Ctrl+S to restore".dim(),
     ])
 }
 
