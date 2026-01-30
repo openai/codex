@@ -1,4 +1,5 @@
 use crate::codex::TurnContext;
+use crate::codex::resolve_base_instructions;
 use crate::context_manager::normalize;
 use crate::instructions::SkillInstructions;
 use crate::instructions::UserInstructions;
@@ -89,7 +90,12 @@ impl ContextManager {
         let personality = turn_context
             .personality
             .or(turn_context.client.config().model_personality);
-        let base_instructions = model_info.get_model_instructions(personality);
+        let base_instructions = resolve_base_instructions(
+            turn_context.client.config().as_ref(),
+            None,
+            &model_info,
+            personality,
+        );
         let base_tokens = i64::try_from(approx_token_count(&base_instructions)).unwrap_or(i64::MAX);
 
         let items_tokens = self.items.iter().fold(0i64, |acc, item| {
