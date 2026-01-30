@@ -120,10 +120,10 @@ use crate::mcp::effective_mcp_servers;
 use crate::mcp::maybe_prompt_and_install_mcp_dependencies;
 use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
+use crate::mentions::CollectedToolMentions;
 use crate::mentions::build_connector_slug_counts;
 use crate::mentions::build_skill_name_counts;
-use crate::mentions::collect_explicit_app_paths;
-use crate::mentions::collect_tool_mentions_from_messages;
+use crate::mentions::collect_app_ids_from_mentions;
 use crate::model_provider_info::CHAT_WIRE_API_DEPRECATION_SUMMARY;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageContentDeltaEvent;
@@ -170,9 +170,7 @@ use crate::skills::SkillsManager;
 use crate::skills::build_skill_injections;
 use crate::skills::collect_env_var_dependencies;
 use crate::skills::collect_explicit_skill_mentions;
-use crate::skills::injection::ToolMentionKind;
-use crate::skills::injection::app_id_from_path;
-use crate::skills::injection::tool_kind_for_path;
+use crate::skills::collect_explicit_skill_mentions_from_mentions;
 use crate::skills::resolve_skill_dependencies_for_turn;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
@@ -1755,6 +1753,7 @@ impl Session {
     ) {
         let mut state = self.state.lock().await;
         state.record_items(items.iter(), turn_context.truncation_policy);
+        state.update_mentions_from_items(items);
     }
 
     pub(crate) async fn record_model_warning(&self, message: impl Into<String>, ctx: &TurnContext) {
@@ -2021,6 +2020,10 @@ impl Session {
         // those spans, and `record_response_item_and_emit_turn_item` would drop them.
         self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
             .await;
+        {
+            let mut state = self.state.lock().await;
+            state.update_mentions_from_user_input(input);
+        }
         let turn_item = TurnItem::UserMessage(UserMessageItem::new(input));
         self.emit_turn_item_started(turn_context, &turn_item).await;
         self.emit_turn_item_completed(turn_context, turn_item).await;
@@ -3226,7 +3229,23 @@ pub(crate) async fn run_turn(
     } else {
         HashMap::new()
     };
-    let mentioned_skills = skills_outcome.as_ref().map_or_else(Vec::new, |outcome| {
+    let (history_mentions, injected_skill_paths) = {
+        let state = sess.state.lock().await;
+        (
+            state.tool_mentions.clone(),
+            state.injected_skill_paths.clone(),
+        )
+    };
+    let mentioned_skills_from_history = skills_outcome.as_ref().map_or_else(Vec::new, |outcome| {
+        collect_explicit_skill_mentions_from_mentions(
+            &history_mentions,
+            &outcome.skills,
+            &outcome.disabled_paths,
+            &skill_name_counts,
+            &connector_slug_counts,
+        )
+    });
+    let mentioned_skills_from_input = skills_outcome.as_ref().map_or_else(Vec::new, |outcome| {
         collect_explicit_skill_mentions(
             &input,
             &outcome.skills,
@@ -3235,7 +3254,11 @@ pub(crate) async fn run_turn(
             &connector_slug_counts,
         )
     });
-    let explicit_app_paths = collect_explicit_app_paths(&input);
+    let mentioned_skills = merge_mentioned_skills(
+        mentioned_skills_from_history,
+        mentioned_skills_from_input,
+        &injected_skill_paths,
+    );
 
     let config = turn_context.client.config();
     if config
@@ -3310,8 +3333,12 @@ pub(crate) async fn run_turn(
             })
             .map(|user_message| user_message.message())
             .collect::<Vec<String>>();
+        let tool_mentions = {
+            let state = sess.state.lock().await;
+            state.tool_mentions.clone()
+        };
         let tool_selection = SamplingRequestToolSelection {
-            explicit_app_paths: &explicit_app_paths,
+            tool_mentions,
             skill_name_counts_lower: &skill_name_counts_lower,
         };
         match run_sampling_request(
@@ -3394,18 +3421,15 @@ async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) 
     }
 }
 
-fn filter_connectors_for_input(
+fn filter_connectors_for_mentions(
     connectors: Vec<connectors::AppInfo>,
-    input: &[ResponseItem],
-    explicit_app_paths: &[String],
+    mentions: &CollectedToolMentions,
     skill_name_counts_lower: &HashMap<String, usize>,
 ) -> Vec<connectors::AppInfo> {
-    let user_messages = collect_user_messages(input);
-    if user_messages.is_empty() && explicit_app_paths.is_empty() {
+    if mentions.is_empty() {
         return Vec::new();
     }
 
-    let mentions = collect_tool_mentions_from_messages(&user_messages);
     let mention_names_lower = mentions
         .plain_names
         .iter()
@@ -3413,16 +3437,7 @@ fn filter_connectors_for_input(
         .collect::<HashSet<String>>();
 
     let connector_slug_counts = build_connector_slug_counts(&connectors);
-    let mut allowed_connector_ids: HashSet<String> = HashSet::new();
-    for path in explicit_app_paths
-        .iter()
-        .chain(mentions.paths.iter())
-        .filter(|path| tool_kind_for_path(path) == ToolMentionKind::App)
-    {
-        if let Some(connector_id) = app_id_from_path(path) {
-            allowed_connector_ids.insert(connector_id.to_string());
-        }
-    }
+    let allowed_connector_ids = collect_app_ids_from_mentions(mentions);
 
     connectors
         .into_iter()
@@ -3461,6 +3476,33 @@ fn connector_inserted_in_messages(
     connector_count == 1 && skill_count == 0 && mention_names_lower.contains(&mention_slug)
 }
 
+fn merge_mentioned_skills(
+    history: Vec<SkillMetadata>,
+    current: Vec<SkillMetadata>,
+    injected_skill_paths: &HashSet<String>,
+) -> Vec<SkillMetadata> {
+    let mut merged = Vec::with_capacity(history.len() + current.len());
+    let mut seen_paths: HashSet<PathBuf> = HashSet::new();
+
+    for skill in history {
+        let path_str = skill.path.to_string_lossy();
+        if injected_skill_paths.contains(path_str.as_ref()) {
+            continue;
+        }
+        if seen_paths.insert(skill.path.clone()) {
+            merged.push(skill);
+        }
+    }
+
+    for skill in current {
+        if seen_paths.insert(skill.path.clone()) {
+            merged.push(skill);
+        }
+    }
+
+    merged
+}
+
 fn filter_codex_apps_mcp_tools(
     mut mcp_tools: HashMap<String, crate::mcp_connection_manager::ToolInfo>,
     connectors: &[connectors::AppInfo],
@@ -3488,7 +3530,7 @@ fn codex_apps_connector_id(tool: &crate::mcp_connection_manager::ToolInfo) -> Op
 }
 
 struct SamplingRequestToolSelection<'a> {
-    explicit_app_paths: &'a [String],
+    tool_mentions: CollectedToolMentions,
     skill_name_counts_lower: &'a HashMap<String, usize>,
 }
 
@@ -3519,10 +3561,9 @@ async fn run_sampling_request(
         .await?;
     let connectors_for_tools = if turn_context.client.config().features.enabled(Feature::Apps) {
         let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
-        Some(filter_connectors_for_input(
+        Some(filter_connectors_for_mentions(
             connectors,
-            &input,
-            tool_selection.explicit_app_paths,
+            &tool_selection.tool_mentions,
             tool_selection.skill_name_counts_lower,
         ))
     } else {
@@ -3941,6 +3982,7 @@ mod tests {
     use codex_protocol::ThreadId;
     use codex_protocol::models::FunctionCallOutputPayload;
 
+    use crate::mentions::collect_tool_mentions_from_response_items;
     use crate::protocol::CompactedItem;
     use crate::protocol::CreditsSnapshot;
     use crate::protocol::InitialHistory;
@@ -4080,15 +4122,11 @@ mod tests {
             make_connector("two", "Foo-Bar"),
         ];
         let input = vec![user_message("use $foo-bar")];
-        let explicit_app_paths = Vec::new();
+        let mentions = collect_tool_mentions_from_response_items(&input);
         let skill_name_counts_lower = HashMap::new();
 
-        let selected = filter_connectors_for_input(
-            connectors,
-            &input,
-            &explicit_app_paths,
-            &skill_name_counts_lower,
-        );
+        let selected =
+            filter_connectors_for_mentions(connectors, &mentions, &skill_name_counts_lower);
 
         assert_eq!(selected, Vec::new());
     }
@@ -4097,15 +4135,11 @@ mod tests {
     fn filter_connectors_for_input_skips_when_skill_name_conflicts() {
         let connectors = vec![make_connector("one", "Todoist")];
         let input = vec![user_message("use $todoist")];
-        let explicit_app_paths = Vec::new();
+        let mentions = collect_tool_mentions_from_response_items(&input);
         let skill_name_counts_lower = HashMap::from([("todoist".to_string(), 1)]);
 
-        let selected = filter_connectors_for_input(
-            connectors,
-            &input,
-            &explicit_app_paths,
-            &skill_name_counts_lower,
-        );
+        let selected =
+            filter_connectors_for_mentions(connectors, &mentions, &skill_name_counts_lower);
 
         assert_eq!(selected, Vec::new());
     }

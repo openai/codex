@@ -2,18 +2,42 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 
+use crate::compact::collect_user_messages;
 use crate::connectors;
+use crate::instructions::SkillInstructions;
 use crate::skills::SkillMetadata;
+use crate::skills::injection::ToolMentionKind;
 use crate::skills::injection::extract_tool_mentions;
+use crate::skills::injection::tool_kind_for_path;
 
+#[derive(Debug, Clone, Default)]
 pub(crate) struct CollectedToolMentions {
     pub(crate) plain_names: HashSet<String>,
     pub(crate) paths: HashSet<String>,
 }
 
+impl CollectedToolMentions {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.plain_names.is_empty() && self.paths.is_empty()
+    }
+
+    pub(crate) fn extend_from(&mut self, other: &CollectedToolMentions) {
+        self.plain_names.extend(other.plain_names.iter().cloned());
+        self.paths.extend(other.paths.iter().cloned());
+    }
+}
+
 pub(crate) fn collect_tool_mentions_from_messages(messages: &[String]) -> CollectedToolMentions {
+    collect_tool_mentions_from_texts(messages.iter().map(String::as_str))
+}
+
+pub(crate) fn collect_tool_mentions_from_texts<'a, I>(messages: I) -> CollectedToolMentions
+where
+    I: IntoIterator<Item = &'a str>,
+{
     let mut plain_names = HashSet::new();
     let mut paths = HashSet::new();
     for message in messages {
@@ -24,13 +48,59 @@ pub(crate) fn collect_tool_mentions_from_messages(messages: &[String]) -> Collec
     CollectedToolMentions { plain_names, paths }
 }
 
-pub(crate) fn collect_explicit_app_paths(input: &[UserInput]) -> Vec<String> {
-    input
+pub(crate) fn collect_structured_tool_mentions_from_user_input(
+    input: &[UserInput],
+) -> CollectedToolMentions {
+    let mut mentions = CollectedToolMentions::default();
+    for item in input {
+        match item {
+            UserInput::Mention { name, path } => {
+                mentions.plain_names.insert(name.clone());
+                mentions.paths.insert(path.clone());
+            }
+            UserInput::Skill { name, path } => {
+                mentions.plain_names.insert(name.clone());
+                mentions.paths.insert(path.to_string_lossy().into_owned());
+            }
+            UserInput::Text { .. } | UserInput::Image { .. } | UserInput::LocalImage { .. } => {}
+            _ => {}
+        }
+    }
+
+    mentions
+}
+
+pub(crate) fn collect_tool_mentions_from_response_items(
+    items: &[ResponseItem],
+) -> CollectedToolMentions {
+    let messages = collect_user_messages(items);
+    collect_tool_mentions_from_messages(&messages)
+}
+
+pub(crate) fn collect_skill_instruction_paths(items: &[ResponseItem]) -> HashSet<String> {
+    let mut paths = HashSet::new();
+    for item in items {
+        let ResponseItem::Message { role, content, .. } = item else {
+            continue;
+        };
+        if role != "user" {
+            continue;
+        }
+        let Some(path) = SkillInstructions::extract_path(content) else {
+            continue;
+        };
+        paths.insert(path);
+    }
+    paths
+}
+
+pub(crate) fn collect_app_ids_from_mentions(mentions: &CollectedToolMentions) -> HashSet<String> {
+    mentions
+        .paths
         .iter()
-        .filter_map(|item| match item {
-            UserInput::Mention { path, .. } => Some(path.clone()),
-            _ => None,
-        })
+        .filter(|path| tool_kind_for_path(path) == ToolMentionKind::App)
+        .filter_map(|path| crate::skills::injection::app_id_from_path(path))
+        .map(str::to_string)
         .collect()
 }
 

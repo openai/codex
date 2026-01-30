@@ -1,11 +1,16 @@
 //! Session-wide mutable state.
 
 use codex_protocol::models::ResponseItem;
+use codex_protocol::user_input::UserInput;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
 use crate::codex::SessionConfiguration;
 use crate::context_manager::ContextManager;
+use crate::mentions::CollectedToolMentions;
+use crate::mentions::collect_skill_instruction_paths;
+use crate::mentions::collect_structured_tool_mentions_from_user_input;
+use crate::mentions::collect_tool_mentions_from_response_items;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
@@ -19,6 +24,8 @@ pub(crate) struct SessionState {
     pub(crate) server_reasoning_included: bool,
     pub(crate) dependency_env: HashMap<String, String>,
     pub(crate) mcp_dependency_prompted: HashSet<String>,
+    pub(crate) tool_mentions: CollectedToolMentions,
+    pub(crate) injected_skill_paths: HashSet<String>,
     /// Whether the session's initial context has been seeded into history.
     ///
     /// TODO(owen): This is a temporary solution to avoid updating a thread's updated_at
@@ -37,6 +44,8 @@ impl SessionState {
             server_reasoning_included: false,
             dependency_env: HashMap::new(),
             mcp_dependency_prompted: HashSet::new(),
+            tool_mentions: CollectedToolMentions::default(),
+            injected_skill_paths: HashSet::new(),
             initial_context_seeded: false,
         }
     }
@@ -56,6 +65,25 @@ impl SessionState {
 
     pub(crate) fn replace_history(&mut self, items: Vec<ResponseItem>) {
         self.history.replace(items);
+        self.rebuild_mentions_from_history();
+    }
+
+    pub(crate) fn update_mentions_from_items(&mut self, items: &[ResponseItem]) {
+        let mentions = collect_tool_mentions_from_response_items(items);
+        self.tool_mentions.extend_from(&mentions);
+        let skill_paths = collect_skill_instruction_paths(items);
+        self.injected_skill_paths.extend(skill_paths);
+    }
+
+    pub(crate) fn update_mentions_from_user_input(&mut self, input: &[UserInput]) {
+        let mentions = collect_structured_tool_mentions_from_user_input(input);
+        self.tool_mentions.extend_from(&mentions);
+    }
+
+    fn rebuild_mentions_from_history(&mut self) {
+        let items = self.history.raw_items();
+        self.tool_mentions = collect_tool_mentions_from_response_items(items);
+        self.injected_skill_paths = collect_skill_instruction_paths(items);
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {

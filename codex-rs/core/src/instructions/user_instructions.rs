@@ -59,6 +59,20 @@ impl SkillInstructions {
             false
         }
     }
+
+    pub fn extract_path(message: &[ContentItem]) -> Option<String> {
+        let [ContentItem::InputText { text }] = message else {
+            return None;
+        };
+        let path_start = text.find("<path>")? + "<path>".len();
+        let path_end = text[path_start..].find("</path>")? + path_start;
+        let path = text.get(path_start..path_end)?;
+        if path.is_empty() {
+            None
+        } else {
+            Some(path.to_string())
+        }
+    }
 }
 
 impl From<SkillInstructions> for ResponseItem {

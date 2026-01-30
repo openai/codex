@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::instructions::SkillInstructions;
+use crate::mentions::CollectedToolMentions;
 use crate::skills::SkillMetadata;
 use codex_otel::OtelManager;
 use codex_protocol::models::ResponseItem;
@@ -102,6 +103,34 @@ pub(crate) fn collect_explicit_skill_mentions(
             );
         }
     }
+
+    selected
+}
+
+pub(crate) fn collect_explicit_skill_mentions_from_mentions(
+    mentions: &CollectedToolMentions,
+    skills: &[SkillMetadata],
+    disabled_paths: &HashSet<PathBuf>,
+    skill_name_counts: &HashMap<String, usize>,
+    connector_slug_counts: &HashMap<String, usize>,
+) -> Vec<SkillMetadata> {
+    let selection_context = SkillSelectionContext {
+        skills,
+        disabled_paths,
+        skill_name_counts,
+        connector_slug_counts,
+    };
+    let mut selected: Vec<SkillMetadata> = Vec::new();
+    let mut seen_names: HashSet<String> = HashSet::new();
+    let mut seen_paths: HashSet<PathBuf> = HashSet::new();
+
+    select_skills_from_collected_mentions(
+        &selection_context,
+        mentions,
+        &mut seen_names,
+        &mut seen_paths,
+        &mut selected,
+    );
 
     selected
 }
@@ -259,6 +288,76 @@ fn select_skills_from_mentions(
             )
         })
         .map(normalize_skill_path)
+        .collect();
+
+    for skill in selection_context.skills {
+        if selection_context.disabled_paths.contains(&skill.path)
+            || seen_paths.contains(&skill.path)
+        {
+            continue;
+        }
+
+        let path_str = skill.path.to_string_lossy();
+        if mention_skill_paths.contains(path_str.as_ref()) {
+            seen_paths.insert(skill.path.clone());
+            seen_names.insert(skill.name.clone());
+            selected.push(skill.clone());
+        }
+    }
+
+    for skill in selection_context.skills {
+        if selection_context.disabled_paths.contains(&skill.path)
+            || seen_paths.contains(&skill.path)
+        {
+            continue;
+        }
+
+        if !mentions.plain_names.contains(skill.name.as_str()) {
+            continue;
+        }
+
+        let skill_count = selection_context
+            .skill_name_counts
+            .get(skill.name.as_str())
+            .copied()
+            .unwrap_or(0);
+        let connector_count = selection_context
+            .connector_slug_counts
+            .get(&skill.name.to_ascii_lowercase())
+            .copied()
+            .unwrap_or(0);
+        if skill_count != 1 || connector_count != 0 {
+            continue;
+        }
+
+        if seen_names.insert(skill.name.clone()) {
+            seen_paths.insert(skill.path.clone());
+            selected.push(skill.clone());
+        }
+    }
+}
+
+fn select_skills_from_collected_mentions(
+    selection_context: &SkillSelectionContext<'_>,
+    mentions: &CollectedToolMentions,
+    seen_names: &mut HashSet<String>,
+    seen_paths: &mut HashSet<PathBuf>,
+    selected: &mut Vec<SkillMetadata>,
+) {
+    if mentions.is_empty() {
+        return;
+    }
+
+    let mention_skill_paths: HashSet<&str> = mentions
+        .paths
+        .iter()
+        .filter(|path| {
+            !matches!(
+                tool_kind_for_path(path),
+                ToolMentionKind::App | ToolMentionKind::Mcp
+            )
+        })
+        .map(|path| normalize_skill_path(path))
         .collect();
 
     for skill in selection_context.skills {
