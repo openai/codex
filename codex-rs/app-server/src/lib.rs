@@ -43,6 +43,7 @@ mod config_api;
 mod dynamic_tools;
 mod error_code;
 mod filters;
+mod find_files_stream;
 mod fuzzy_file_search;
 mod message_processor;
 mod models;

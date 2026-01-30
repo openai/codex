@@ -3,6 +3,7 @@ mod auth;
 mod codex_message_processor_flow;
 mod config;
 mod create_thread;
+mod find_file_stream;
 mod fork_thread;
 mod fuzzy_file_search;
 mod interrupt;

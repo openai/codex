@@ -1,6 +1,7 @@
 use crate::bespoke_event_handling::apply_bespoke_event_handling;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
+use crate::find_files_stream::run_find_files_stream;
 use crate::fuzzy_file_search::run_fuzzy_file_search;
 use crate::models::supported_models;
 use crate::outgoing_message::OutgoingMessageSender;
@@ -34,6 +35,8 @@ use codex_app_server_protocol::DynamicToolSpec as ApiDynamicToolSpec;
 use codex_app_server_protocol::ExecOneOffCommandResponse;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::FeedbackUploadResponse;
+use codex_app_server_protocol::FindFilesStreamParams;
+use codex_app_server_protocol::FindFilesStreamResponse;
 use codex_app_server_protocol::ForkConversationParams;
 use codex_app_server_protocol::ForkConversationResponse;
 use codex_app_server_protocol::FuzzyFileSearchParams;
@@ -269,6 +272,7 @@ pub(crate) struct CodexMessageProcessor {
     pending_rollbacks: PendingRollbacks,
     turn_summary_store: TurnSummaryStore,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    pending_find_files_streams: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     feedback: CodexFeedback,
 }
 
@@ -325,6 +329,7 @@ impl CodexMessageProcessor {
             pending_rollbacks: Arc::new(Mutex::new(HashMap::new())),
             turn_summary_store: Arc::new(Mutex::new(HashMap::new())),
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
+            pending_find_files_streams: Arc::new(Mutex::new(HashMap::new())),
             feedback,
         }
     }
@@ -571,6 +576,9 @@ impl CodexMessageProcessor {
                 params: _,
             } => {
                 self.get_user_info(request_id).await;
+            }
+            ClientRequest::FindFilesStream { request_id, params } => {
+                self.find_files_stream(request_id, params).await;
             }
             ClientRequest::FuzzyFileSearch { request_id, params } => {
                 self.fuzzy_file_search(request_id, params).await;
@@ -4535,6 +4543,55 @@ impl CodexMessageProcessor {
 
         let response = FuzzyFileSearchResponse { files: results };
         self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn find_files_stream(&mut self, request_id: RequestId, params: FindFilesStreamParams) {
+        let FindFilesStreamParams {
+            query,
+            roots,
+            exclude,
+            cancellation_token,
+        } = params;
+
+        let cancel_flag = match cancellation_token.clone() {
+            Some(token) => {
+                let mut pending_streams = self.pending_find_files_streams.lock().await;
+                if let Some(existing) = pending_streams.get(&token) {
+                    existing.store(true, Ordering::Relaxed);
+                }
+                let flag = Arc::new(AtomicBool::new(false));
+                pending_streams.insert(token.clone(), flag.clone());
+                flag
+            }
+            None => Arc::new(AtomicBool::new(false)),
+        };
+
+        self.outgoing
+            .send_response(request_id.clone(), FindFilesStreamResponse {})
+            .await;
+
+        let outgoing = self.outgoing.clone();
+        let pending_streams = self.pending_find_files_streams.clone();
+        tokio::spawn(async move {
+            run_find_files_stream(
+                request_id.clone(),
+                query,
+                roots,
+                exclude,
+                cancel_flag.clone(),
+                outgoing,
+            )
+            .await;
+
+            if let Some(token) = cancellation_token {
+                let mut pending_streams = pending_streams.lock().await;
+                if let Some(current_flag) = pending_streams.get(&token)
+                    && Arc::ptr_eq(current_flag, &cancel_flag)
+                {
+                    pending_streams.remove(&token);
+                }
+            }
+        });
     }
 
     async fn upload_feedback(&self, request_id: RequestId, params: FeedbackUploadParams) {
