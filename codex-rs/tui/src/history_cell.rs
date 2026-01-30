@@ -47,6 +47,7 @@ use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::web_search::web_search_detail;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::account::PlanType;
+use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::mcp::Resource;
 use codex_protocol::mcp::ResourceTemplate;
 use codex_protocol::models::WebSearchAction;
@@ -168,6 +169,7 @@ pub(crate) struct UserHistoryCell {
     pub text_elements: Vec<TextElement>,
     #[allow(dead_code)]
     pub local_image_paths: Vec<PathBuf>,
+    pub collaboration_mode: Option<CollaborationModeMask>,
 }
 
 /// Build logical lines for a user message with styled text elements.
@@ -1018,11 +1020,13 @@ pub(crate) fn new_user_prompt(
     message: String,
     text_elements: Vec<TextElement>,
     local_image_paths: Vec<PathBuf>,
+    collaboration_mode: Option<CollaborationModeMask>,
 ) -> UserHistoryCell {
     UserHistoryCell {
         message,
         text_elements,
         local_image_paths,
+        collaboration_mode,
     }
 }
 
@@ -3311,6 +3315,7 @@ mod tests {
             message: msg.to_string(),
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
+            collaboration_mode: None,
         };
 
         // Small width to force wrapping more clearly. Effective wrap width is width-2 due to the ▌ prefix and trailing space.
