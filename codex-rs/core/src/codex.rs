@@ -4188,7 +4188,10 @@ fn initial_messages_from_history(initial_history: &InitialHistory) -> Option<Vec
                 }
             }
             RolloutItem::ResponseItem(response_item) => {
-                if matches!(response_item, ResponseItem::FunctionCallOutput { .. }) {
+                if matches!(
+                    response_item,
+                    ResponseItem::FunctionCall { .. } | ResponseItem::FunctionCallOutput { .. }
+                ) {
                     events.push(EventMsg::RawResponseItem(RawResponseItemEvent {
                         item: response_item,
                     }));

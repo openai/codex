@@ -110,6 +110,7 @@ use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::request_user_input::INTERRUPTED_ANSWER_ID_BASE;
 use codex_protocol::request_user_input::INTERRUPTED_ANSWER_TEXT;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
+use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::request_user_input::RequestUserInputResponse;
@@ -1553,27 +1554,51 @@ impl ChatWidget {
     }
 
     fn on_raw_response_item_replay(&mut self, ev: RawResponseItemEvent) {
-        let ResponseItem::FunctionCallOutput { call_id, output } = ev.item else {
-            return;
-        };
-        let Some(questions) = self.request_user_input_questions.remove(&call_id) else {
-            return;
-        };
-        let response: RequestUserInputResponse = match serde_json::from_str(&output.content) {
-            Ok(response) => response,
-            Err(err) => {
-                tracing::warn!(
-                    "failed to parse request_user_input response for call_id {call_id}: {err}"
-                );
-                return;
+        match ev.item {
+            ResponseItem::FunctionCall {
+                name,
+                arguments,
+                call_id,
+                ..
+            } => {
+                if name != "request_user_input" {
+                    return;
+                }
+                let args: RequestUserInputArgs = match serde_json::from_str(&arguments) {
+                    Ok(args) => args,
+                    Err(err) => {
+                        tracing::warn!(
+                            "failed to parse request_user_input arguments for call_id {call_id}: {err}"
+                        );
+                        return;
+                    }
+                };
+                self.request_user_input_questions
+                    .insert(call_id, args.questions);
             }
-        };
-        let (answers, interrupted) = split_request_user_input_answers(response.answers);
-        self.add_to_history(history_cell::new_request_user_input_result(
-            questions,
-            answers,
-            interrupted,
-        ));
+            ResponseItem::FunctionCallOutput { call_id, output } => {
+                let Some(questions) = self.request_user_input_questions.remove(&call_id) else {
+                    return;
+                };
+                let response: RequestUserInputResponse = match serde_json::from_str(&output.content)
+                {
+                    Ok(response) => response,
+                    Err(err) => {
+                        tracing::warn!(
+                            "failed to parse request_user_input response for call_id {call_id}: {err}"
+                        );
+                        return;
+                    }
+                };
+                let (answers, interrupted) = split_request_user_input_answers(response.answers);
+                self.add_to_history(history_cell::new_request_user_input_result(
+                    questions,
+                    answers,
+                    interrupted,
+                ));
+            }
+            _ => {}
+        }
     }
 
     fn on_exec_command_begin(&mut self, ev: ExecCommandBeginEvent) {
