@@ -14,9 +14,6 @@ use std::sync::Mutex;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 
-const MAX_FILE_SEARCH_RESULTS: NonZeroUsize = NonZeroUsize::new(20).unwrap();
-const NUM_FILE_SEARCH_THREADS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
-
 pub(crate) struct FileSearchManager {
     state: Arc<Mutex<SearchState>>,
     search_dir: PathBuf,
