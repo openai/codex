@@ -5623,6 +5623,7 @@ mod tests {
                 None,
                 SessionSource::Exec,
                 base_instructions,
+                Vec::new(),
             ),
             None,
             None,

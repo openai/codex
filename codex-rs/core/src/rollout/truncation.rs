@@ -210,6 +210,7 @@ pub(crate) fn apply_rollbacks_to_rollout(items: &[RolloutItem]) -> Vec<RolloutIt
 mod tests {
     use super::*;
     use crate::codex::make_session_and_context;
+    use crate::protocol::CompactedItem;
     use assert_matches::assert_matches;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ReasoningItemReasoningSummary;
@@ -232,6 +233,17 @@ mod tests {
             id: None,
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
+                text: text.to_string(),
+            }],
+            end_turn: None,
+        }
+    }
+
+    fn user_input_msg(text: &str) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
                 text: text.to_string(),
             }],
             end_turn: None,
@@ -324,6 +336,55 @@ mod tests {
             serde_json::to_value(&truncated).unwrap(),
             serde_json::to_value(&expected).unwrap()
         );
+    }
+
+    #[test]
+    fn effective_user_turns_use_replacement_history_for_compaction() {
+        let rollout_items = vec![
+            RolloutItem::ResponseItem(user_input_msg("u1")),
+            RolloutItem::ResponseItem(assistant_msg("a1")),
+            RolloutItem::Compacted(CompactedItem {
+                message: "ignored summary".to_string(),
+                replacement_history: Some(vec![
+                    user_input_msg("r1"),
+                    assistant_msg("ra1"),
+                    user_input_msg("r2"),
+                ]),
+            }),
+            RolloutItem::ResponseItem(user_input_msg("u2")),
+        ];
+
+        let turns = effective_user_turns(&rollout_items);
+        let texts: Vec<String> = turns.iter().map(|turn| turn.text.clone()).collect();
+        assert_eq!(
+            texts,
+            vec!["r1".to_string(), "r2".to_string(), "u2".to_string()]
+        );
+
+        let indices: Vec<usize> = turns.iter().map(|turn| turn.source_index).collect();
+        assert_eq!(indices, vec![2, 2, 3]);
+    }
+
+    #[test]
+    fn effective_user_turns_use_placeholder_when_summary_empty() {
+        let rollout_items = vec![
+            RolloutItem::ResponseItem(user_input_msg("u1")),
+            RolloutItem::ResponseItem(assistant_msg("a1")),
+            RolloutItem::Compacted(CompactedItem {
+                message: String::new(),
+                replacement_history: None,
+            }),
+        ];
+
+        let turns = effective_user_turns(&rollout_items);
+        let texts: Vec<String> = turns.iter().map(|turn| turn.text.clone()).collect();
+        assert_eq!(
+            texts,
+            vec!["u1".to_string(), "(no summary available)".to_string()]
+        );
+
+        let indices: Vec<usize> = turns.iter().map(|turn| turn.source_index).collect();
+        assert_eq!(indices, vec![0, 2]);
     }
 
     #[tokio::test]
