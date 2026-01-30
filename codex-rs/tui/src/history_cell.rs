@@ -735,7 +735,7 @@ pub fn new_approval_decision_cell(
                     "approved".bold(),
                     " codex to run ".into(),
                     snippet,
-                    " and applied the execpolicy amendment".bold(),
+                    " and updated the rules file".bold(),
                 ],
             )
         }
