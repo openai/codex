@@ -1812,22 +1812,21 @@ impl HistoryCell for RequestUserInputResultCell {
                 Some(answer) => answer.answers.is_empty(),
                 None => true,
             };
-            let mut question_text = question.question.clone();
-            if answer_missing {
-                question_text.push_str(" (unanswered)");
-            }
-            let question_style = if answer_missing {
-                Style::default().add_modifier(Modifier::DIM)
-            } else {
-                Style::default()
-            };
-            lines.extend(wrap_with_prefix(
-                &question_text,
+            let mut question_lines = wrap_with_prefix(
+                &question.question,
                 width,
                 "  • ".into(),
                 "    ".into(),
-                question_style,
-            ));
+                Style::default(),
+            );
+            if answer_missing {
+                if let Some(last) = question_lines.last_mut() {
+                    let spans = last.spans.to_vec();
+                    last.spans = spans;
+                    last.spans.push(" (unanswered)".dim());
+                }
+            }
+            lines.extend(question_lines);
 
             let Some(answer) = answer.filter(|answer| !answer.answers.is_empty()) else {
                 continue;
