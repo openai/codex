@@ -178,6 +178,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
                     Personality::Pragmatic,
                     PERSONALITY_PRAGMATIC.to_string(),
                 )]))),
+                collaboration_modes_messages: None,
             }),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             shell_type: ConfigShellToolType::ShellCommand,
@@ -222,6 +223,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
                     Personality::Pragmatic,
                     PERSONALITY_PRAGMATIC.to_string(),
                 )]))),
+                collaboration_modes_messages: None,
             }),
         )
     } else if slug.starts_with("gpt-5.1-codex-max") {

@@ -296,6 +296,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
                 Personality::Friendly,
                 remote_personality_message.to_string(),
             )]))),
+            collaboration_modes_messages: None,
         }),
         supports_reasoning_summaries: false,
         support_verbosity: false,
