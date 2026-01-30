@@ -6257,7 +6257,6 @@ pub fn build_status_line_payload(chat: &ChatWidget, config: &Config) -> serde_js
     );
     payload.insert("cwd".to_string(), cwd.to_string_lossy().to_string().into());
 
-    // TODO: set once and cache
     let project_dir = codex_core::git_info::resolve_root_git_project_for_trust(&cwd)
         .unwrap_or_else(|| cwd.clone());
 
@@ -6268,7 +6267,6 @@ pub fn build_status_line_payload(chat: &ChatWidget, config: &Config) -> serde_js
 
     payload.insert("workspace".to_string(), workspace);
 
-    // TODO: set once and cache
     let model = serde_json::json!({
         "id": chat.current_model(),
         "display_name": chat.models_manager.try_list_models(&chat.config).ok()
@@ -6315,7 +6313,7 @@ pub fn build_status_line_payload(chat: &ChatWidget, config: &Config) -> serde_js
     });
     payload.insert("context_window".to_string(), context_window);
 
-    tracing::info!("status line payload: {:#?}", payload);
+    tracing::debug!("status line payload: {:#?}", payload);
     serde_json::Value::Object(payload)
 }
 
