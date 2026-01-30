@@ -283,6 +283,7 @@ fn build_mcp_tool_approval_question(
         header: "Approve app tool call?".to_string(),
         question,
         is_other: false,
+        is_secret: false,
         options: Some(vec![
             RequestUserInputQuestionOption {
                 label: MCP_TOOL_APPROVAL_ACCEPT.to_string(),
