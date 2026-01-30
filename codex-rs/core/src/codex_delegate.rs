@@ -368,9 +368,10 @@ async fn handle_request_user_input(
     event: RequestUserInputEvent,
     cancel_token: &CancellationToken,
 ) {
-    let args = RequestUserInputArgs {
-        questions: event.questions,
-    };
+    let RequestUserInputEvent {
+        call_id, questions, ..
+    } = event;
+    let args = RequestUserInputArgs { questions };
     let response_fut =
         parent_session.request_user_input(parent_ctx, parent_ctx.sub_id.clone(), args);
     let response = await_user_input_with_cancel(
@@ -380,7 +381,13 @@ async fn handle_request_user_input(
         cancel_token,
     )
     .await;
-    let _ = codex.submit(Op::UserInputAnswer { id, response }).await;
+    let _ = codex
+        .submit(Op::UserInputAnswer {
+            id,
+            call_id: Some(call_id),
+            response,
+        })
+        .await;
 }
 
 async fn await_user_input_with_cancel<F>(

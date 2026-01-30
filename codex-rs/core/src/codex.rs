@@ -1689,6 +1689,7 @@ impl Session {
     pub async fn notify_user_input_response(
         &self,
         sub_id: &str,
+        call_id: Option<String>,
         response: RequestUserInputResponse,
     ) {
         let entry = {
@@ -1713,17 +1714,18 @@ impl Session {
                 // Record a function_call_output so history/rollout includes the tool
                 // response in the correct order before the next user message, without
                 // starting a new model request immediately.
+                let call_id = call_id.unwrap_or_else(|| sub_id.to_string());
                 let content = match serde_json::to_string(&response) {
                     Ok(content) => content,
                     Err(err) => {
                         warn!(
-                            "failed to serialize request_user_input response for call_id: {sub_id}: {err}"
+                            "failed to serialize request_user_input response for call_id: {call_id}: {err}"
                         );
                         return;
                     }
                 };
                 let response_item = ResponseItem::FunctionCallOutput {
-                    call_id: sub_id.to_string(),
+                    call_id,
                     output: FunctionCallOutputPayload {
                         content,
                         success: Some(true),
@@ -2509,8 +2511,12 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::PatchApproval { id, decision } => {
                 handlers::patch_approval(&sess, id, decision).await;
             }
-            Op::UserInputAnswer { id, response } => {
-                handlers::request_user_input_response(&sess, id, response).await;
+            Op::UserInputAnswer {
+                id,
+                call_id,
+                response,
+            } => {
+                handlers::request_user_input_response(&sess, id, call_id, response).await;
             }
             Op::DynamicToolResponse { id, response } => {
                 handlers::dynamic_tool_response(&sess, id, response).await;
@@ -2822,9 +2828,11 @@ mod handlers {
     pub async fn request_user_input_response(
         sess: &Arc<Session>,
         id: String,
+        call_id: Option<String>,
         response: RequestUserInputResponse,
     ) {
-        sess.notify_user_input_response(&id, response).await;
+        sess.notify_user_input_response(&id, call_id, response)
+            .await;
     }
 
     pub async fn dynamic_tool_response(

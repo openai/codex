@@ -3324,8 +3324,10 @@ impl ChatWidget {
     fn flush_pending_request_user_input_answers(&mut self) {
         let pending = std::mem::take(&mut self.pending_request_user_input_answers);
         for pending in pending {
+            let call_id = pending.call_id;
             self.submit_op(Op::UserInputAnswer {
-                id: pending.call_id,
+                id: call_id.clone(),
+                call_id: Some(call_id),
                 response: RequestUserInputResponse {
                     answers: pending.answers,
                 },

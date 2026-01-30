@@ -300,11 +300,12 @@ pub(crate) async fn apply_bespoke_event_handling(
                     item_id: request.call_id,
                     questions,
                 };
+                let call_id = request.call_id;
                 let rx = outgoing
                     .send_request(ServerRequestPayload::ToolRequestUserInput(params))
                     .await;
                 tokio::spawn(async move {
-                    on_request_user_input_response(event_turn_id, rx, conversation).await;
+                    on_request_user_input_response(event_turn_id, call_id, rx, conversation).await;
                 });
             } else {
                 error!(
@@ -317,6 +318,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 if let Err(err) = conversation
                     .submit(Op::UserInputAnswer {
                         id: event_turn_id,
+                        call_id: Some(request.call_id),
                         response: empty,
                     })
                     .await
@@ -1483,6 +1485,7 @@ async fn on_exec_approval_response(
 
 async fn on_request_user_input_response(
     event_turn_id: String,
+    call_id: String,
     receiver: oneshot::Receiver<JsonValue>,
     conversation: Arc<CodexThread>,
 ) {
@@ -1497,6 +1500,7 @@ async fn on_request_user_input_response(
             if let Err(err) = conversation
                 .submit(Op::UserInputAnswer {
                     id: event_turn_id,
+                    call_id: Some(call_id.clone()),
                     response: empty,
                 })
                 .await
@@ -1532,6 +1536,7 @@ async fn on_request_user_input_response(
     if let Err(err) = conversation
         .submit(Op::UserInputAnswer {
             id: event_turn_id,
+            call_id: Some(call_id),
             response,
         })
         .await
