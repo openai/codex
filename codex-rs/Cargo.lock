@@ -1084,6 +1084,7 @@ dependencies = [
  "axum",
  "base64",
  "chrono",
+ "clap",
  "codex-app-server-protocol",
  "codex-arg0",
  "codex-backend-client",
@@ -1298,7 +1299,6 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "base64",
- "codex-app-server-protocol",
  "codex-backend-client",
  "codex-core",
  "codex-otel",
