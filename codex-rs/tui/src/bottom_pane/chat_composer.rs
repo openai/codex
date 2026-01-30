@@ -762,7 +762,7 @@ impl ChatComposer {
         self.sync_popups();
     }
 
-/// Update the placeholder text without changing input enablement.
+    /// Update the placeholder text without changing input enablement.
     pub(crate) fn set_placeholder_text(&mut self, placeholder: String) {
         self.placeholder_text = placeholder;
     }
@@ -1811,7 +1811,7 @@ impl ChatComposer {
         self.textarea.set_cursor(new_cursor);
     }
 
-fn record_mention_path(&mut self, insert_text: &str, path: &str) {
+    fn record_mention_path(&mut self, insert_text: &str, path: &str) {
         let Some(name) = Self::mention_name_from_insert_text(insert_text) else {
             return;
         };
@@ -1863,7 +1863,7 @@ fn record_mention_path(&mut self, insert_text: &str, path: &str) {
             text = text.trim().to_string();
             text_elements = Self::trim_text_elements(&expanded_input, &text, text_elements);
 
-if self.slash_commands_enabled()
+            if self.slash_commands_enabled()
                 && let Some((name, _rest, _rest_offset)) = parse_slash_name(&text)
             {
                 let treat_as_plain_text = input_starts_with_space || name.contains('/');
@@ -1934,7 +1934,7 @@ if self.slash_commands_enabled()
         if text.is_empty() && self.attached_images.is_empty() {
             return None;
         }
-if matches!(mode, PrepareMode::ForSubmit)
+        if matches!(mode, PrepareMode::ForSubmit)
             && (!text.is_empty() || !self.attached_images.is_empty())
         {
             let local_image_paths = self
