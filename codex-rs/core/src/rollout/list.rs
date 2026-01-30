@@ -6,8 +6,6 @@ use std::num::NonZero;
 use std::ops::ControlFlow;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use time::OffsetDateTime;
 use time::PrimitiveDateTime;
 use time::format_description::FormatItem;
@@ -1075,30 +1073,17 @@ async fn find_thread_path_by_id_str_in_subdir(
     // This is safe because we know the values are valid.
     #[allow(clippy::unwrap_used)]
     let limit = NonZero::new(1).unwrap();
-    // This is safe because we know the values are valid.
-    #[allow(clippy::unwrap_used)]
-    let threads = NonZero::new(2).unwrap();
-    let cancel = Arc::new(AtomicBool::new(false));
-    let exclude: Vec<String> = Vec::new();
-    let compute_indices = false;
-
-    let results = file_search::run(
-        id_str,
+    let options = file_search::FileSearchOptions {
         limit,
-        &root,
-        exclude,
-        threads,
-        cancel,
-        compute_indices,
-        false,
-    )
-    .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
+        compute_indices: false,
+        respect_gitignore: false,
+        ..Default::default()
+    };
 
-    let found = results
-        .matches
-        .into_iter()
-        .next()
-        .map(|m| root.join(m.path));
+    let results = file_search::run(id_str, vec![root], options, None)
+        .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
+
+    let found = results.matches.into_iter().next().map(|m| m.full_path());
 
     // Checking if DB is at parity.
     // TODO(jif): sqlite migration phase 1
