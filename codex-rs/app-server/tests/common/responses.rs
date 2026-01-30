@@ -67,7 +67,6 @@ pub fn create_request_user_input_sse_response(call_id: &str) -> anyhow::Result<S
             "id": "confirm_path",
             "header": "Confirm",
             "question": "Proceed with the plan?",
-            "isOther": false,
             "options": [{
                 "label": "Yes (Recommended)",
                 "description": "Continue the current plan."

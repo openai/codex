@@ -115,6 +115,8 @@ pub enum Feature {
     Apps,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,
+    /// Prompt for missing skill env var dependencies.
+    SkillEnvVarDependencyPrompt,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     Steer,
     /// Enable collaboration modes (Plan, Code, Pair Programming, Execute).
@@ -462,7 +464,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RequestRule,
         key: "request_rule",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Smart approvals",
+            menu_description: "Get smarter \"Don't ask again\" rule requests.",
+            announcement: "NEW: Try Smart approvals to get smarter \"Don't ask again\" requests. Enable in /experimental!",
+        },
         default_enabled: false,
     },
     FeatureSpec {
@@ -534,6 +540,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::SkillEnvVarDependencyPrompt,
+        key: "skill_env_var_dependency_prompt",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::Steer,
         key: "steer",
         stage: Stage::Experimental {
@@ -552,7 +564,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Personality,
         key: "personality",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Personality",
+            menu_description: "Choose a communication style for Codex.",
+            announcement: "NEW: Pick a personality for Codex. Enable in /experimental!",
+        },
         default_enabled: false,
     },
     FeatureSpec {

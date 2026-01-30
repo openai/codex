@@ -47,6 +47,7 @@ ts-rs = { workspace = true, features = [
     "serde-json-impl",
     "no-serde-warnings",
 ] }
+uuid = { workspace = true }
 
 
 [dev-dependencies]

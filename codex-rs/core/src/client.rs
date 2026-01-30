@@ -27,7 +27,6 @@ use codex_api::common::ResponsesWsRequest;
 use codex_api::create_text_param_for_request;
 use codex_api::error::ApiError;
 use codex_api::requests::responses::Compression;
-use codex_app_server_protocol::AuthMode;
 use codex_otel::OtelManager;
 
 use codex_protocol::ThreadId;
@@ -50,6 +49,7 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 use crate::AuthManager;
+use crate::auth::CodexAuth;
 use crate::auth::RefreshTokenError;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
@@ -220,7 +220,7 @@ impl ModelClient {
         let api_provider = self
             .state
             .provider
-            .to_api_provider(auth.as_ref().map(|a| a.mode))?;
+            .to_api_provider(auth.as_ref().map(CodexAuth::internal_auth_mode))?;
         let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
         let transport = ReqwestTransport::new(build_reqwest_client());
         let request_telemetry = self.build_request_telemetry();
@@ -260,12 +260,18 @@ impl ModelClientSession {
     /// For Chat providers, the underlying stream is optionally aggregated
     /// based on the `show_raw_agent_reasoning` flag in the config.
     pub async fn stream(&mut self, prompt: &Prompt) -> Result<ResponseStream> {
-        let wire_api = self
-            .transport_manager
-            .effective_wire_api(self.state.provider.wire_api);
+        let wire_api = self.state.provider.wire_api;
         match wire_api {
-            WireApi::Responses => self.stream_responses_api(prompt).await,
-            WireApi::ResponsesWebsocket => self.stream_responses_websocket(prompt).await,
+            WireApi::Responses => {
+                let websocket_enabled = self.responses_websocket_enabled()
+                    && !self.transport_manager.disable_websockets();
+
+                if websocket_enabled {
+                    self.stream_responses_websocket(prompt).await
+                } else {
+                    self.stream_responses_api(prompt).await
+                }
+            }
             WireApi::Chat => {
                 let api_stream = self.stream_chat_completions(prompt).await?;
 
@@ -285,9 +291,10 @@ impl ModelClientSession {
     }
 
     pub(crate) fn try_switch_fallback_transport(&mut self) -> bool {
+        let websocket_enabled = self.responses_websocket_enabled();
         let activated = self
             .transport_manager
-            .activate_http_fallback(self.state.provider.wire_api);
+            .activate_http_fallback(websocket_enabled);
         if activated {
             warn!("falling back to HTTP");
             self.state.otel_manager.counter(
@@ -300,6 +307,15 @@ impl ModelClientSession {
             self.websocket_last_items.clear();
         }
         activated
+    }
+
+    fn responses_websocket_enabled(&self) -> bool {
+        self.state.provider.supports_websockets
+            && self
+                .state
+                .config
+                .features
+                .enabled(Feature::ResponsesWebsockets)
     }
 
     fn build_responses_request(&self, prompt: &Prompt) -> Result<ApiPrompt> {
@@ -453,7 +469,7 @@ impl ModelClientSession {
             .config
             .features
             .enabled(Feature::EnableRequestCompression)
-            && auth.is_some_and(|auth| auth.mode == AuthMode::ChatGPT)
+            && auth.is_some_and(CodexAuth::is_chatgpt_auth)
             && self.state.provider.is_openai()
         {
             Compression::Zstd
@@ -491,7 +507,7 @@ impl ModelClientSession {
             let api_provider = self
                 .state
                 .provider
-                .to_api_provider(auth.as_ref().map(|a| a.mode))?;
+                .to_api_provider(auth.as_ref().map(CodexAuth::internal_auth_mode))?;
             let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
             let transport = ReqwestTransport::new(build_reqwest_client());
             let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
@@ -547,7 +563,7 @@ impl ModelClientSession {
             let api_provider = self
                 .state
                 .provider
-                .to_api_provider(auth.as_ref().map(|a| a.mode))?;
+                .to_api_provider(auth.as_ref().map(CodexAuth::internal_auth_mode))?;
             let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
             let transport = ReqwestTransport::new(build_reqwest_client());
             let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
@@ -593,7 +609,7 @@ impl ModelClientSession {
             let api_provider = self
                 .state
                 .provider
-                .to_api_provider(auth.as_ref().map(|a| a.mode))?;
+                .to_api_provider(auth.as_ref().map(CodexAuth::internal_auth_mode))?;
             let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
             let compression = self.responses_request_compression(auth.as_ref());
 

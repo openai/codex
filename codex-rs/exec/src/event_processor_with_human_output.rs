@@ -750,7 +750,8 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 );
             }
             EventMsg::ShutdownComplete => return CodexStatus::Shutdown,
-            EventMsg::ExecApprovalRequest(_)
+            EventMsg::ThreadNameUpdated(_)
+            | EventMsg::ExecApprovalRequest(_)
             | EventMsg::ApplyPatchApprovalRequest(_)
             | EventMsg::TerminalInteraction(_)
             | EventMsg::ExecCommandOutputDelta(_)
