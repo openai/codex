@@ -152,6 +152,7 @@ async fn responses_stream_includes_turn_metadata_header_when_set() {
         stream_max_retries: Some(0),
         stream_idle_timeout_ms: Some(5_000),
         requires_openai_auth: false,
+        supports_websockets: false,
     };
 
     let codex_home = TempDir::new().expect("failed to create TempDir");
@@ -192,6 +193,7 @@ async fn responses_stream_includes_turn_metadata_header_when_set() {
         summary,
         conversation_id,
         session_source,
+        TransportManager::new(),
     )
     .new_session_with_turn_metadata(Some(turn_metadata.clone()));
 
