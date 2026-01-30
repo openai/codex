@@ -112,7 +112,7 @@ Example:
 plan content
 </proposed_plan>
 
-plan content human and agent digestable. The final plan must be plan-only and include:
+plan content should be human and agent digestible. The final plan must be plan-only and include:
 
 * A clear title
 * tldr section. don't necessary call it tldr.
