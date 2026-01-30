@@ -30,6 +30,7 @@ use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
 use crate::terminal;
+use crate::transport_manager::TransportManager;
 use crate::truncate::TruncationPolicy;
 use crate::user_notification::UserNotifier;
 use crate::util::error_or_panic;
@@ -84,6 +85,7 @@ use tracing::debug;
 use tracing::error;
 use tracing::field;
 use tracing::info;
+use tracing::info_span;
 use tracing::instrument;
 use tracing::trace_span;
 use tracing::warn;
@@ -166,10 +168,12 @@ use crate::skills::SkillInjections;
 use crate::skills::SkillMetadata;
 use crate::skills::SkillsManager;
 use crate::skills::build_skill_injections;
+use crate::skills::collect_env_var_dependencies;
 use crate::skills::collect_explicit_skill_mentions;
 use crate::skills::injection::ToolMentionKind;
 use crate::skills::injection::app_id_from_path;
 use crate::skills::injection::tool_kind_for_path;
+use crate::skills::resolve_skill_dependencies_for_turn;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
 use crate::state::SessionState;
@@ -320,6 +324,12 @@ impl Codex {
             .clone()
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
             .unwrap_or_else(|| model_info.get_model_instructions(config.model_personality));
+        // Respect explicit thread-start tools; fall back to persisted tools when resuming a thread.
+        let dynamic_tools = if dynamic_tools.is_empty() {
+            conversation_history.get_dynamic_tools().unwrap_or_default()
+        } else {
+            dynamic_tools
+        };
 
         // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.collaboration_mode
         // to avoid extracting these fields separately and constructing CollaborationMode here.
@@ -353,6 +363,7 @@ impl Codex {
         let session_source_clone = session_configuration.session_source.clone();
         let (agent_status_tx, agent_status_rx) = watch::channel(AgentStatus::PendingInit);
 
+        let session_init_span = info_span!("session_init");
         let session = Session::new(
             session_configuration,
             config.clone(),
@@ -366,6 +377,7 @@ impl Codex {
             skills_manager,
             agent_control,
         )
+        .instrument(session_init_span)
         .await
         .map_err(|e| {
             error!("Failed to create session: {e:#}");
@@ -374,7 +386,10 @@ impl Codex {
         let thread_id = session.conversation_id;
 
         // This task will run until Op::Shutdown is received.
-        tokio::spawn(submission_loop(Arc::clone(&session), config, rx_sub));
+        let session_loop_span = info_span!("session_loop", thread_id = %thread_id);
+        tokio::spawn(
+            submission_loop(Arc::clone(&session), config, rx_sub).instrument(session_loop_span),
+        );
         let codex = Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
@@ -618,6 +633,7 @@ impl Session {
         model_info: ModelInfo,
         conversation_id: ThreadId,
         sub_id: String,
+        transport_manager: TransportManager,
     ) -> TurnContext {
         let otel_manager = otel_manager.clone().with_model(
             session_configuration.collaboration_mode.model(),
@@ -634,6 +650,7 @@ impl Session {
             session_configuration.model_reasoning_summary,
             conversation_id,
             session_configuration.session_source.clone(),
+            transport_manager,
         );
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -704,6 +721,7 @@ impl Session {
                         BaseInstructions {
                             text: session_configuration.base_instructions.clone(),
                         },
+                        session_configuration.dynamic_tools.clone(),
                     ),
                 )
             }
@@ -863,6 +881,7 @@ impl Session {
             skills_manager,
             agent_control,
             state_db: state_db_ctx.clone(),
+            transport_manager: TransportManager::new(),
         };
 
         let sess = Arc::new(Session {
@@ -1182,6 +1201,7 @@ impl Session {
             model_info,
             self.conversation_id,
             sub_id,
+            self.services.transport_manager.clone(),
         );
         if let Some(final_schema) = final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
@@ -1940,6 +1960,16 @@ impl Session {
     {
         let mut state = self.state.lock().await;
         state.record_mcp_dependency_prompted(names);
+    }
+
+    pub async fn dependency_env(&self) -> HashMap<String, String> {
+        let state = self.state.lock().await;
+        state.dependency_env()
+    }
+
+    pub async fn set_dependency_env(&self, values: HashMap<String, String>) {
+        let mut state = self.state.lock().await;
+        state.set_dependency_env(values);
     }
 
     pub(crate) async fn set_server_reasoning_included(&self, included: bool) {
@@ -3036,6 +3066,7 @@ async fn spawn_review_thread(
         per_turn_config.model_reasoning_summary,
         sess.conversation_id,
         parent_turn_context.client.get_session_source(),
+        parent_turn_context.client.transport_manager(),
     );
 
     let review_turn_context = TurnContext {
@@ -3205,6 +3236,15 @@ pub(crate) async fn run_turn(
         )
     });
     let explicit_app_paths = collect_explicit_app_paths(&input);
+
+    let config = turn_context.client.config();
+    if config
+        .features
+        .enabled(Feature::SkillEnvVarDependencyPrompt)
+    {
+        let env_var_dependencies = collect_env_var_dependencies(&mentioned_skills);
+        resolve_skill_dependencies_for_turn(&sess, &turn_context, &env_var_dependencies).await;
+    }
 
     maybe_prompt_and_install_mcp_dependencies(
         sess.as_ref(),
@@ -3531,7 +3571,9 @@ async fn run_sampling_request(
         )
         .await
         {
-            Ok(output) => return Ok(output),
+            Ok(output) => {
+                return Ok(output);
+            }
             Err(CodexErr::ContextWindowExceeded) => {
                 sess.set_total_tokens_full(&turn_context).await;
                 return Err(CodexErr::ContextWindowExceeded);
@@ -3552,6 +3594,17 @@ async fn run_sampling_request(
 
         // Use the configured provider-specific stream retry budget.
         let max_retries = turn_context.client.get_provider().stream_max_retries();
+        if retries >= max_retries && client_session.try_switch_fallback_transport() {
+            sess.send_event(
+                &turn_context,
+                EventMsg::Warning(WarningEvent {
+                    message: format!("Falling back from WebSockets to HTTPS transport. {err:#}"),
+                }),
+            )
+            .await;
+            retries = 0;
+            continue;
+        }
         if retries < max_retries {
             retries += 1;
             let delay = match &err {
@@ -4747,6 +4800,7 @@ mod tests {
             skills_manager,
             agent_control,
             state_db: None,
+            transport_manager: TransportManager::new(),
         };
 
         let turn_context = Session::make_turn_context(
@@ -4758,6 +4812,7 @@ mod tests {
             model_info,
             conversation_id,
             "turn_id".to_string(),
+            services.transport_manager.clone(),
         );
 
         let session = Session {
@@ -4859,6 +4914,7 @@ mod tests {
             skills_manager,
             agent_control,
             state_db: None,
+            transport_manager: TransportManager::new(),
         };
 
         let turn_context = Arc::new(Session::make_turn_context(
@@ -4870,6 +4926,7 @@ mod tests {
             model_info,
             conversation_id,
             "turn_id".to_string(),
+            services.transport_manager.clone(),
         ));
 
         let session = Arc::new(Session {

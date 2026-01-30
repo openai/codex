@@ -79,6 +79,7 @@ async fn should_install_mcp_dependencies(
             "The following MCP servers are required by the selected skills but are not installed yet: {server_list}. Install them now?"
         ),
         is_other: false,
+        is_secret: false,
         options: Some(vec![
             RequestUserInputQuestionOption {
                 label: MCP_DEPENDENCY_OPTION_INSTALL.to_string(),
