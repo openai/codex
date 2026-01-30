@@ -64,6 +64,7 @@ pub(crate) enum PlanType {
 #[serde(rename_all = "lowercase")]
 pub(crate) enum KnownPlan {
     Free,
+    Go,
     Plus,
     Pro,
     Team,
@@ -193,6 +194,38 @@ mod tests {
         let info = parse_id_token(&fake_jwt).expect("should parse");
         assert_eq!(info.email.as_deref(), Some("user@example.com"));
         assert_eq!(info.get_chatgpt_plan_type().as_deref(), Some("Pro"));
+    }
+
+    #[test]
+    fn id_token_info_parses_go_plan() {
+        #[derive(Serialize)]
+        struct Header {
+            alg: &'static str,
+            typ: &'static str,
+        }
+        let header = Header {
+            alg: "none",
+            typ: "JWT",
+        };
+        let payload = serde_json::json!({
+            "email": "user@example.com",
+            "https://api.openai.com/auth": {
+                "chatgpt_plan_type": "go"
+            }
+        });
+
+        fn b64url_no_pad(bytes: &[u8]) -> String {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+        }
+
+        let header_b64 = b64url_no_pad(&serde_json::to_vec(&header).unwrap());
+        let payload_b64 = b64url_no_pad(&serde_json::to_vec(&payload).unwrap());
+        let signature_b64 = b64url_no_pad(b"sig");
+        let fake_jwt = format!("{header_b64}.{payload_b64}.{signature_b64}");
+
+        let info = parse_id_token(&fake_jwt).expect("should parse");
+        assert_eq!(info.email.as_deref(), Some("user@example.com"));
+        assert_eq!(info.get_chatgpt_plan_type().as_deref(), Some("Go"));
     }
 
     #[test]

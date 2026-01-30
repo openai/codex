@@ -6,5 +6,6 @@ expression: rendered
 
 Background terminals
 
-  • rg "foo" src --glob '**/*. [...]
-    ↳ searching...
+  • just fix
+    ↳   indented first
+          more indented

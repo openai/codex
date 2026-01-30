@@ -93,6 +93,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
                     source: SessionSource::default(),
                     model_provider: None,
                     base_instructions: None,
+                    dynamic_tools: None,
                 },
                 git: None,
             };

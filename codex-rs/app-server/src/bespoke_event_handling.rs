@@ -52,6 +52,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::TerminalInteractionNotification;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadNameUpdatedNotification;
 use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
@@ -1095,6 +1096,17 @@ pub(crate) async fn apply_bespoke_event_handling(
                 };
 
                 outgoing.send_response(request_id, response).await;
+            }
+        }
+        EventMsg::ThreadNameUpdated(thread_name_event) => {
+            if let ApiVersion::V2 = api_version {
+                let notification = ThreadNameUpdatedNotification {
+                    thread_id: thread_name_event.thread_id.to_string(),
+                    thread_name: thread_name_event.thread_name,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::ThreadNameUpdated(notification))
+                    .await;
             }
         }
         EventMsg::TurnDiff(turn_diff_event) => {

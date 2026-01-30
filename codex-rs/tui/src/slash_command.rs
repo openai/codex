@@ -20,11 +20,13 @@ pub enum SlashCommand {
     Experimental,
     Skills,
     Review,
+    Rename,
     New,
     Resume,
     Fork,
     Init,
     Compact,
+    Plan,
     Collab,
     Agent,
     // Undo,
@@ -52,6 +54,7 @@ impl SlashCommand {
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
             SlashCommand::Review => "review my current changes and find issues",
+            SlashCommand::Rename => "rename the current thread",
             SlashCommand::Resume => "resume a saved chat",
             SlashCommand::Fork => "fork the current chat",
             // SlashCommand::Undo => "ask Codex to undo a turn",
@@ -63,6 +66,7 @@ impl SlashCommand {
             SlashCommand::Ps => "list background terminals",
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Personality => "choose a communication style for Codex",
+            SlashCommand::Plan => "switch to Plan mode",
             SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Agent => "switch the active agent thread",
             SlashCommand::Approvals => "choose what Codex can do without approval",
@@ -101,6 +105,7 @@ impl SlashCommand {
             | SlashCommand::Review
             | SlashCommand::Logout => false,
             SlashCommand::Diff
+            | SlashCommand::Rename
             | SlashCommand::Mention
             | SlashCommand::Skills
             | SlashCommand::Status
@@ -112,6 +117,7 @@ impl SlashCommand {
             | SlashCommand::Exit => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
+            SlashCommand::Plan => true,
             SlashCommand::Collab => true,
             SlashCommand::Agent => true,
         }

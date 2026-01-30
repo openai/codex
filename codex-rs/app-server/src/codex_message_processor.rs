@@ -110,6 +110,8 @@ use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackParams;
+use codex_app_server_protocol::ThreadSetNameParams;
+use codex_app_server_protocol::ThreadSetNameResponse;
 use codex_app_server_protocol::ThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
 use codex_app_server_protocol::ThreadStartParams;
@@ -131,6 +133,7 @@ use codex_app_server_protocol::build_turns_from_event_msgs;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
 use codex_core::AuthManager;
+use codex_core::CodexAuth;
 use codex_core::CodexThread;
 use codex_core::Cursor as RolloutCursor;
 use codex_core::InitialHistory;
@@ -416,6 +419,9 @@ impl CodexMessageProcessor {
             ClientRequest::ThreadArchive { request_id, params } => {
                 self.thread_archive(request_id, params).await;
             }
+            ClientRequest::ThreadSetName { request_id, params } => {
+                self.thread_set_name(request_id, params).await;
+            }
             ClientRequest::ThreadUnarchive { request_id, params } => {
                 self.thread_unarchive(request_id, params).await;
             }
@@ -681,7 +687,11 @@ impl CodexMessageProcessor {
                     .await;
 
                 let payload = AuthStatusChangeNotification {
-                    auth_method: self.auth_manager.auth_cached().map(|auth| auth.mode),
+                    auth_method: self
+                        .auth_manager
+                        .auth_cached()
+                        .as_ref()
+                        .map(CodexAuth::api_auth_mode),
                 };
                 self.outgoing
                     .send_server_notification(ServerNotification::AuthStatusChange(payload))
@@ -711,7 +721,11 @@ impl CodexMessageProcessor {
                     .await;
 
                 let payload_v2 = AccountUpdatedNotification {
-                    auth_mode: self.auth_manager.auth_cached().map(|auth| auth.mode),
+                    auth_mode: self
+                        .auth_manager
+                        .auth_cached()
+                        .as_ref()
+                        .map(CodexAuth::api_auth_mode),
                 };
                 self.outgoing
                     .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
@@ -807,7 +821,10 @@ impl CodexMessageProcessor {
                             auth_manager.reload();
 
                             // Notify clients with the actual current auth mode.
-                            let current_auth_method = auth_manager.auth_cached().map(|a| a.mode);
+                            let current_auth_method = auth_manager
+                                .auth_cached()
+                                .as_ref()
+                                .map(CodexAuth::api_auth_mode);
                             let payload = AuthStatusChangeNotification {
                                 auth_method: current_auth_method,
                             };
@@ -897,7 +914,10 @@ impl CodexMessageProcessor {
                             auth_manager.reload();
 
                             // Notify clients with the actual current auth mode.
-                            let current_auth_method = auth_manager.auth_cached().map(|a| a.mode);
+                            let current_auth_method = auth_manager
+                                .auth_cached()
+                                .as_ref()
+                                .map(CodexAuth::api_auth_mode);
                             let payload_v2 = AccountUpdatedNotification {
                                 auth_mode: current_auth_method,
                             };
@@ -1101,7 +1121,11 @@ impl CodexMessageProcessor {
         }
 
         // Reflect the current auth method after logout (likely None).
-        Ok(self.auth_manager.auth_cached().map(|auth| auth.mode))
+        Ok(self
+            .auth_manager
+            .auth_cached()
+            .as_ref()
+            .map(CodexAuth::api_auth_mode))
     }
 
     async fn logout_v1(&mut self, request_id: RequestId) {
@@ -1173,7 +1197,7 @@ impl CodexMessageProcessor {
         } else {
             match self.auth_manager.auth().await {
                 Some(auth) => {
-                    let auth_mode = auth.mode;
+                    let auth_mode = auth.api_auth_mode();
                     let (reported_auth_method, token_opt) = match auth.get_token() {
                         Ok(token) if !token.is_empty() => {
                             let tok = if include_token { Some(token) } else { None };
@@ -1220,9 +1244,9 @@ impl CodexMessageProcessor {
         }
 
         let account = match self.auth_manager.auth_cached() {
-            Some(auth) => Some(match auth.mode {
-                AuthMode::ApiKey => Account::ApiKey {},
-                AuthMode::ChatGPT | AuthMode::ChatgptAuthTokens => {
+            Some(auth) => Some(match auth {
+                CodexAuth::ApiKey(_) => Account::ApiKey {},
+                CodexAuth::ChatGpt(_) | CodexAuth::ChatGptAuthTokens(_) => {
                     let email = auth.get_account_email();
                     let plan_type = auth.account_plan_type();
 
@@ -1281,7 +1305,7 @@ impl CodexMessageProcessor {
             });
         };
 
-        if !matches!(auth.mode, AuthMode::ChatGPT | AuthMode::ChatgptAuthTokens) {
+        if !auth.is_chatgpt_auth() {
             return Err(JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
                 message: "chatgpt authentication required to read rate limits".to_string(),
@@ -1778,6 +1802,36 @@ impl CodexMessageProcessor {
                 self.outgoing.send_error(request_id, err).await;
             }
         }
+    }
+
+    async fn thread_set_name(&self, request_id: RequestId, params: ThreadSetNameParams) {
+        let ThreadSetNameParams { thread_id, name } = params;
+        let Some(name) = codex_core::util::normalize_thread_name(&name) else {
+            self.send_invalid_request_error(
+                request_id,
+                "thread name must not be empty".to_string(),
+            )
+            .await;
+            return;
+        };
+
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        if let Err(err) = thread.submit(Op::SetThreadName { name }).await {
+            self.send_internal_error(request_id, format!("failed to set thread name: {err}"))
+                .await;
+            return;
+        }
+
+        self.outgoing
+            .send_response(request_id, ThreadSetNameResponse {})
+            .await;
     }
 
     async fn thread_unarchive(&mut self, request_id: RequestId, params: ThreadUnarchiveParams) {

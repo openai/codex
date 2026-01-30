@@ -144,7 +144,7 @@ struct CompletionCommand {
 
 #[derive(Debug, Parser)]
 struct ResumeCommand {
-    /// Conversation/session id (UUID). When provided, resumes this session.
+    /// Conversation/session id (UUID) or thread name. UUIDs take precedence if it parses.
     /// If omitted, use --last to pick the most recent recorded session.
     #[arg(value_name = "SESSION_ID")]
     session_id: Option<String>,
@@ -323,6 +323,7 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
     let AppExitInfo {
         token_usage,
         thread_id: conversation_id,
+        thread_name,
         ..
     } = exit_info;
 
@@ -335,8 +336,9 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
         codex_core::protocol::FinalOutput::from(token_usage)
     )];
 
-    if let Some(session_id) = conversation_id {
-        let resume_cmd = format!("codex resume {session_id}");
+    if let Some(resume_cmd) =
+        codex_core::util::resume_command(thread_name.as_deref(), conversation_id)
+    {
         let command = if color_enabled {
             resume_cmd.cyan().to_string()
         } else {
@@ -1028,7 +1030,7 @@ mod tests {
         app_server
     }
 
-    fn sample_exit_info(conversation: Option<&str>) -> AppExitInfo {
+    fn sample_exit_info(conversation_id: Option<&str>, thread_name: Option<&str>) -> AppExitInfo {
         let token_usage = TokenUsage {
             output_tokens: 2,
             total_tokens: 2,
@@ -1036,7 +1038,10 @@ mod tests {
         };
         AppExitInfo {
             token_usage,
-            thread_id: conversation.map(ThreadId::from_string).map(Result::unwrap),
+            thread_id: conversation_id
+                .map(ThreadId::from_string)
+                .map(Result::unwrap),
+            thread_name: thread_name.map(str::to_string),
             update_action: None,
             exit_reason: ExitReason::UserRequested,
         }
@@ -1047,6 +1052,7 @@ mod tests {
         let exit_info = AppExitInfo {
             token_usage: TokenUsage::default(),
             thread_id: None,
+            thread_name: None,
             update_action: None,
             exit_reason: ExitReason::UserRequested,
         };
@@ -1056,7 +1062,7 @@ mod tests {
 
     #[test]
     fn format_exit_messages_includes_resume_hint_without_color() {
-        let exit_info = sample_exit_info(Some("123e4567-e89b-12d3-a456-426614174000"));
+        let exit_info = sample_exit_info(Some("123e4567-e89b-12d3-a456-426614174000"), None);
         let lines = format_exit_messages(exit_info, false);
         assert_eq!(
             lines,
@@ -1070,10 +1076,26 @@ mod tests {
 
     #[test]
     fn format_exit_messages_applies_color_when_enabled() {
-        let exit_info = sample_exit_info(Some("123e4567-e89b-12d3-a456-426614174000"));
+        let exit_info = sample_exit_info(Some("123e4567-e89b-12d3-a456-426614174000"), None);
         let lines = format_exit_messages(exit_info, true);
         assert_eq!(lines.len(), 2);
         assert!(lines[1].contains("\u{1b}[36m"));
+    }
+
+    #[test]
+    fn format_exit_messages_prefers_thread_name() {
+        let exit_info = sample_exit_info(
+            Some("123e4567-e89b-12d3-a456-426614174000"),
+            Some("my-thread"),
+        );
+        let lines = format_exit_messages(exit_info, false);
+        assert_eq!(
+            lines,
+            vec![
+                "Token usage: total=2 input=0 output=2".to_string(),
+                "To continue this session, run codex resume my-thread".to_string(),
+            ]
+        );
     }
 
     #[test]

@@ -459,7 +459,7 @@ mod tests {
     #[test]
     fn collab_command_hidden_when_collaboration_modes_disabled() {
         let mut popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
-        popup.on_composer_text_change("/coll".to_string());
+        popup.on_composer_text_change("/".to_string());
 
         let cmds: Vec<&str> = popup
             .filtered_items()
@@ -472,6 +472,10 @@ mod tests {
         assert!(
             !cmds.contains(&"collab"),
             "expected '/collab' to be hidden when collaboration modes are disabled, got {cmds:?}"
+        );
+        assert!(
+            !cmds.contains(&"plan"),
+            "expected '/plan' to be hidden when collaboration modes are disabled, got {cmds:?}"
         );
     }
 
@@ -491,6 +495,25 @@ mod tests {
         match popup.selected_item() {
             Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "collab"),
             other => panic!("expected collab to be selected for exact match, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plan_command_visible_when_collaboration_modes_enabled() {
+        let mut popup = CommandPopup::new(
+            Vec::new(),
+            CommandPopupFlags {
+                collaboration_modes_enabled: true,
+                connectors_enabled: false,
+                personality_command_enabled: true,
+                windows_degraded_sandbox_active: false,
+            },
+        );
+        popup.on_composer_text_change("/plan".to_string());
+
+        match popup.selected_item() {
+            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "plan"),
+            other => panic!("expected plan to be selected for exact match, got {other:?}"),
         }
     }
 

@@ -11,6 +11,7 @@ use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
+use codex_state::DB_METRIC_COMPARE_ERROR;
 pub use codex_state::LogEntry;
 use codex_state::STATE_DB_FILENAME;
 use codex_state::ThreadMetadataBuilder;
@@ -32,12 +33,6 @@ pub(crate) async fn init_if_enabled(
 ) -> Option<StateDbHandle> {
     let state_path = config.codex_home.join(STATE_DB_FILENAME);
     if !config.features.enabled(Feature::Sqlite) {
-        // We delete the file on best effort basis to maintain retro-compatibility in the future.
-        let wal_path = state_path.with_extension("sqlite-wal");
-        let shm_path = state_path.with_extension("sqlite-shm");
-        for path in [state_path.as_path(), wal_path.as_path(), shm_path.as_path()] {
-            tokio::fs::remove_file(path).await.ok();
-        }
         return None;
     }
     let existed = tokio::fs::try_exists(&state_path).await.unwrap_or(false);
@@ -282,9 +277,10 @@ pub async fn apply_rollout_items(
 pub fn record_discrepancy(stage: &str, reason: &str) {
     // We access the global metric because the call sites might not have access to the broader
     // OtelManager.
+    tracing::warn!("state db record_discrepancy: {stage}{reason}");
     if let Some(metric) = codex_otel::metrics::global() {
         let _ = metric.counter(
-            "codex.db.discrepancy",
+            DB_METRIC_COMPARE_ERROR,
             1,
             &[("stage", stage), ("reason", reason)],
         );

@@ -9,7 +9,10 @@ Use /status to see the current model, approvals, and token usage.
 Use /fork to branch the current chat into a new thread.
 Use /init to create an AGENTS.md with project-specific guidance.
 Use /mcp to list configured MCP tools.
+Use /rename to rename your threads for easier thread resuming.
 Use the OpenAI docs MCP for API questions; enable it with `codex mcp add openaiDeveloperDocs --url https://developers.openai.com/mcp`.
+Join the OpenAI community Discord: http://discord.gg/openai
+Visit the Codex community forum: https://community.openai.com/c/codex/37
 You can run any shell command from Codex using `!` (e.g. `!ls`)
 Type / to open the command popup; Tab autocompletes slash commands.
 When the composer is empty, press Esc to step back and edit your last message; Enter confirms.

@@ -1293,6 +1293,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-cloud-requirements"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "base64",
+ "codex-app-server-protocol",
+ "codex-backend-client",
+ "codex-core",
+ "codex-otel",
+ "codex-protocol",
+ "pretty_assertions",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml 0.9.5",
+ "tracing",
+]
+
+[[package]]
 name = "codex-cloud-tasks"
 version = "0.0.0"
 dependencies = [
@@ -1895,6 +1914,7 @@ dependencies = [
  "codex-backend-client",
  "codex-chatgpt",
  "codex-cli",
+ "codex-cloud-requirements",
  "codex-common",
  "codex-core",
  "codex-feedback",
