@@ -1144,6 +1144,7 @@ dependencies = [
  "clap",
  "codex-app-server-protocol",
  "codex-protocol",
+ "dirs",
  "serde",
  "serde_json",
  "uuid",
