@@ -72,7 +72,8 @@ struct DependencyTool {
 }
 
 const SKILLS_FILENAME: &str = "SKILL.md";
-const SKILLS_JSON_FILENAME: &str = "SKILL.json";
+const SKILLS_METADATA_DIR: &str = "agents";
+const SKILLS_METADATA_FILENAME: &str = "openai.yaml";
 const SKILLS_DIR_NAME: &str = "skills";
 const MAX_NAME_LEN: usize = 64;
 const MAX_DESCRIPTION_LEN: usize = 1024;
@@ -402,7 +403,9 @@ fn load_skill_metadata(skill_path: &Path) -> (Option<SkillInterface>, Option<Ski
     let Some(skill_dir) = skill_path.parent() else {
         return (None, None);
     };
-    let metadata_path = skill_dir.join(SKILLS_JSON_FILENAME);
+    let metadata_path = skill_dir
+        .join(SKILLS_METADATA_DIR)
+        .join(SKILLS_METADATA_FILENAME);
     if !metadata_path.exists() {
         return (None, None);
     }
@@ -413,19 +416,19 @@ fn load_skill_metadata(skill_path: &Path) -> (Option<SkillInterface>, Option<Ski
             tracing::warn!(
                 "ignoring {path}: failed to read {label}: {error}",
                 path = metadata_path.display(),
-                label = SKILLS_JSON_FILENAME
+                label = SKILLS_METADATA_FILENAME
             );
             return (None, None);
         }
     };
 
-    let parsed: SkillMetadataFile = match serde_json::from_str(&contents) {
+    let parsed: SkillMetadataFile = match serde_yaml::from_str(&contents) {
         Ok(parsed) => parsed,
         Err(error) => {
             tracing::warn!(
                 "ignoring {path}: invalid {label}: {error}",
                 path = metadata_path.display(),
-                label = SKILLS_JSON_FILENAME
+                label = SKILLS_METADATA_FILENAME
             );
             return (None, None);
         }
@@ -859,25 +862,29 @@ mod tests {
         path
     }
 
-    fn write_skill_metadata_at(skill_dir: &Path, filename: &str, contents: &str) -> PathBuf {
-        let path = skill_dir.join(filename);
+    fn write_skill_metadata_at(skill_dir: &Path, contents: &str) -> PathBuf {
+        let path = skill_dir
+            .join(SKILLS_METADATA_DIR)
+            .join(SKILLS_METADATA_FILENAME);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
         fs::write(&path, contents).unwrap();
         path
     }
 
     fn write_skill_interface_at(skill_dir: &Path, contents: &str) -> PathBuf {
-        write_skill_metadata_at(skill_dir, SKILLS_JSON_FILENAME, contents)
+        write_skill_metadata_at(skill_dir, contents)
     }
 
     #[tokio::test]
-    async fn loads_skill_dependencies_metadata_from_json() {
+    async fn loads_skill_dependencies_metadata_from_yaml() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let skill_path = write_skill(&codex_home, "demo", "dep-skill", "from json");
         let skill_dir = skill_path.parent().expect("skill dir");
 
         write_skill_metadata_at(
             skill_dir,
-            SKILLS_JSON_FILENAME,
             r#"
 {
   "dependencies": {
@@ -970,7 +977,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn loads_skill_interface_metadata_from_json() {
+    async fn loads_skill_interface_metadata_from_yaml() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let skill_path = write_skill(&codex_home, "demo", "ui-skill", "from json");
         let skill_dir = skill_path.parent().expect("skill dir");
@@ -979,16 +986,13 @@ mod tests {
         write_skill_interface_at(
             skill_dir,
             r##"
-{
-  "interface": {
-    "display_name": "UI Skill",
-    "short_description": "  short    desc   ",
-    "icon_small": "./assets/small-400px.png",
-    "icon_large": "./assets/large-logo.svg",
-    "brand_color": "#3B82F6",
-    "default_prompt": "  default   prompt   "
-  }
-}
+interface:
+  display_name: "UI Skill"
+  short_description: "  short    desc   "
+  icon_small: "./assets/small-400px.png"
+  icon_large: "./assets/large-logo.svg"
+  brand_color: "#3B82F6"
+  default_prompt: "  default   prompt   "
 "##,
         );
 
@@ -1000,8 +1004,13 @@ mod tests {
             "unexpected errors: {:?}",
             outcome.errors
         );
+        let user_skills: Vec<SkillMetadata> = outcome
+            .skills
+            .into_iter()
+            .filter(|skill| skill.scope == SkillScope::User)
+            .collect();
         assert_eq!(
-            outcome.skills,
+            user_skills,
             vec![SkillMetadata {
                 name: "ui-skill".to_string(),
                 description: "from json".to_string(),

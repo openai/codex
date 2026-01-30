@@ -114,6 +114,7 @@ impl ToolRouter {
                             workdir: exec.working_directory,
                             timeout_ms: exec.timeout_ms,
                             sandbox_permissions: Some(SandboxPermissions::UseDefault),
+                            prefix_rule: None,
                             justification: None,
                         };
                         Ok(Some(ToolCall {

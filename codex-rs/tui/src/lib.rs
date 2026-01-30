@@ -36,6 +36,7 @@ use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_state::log_db;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use cwd_prompt::CwdPromptAction;
 use cwd_prompt::CwdSelection;
@@ -305,7 +306,10 @@ pub async fn run_main(
         // grep for a specific module/target while troubleshooting.
         .with_target(true)
         .with_ansi(false)
-        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
+        .with_span_events(
+            tracing_subscriber::fmt::format::FmtSpan::NEW
+                | tracing_subscriber::fmt::format::FmtSpan::CLOSE,
+        )
         .with_filter(env_filter());
 
     let feedback = codex_feedback::CodexFeedback::new();
@@ -351,10 +355,15 @@ pub async fn run_main(
 
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
+    let log_db_layer = codex_core::state_db::get_state_db(&config, None)
+        .await
+        .map(|db| log_db::start(db).with_filter(env_filter()));
+
     let _ = tracing_subscriber::registry()
         .with(file_layer)
         .with(feedback_layer)
         .with(feedback_metadata_layer)
+        .with(log_db_layer)
         .with(otel_logger_layer)
         .with(otel_tracing_layer)
         .try_init();
@@ -882,7 +891,7 @@ mod tests {
         let mut config = build_config(&temp_dir).await?;
         config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig { trust_level: None };
-        config.set_windows_sandbox_globally(false);
+        config.set_windows_sandbox_enabled(false);
 
         let should_show = should_show_trust_screen(&config);
         if cfg!(target_os = "windows") {
@@ -905,7 +914,7 @@ mod tests {
         let mut config = build_config(&temp_dir).await?;
         config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig { trust_level: None };
-        config.set_windows_sandbox_globally(true);
+        config.set_windows_sandbox_enabled(true);
 
         let should_show = should_show_trust_screen(&config);
         if cfg!(target_os = "windows") {

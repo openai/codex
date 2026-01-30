@@ -6,6 +6,8 @@ mod layer_io;
 mod macos;
 mod merge;
 mod overrides;
+#[cfg(test)]
+mod requirements_exec_policy;
 mod state;
 
 #[cfg(test)]

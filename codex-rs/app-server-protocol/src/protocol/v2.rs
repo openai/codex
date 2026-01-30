@@ -86,6 +86,10 @@ macro_rules! v2_enum_from_core {
 pub enum CodexErrorInfo {
     ContextWindowExceeded,
     UsageLimitExceeded,
+    ModelCap {
+        model: String,
+        reset_after_seconds: Option<u64>,
+    },
     HttpConnectionFailed {
         #[serde(rename = "httpStatusCode")]
         #[ts(rename = "httpStatusCode")]
@@ -122,6 +126,13 @@ impl From<CoreCodexErrorInfo> for CodexErrorInfo {
         match value {
             CoreCodexErrorInfo::ContextWindowExceeded => CodexErrorInfo::ContextWindowExceeded,
             CoreCodexErrorInfo::UsageLimitExceeded => CodexErrorInfo::UsageLimitExceeded,
+            CoreCodexErrorInfo::ModelCap {
+                model,
+                reset_after_seconds,
+            } => CodexErrorInfo::ModelCap {
+                model,
+                reset_after_seconds,
+            },
             CoreCodexErrorInfo::HttpConnectionFailed { http_status_code } => {
                 CodexErrorInfo::HttpConnectionFailed { http_status_code }
             }
@@ -824,6 +835,24 @@ pub enum LoginAccountParams {
     #[serde(rename = "chatgpt")]
     #[ts(rename = "chatgpt")]
     Chatgpt,
+    /// [UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.
+    /// The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.
+    #[serde(rename = "chatgptAuthTokens")]
+    #[ts(rename = "chatgptAuthTokens")]
+    ChatgptAuthTokens {
+        /// ID token (JWT) supplied by the client.
+        ///
+        /// This token is used for identity and account metadata (email, plan type,
+        /// workspace id).
+        #[serde(rename = "idToken")]
+        #[ts(rename = "idToken")]
+        id_token: String,
+        /// Access token (JWT) supplied by the client.
+        /// This token is used for backend API requests.
+        #[serde(rename = "accessToken")]
+        #[ts(rename = "accessToken")]
+        access_token: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -843,6 +872,9 @@ pub enum LoginAccountResponse {
         /// URL the client should open in a browser to initiate the OAuth flow.
         auth_url: String,
     },
+    #[serde(rename = "chatgptAuthTokens", rename_all = "camelCase")]
+    #[ts(rename = "chatgptAuthTokens", rename_all = "camelCase")]
+    ChatgptAuthTokens {},
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -873,6 +905,37 @@ pub struct CancelLoginAccountResponse {
 #[ts(export_to = "v2/")]
 pub struct LogoutAccountResponse {}
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ChatgptAuthTokensRefreshReason {
+    /// Codex attempted a backend request and received `401 Unauthorized`.
+    Unauthorized,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ChatgptAuthTokensRefreshParams {
+    pub reason: ChatgptAuthTokensRefreshReason,
+    /// Workspace/account identifier that Codex was previously using.
+    ///
+    /// Clients that manage multiple accounts/workspaces can use this as a hint
+    /// to refresh the token for the correct workspace.
+    ///
+    /// This may be `null` when the prior ID token did not include a workspace
+    /// identifier (`chatgpt_account_id`) or when the token could not be parsed.
+    pub previous_account_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ChatgptAuthTokensRefreshResponse {
+    pub id_token: String,
+    pub access_token: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -884,6 +947,11 @@ pub struct GetAccountRateLimitsResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct GetAccountParams {
+    /// When `true`, requests a proactive token refresh before returning.
+    ///
+    /// In managed auth mode this triggers the normal refresh-token flow. In
+    /// external auth mode this flag is ignored. Clients should refresh tokens
+    /// themselves and call `account/login/start` with `chatgptAuthTokens`.
     #[serde(default)]
     pub refresh_token: bool,
 }
@@ -1003,6 +1071,8 @@ pub struct AppInfo {
     pub name: String,
     pub description: Option<String>,
     pub logo_url: Option<String>,
+    pub logo_url_dark: Option<String>,
+    pub distribution_channel: Option<String>,
     pub install_url: Option<String>,
     #[serde(default)]
     pub is_accessible: bool,
@@ -1897,6 +1967,10 @@ pub enum UserInput {
         name: String,
         path: PathBuf,
     },
+    Mention {
+        name: String,
+        path: String,
+    },
 }
 
 impl UserInput {
@@ -1912,6 +1986,7 @@ impl UserInput {
             UserInput::Image { url } => CoreUserInput::Image { image_url: url },
             UserInput::LocalImage { path } => CoreUserInput::LocalImage { path },
             UserInput::Skill { name, path } => CoreUserInput::Skill { name, path },
+            UserInput::Mention { name, path } => CoreUserInput::Mention { name, path },
         }
     }
 }
@@ -1929,6 +2004,7 @@ impl From<CoreUserInput> for UserInput {
             CoreUserInput::Image { image_url } => UserInput::Image { url: image_url },
             CoreUserInput::LocalImage { path } => UserInput::LocalImage { path },
             CoreUserInput::Skill { name, path } => UserInput::Skill { name, path },
+            CoreUserInput::Mention { name, path } => UserInput::Mention { name, path },
             _ => unreachable!("unsupported user input variant"),
         }
     }
@@ -2029,6 +2105,9 @@ pub enum ThreadItem {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     ExitedReviewMode { id: String, review: String },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    ContextCompaction { id: String },
 }
 
 impl From<CoreTurnItem> for ThreadItem {
@@ -2057,6 +2136,9 @@ impl From<CoreTurnItem> for ThreadItem {
                 id: search.id,
                 query: search.query,
             },
+            CoreTurnItem::ContextCompaction(compaction) => {
+                ThreadItem::ContextCompaction { id: compaction.id }
+            }
         }
     }
 }
@@ -2419,6 +2501,7 @@ pub struct WindowsWorldWritableWarningNotification {
     pub failed_scan: bool,
 }
 
+/// Deprecated: Use `ContextCompaction` item type instead.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -2517,6 +2600,8 @@ pub struct ToolRequestUserInputQuestion {
     pub question: String,
     #[serde(default)]
     pub is_other: bool,
+    #[serde(default)]
+    pub is_secret: bool,
     pub options: Option<Vec<ToolRequestUserInputOption>>,
 }
 
@@ -2725,6 +2810,10 @@ mod tests {
                     name: "skill-creator".to_string(),
                     path: PathBuf::from("/repo/.codex/skills/skill-creator/SKILL.md"),
                 },
+                CoreUserInput::Mention {
+                    name: "Demo App".to_string(),
+                    path: "app://demo-app".to_string(),
+                },
             ],
         });
 
@@ -2746,6 +2835,10 @@ mod tests {
                     UserInput::Skill {
                         name: "skill-creator".to_string(),
                         path: PathBuf::from("/repo/.codex/skills/skill-creator/SKILL.md"),
+                    },
+                    UserInput::Mention {
+                        name: "Demo App".to_string(),
+                        path: "app://demo-app".to_string(),
                     },
                 ],
             }

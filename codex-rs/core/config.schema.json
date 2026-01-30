@@ -111,6 +111,13 @@
             "auto"
           ],
           "type": "string"
+        },
+        {
+          "description": "Store credentials in memory only for the current process.",
+          "enum": [
+            "ephemeral"
+          ],
+          "type": "string"
         }
       ]
     },
@@ -142,6 +149,9 @@
           "description": "Optional feature toggles scoped to this profile.",
           "properties": {
             "apply_patch_freeform": {
+              "type": "boolean"
+            },
+            "apps": {
               "type": "boolean"
             },
             "child_agents_md": {
@@ -180,6 +190,9 @@
             "include_apply_patch_tool": {
               "type": "boolean"
             },
+            "personality": {
+              "type": "boolean"
+            },
             "powershell_utf8": {
               "type": "boolean"
             },
@@ -187,6 +200,9 @@
               "type": "boolean"
             },
             "remote_models": {
+              "type": "boolean"
+            },
+            "request_rule": {
               "type": "boolean"
             },
             "responses_websockets": {
@@ -198,7 +214,13 @@
             "shell_tool": {
               "type": "boolean"
             },
+            "skill_env_var_dependency_prompt": {
+              "type": "boolean"
+            },
             "skill_mcp_dependency_install": {
+              "type": "boolean"
+            },
+            "sqlite": {
               "type": "boolean"
             },
             "steer": {
@@ -428,6 +450,11 @@
           "minimum": 0.0,
           "type": "integer"
         },
+        "supports_websockets": {
+          "default": false,
+          "description": "Whether this provider supports the Responses API WebSocket transport.",
+          "type": "boolean"
+        },
         "wire_api": {
           "allOf": [
             {
@@ -476,6 +503,14 @@
         }
       },
       "type": "object"
+    },
+    "NotificationMethod": {
+      "enum": [
+        "auto",
+        "osc9",
+        "bel"
+      ],
+      "type": "string"
     },
     "Notifications": {
       "anyOf": [
@@ -985,6 +1020,15 @@
           "default": null,
           "description": "Start the TUI in the specified collaboration mode (plan/execute/etc.). Defaults to unset."
         },
+        "notification_method": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/NotificationMethod"
+            }
+          ],
+          "default": "auto",
+          "description": "Notification method to use for unfocused terminal notifications. Defaults to `auto`."
+        },
         "notifications": {
           "allOf": [
             {
@@ -1046,13 +1090,6 @@
           "description": "The Responses API exposed by OpenAI at `/v1/responses`.",
           "enum": [
             "responses"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Experimental: Responses API over WebSocket transport.",
-          "enum": [
-            "responses_websocket"
           ],
           "type": "string"
         },
@@ -1139,6 +1176,9 @@
         "apply_patch_freeform": {
           "type": "boolean"
         },
+        "apps": {
+          "type": "boolean"
+        },
         "child_agents_md": {
           "type": "boolean"
         },
@@ -1175,6 +1215,9 @@
         "include_apply_patch_tool": {
           "type": "boolean"
         },
+        "personality": {
+          "type": "boolean"
+        },
         "powershell_utf8": {
           "type": "boolean"
         },
@@ -1182,6 +1225,9 @@
           "type": "boolean"
         },
         "remote_models": {
+          "type": "boolean"
+        },
+        "request_rule": {
           "type": "boolean"
         },
         "responses_websockets": {
@@ -1193,7 +1239,13 @@
         "shell_tool": {
           "type": "boolean"
         },
+        "skill_env_var_dependency_prompt": {
+          "type": "boolean"
+        },
         "skill_mcp_dependency_install": {
+          "type": "boolean"
+        },
+        "sqlite": {
           "type": "boolean"
         },
         "steer": {

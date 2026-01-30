@@ -3,17 +3,17 @@ source: tui/src/bottom_pane/request_user_input/mod.rs
 expression: "render_snapshot(&overlay, area)"
 ---
                                                                                                                         
-  Question 1/1                                                                                                          
-  Area                                                                                                                  
+  Question 1/1 (1 unanswered)                                                                                           
   Choose an option.                                                                                                     
-  (x) Option 1  First choice.                                                                                           
-  ( ) Option 2  Second choice.                                                                                          
-  ( ) Option 3  Third choice.                                                                                           
-  Notes for Option 1                                                                                                    
+                                                                                                                        
+  › 1. Option 1  First choice.                                                                                          
+    2. Option 2  Second choice.                                                                                         
+    3. Option 3  Third choice.                                                                                          
                                                                                                                         
   › Add notes                                                                                                           
                                                                                                                         
                                                                                                                         
                                                                                                                         
                                                                                                                         
-  Option 1 of 3 | ↑/↓ scroll | Tab: clear notes | Enter: submit answer | Esc: interrupt
+                                                                                                                        
+  tab to clear notes | enter to submit answer | esc to interrupt

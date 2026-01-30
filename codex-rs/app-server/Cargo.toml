@@ -17,6 +17,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+async-trait = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-common = { workspace = true, features = ["cli"] }
 codex-core = { workspace = true }
@@ -56,6 +57,7 @@ axum = { workspace = true, default-features = false, features = [
     "tokio",
 ] }
 base64 = { workspace = true }
+codex-execpolicy = { workspace = true }
 core_test_support = { workspace = true }
 mcp-types = { workspace = true }
 os_info = { workspace = true }
