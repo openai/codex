@@ -306,7 +306,10 @@ pub async fn run_main(
         // grep for a specific module/target while troubleshooting.
         .with_target(true)
         .with_ansi(false)
-        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
+        .with_span_events(
+            tracing_subscriber::fmt::format::FmtSpan::NEW
+                | tracing_subscriber::fmt::format::FmtSpan::CLOSE,
+        )
         .with_filter(env_filter());
 
     let feedback = codex_feedback::CodexFeedback::new();
