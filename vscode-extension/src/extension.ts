@@ -724,7 +724,10 @@ export function activate(context: vscode.ExtensionContext): void {
           );
           return;
         }
-        if (session.backendId === "opencode" && bm.isOpencodeSessionBusy(session)) {
+        if (
+          session.backendId === "opencode" &&
+          bm.isOpencodeSessionBusy(session)
+        ) {
           void vscode.window.showErrorMessage(
             "OpenCode セッションが busy のため Rewind できません。Stop してからやり直してください。",
           );
@@ -871,19 +874,31 @@ export function activate(context: vscode.ExtensionContext): void {
       return res.files.map((f) => String(f.path || "").replace(/\\\\/g, "/"));
     },
     async (sessionId) => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
       if (!sessions) throw new Error("sessions is not initialized");
       const session = sessions.getById(sessionId);
       if (!session) throw new Error(`Session not found: ${sessionId}`);
-      const folder = resolveWorkspaceFolderForSession(session);
-      if (!folder)
-        throw new Error(`WorkspaceFolder not found for session: ${sessionId}`);
+
+      if (session.backendId === "opencode") {
+        const agents = await backendManager.listAgentsForSession(session);
+        return agents
+          .map((a) => String(a.name || "").trim())
+          .filter((name) => name.length > 0);
+      }
 
       if (session.backendId !== "codez") return [];
 
+      const folder = resolveWorkspaceFolderForSession(session);
+      if (!folder)
+        throw new Error(`WorkspaceFolder not found for session: ${sessionId}`);
       const { agents } = await listAgentsFromDisk(folder.uri.fsPath);
       return agents
         .map((a) => String(a.name || "").trim())
         .filter((name) => name.length > 0);
+    },
+    async (session) => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      return await backendManager.listAgentsForSession(session);
     },
     async (sessionId) => {
       if (!backendManager) throw new Error("backendManager is not initialized");
@@ -2315,7 +2330,10 @@ export function activate(context: vscode.ExtensionContext): void {
           rt.uiHydrationBlockedText =
             "他のセッションが実行中のため、このセッションの履歴を読み込めません。\nStop してから Load history を実行してください。";
           chatView.refresh();
-          chatView.toast("info", "他のセッションが実行中です。Stop してから実行してください。");
+          chatView.toast(
+            "info",
+            "他のセッションが実行中です。Stop してから実行してください。",
+          );
           return;
         }
 
@@ -3680,6 +3698,7 @@ function setActiveSession(
       model: null,
       provider: null,
       reasoning: null,
+      agent: null,
     });
   }
   if (markRead) unreadSessionIds.delete(sessionId);
@@ -3799,7 +3818,7 @@ async function readModelStateFromConfig(
     const provider = pickString(parsed["model_provider"]);
     const reasoning = pickString(parsed["model_reasoning_effort"]);
     if (!model && !provider && !reasoning) return null;
-    return { model, provider, reasoning };
+    return { model, provider, reasoning, agent: null };
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
     output.appendLine(
@@ -4194,7 +4213,8 @@ function buildChatState(): ChatViewState {
     sending: rt.sending,
     reloading: rt.reloading,
     hydrationBlockedText,
-    opencodeDefaultModelKey: backendManager?.getOpencodeDefaultModelKey(activeRaw) ?? null,
+    opencodeDefaultModelKey:
+      backendManager?.getOpencodeDefaultModelKey(activeRaw) ?? null,
     statusText:
       statusText ??
       [globalStatusText, globalRateLimitStatusText].filter(Boolean).join(" • "),
@@ -4848,7 +4868,9 @@ function applyItemLifecycle(
           const existing =
             idx !== undefined ? (rt.blocks[idx] as any) : (null as any);
           const toolCount =
-            existing && existing.type === "step" && Array.isArray(existing.tools)
+            existing &&
+            existing.type === "step" &&
+            Array.isArray(existing.tools)
               ? existing.tools.length
               : 0;
 
@@ -4865,10 +4887,14 @@ function applyItemLifecycle(
                 ? (anyItem.tokens as any)
                 : null;
             const parts: string[] = [];
-            if (typeof anyItem.cost === "number" && Number.isFinite(anyItem.cost))
+            if (
+              typeof anyItem.cost === "number" &&
+              Number.isFinite(anyItem.cost)
+            )
               parts.push(`cost=${String(anyItem.cost)}`);
             if (tokens) {
-              if (typeof tokens.input === "number") parts.push(`in=${String(tokens.input)}`);
+              if (typeof tokens.input === "number")
+                parts.push(`in=${String(tokens.input)}`);
               if (typeof tokens.output === "number")
                 parts.push(`out=${String(tokens.output)}`);
               if (typeof tokens.reasoning === "number")
@@ -4949,7 +4975,9 @@ function applyItemLifecycle(
                 ? String(anyItem.snapshot)
                 : null,
             reason:
-              typeof anyItem.reason === "string" ? String(anyItem.reason) : null,
+              typeof anyItem.reason === "string"
+                ? String(anyItem.reason)
+                : null,
             cost:
               typeof anyItem.cost === "number" && Number.isFinite(anyItem.cost)
                 ? Number(anyItem.cost)
@@ -4964,7 +4992,9 @@ function applyItemLifecycle(
                 ? String(anyItem.snapshot)
                 : null;
             block.reason =
-              typeof anyItem.reason === "string" ? String(anyItem.reason) : null;
+              typeof anyItem.reason === "string"
+                ? String(anyItem.reason)
+                : null;
             block.cost =
               typeof anyItem.cost === "number" && Number.isFinite(anyItem.cost)
                 ? Number(anyItem.cost)
@@ -5815,7 +5845,12 @@ function applyGlobalNotification(
           ? sessions.getByThreadId(backendKey, threadId)
           : null;
       if (session && model) {
-        setSessionModelState(session.id, { model, provider: null, reasoning });
+        setSessionModelState(session.id, {
+          model,
+          provider: null,
+          reasoning,
+          agent: null,
+        });
       }
       upsertGlobal({
         id: newLocalId("sessionConfigured"),

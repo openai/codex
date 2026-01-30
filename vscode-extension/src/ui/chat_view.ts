@@ -177,7 +177,8 @@ let sessionModelState: {
   model: string | null;
   provider: string | null;
   reasoning: string | null;
-} = { model: null, provider: null, reasoning: null };
+  agent: string | null;
+} = { model: null, provider: null, reasoning: null, agent: null };
 
 export type ModelState = typeof sessionModelState;
 
@@ -242,6 +243,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       reject: (err: unknown) => void;
     }
   >();
+  private opencodeAgentsCache: Array<{
+    id: string;
+    name: string;
+    description?: string;
+  }> | null = null;
+  private opencodeAgentsCacheSessionId: string | null = null;
 
   public insertIntoInput(text: string): void {
     this.view?.webview.postMessage({ type: "insertText", text });
@@ -308,6 +315,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       cancellationToken: string,
     ) => Promise<string[]>,
     private readonly onListAgents: (sessionId: string) => Promise<string[]>,
+    private readonly onListOpencodeAgents: (
+      session: Session,
+    ) => Promise<Array<{ id: string; name: string; description?: string }>>,
     private readonly onListSkills: (sessionId: string) => Promise<
       Array<{
         name: string;
@@ -682,9 +692,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (type === "loadSessionHistory") {
       const sessionId = anyMsg["sessionId"];
       if (typeof sessionId !== "string") return;
-      await vscode.commands.executeCommand("codez._internal.loadHistoryForSession", {
-        sessionId,
-      });
+      await vscode.commands.executeCommand(
+        "codez._internal.loadHistoryForSession",
+        {
+          sessionId,
+        },
+      );
       return;
     }
 
@@ -1013,7 +1026,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const model = asNullableString(anyMsg["model"]);
       const provider = asNullableString(anyMsg["provider"]);
       const reasoning = asNullableString(anyMsg["reasoning"]);
-      setSessionModelState(sessionId, { model, provider, reasoning });
+      const agent = asNullableString(anyMsg["agent"]);
+      setSessionModelState(sessionId, { model, provider, reasoning, agent });
       this.refresh();
       return;
     }
@@ -1410,6 +1424,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       models: full.models,
       approvals: full.approvals,
       customPrompts: full.customPrompts,
+      opencodeAgents: this.opencodeAgentsCache,
     };
     void this.view.webview
       .postMessage({ type: "controlState", seq, state: controlState })
@@ -1422,6 +1437,32 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       });
 
     const activeId = full.activeSession?.id ?? null;
+    const activeBackendId = full.activeSession?.backendId ?? null;
+
+    // Fetch opencode agents when the active session changes to an opencode session
+    if (
+      activeId &&
+      activeId !== this.opencodeAgentsCacheSessionId &&
+      activeBackendId === "opencode"
+    ) {
+      this.opencodeAgentsCacheSessionId = activeId;
+      void (async () => {
+        try {
+          const session = full.activeSession;
+          if (session) {
+            this.opencodeAgentsCache = await this.onListOpencodeAgents(session);
+            this.postControlState();
+          }
+        } catch (err) {
+          this.onUiDebug(`Failed to load opencode agents: ${String(err)}`);
+          this.opencodeAgentsCache = [];
+        }
+      })();
+    } else if (activeBackendId !== "opencode") {
+      this.opencodeAgentsCache = null;
+      this.opencodeAgentsCacheSessionId = null;
+    }
+
     if (activeId && activeId !== this.blocksSessionIdSynced) {
       this.blocksSessionIdSynced = activeId;
       void this.view.webview

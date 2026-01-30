@@ -27,6 +27,7 @@ type ModelState = {
   model: string | null;
   provider: string | null;
   reasoning: string | null;
+  agent?: string | null;
 };
 
 type ChatBlock =
@@ -189,6 +190,11 @@ type ChatViewState = {
     argumentHint: string | null;
     source: string;
   }>;
+  opencodeAgents?: Array<{
+    id: string;
+    name: string;
+    description?: string;
+  }> | null;
 };
 
 type AskUserQuestionType = "text" | "single_select" | "multi_select";
@@ -301,8 +307,11 @@ function main(): void {
   modelSelect.className = "modelSelect model";
   const reasoningSelect = document.createElement("select");
   reasoningSelect.className = "modelSelect effort";
+  const agentSelect = document.createElement("select");
+  agentSelect.className = "modelSelect agent";
   modelBarEl.appendChild(modelSelect);
   modelBarEl.appendChild(reasoningSelect);
+  modelBarEl.appendChild(agentSelect);
 
   const placeholder = {
     // Keep the placeholder short (single-line). Put detailed hints in title.
@@ -945,17 +954,23 @@ function main(): void {
       showToast("error", "No session selected.");
       return;
     }
+    const backendId = state.activeSession?.backendId ?? null;
     vscode.postMessage({
       type: "setModel",
       sessionId: domSessionId,
       model: modelSelect.value === "default" ? null : modelSelect.value,
       reasoning:
         reasoningSelect.value === "default" ? null : reasoningSelect.value,
+      agent:
+        backendId === "opencode" && agentSelect.value !== "default"
+          ? agentSelect.value
+          : null,
     });
   };
 
   modelSelect.addEventListener("change", sendModelState);
   reasoningSelect.addEventListener("change", sendModelState);
+  agentSelect.addEventListener("change", sendModelState);
   const suggestEl = mustGet("suggest");
   type PendingImage = { id: string; name: string; url: string };
 
@@ -3652,6 +3667,22 @@ function main(): void {
       return ["default", ...supported];
     })();
     populateSelect(reasoningSelect, effortOptions, ms.reasoning);
+
+    // Agent selector for opencode sessions (Build/Plan mode)
+    const agents = s.opencodeAgents ?? [];
+    if (backendId === "opencode" && agents.length > 0) {
+      agentSelect.style.display = "";
+      const agentOptions = [
+        { value: "default", label: "default (auto)" },
+        ...agents.map((a) => ({
+          value: a.id,
+          label: a.name || a.id,
+        })),
+      ];
+      populateSelectWithLabels(agentSelect, agentOptions, ms.agent ?? null);
+    } else {
+      agentSelect.style.display = "none";
+    }
 
     const fullStatus = String(s.statusText || "").trim();
     const statusTooltip = String(s.statusTooltip || fullStatus).trim();

@@ -6,6 +6,10 @@
 
 - **Sessions / Tabs**
   - セッションタブを backendId（opencode / codez）でフィルタリング。アクティブセッションと同じ backend のセッションのみ表示されるように変更
+- **OpenCode / Agent Mode**
+  - OpenCodeのAgentモード（Build/Plan）切り替えをサポート
+  - opencodeセッション時にモデルセレクターの横にAgentセレクターを表示
+  - Agent選択時にAPIリクエストにagentパラメータを含めて送信
 
 ## 0.2.7
 

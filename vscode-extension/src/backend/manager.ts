@@ -12,6 +12,7 @@ import {
   type OpencodeProviderAuthMethodsResponse,
   type OpencodeProviderAuthorization,
   type OpencodeProviderListResponse,
+  type OpencodeAgentInfo,
 } from "./opencode_http";
 import type { ThreadResumeParams } from "../generated/v2/ThreadResumeParams";
 import type { ThreadStartParams } from "../generated/v2/ThreadStartParams";
@@ -53,6 +54,7 @@ type ModelSettings = {
   model: string | null;
   provider: string | null;
   reasoning: string | null;
+  agent?: string | null;
 };
 
 function imageMimeFromPath(filePath: string): string | null {
@@ -107,7 +109,10 @@ export class BackendManager implements vscode.Disposable {
   >();
   private readonly latestDiffByThreadId = new Map<string, string>();
   private readonly modelsByBackendKey = new Map<string, Model[]>();
-  private readonly opencodeDefaultModelKeyByBackendKey = new Map<string, string>();
+  private readonly opencodeDefaultModelKeyByBackendKey = new Map<
+    string,
+    string
+  >();
   private readonly itemsByThreadId = new Map<string, Map<string, ThreadItem>>();
 
   public onSessionAdded: ((session: Session) => void) | null = null;
@@ -330,11 +335,7 @@ export class BackendManager implements vscode.Disposable {
           ),
           this.withTimeout("opencode /config", client.getConfig(), 5_000),
           this.withTimeout("opencode /provider", client.listProviders(), 5_000),
-          this.withTimeout(
-            "opencode /skill",
-            client.listSkills(cwd),
-            5_000,
-          ),
+          this.withTimeout("opencode /skill", client.listSkills(cwd), 5_000),
         ]);
 
         const [healthRes, configRes, providerRes, skillsRes] = results;
@@ -358,7 +359,8 @@ export class BackendManager implements vscode.Disposable {
             : [];
           const all = Array.isArray(providerObj.all) ? providerObj.all : [];
           const defaultByProvider =
-            typeof providerObj.default === "object" && providerObj.default !== null
+            typeof providerObj.default === "object" &&
+            providerObj.default !== null
               ? providerObj.default
               : {};
 
@@ -389,7 +391,6 @@ export class BackendManager implements vscode.Disposable {
               );
             }
           }
-
         } else if (providerRes.status === "rejected") {
           lines.push(
             `Providers: error: ${String(providerRes.reason instanceof Error ? providerRes.reason.message : providerRes.reason)}`,
@@ -606,7 +607,9 @@ export class BackendManager implements vscode.Disposable {
 
   public getOpencodeDefaultModelKey(session: Session): string | null {
     if (session.backendId !== "opencode") return null;
-    return this.opencodeDefaultModelKeyByBackendKey.get(session.backendKey) ?? null;
+    return (
+      this.opencodeDefaultModelKeyByBackendKey.get(session.backendKey) ?? null
+    );
   }
 
   public async listSkillsForSession(
@@ -633,6 +636,26 @@ export class BackendManager implements vscode.Disposable {
       forceReload: false,
     });
     return res.data ?? [];
+  }
+
+  public async listAgentsForSession(
+    session: Session,
+  ): Promise<OpencodeAgentInfo[]> {
+    if (session.backendId !== "opencode") {
+      return [];
+    }
+    const oc = this.opencode.get(session.backendKey);
+    if (!oc) {
+      return [];
+    }
+    try {
+      return await oc.client.listAgents();
+    } catch (err) {
+      this.output.appendLine(
+        `[opencode] Failed to list agents: ${String((err as Error)?.message ?? err)}`,
+      );
+      return [];
+    }
   }
 
   public async fuzzyFileSearchForSession(
@@ -1249,7 +1272,11 @@ export class BackendManager implements vscode.Disposable {
 
       let msg: OpencodeMessageWithParts;
       try {
-        msg = await oc.client.prompt(session.threadId, { parts, model });
+        msg = await oc.client.prompt(session.threadId, {
+          parts,
+          model,
+          agent: modelSettings?.agent ?? undefined,
+        });
       } catch (err) {
         this.emitNotification(session.backendKey, session, {
           method: "error",
@@ -1509,44 +1536,44 @@ export class BackendManager implements vscode.Disposable {
     this.onServerEvent?.(backendKey, session, n);
   }
 
-	  private onOpencodeEvent(
-	    backendKey: string,
-	    raw: OpencodeEvent,
-	    messageRoleById: Map<string, "user" | "assistant">,
-	    activeTurnIdBySession: Map<string, string>,
-	    partItemIdByKey: Map<string, string>,
-	    activeStepIdByMessageId: Map<string, string>,
-	    sessionStatusById: Map<string, string>,
-	    client: OpencodeHttpClient,
-	  ): void {
+  private onOpencodeEvent(
+    backendKey: string,
+    raw: OpencodeEvent,
+    messageRoleById: Map<string, "user" | "assistant">,
+    activeTurnIdBySession: Map<string, string>,
+    partItemIdByKey: Map<string, string>,
+    activeStepIdByMessageId: Map<string, string>,
+    sessionStatusById: Map<string, string>,
+    client: OpencodeHttpClient,
+  ): void {
     const evt = (raw as any)?.payload
       ? ((raw as any).payload as any)
       : (raw as any);
-	    const type = typeof evt?.type === "string" ? (evt.type as string) : "";
-	    const properties = evt?.properties as any;
-	    if (!type) return;
+    const type = typeof evt?.type === "string" ? (evt.type as string) : "";
+    const properties = evt?.properties as any;
+    if (!type) return;
 
-	    if (type === "server.heartbeat" || type === "session.updated") {
-	      // Noise events: ignore by default (no UI updates).
-	      return;
-	    }
+    if (type === "server.heartbeat" || type === "session.updated") {
+      // Noise events: ignore by default (no UI updates).
+      return;
+    }
 
-	    if (type === "session.status") {
-	      const sessionID =
-	        typeof properties?.sessionID === "string"
-	          ? (properties.sessionID as string)
-	          : null;
-	      const statusType =
-	        typeof properties?.status?.type === "string"
-	          ? String(properties.status.type)
-	          : null;
-	      if (sessionID && statusType) sessionStatusById.set(sessionID, statusType);
-	      return;
-	    }
+    if (type === "session.status") {
+      const sessionID =
+        typeof properties?.sessionID === "string"
+          ? (properties.sessionID as string)
+          : null;
+      const statusType =
+        typeof properties?.status?.type === "string"
+          ? String(properties.status.type)
+          : null;
+      if (sessionID && statusType) sessionStatusById.set(sessionID, statusType);
+      return;
+    }
 
-	    if (type === "message.updated") {
-	      const info = properties?.info as any;
-	      const role = info?.role;
+    if (type === "message.updated") {
+      const info = properties?.info as any;
+      const role = info?.role;
       const messageID =
         typeof info?.id === "string" ? (info.id as string) : null;
       const sessionID =
@@ -2249,11 +2276,14 @@ function buildOpencodeItemsFromParts(
 
     if (type === "step-start") {
       const snapshot =
-        typeof (p as any).snapshot === "string" ? String((p as any).snapshot) : null;
+        typeof (p as any).snapshot === "string"
+          ? String((p as any).snapshot)
+          : null;
       const stepId = opencodeStepItemId({
         messageID,
         snapshot,
-        partId: typeof (p as any).id === "string" ? String((p as any).id) : null,
+        partId:
+          typeof (p as any).id === "string" ? String((p as any).id) : null,
       });
       activeStepId = stepId;
       out.push({
@@ -2271,7 +2301,9 @@ function buildOpencodeItemsFromParts(
 
     if (type === "step-finish") {
       const snapshot =
-        typeof (p as any).snapshot === "string" ? String((p as any).snapshot) : null;
+        typeof (p as any).snapshot === "string"
+          ? String((p as any).snapshot)
+          : null;
       const stepId: string =
         activeStepId ??
         opencodeStepItemId({
@@ -2286,9 +2318,13 @@ function buildOpencodeItemsFromParts(
         status: "completed",
         messageID,
         snapshot,
-        reason: typeof (p as any).reason === "string" ? String((p as any).reason) : null,
+        reason:
+          typeof (p as any).reason === "string"
+            ? String((p as any).reason)
+            : null,
         cost:
-          typeof (p as any).cost === "number" && Number.isFinite((p as any).cost)
+          typeof (p as any).cost === "number" &&
+          Number.isFinite((p as any).cost)
             ? Number((p as any).cost)
             : null,
         tokens:
@@ -2301,13 +2337,18 @@ function buildOpencodeItemsFromParts(
     }
 
     if (type === "tool") {
-      const callID = typeof (p as any).callID === "string" ? String((p as any).callID) : null;
+      const callID =
+        typeof (p as any).callID === "string"
+          ? String((p as any).callID)
+          : null;
       const toolId = opencodeToolItemId({
         messageID,
         callID,
-        partId: typeof (p as any).id === "string" ? String((p as any).id) : null,
+        partId:
+          typeof (p as any).id === "string" ? String((p as any).id) : null,
       });
-      const toolName = typeof (p as any).tool === "string" ? String((p as any).tool) : "tool";
+      const toolName =
+        typeof (p as any).tool === "string" ? String((p as any).tool) : "tool";
       const rawStatus =
         typeof (p as any).state?.status === "string"
           ? String((p as any).state.status)
@@ -2320,7 +2361,9 @@ function buildOpencodeItemsFromParts(
             ? String((p as any).title)
             : null;
       const input =
-        typeof (p as any).state?.input !== "undefined" ? (p as any).state.input : null;
+        typeof (p as any).state?.input !== "undefined"
+          ? (p as any).state.input
+          : null;
       const output =
         typeof (p as any).state?.output !== "undefined"
           ? (p as any).state.output
@@ -2349,7 +2392,11 @@ function buildOpencodeItemsFromParts(
         typeof partIndexRaw === "number" && Number.isFinite(partIndexRaw)
           ? Math.trunc(partIndexRaw)
           : i;
-      const itemId = opencodePartItemId({ messageID, partType: type, index: partIndex });
+      const itemId = opencodePartItemId({
+        messageID,
+        partType: type,
+        index: partIndex,
+      });
       out.push(opencodePartToThreadItem(p as any, itemId));
       continue;
     }
@@ -2446,7 +2493,8 @@ function parseOpencodeDefaultModelKey(
   cfg: Record<string, unknown> | null,
 ): string | null {
   if (!cfg) return null;
-  const raw = typeof cfg["model"] === "string" ? String(cfg["model"]).trim() : "";
+  const raw =
+    typeof cfg["model"] === "string" ? String(cfg["model"]).trim() : "";
   if (!raw) return null;
 
   // opencode config commonly uses `provider/modelID` (e.g. "openai/gpt-5.2").
@@ -2482,7 +2530,9 @@ function resolveOpencodeDefaultModelKey(
     return new Set(Object.keys(raw as Record<string, unknown>).filter(Boolean));
   })();
 
-  const connected = Array.isArray(providers?.connected) ? providers.connected : [];
+  const connected = Array.isArray(providers?.connected)
+    ? providers.connected
+    : [];
   const all = Array.isArray(providers?.all) ? providers.all : [];
   const defaultByProvider =
     typeof providers?.default === "object" && providers.default !== null
@@ -2520,8 +2570,7 @@ function summarizeItem(
     case "commandExecution": {
       const it = item as any;
       const status = phase === "completed" ? ` status=${it.status}` : "";
-      const exitCode =
-        it.exitCode !== null ? ` exitCode=${it.exitCode}` : "";
+      const exitCode = it.exitCode !== null ? ` exitCode=${it.exitCode}` : "";
       return `${prefix}${status}${exitCode}\n$ ${it.command}\n`;
     }
     case "fileChange": {
@@ -2558,19 +2607,27 @@ function summarizeItem(
     }
     case "opencodeStep": {
       const anyItem = item as any;
-      const status = phase === "completed" ? ` status=${String(anyItem.status ?? "")}` : "";
+      const status =
+        phase === "completed" ? ` status=${String(anyItem.status ?? "")}` : "";
       const snapshot =
-        typeof anyItem.snapshot === "string" ? ` snapshot=${String(anyItem.snapshot)}` : "";
+        typeof anyItem.snapshot === "string"
+          ? ` snapshot=${String(anyItem.snapshot)}`
+          : "";
       const reason =
-        typeof anyItem.reason === "string" ? ` reason=${String(anyItem.reason)}` : "";
+        typeof anyItem.reason === "string"
+          ? ` reason=${String(anyItem.reason)}`
+          : "";
       return `${prefix}${status}${snapshot}${reason}\n`;
     }
     case "opencodeTool": {
       const anyItem = item as any;
-      const status = phase === "completed" ? ` status=${String(anyItem.status ?? "")}` : "";
+      const status =
+        phase === "completed" ? ` status=${String(anyItem.status ?? "")}` : "";
       const tool = typeof anyItem.tool === "string" ? String(anyItem.tool) : "";
       const callID =
-        typeof anyItem.callID === "string" ? ` callID=${String(anyItem.callID)}` : "";
+        typeof anyItem.callID === "string"
+          ? ` callID=${String(anyItem.callID)}`
+          : "";
       return `${prefix}${status}\n${tool}${callID}\n`;
     }
     default: {

@@ -50,6 +50,12 @@ export type OpencodeSkillInfo = {
   location: string;
 };
 
+export type OpencodeAgentInfo = {
+  id: string;
+  name: string;
+  description?: string;
+};
+
 export type OpencodeProviderAuthMethod = {
   type: "oauth" | "api";
   label: string;
@@ -72,7 +78,9 @@ export class OpencodeHttpClient {
   public constructor(private readonly opts: OpencodeHttpOptions) {}
 
   public async getConfig(): Promise<Record<string, unknown>> {
-    const res = await this.getJson(`/config`, { directory: this.opts.directory });
+    const res = await this.getJson(`/config`, {
+      directory: this.opts.directory,
+    });
     if (typeof res !== "object" || res === null) {
       throw new Error("Unexpected /config response (not an object)");
     }
@@ -141,12 +149,14 @@ export class OpencodeHttpClient {
     args: {
       parts: Array<Record<string, unknown>>;
       model?: { providerID: string; modelID: string };
+      agent?: string;
     },
   ): Promise<OpencodeMessageWithParts> {
     const body: Record<string, unknown> = {
       parts: args.parts,
     };
     if (args.model) body["model"] = args.model;
+    if (args.agent) body["agent"] = args.agent;
     const res = await this.postJson(
       `/session/${encodeURIComponent(sessionID)}/message`,
       body,
@@ -223,10 +233,25 @@ export class OpencodeHttpClient {
     })) as OpencodeProviderListResponse;
   }
 
+  public async listAgents(): Promise<OpencodeAgentInfo[]> {
+    const res = await this.getJson(`/agent`, {
+      directory: this.opts.directory,
+    });
+    if (!Array.isArray(res)) return [];
+    return (res as any[]).map((a) => ({
+      id: String(a.id ?? ""),
+      name: String(a.name ?? a.id ?? ""),
+      description:
+        typeof a.description === "string" ? a.description : undefined,
+    }));
+  }
+
   public modelsFromProviders(res: OpencodeProviderListResponse): Model[] {
     const providers = Array.isArray(res?.all) ? res.all : [];
     const defaultByProvider =
-      typeof res?.default === "object" && res.default !== null ? res.default : {};
+      typeof res?.default === "object" && res.default !== null
+        ? res.default
+        : {};
     const out: Model[] = [];
     for (const p of providers) {
       const providerID = String(p.id ?? "");
