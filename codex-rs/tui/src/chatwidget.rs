@@ -3460,11 +3460,6 @@ impl ChatWidget {
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
             | EventMsg::DynamicToolCallRequest(_) => {}
-            EventMsg::ItemCompleted(event) => {
-                if let codex_protocol::items::TurnItem::Plan(plan_item) = event.item {
-                    self.on_plan_item_completed(plan_item.text);
-                }
-            }
         }
     }
 
@@ -3477,6 +3472,7 @@ impl ChatWidget {
             TurnItem::UserMessage(_)
             | TurnItem::AgentMessage(_)
             | TurnItem::Reasoning(_)
+            | TurnItem::Plan(_)
             | TurnItem::WebSearch(_) => {}
         };
     }
@@ -3487,6 +3483,7 @@ impl ChatWidget {
         }
         match event.item {
             TurnItem::ContextCompaction(item) => self.on_context_compaction_completed(item),
+            TurnItem::Plan(plan_item) => self.on_plan_item_completed(plan_item.text),
             TurnItem::UserMessage(_)
             | TurnItem::AgentMessage(_)
             | TurnItem::Reasoning(_)
