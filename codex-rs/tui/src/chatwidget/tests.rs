@@ -833,6 +833,7 @@ async fn make_chatwidget_manual(
         show_welcome_banner: true,
         queued_user_messages: VecDeque::new(),
         pending_request_user_input_answers: VecDeque::new(),
+        request_user_input_questions: HashMap::new(),
         suppress_session_configured_redraw: false,
         pending_notification: None,
         quit_shortcut_expires_at: None,
