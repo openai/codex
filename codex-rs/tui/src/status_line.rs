@@ -228,6 +228,10 @@ async fn run_request(request: &StatusLineRequest) -> Result<String, String> {
             .write_all(request.payload.as_bytes())
             .await
             .map_err(|err| format!("failed to write status line payload: {err}"))?;
+        stdin
+            .shutdown()
+            .await
+            .map_err(|err| format!("failed to shutdown status line stdin: {err}"))?;
     }
 
     let output = tokio::time::timeout(request.timeout, child.wait_with_output())
