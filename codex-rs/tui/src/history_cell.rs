@@ -726,16 +726,17 @@ pub fn new_approval_decision_cell(
                 ],
             )
         }
-        ApprovedExecpolicyAmendment { .. } => {
-            let snippet = Span::from(exec_snippet(&command)).dim();
+        ApprovedExecpolicyAmendment {
+            proposed_execpolicy_amendment,
+        } => {
+            let snippet = Span::from(exec_snippet(&proposed_execpolicy_amendment.command)).dim();
             (
                 "✔ ".green(),
                 vec![
                     "You ".into(),
                     "approved".bold(),
-                    " codex to run ".into(),
+                    " codex to always run commands that start with ".into(),
                     snippet,
-                    " and applied the execpolicy amendment".bold(),
                 ],
             )
         }
