@@ -23,6 +23,7 @@ use crate::token_data::TokenData;
 use codex_app_server_protocol::AuthMode;
 use codex_keyring_store::DefaultKeyringStore;
 use codex_keyring_store::KeyringStore;
+use codex_protocol::account::PlanType as AccountPlanType;
 use once_cell::sync::Lazy;
 
 /// Determine where Codex should store CLI auth credentials.
@@ -54,6 +55,24 @@ pub struct AuthDotJson {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_refresh: Option<DateTime<Utc>>,
+
+    /// ChatGPT account metadata supplied by a trusted proxy.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "chatgptProxy"
+    )]
+    pub chatgpt_proxy: Option<ChatGptProxyAccount>,
+}
+
+/// Account metadata for the tokenless ChatGPT proxy auth mode.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatGptProxyAccount {
+    pub user_id: Option<String>,
+    pub account_id: Option<String>,
+    pub email: Option<String>,
+    pub plan_type: Option<AccountPlanType>,
 }
 
 pub(super) fn get_auth_file(codex_home: &Path) -> PathBuf {
@@ -353,6 +372,7 @@ mod tests {
             openai_api_key: Some("test-key".to_string()),
             tokens: None,
             last_refresh: Some(Utc::now()),
+            chatgpt_proxy: None,
         };
 
         storage
@@ -373,6 +393,7 @@ mod tests {
             openai_api_key: Some("test-key".to_string()),
             tokens: None,
             last_refresh: Some(Utc::now()),
+            chatgpt_proxy: None,
         };
 
         let file = get_auth_file(codex_home.path());
@@ -395,6 +416,7 @@ mod tests {
             openai_api_key: Some("sk-test-key".to_string()),
             tokens: None,
             last_refresh: None,
+            chatgpt_proxy: None,
         };
         let storage = create_auth_storage(dir.path().to_path_buf(), AuthCredentialsStoreMode::File);
         storage.save(&auth_dot_json)?;
@@ -418,6 +440,7 @@ mod tests {
             openai_api_key: Some("sk-ephemeral".to_string()),
             tokens: None,
             last_refresh: Some(Utc::now()),
+            chatgpt_proxy: None,
         };
 
         storage.save(&auth_dot_json)?;
@@ -516,6 +539,7 @@ mod tests {
                 account_id: Some(format!("{prefix}-account-id")),
             }),
             last_refresh: None,
+            chatgpt_proxy: None,
         }
     }
 
@@ -532,6 +556,7 @@ mod tests {
             openai_api_key: Some("sk-test".to_string()),
             tokens: None,
             last_refresh: None,
+            chatgpt_proxy: None,
         };
         seed_keyring_with_auth(
             &mock_keyring,
@@ -574,6 +599,7 @@ mod tests {
                 account_id: Some("account".to_string()),
             }),
             last_refresh: Some(Utc::now()),
+            chatgpt_proxy: None,
         };
 
         storage.save(&auth)?;

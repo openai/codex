@@ -131,6 +131,7 @@ use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_app_server_protocol::build_turns_from_event_msgs;
 use codex_backend_client::Client as BackendClient;
+use codex_backend_client::UsageMetadata;
 use codex_chatgpt::connectors;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
@@ -239,6 +240,8 @@ const THREAD_LIST_MAX_LIMIT: usize = 100;
 
 // Duration before a ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+// Timeout for best-effort plan type lookups via the usage endpoint.
+const PLAN_TYPE_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 struct ActiveLogin {
     shutdown_handle: ShutdownHandle,
     login_id: Uuid,
@@ -1198,19 +1201,16 @@ impl CodexMessageProcessor {
             match self.auth_manager.auth().await {
                 Some(auth) => {
                     let auth_mode = auth.api_auth_mode();
-                    let (reported_auth_method, token_opt) = match auth.get_token() {
-                        Ok(token) if !token.is_empty() => {
-                            let tok = if include_token { Some(token) } else { None };
-                            (Some(auth_mode), tok)
-                        }
-                        Ok(_) => (None, None),
+                    let token_opt = match auth.bearer_token() {
+                        Ok(Some(token)) if include_token && !token.is_empty() => Some(token),
+                        Ok(_) => None,
                         Err(err) => {
-                            tracing::warn!("failed to get token for auth status: {err}");
-                            (None, None)
+                            tracing::warn!("failed to get bearer token for auth status: {err}");
+                            None
                         }
                     };
                     GetAuthStatusResponse {
-                        auth_method: reported_auth_method,
+                        auth_method: Some(auth_mode),
                         auth_token: token_opt,
                         requires_openai_auth: Some(true),
                     }
@@ -1265,6 +1265,26 @@ impl CodexMessageProcessor {
                         }
                     }
                 }
+                CodexAuth::ChatgptProxy(_) => {
+                    let needs_usage_metadata = auth.account_plan_type().is_none()
+                        || auth.get_account_email().is_none()
+                        || auth.get_account_id().is_none();
+                    let usage_metadata = if needs_usage_metadata {
+                        self.fetch_usage_metadata_from_usage().await
+                    } else {
+                        None
+                    };
+
+                    let email = auth
+                        .get_account_email()
+                        .or_else(|| usage_metadata.as_ref().and_then(|meta| meta.email.clone()))
+                        .unwrap_or_else(|| "unknown".to_string());
+                    let plan_type = auth
+                        .account_plan_type()
+                        .or_else(|| usage_metadata.as_ref().map(|meta| meta.plan_type))
+                        .unwrap_or(codex_protocol::account::PlanType::Unknown);
+                    Account::Chatgpt { email, plan_type }
+                }
             }),
             None => None,
         };
@@ -1297,6 +1317,13 @@ impl CodexMessageProcessor {
     }
 
     async fn fetch_account_rate_limits(&self) -> Result<CoreRateLimitSnapshot, JSONRPCErrorError> {
+        let (snapshot, _) = self.fetch_rate_limits_with_metadata().await?;
+        Ok(snapshot)
+    }
+
+    async fn fetch_rate_limits_with_metadata(
+        &self,
+    ) -> Result<(CoreRateLimitSnapshot, UsageMetadata), JSONRPCErrorError> {
         let Some(auth) = self.auth_manager.auth().await else {
             return Err(JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
@@ -1321,13 +1348,42 @@ impl CodexMessageProcessor {
             })?;
 
         client
-            .get_rate_limits()
+            .get_rate_limits_with_metadata()
             .await
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
                 message: format!("failed to fetch codex rate limits: {err}"),
                 data: None,
             })
+    }
+
+    async fn fetch_usage_metadata_from_usage(&self) -> Option<UsageMetadata> {
+        match tokio::time::timeout(
+            PLAN_TYPE_FETCH_TIMEOUT,
+            self.fetch_rate_limits_with_metadata(),
+        )
+        .await
+        {
+            Ok(Ok((_snapshot, metadata))) => {
+                let _changed = self.auth_manager.update_chatgpt_proxy_account_metadata(
+                    metadata.user_id.clone(),
+                    metadata.account_id.clone(),
+                    metadata.email.clone(),
+                    Some(metadata.plan_type),
+                );
+                Some(metadata)
+            }
+            Ok(Err(err)) => {
+                let message = err.message;
+                warn!("failed to fetch usage metadata from usage endpoint: {message}");
+                None
+            }
+            Err(_) => {
+                let secs = PLAN_TYPE_FETCH_TIMEOUT.as_secs();
+                warn!("fetching usage metadata from usage endpoint timed out after {secs}s");
+                None
+            }
+        }
     }
 
     async fn get_user_saved_config(&self, request_id: RequestId) {
