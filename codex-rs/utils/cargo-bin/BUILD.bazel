@@ -1,5 +1,7 @@
 load("//:defs.bzl", "codex_rust_crate")
 
+exports_files(["repo_root.marker"])
+
 codex_rust_crate(
     name = "cargo-bin",
     crate_name = "codex_utils_cargo_bin",

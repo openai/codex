@@ -22,11 +22,15 @@ Similar to [MCP](https://modelcontextprotocol.io/), `codex app-server` supports 
 
 ## Message Schema
 
-Currently, you can dump a TypeScript version of the schema using `codex app-server generate-ts`, or a JSON Schema bundle via `codex app-server generate-json-schema`. Each output is specific to the version of Codex you used to run the command, so the generated artifacts are guaranteed to match that version.
+You can dump a TypeScript version of the schema using `codex app-server generate-ts`, or a JSON Schema bundle via `codex app-server generate-json-schema`.
+
+By default, these commands write a bundled stable schema that omits experimental APIs. Pass `--experimental` to regenerate from source and include experimental APIs.
 
 ```
 codex app-server generate-ts --out DIR
+codex app-server generate-ts --out DIR --experimental
 codex app-server generate-json-schema --out DIR
+codex app-server generate-json-schema --out DIR --experimental
 ```
 
 ## Core Primitives

@@ -5,6 +5,9 @@ members = [
     "async-utils",
     "app-server",
     "app-server-protocol",
+    "app-server-protocol-stable-export",
+    "app-server-json-schema",
+    "app-server-ts-types",
     "app-server-test-client",
     "debug-client",
     "apply-patch",
@@ -66,7 +69,9 @@ app_test_support = { path = "app-server/tests/common" }
 codex-ansi-escape = { path = "ansi-escape" }
 codex-api = { path = "codex-api" }
 codex-app-server = { path = "app-server" }
+codex-app-server-json-schema = { path = "app-server-json-schema" }
 codex-app-server-protocol = { path = "app-server-protocol" }
+codex-app-server-ts-types = { path = "app-server-ts-types" }
 codex-apply-patch = { path = "apply-patch" }
 codex-arg0 = { path = "arg0" }
 codex-async-utils = { path = "async-utils" }

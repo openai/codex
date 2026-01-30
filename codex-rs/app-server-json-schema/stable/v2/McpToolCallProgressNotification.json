@@ -1,0 +1,25 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "itemId": {
+      "type": "string"
+    },
+    "message": {
+      "type": "string"
+    },
+    "threadId": {
+      "type": "string"
+    },
+    "turnId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "itemId",
+    "message",
+    "threadId",
+    "turnId"
+  ],
+  "title": "McpToolCallProgressNotification",
+  "type": "object"
+}

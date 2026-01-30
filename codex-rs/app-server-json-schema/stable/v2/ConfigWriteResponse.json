@@ -1,0 +1,237 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "AbsolutePathBuf": {
+      "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
+      "type": "string"
+    },
+    "ConfigLayerMetadata": {
+      "properties": {
+        "name": {
+          "$ref": "#/definitions/ConfigLayerSource"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "type": "object"
+    },
+    "ConfigLayerSource": {
+      "oneOf": [
+        {
+          "description": "Managed preferences layer delivered by MDM (macOS only).",
+          "properties": {
+            "domain": {
+              "type": "string"
+            },
+            "key": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "mdm"
+              ],
+              "title": "MdmConfigLayerSourceType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "domain",
+            "key",
+            "type"
+          ],
+          "title": "MdmConfigLayerSource",
+          "type": "object"
+        },
+        {
+          "description": "Managed config layer from a file (usually `managed_config.toml`).",
+          "properties": {
+            "file": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/AbsolutePathBuf"
+                }
+              ],
+              "description": "This is the path to the system config.toml file, though it is not guaranteed to exist."
+            },
+            "type": {
+              "enum": [
+                "system"
+              ],
+              "title": "SystemConfigLayerSourceType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "file",
+            "type"
+          ],
+          "title": "SystemConfigLayerSource",
+          "type": "object"
+        },
+        {
+          "description": "User config layer from $CODEX_HOME/config.toml. This layer is special in that it is expected to be: - writable by the user - generally outside the workspace directory",
+          "properties": {
+            "file": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/AbsolutePathBuf"
+                }
+              ],
+              "description": "This is the path to the user's config.toml file, though it is not guaranteed to exist."
+            },
+            "type": {
+              "enum": [
+                "user"
+              ],
+              "title": "UserConfigLayerSourceType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "file",
+            "type"
+          ],
+          "title": "UserConfigLayerSource",
+          "type": "object"
+        },
+        {
+          "description": "Path to a .codex/ folder within a project. There could be multiple of these between `cwd` and the project/repo root.",
+          "properties": {
+            "dotCodexFolder": {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            "type": {
+              "enum": [
+                "project"
+              ],
+              "title": "ProjectConfigLayerSourceType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "dotCodexFolder",
+            "type"
+          ],
+          "title": "ProjectConfigLayerSource",
+          "type": "object"
+        },
+        {
+          "description": "Session-layer overrides supplied via `-c`/`--config`.",
+          "properties": {
+            "type": {
+              "enum": [
+                "sessionFlags"
+              ],
+              "title": "SessionFlagsConfigLayerSourceType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "SessionFlagsConfigLayerSource",
+          "type": "object"
+        },
+        {
+          "description": "`managed_config.toml` was designed to be a config that was loaded as the last layer on top of everything else. This scheme did not quite work out as intended, but we keep this variant as a \"best effort\" while we phase out `managed_config.toml` in favor of `requirements.toml`.",
+          "properties": {
+            "file": {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            "type": {
+              "enum": [
+                "legacyManagedConfigTomlFromFile"
+              ],
+              "title": "LegacyManagedConfigTomlFromFileConfigLayerSourceType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "file",
+            "type"
+          ],
+          "title": "LegacyManagedConfigTomlFromFileConfigLayerSource",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "legacyManagedConfigTomlFromMdm"
+              ],
+              "title": "LegacyManagedConfigTomlFromMdmConfigLayerSourceType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "LegacyManagedConfigTomlFromMdmConfigLayerSource",
+          "type": "object"
+        }
+      ]
+    },
+    "OverriddenMetadata": {
+      "properties": {
+        "effectiveValue": true,
+        "message": {
+          "type": "string"
+        },
+        "overridingLayer": {
+          "$ref": "#/definitions/ConfigLayerMetadata"
+        }
+      },
+      "required": [
+        "effectiveValue",
+        "message",
+        "overridingLayer"
+      ],
+      "type": "object"
+    },
+    "WriteStatus": {
+      "enum": [
+        "ok",
+        "okOverridden"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "filePath": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      ],
+      "description": "Canonical path to the config file that was written."
+    },
+    "overriddenMetadata": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/OverriddenMetadata"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "status": {
+      "$ref": "#/definitions/WriteStatus"
+    },
+    "version": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "filePath",
+    "status",
+    "version"
+  ],
+  "title": "ConfigWriteResponse",
+  "type": "object"
+}

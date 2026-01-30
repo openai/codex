@@ -20,7 +20,9 @@ anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 clap_complete = { workspace = true }
 codex-app-server = { workspace = true }
+codex-app-server-json-schema = { workspace = true }
 codex-app-server-protocol = { workspace = true }
+codex-app-server-ts-types = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-chatgpt = { workspace = true }
 codex-cloud-tasks = { path = "../cloud-tasks" }

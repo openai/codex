@@ -1,0 +1,26 @@
+# load("//:defs.bzl", "codex_rust_crate")
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+
+# codex_rust_crate(
+#     name = "app-server-protocol-stable-export",
+#     crate_name = "codex_app_server_protocol_stable_export",
+#     alt_deps = {
+#         "//codex-rs/app-server-protocol:app-server-protocol": "//codex-rs/app-server-protocol:app-server-protocol-stable",
+#     },
+# )
+
+rust_binary(
+    name = "codex-app-server-protocol-stable-export",
+    srcs = ["//codex-rs/app-server-protocol-stable-export:src/main.rs"],
+    crate_name = "codex_app_server_protocol_stable_export",
+    crate_root = "//codex-rs/app-server-protocol-stable-export:src/main.rs",
+    generator_function = "codex_rust_crate",
+    generator_location = "codex-rs/app-server-protocol-stable-export/BUILD.bazel:3:17",
+    generator_name = "app-server-protocol-stable-export",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//codex-rs/app-server-protocol:app-server-protocol-stable",
+        "@crates//:anyhow-1.0.100",
+        "@crates//:clap-4.5.54",
+    ],
+)
