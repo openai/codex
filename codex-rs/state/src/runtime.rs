@@ -394,8 +394,10 @@ ON CONFLICT(id) DO UPDATE SET
 
     /// Update the thread name for an existing thread.
     pub async fn update_thread_name(&self, thread_id: ThreadId, name: &str) -> anyhow::Result<()> {
-        sqlx::query("UPDATE threads SET name = ? WHERE id = ?")
+        let updated_at = datetime_to_epoch_seconds(Utc::now());
+        sqlx::query("UPDATE threads SET name = ?, updated_at = ? WHERE id = ?")
             .bind(name)
+            .bind(updated_at)
             .bind(thread_id.to_string())
             .execute(self.pool.as_ref())
             .await?;

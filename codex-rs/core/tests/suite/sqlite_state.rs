@@ -301,6 +301,18 @@ async fn thread_rename_updates_state_db_name() -> Result<()> {
     let thread_id = test.session_configured.session_id;
     let new_name = "renamed thread";
 
+    let mut metadata = None;
+    for _ in 0..100 {
+        metadata = db.get_thread(thread_id).await?;
+        if metadata.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let metadata = metadata.expect("thread should exist in state db");
+    let previous_updated_at = metadata.updated_at;
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
     test.codex
         .submit(Op::SetThreadName {
             name: new_name.to_string(),
@@ -325,6 +337,10 @@ async fn thread_rename_updates_state_db_name() -> Result<()> {
 
     let metadata = metadata.expect("thread should exist in state db");
     assert_eq!(metadata.name, new_name);
+    assert!(
+        metadata.updated_at > previous_updated_at,
+        "expected updated_at to bump after rename"
+    );
 
     Ok(())
 }
