@@ -5,6 +5,28 @@ use std::path::PathBuf;
 fn main() {
     // Tell rustc/clippy that this is an expected cfg value.
     println!("cargo:rustc-check-cfg=cfg(vendored_bwrap_available)");
+    println!("cargo:rerun-if-env-changed=CODEX_BWRAP_ENABLE_FFI");
+    println!("cargo:rerun-if-env-changed=CODEX_BWRAP_SOURCE_DIR");
+
+    // Rebuild if the vendored bwrap sources change.
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap_or_default());
+    let vendor_dir = manifest_dir.join("../vendor/bubblewrap");
+    println!(
+        "cargo:rerun-if-changed={}",
+        vendor_dir.join("bubblewrap.c").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        vendor_dir.join("bind-mount.c").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        vendor_dir.join("network.c").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        vendor_dir.join("utils.c").display()
+    );
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if target_os != "linux" {

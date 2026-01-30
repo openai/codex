@@ -39,10 +39,14 @@ mod imp {
     pub(crate) fn exec_vendored_bwrap(_argv: Vec<String>) -> ! {
         panic!(
             "build-time bubblewrap is not available in this build.\n\
-To enable it on Linux:\n\
-- set CODEX_BWRAP_ENABLE_FFI=1\n\
-- and either set CODEX_BWRAP_SOURCE_DIR to a bubblewrap checkout,\n\
-  or set CODEX_BWRAP_FETCH=1 (and optionally CODEX_BWRAP_FETCH_REF)."
+Rebuild codex-linux-sandbox on Linux with CODEX_BWRAP_ENABLE_FFI=1.\n\
+Example:\n\
+- cd codex-rs && CODEX_BWRAP_ENABLE_FFI=1 cargo build -p codex-linux-sandbox\n\
+If this crate was already built without it, run:\n\
+- cargo clean -p codex-linux-sandbox\n\
+Notes:\n\
+- libcap headers must be available via pkg-config\n\
+- bubblewrap sources expected at codex-rs/vendor/bubblewrap (default)"
         );
     }
 }
