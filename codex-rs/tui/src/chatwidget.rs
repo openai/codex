@@ -946,7 +946,7 @@ impl ChatWidget {
     fn on_plan_item_completed(&mut self, text: String) {
         let streamed_plan = self.plan_delta_buffer.trim().to_string();
         let plan_text = if text.trim().is_empty() {
-            streamed_plan.clone()
+            streamed_plan
         } else {
             text
         };
