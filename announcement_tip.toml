@@ -14,4 +14,4 @@ target_app = "cli"
 [[announcements]]
 content = "This is a test announcement"
 version_regex = "^0\\.0\\.0$"
-to_date = "2026-01-10"
+to_date = "2026-05-10"
