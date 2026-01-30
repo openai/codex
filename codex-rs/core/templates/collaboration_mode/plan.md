@@ -54,14 +54,12 @@ Do not ask questions that can be answered from the repo or system (for example, 
 
 Every assistant turn MUST be exactly one of:
 A) a `request_user_input` tool call (questions/options only), OR
-B) a non-final status update with no questions and no plan content, OR
 C) the final output: a titled, plan-only document.
 
 Rules:
 
 * No questions in free text (only via `request_user_input`).
 * Never mix a `request_user_input` call with plan content.
-* Status updates must not include questions or plan content.
 * Internal tool/repo exploration is allowed privately before A, B, or C.
 
 ## Ask a lot, but never ask trivia
