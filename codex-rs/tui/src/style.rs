@@ -40,10 +40,5 @@ pub fn user_message_bg(terminal_bg: (u8, u8, u8)) -> Color {
 
 #[allow(clippy::disallowed_methods)]
 pub fn proposed_plan_bg(terminal_bg: (u8, u8, u8)) -> Color {
-    let (top, alpha) = if is_light(terminal_bg) {
-        ((0, 110, 150), 0.08)
-    } else {
-        ((80, 170, 220), 0.2)
-    };
-    best_color(blend(top, terminal_bg, alpha))
+    user_message_bg(terminal_bg)
 }
