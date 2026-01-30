@@ -2686,9 +2686,7 @@ impl ChatWidget {
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } if self.bottom_pane.no_modal_or_popup_active() && self.stash.is_some() => {
-                if self.restore_stash() {
-                    return;
-                }
+                self.restore_stash();
             }
             _ => match self.bottom_pane.handle_key_event(key_event) {
                 InputResult::Submitted {
