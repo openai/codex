@@ -8,6 +8,7 @@ use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
 use crate::app_event_sender::AppEventSender;
+use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::history_cell::UserHistoryCell;
 use crate::test_backend::VT100Backend;
@@ -133,6 +134,7 @@ async fn resumed_initial_messages_render_history() {
     let configured = codex_core::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
         approval_policy: AskForApproval::Never,
@@ -199,6 +201,7 @@ async fn replayed_user_message_preserves_text_elements_and_local_images() {
     let configured = codex_core::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
         approval_policy: AskForApproval::Never,
@@ -251,6 +254,7 @@ async fn submission_preserves_text_elements_and_local_images() {
     let configured = codex_core::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
         approval_policy: AskForApproval::Never,
@@ -355,6 +359,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
             path: first_images[0].clone(),
         }],
         text_elements: first_elements,
+        mention_paths: HashMap::new(),
     });
     chat.queued_user_messages.push_back(UserMessage {
         text: second_text,
@@ -363,6 +368,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
             path: second_images[0].clone(),
         }],
         text_elements: second_elements,
+        mention_paths: HashMap::new(),
     });
     chat.refresh_queued_user_messages();
 
@@ -442,6 +448,7 @@ async fn remap_placeholders_uses_attachment_labels() {
         text,
         text_elements: elements,
         local_images: attachments,
+        mention_paths: HashMap::new(),
     };
     let mut next_label = 3usize;
     let remapped = remap_placeholders_for_message(message, &mut next_label);
@@ -502,6 +509,7 @@ async fn remap_placeholders_uses_byte_ranges_when_placeholder_missing() {
         text,
         text_elements: elements,
         local_images: attachments,
+        mention_paths: HashMap::new(),
     };
     let mut next_label = 3usize;
     let remapped = remap_placeholders_for_message(message, &mut next_label);
@@ -712,6 +720,7 @@ async fn helpers_are_available_and_do_not_panic() {
         models_manager: thread_manager.get_models_manager(),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
+        feedback_audience: FeedbackAudience::External,
         model: Some(resolved_model),
         otel_manager,
     };
@@ -810,12 +819,14 @@ async fn make_chatwidget_manual(
         unified_exec_processes: Vec::new(),
         agent_turn_running: false,
         mcp_startup_status: None,
+        connectors_cache: ConnectorsCacheState::default(),
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
         current_status_header: String::from("Working"),
         retry_status_header: None,
         thread_id: None,
+        thread_name: None,
         forked_from: None,
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
@@ -832,6 +843,7 @@ async fn make_chatwidget_manual(
         last_separator_elapsed_secs: None,
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
+        feedback_audience: FeedbackAudience::External,
         current_rollout_path: None,
         external_editor_state: ExternalEditorState::Closed,
     };
@@ -2017,7 +2029,9 @@ async fn unified_exec_wait_status_header_updates_on_late_command_display() {
     chat.on_task_started();
     chat.unified_exec_processes.push(UnifiedExecProcessSummary {
         key: "proc-1".to_string(),
+        call_id: "call-1".to_string(),
         command_display: "sleep 5".to_string(),
+        recent_chunks: Vec::new(),
     });
 
     chat.on_terminal_interaction(TerminalInteractionEvent {
@@ -2263,6 +2277,19 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
 }
 
 #[tokio::test]
+async fn plan_slash_command_switches_to_plan_mode() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let initial = chat.current_collaboration_mode().clone();
+
+    chat.dispatch_command(SlashCommand::Plan);
+
+    assert!(rx.try_recv().is_err(), "plan should not emit an app event");
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    assert_eq!(chat.current_collaboration_mode(), &initial);
+}
+
+#[tokio::test]
 async fn collaboration_modes_defaults_to_code_on_startup() {
     let codex_home = tempdir().expect("tempdir");
     let cfg = ConfigBuilder::default()
@@ -2291,6 +2318,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         models_manager: thread_manager.get_models_manager(),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
+        feedback_audience: FeedbackAudience::External,
         model: Some(resolved_model.clone()),
         otel_manager,
     };
@@ -2335,6 +2363,7 @@ async fn experimental_mode_plan_applies_on_startup() {
         models_manager: thread_manager.get_models_manager(),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
+        feedback_audience: FeedbackAudience::External,
         model: Some(resolved_model.clone()),
         otel_manager,
     };
@@ -3014,6 +3043,43 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
         !popup.contains("test-hidden-model"),
         "expected hidden model to be excluded from picker:\n{popup}"
     );
+}
+
+#[tokio::test]
+async fn model_cap_error_does_not_switch_models() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("boomslang")).await;
+    chat.set_model("boomslang");
+    while rx.try_recv().is_ok() {}
+    while op_rx.try_recv().is_ok() {}
+
+    chat.handle_codex_event(Event {
+        id: "err-1".to_string(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "model cap".to_string(),
+            codex_error_info: Some(CodexErrorInfo::ModelCap {
+                model: "boomslang".to_string(),
+                reset_after_seconds: Some(120),
+            }),
+        }),
+    });
+
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::UpdateModel(model) = event {
+            assert_eq!(
+                model, "boomslang",
+                "did not expect model switch on model-cap error"
+            );
+        }
+    }
+
+    while let Ok(event) = op_rx.try_recv() {
+        if let Op::OverrideTurnContext { model, .. } = event {
+            assert!(
+                model.is_none(),
+                "did not expect OverrideTurnContext model update on model-cap error"
+            );
+        }
+    }
 }
 
 #[tokio::test]

@@ -26,10 +26,12 @@ use crate::features::maybe_push_unstable_features_warning;
 use crate::models_manager::manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
+use crate::rollout::session_index;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
 use crate::terminal;
+use crate::transport_manager::TransportManager;
 use crate::truncate::TruncationPolicy;
 use crate::user_notification::UserNotifier;
 use crate::util::error_or_panic;
@@ -84,6 +86,7 @@ use tracing::debug;
 use tracing::error;
 use tracing::field;
 use tracing::info;
+use tracing::info_span;
 use tracing::instrument;
 use tracing::trace_span;
 use tracing::warn;
@@ -120,6 +123,10 @@ use crate::mcp::effective_mcp_servers;
 use crate::mcp::maybe_prompt_and_install_mcp_dependencies;
 use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
+use crate::mentions::build_connector_slug_counts;
+use crate::mentions::build_skill_name_counts;
+use crate::mentions::collect_explicit_app_paths;
+use crate::mentions::collect_tool_mentions_from_messages;
 use crate::model_provider_info::CHAT_WIRE_API_DEPRECATION_SUMMARY;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageContentDeltaEvent;
@@ -164,7 +171,12 @@ use crate::skills::SkillInjections;
 use crate::skills::SkillMetadata;
 use crate::skills::SkillsManager;
 use crate::skills::build_skill_injections;
+use crate::skills::collect_env_var_dependencies;
 use crate::skills::collect_explicit_skill_mentions;
+use crate::skills::injection::ToolMentionKind;
+use crate::skills::injection::app_id_from_path;
+use crate::skills::injection::tool_kind_for_path;
+use crate::skills::resolve_skill_dependencies_for_turn;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
 use crate::state::SessionState;
@@ -316,6 +328,12 @@ impl Codex {
             .clone()
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
             .unwrap_or_else(|| model_info.get_model_instructions(config.model_personality));
+        // Respect explicit thread-start tools; fall back to persisted tools when resuming a thread.
+        let dynamic_tools = if dynamic_tools.is_empty() {
+            conversation_history.get_dynamic_tools().unwrap_or_default()
+        } else {
+            dynamic_tools
+        };
 
         // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.collaboration_mode
         // to avoid extracting these fields separately and constructing CollaborationMode here.
@@ -340,6 +358,8 @@ impl Codex {
             sandbox_policy: config.sandbox_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
+            codex_home: config.codex_home.clone(),
+            thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             session_source,
             dynamic_tools,
@@ -349,6 +369,7 @@ impl Codex {
         let session_source_clone = session_configuration.session_source.clone();
         let (agent_status_tx, agent_status_rx) = watch::channel(AgentStatus::PendingInit);
 
+        let session_init_span = info_span!("session_init");
         let session = Session::new(
             session_configuration,
             config.clone(),
@@ -363,6 +384,7 @@ impl Codex {
             file_watcher,
             agent_control,
         )
+        .instrument(session_init_span)
         .await
         .map_err(|e| {
             error!("Failed to create session: {e:#}");
@@ -371,7 +393,10 @@ impl Codex {
         let thread_id = session.conversation_id;
 
         // This task will run until Op::Shutdown is received.
-        tokio::spawn(submission_loop(Arc::clone(&session), config, rx_sub));
+        let session_loop_span = info_span!("session_loop", thread_id = %thread_id);
+        tokio::spawn(
+            submission_loop(Arc::clone(&session), config, rx_sub).instrument(session_loop_span),
+        );
         let codex = Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
@@ -530,6 +555,10 @@ pub(crate) struct SessionConfiguration {
     /// `ConfigureSession` operation so that the business-logic layer can
     /// operate deterministically.
     cwd: PathBuf,
+    /// Directory containing all Codex state for this session.
+    codex_home: PathBuf,
+    /// Optional user-facing name for the thread, updated during the session.
+    thread_name: Option<String>,
 
     // TODO(pakrym): Remove config from here
     original_config_do_not_use: Arc<Config>,
@@ -539,6 +568,10 @@ pub(crate) struct SessionConfiguration {
 }
 
 impl SessionConfiguration {
+    pub(crate) fn codex_home(&self) -> &PathBuf {
+        &self.codex_home
+    }
+
     fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
         ThreadConfigSnapshot {
             model: self.collaboration_mode.model().to_string(),
@@ -669,6 +702,11 @@ impl Session {
         });
     }
 
+    pub(crate) async fn codex_home(&self) -> PathBuf {
+        let state = self.state.lock().await;
+        state.session_configuration.codex_home().clone()
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn make_turn_context(
         auth_manager: Option<Arc<AuthManager>>,
@@ -679,6 +717,7 @@ impl Session {
         model_info: ModelInfo,
         conversation_id: ThreadId,
         sub_id: String,
+        transport_manager: TransportManager,
     ) -> TurnContext {
         let otel_manager = otel_manager.clone().with_model(
             session_configuration.collaboration_mode.model(),
@@ -695,6 +734,7 @@ impl Session {
             session_configuration.model_reasoning_summary,
             conversation_id,
             session_configuration.session_source.clone(),
+            transport_manager,
         );
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -727,7 +767,7 @@ impl Session {
 
     #[allow(clippy::too_many_arguments)]
     async fn new(
-        session_configuration: SessionConfiguration,
+        mut session_configuration: SessionConfiguration,
         config: Arc<Config>,
         auth_manager: Arc<AuthManager>,
         models_manager: Arc<ModelsManager>,
@@ -766,6 +806,7 @@ impl Session {
                         BaseInstructions {
                             text: session_configuration.base_instructions.clone(),
                         },
+                        session_configuration.dynamic_tools.clone(),
                     ),
                 )
             }
@@ -907,6 +948,16 @@ impl Session {
                 otel_manager.clone(),
             );
         }
+        let thread_name =
+            match session_index::find_thread_name_by_id(&config.codex_home, &conversation_id).await
+            {
+                Ok(name) => name,
+                Err(err) => {
+                    warn!("Failed to read session index for thread name: {err}");
+                    None
+                }
+            };
+        session_configuration.thread_name = thread_name.clone();
         let state = SessionState::new(session_configuration.clone());
         let live_agents_reload = config.features.enabled(Feature::LiveAgentsReload);
         let live_skills_reload = config.features.enabled(Feature::LiveSkillsReload);
@@ -933,6 +984,7 @@ impl Session {
             file_watcher,
             agent_control,
             state_db: state_db_ctx.clone(),
+            transport_manager: TransportManager::new(),
         };
 
         let sess = Arc::new(Session {
@@ -959,6 +1011,7 @@ impl Session {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
                 forked_from_id,
+                thread_name: session_configuration.thread_name.clone(),
                 model: session_configuration.collaboration_mode.model().to_string(),
                 model_provider_id: config.model_provider_id.clone(),
                 approval_policy: session_configuration.approval_policy.value(),
@@ -1263,6 +1316,7 @@ impl Session {
             model_info,
             self.conversation_id,
             sub_id,
+            self.services.transport_manager.clone(),
         );
         if let Some(final_schema) = final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
@@ -1346,27 +1400,31 @@ impl Session {
         previous: Option<&Arc<TurnContext>>,
         next: &TurnContext,
     ) -> Option<ResponseItem> {
-        let personality = next.personality?;
-        if let Some(prev) = previous
-            && prev.personality == Some(personality)
-        {
+        if !self.features.enabled(Feature::Personality) {
             return None;
         }
-        let model_info = next.client.get_model_info();
-        let personality_message = Self::personality_message_for(&model_info, personality);
+        let previous = previous?;
 
-        personality_message.map(|personality_message| {
-            DeveloperInstructions::personality_spec_message(personality_message).into()
-        })
+        // if a personality is specified and it's different from the previous one, build a personality update item
+        if let Some(personality) = next.personality
+            && next.personality != previous.personality
+        {
+            let model_info = next.client.get_model_info();
+            let personality_message = Self::personality_message_for(&model_info, personality);
+            personality_message.map(|personality_message| {
+                DeveloperInstructions::personality_spec_message(personality_message).into()
+            })
+        } else {
+            None
+        }
     }
 
     fn personality_message_for(model_info: &ModelInfo, personality: Personality) -> Option<String> {
         model_info
-            .model_instructions_template
+            .model_messages
             .as_ref()
-            .and_then(|template| template.personality_messages.as_ref())
-            .and_then(|messages| messages.0.get(&personality))
-            .cloned()
+            .and_then(|spec| spec.get_personality_message(Some(personality)))
+            .filter(|message| !message.is_empty())
     }
 
     fn build_collaboration_mode_update_item(
@@ -1508,8 +1566,7 @@ impl Session {
             .lock()
             .await
             .session_configuration
-            .original_config_do_not_use
-            .codex_home
+            .codex_home()
             .clone();
 
         if !features.enabled(Feature::ExecPolicy) {
@@ -1935,14 +1992,32 @@ impl Session {
             items.push(DeveloperInstructions::new(developer_instructions.to_string()).into());
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
-        let collaboration_mode = {
+        let (collaboration_mode, base_instructions) = {
             let state = self.state.lock().await;
-            state.session_configuration.collaboration_mode.clone()
+            (
+                state.session_configuration.collaboration_mode.clone(),
+                state.session_configuration.base_instructions.clone(),
+            )
         };
         if let Some(collab_instructions) =
             DeveloperInstructions::from_collaboration_mode(&collaboration_mode)
         {
             items.push(collab_instructions.into());
+        }
+        if self.features.enabled(Feature::Personality)
+            && let Some(personality) = turn_context.personality
+        {
+            let model_info = turn_context.client.get_model_info();
+            let has_baked_personality = model_info.supports_personality()
+                && base_instructions == model_info.get_model_instructions(Some(personality));
+            if !has_baked_personality
+                && let Some(personality_message) =
+                    Self::personality_message_for(&model_info, personality)
+            {
+                items.push(
+                    DeveloperInstructions::personality_spec_message(personality_message).into(),
+                );
+            }
         }
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
             items.push(
@@ -2050,6 +2125,16 @@ impl Session {
     {
         let mut state = self.state.lock().await;
         state.record_mcp_dependency_prompted(names);
+    }
+
+    pub async fn dependency_env(&self) -> HashMap<String, String> {
+        let state = self.state.lock().await;
+        state.dependency_env()
+    }
+
+    pub async fn set_dependency_env(&self, values: HashMap<String, String>) {
+        let mut state = self.state.lock().await;
+        state.set_dependency_env(values);
     }
 
     pub(crate) async fn set_server_reasoning_included(&self, included: bool) {
@@ -2306,7 +2391,7 @@ impl Session {
         let config = self.get_config().await;
         let mcp_servers = with_codex_apps_mcp(
             mcp_servers,
-            self.features.enabled(Feature::Connectors),
+            self.features.enabled(Feature::Apps),
             auth.as_ref(),
             config.as_ref(),
         );
@@ -2498,6 +2583,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::ThreadRollback { num_turns } => {
                 handlers::thread_rollback(&sess, sub.id.clone(), num_turns).await;
             }
+            Op::SetThreadName { name } => {
+                handlers::set_thread_name(&sess, sub.id.clone(), name).await;
+            }
             Op::RunUserShellCommand { command } => {
                 handlers::run_user_shell_command(
                     &sess,
@@ -2542,6 +2630,7 @@ mod handlers {
     use crate::mcp::collect_mcp_snapshot_from_manager;
     use crate::mcp::effective_mcp_servers;
     use crate::review_prompts::resolve_review_request;
+    use crate::rollout::session_index;
     use crate::tasks::CompactTask;
     use crate::tasks::RegularTask;
     use crate::tasks::UndoTask;
@@ -2558,6 +2647,7 @@ mod handlers {
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
     use codex_protocol::protocol::SkillsListEntry;
+    use codex_protocol::protocol::ThreadNameUpdatedEvent;
     use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::WarningEvent;
@@ -3021,6 +3111,72 @@ mod handlers {
         .await;
     }
 
+    /// Persists the thread name in the session index, updates in-memory state, and emits
+    /// a `ThreadNameUpdated` event on success.
+    ///
+    /// This appends the name to `CODEX_HOME/sessions_index.jsonl` via `session_index::append_thread_name` for the
+    /// current `thread_id`, then updates `SessionConfiguration::thread_name`.
+    ///
+    /// Returns an error event if the name is empty or session persistence is disabled.
+    pub async fn set_thread_name(sess: &Arc<Session>, sub_id: String, name: String) {
+        let Some(name) = crate::util::normalize_thread_name(&name) else {
+            let event = Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: "Thread name cannot be empty.".to_string(),
+                    codex_error_info: Some(CodexErrorInfo::BadRequest),
+                }),
+            };
+            sess.send_event_raw(event).await;
+            return;
+        };
+
+        let persistence_enabled = {
+            let rollout = sess.services.rollout.lock().await;
+            rollout.is_some()
+        };
+        if !persistence_enabled {
+            let event = Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: "Session persistence is disabled; cannot rename thread.".to_string(),
+                    codex_error_info: Some(CodexErrorInfo::Other),
+                }),
+            };
+            sess.send_event_raw(event).await;
+            return;
+        };
+
+        let codex_home = sess.codex_home().await;
+        if let Err(e) =
+            session_index::append_thread_name(&codex_home, sess.conversation_id, &name).await
+        {
+            let event = Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: format!("Failed to set thread name: {e}"),
+                    codex_error_info: Some(CodexErrorInfo::Other),
+                }),
+            };
+            sess.send_event_raw(event).await;
+            return;
+        }
+
+        {
+            let mut state = sess.state.lock().await;
+            state.session_configuration.thread_name = Some(name.clone());
+        }
+
+        sess.send_event_raw(Event {
+            id: sub_id,
+            msg: EventMsg::ThreadNameUpdated(ThreadNameUpdatedEvent {
+                thread_id: sess.conversation_id,
+                thread_name: Some(name),
+            }),
+        })
+        .await;
+    }
+
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
         sess.services
@@ -3157,6 +3313,7 @@ async fn spawn_review_thread(
         per_turn_config.model_reasoning_summary,
         sess.conversation_id,
         parent_turn_context.client.get_session_source(),
+        parent_turn_context.client.transport_manager(),
     );
 
     let review_turn_context = TurnContext {
@@ -3294,9 +3451,47 @@ pub(crate) async fn run_turn(
             .await,
     );
 
+    let (skill_name_counts, skill_name_counts_lower) = skills_outcome.as_ref().map_or_else(
+        || (HashMap::new(), HashMap::new()),
+        |outcome| build_skill_name_counts(&outcome.skills, &outcome.disabled_paths),
+    );
+    let connector_slug_counts = if turn_context.client.config().features.enabled(Feature::Apps) {
+        let mcp_tools = match sess
+            .services
+            .mcp_connection_manager
+            .read()
+            .await
+            .list_all_tools()
+            .or_cancel(&cancellation_token)
+            .await
+        {
+            Ok(mcp_tools) => mcp_tools,
+            Err(_) => return None,
+        };
+        let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
+        build_connector_slug_counts(&connectors)
+    } else {
+        HashMap::new()
+    };
     let mentioned_skills = skills_outcome.as_ref().map_or_else(Vec::new, |outcome| {
-        collect_explicit_skill_mentions(&input, &outcome.skills, &outcome.disabled_paths)
+        collect_explicit_skill_mentions(
+            &input,
+            &outcome.skills,
+            &outcome.disabled_paths,
+            &skill_name_counts,
+            &connector_slug_counts,
+        )
     });
+    let explicit_app_paths = collect_explicit_app_paths(&input);
+
+    let config = turn_context.client.config();
+    if config
+        .features
+        .enabled(Feature::SkillEnvVarDependencyPrompt)
+    {
+        let env_var_dependencies = collect_env_var_dependencies(&mentioned_skills);
+        resolve_skill_dependencies_for_turn(&sess, &turn_context, &env_var_dependencies).await;
+    }
 
     maybe_prompt_and_install_mcp_dependencies(
         sess.as_ref(),
@@ -3362,12 +3557,17 @@ pub(crate) async fn run_turn(
             })
             .map(|user_message| user_message.message())
             .collect::<Vec<String>>();
+        let tool_selection = SamplingRequestToolSelection {
+            explicit_app_paths: &explicit_app_paths,
+            skill_name_counts_lower: &skill_name_counts_lower,
+        };
         match run_sampling_request(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
             Arc::clone(&turn_diff_tracker),
             &mut client_session,
             sampling_request_input,
+            tool_selection,
             cancellation_token.child_token(),
         )
         .await
@@ -3442,40 +3642,79 @@ async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) 
 }
 
 fn filter_connectors_for_input(
-    connectors: Vec<connectors::ConnectorInfo>,
+    connectors: Vec<connectors::AppInfo>,
     input: &[ResponseItem],
-) -> Vec<connectors::ConnectorInfo> {
+    explicit_app_paths: &[String],
+    skill_name_counts_lower: &HashMap<String, usize>,
+) -> Vec<connectors::AppInfo> {
     let user_messages = collect_user_messages(input);
-    if user_messages.is_empty() {
+    if user_messages.is_empty() && explicit_app_paths.is_empty() {
         return Vec::new();
+    }
+
+    let mentions = collect_tool_mentions_from_messages(&user_messages);
+    let mention_names_lower = mentions
+        .plain_names
+        .iter()
+        .map(|name| name.to_ascii_lowercase())
+        .collect::<HashSet<String>>();
+
+    let connector_slug_counts = build_connector_slug_counts(&connectors);
+    let mut allowed_connector_ids: HashSet<String> = HashSet::new();
+    for path in explicit_app_paths
+        .iter()
+        .chain(mentions.paths.iter())
+        .filter(|path| tool_kind_for_path(path) == ToolMentionKind::App)
+    {
+        if let Some(connector_id) = app_id_from_path(path) {
+            allowed_connector_ids.insert(connector_id.to_string());
+        }
     }
 
     connectors
         .into_iter()
-        .filter(|connector| connector_inserted_in_messages(connector, &user_messages))
+        .filter(|connector| {
+            connector_inserted_in_messages(
+                connector,
+                &mention_names_lower,
+                &allowed_connector_ids,
+                &connector_slug_counts,
+                skill_name_counts_lower,
+            )
+        })
         .collect()
 }
 
 fn connector_inserted_in_messages(
-    connector: &connectors::ConnectorInfo,
-    user_messages: &[String],
+    connector: &connectors::AppInfo,
+    mention_names_lower: &HashSet<String>,
+    allowed_connector_ids: &HashSet<String>,
+    connector_slug_counts: &HashMap<String, usize>,
+    skill_name_counts_lower: &HashMap<String, usize>,
 ) -> bool {
-    let label = connectors::connector_display_label(connector);
-    let needle = label.to_lowercase();
-    let legacy = format!("{label} connector").to_lowercase();
-    user_messages.iter().any(|message| {
-        let message = message.to_lowercase();
-        message.contains(&needle) || message.contains(&legacy)
-    })
+    if allowed_connector_ids.contains(&connector.id) {
+        return true;
+    }
+
+    let mention_slug = connectors::connector_mention_slug(connector);
+    let connector_count = connector_slug_counts
+        .get(&mention_slug)
+        .copied()
+        .unwrap_or(0);
+    let skill_count = skill_name_counts_lower
+        .get(&mention_slug)
+        .copied()
+        .unwrap_or(0);
+    connector_count == 1 && skill_count == 0 && mention_names_lower.contains(&mention_slug)
 }
 
 fn filter_codex_apps_mcp_tools(
     mut mcp_tools: HashMap<String, crate::mcp_connection_manager::ToolInfo>,
-    connectors: &[connectors::ConnectorInfo],
+    connectors: &[connectors::AppInfo],
 ) -> HashMap<String, crate::mcp_connection_manager::ToolInfo> {
     let allowed: HashSet<&str> = connectors
         .iter()
-        .map(|connector| connector.connector_id.as_str())
+        .map(|connector| connector.id.as_str())
         .collect();
 
     mcp_tools.retain(|_, tool| {
@@ -3495,6 +3734,11 @@ fn codex_apps_connector_id(tool: &crate::mcp_connection_manager::ToolInfo) -> Op
     tool.connector_id.as_deref()
 }
 
+struct SamplingRequestToolSelection<'a> {
+    explicit_app_paths: &'a [String],
+    skill_name_counts_lower: &'a HashMap<String, usize>,
+}
+
 #[instrument(level = "trace",
     skip_all,
     fields(
@@ -3509,6 +3753,7 @@ async fn run_sampling_request(
     turn_diff_tracker: SharedTurnDiffTracker,
     client_session: &mut ModelClientSession,
     input: Vec<ResponseItem>,
+    tool_selection: SamplingRequestToolSelection<'_>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
     let mut mcp_tools = sess
@@ -3519,14 +3764,14 @@ async fn run_sampling_request(
         .list_all_tools()
         .or_cancel(&cancellation_token)
         .await?;
-    let connectors_for_tools = if turn_context
-        .client
-        .config()
-        .features
-        .enabled(Feature::Connectors)
-    {
+    let connectors_for_tools = if turn_context.client.config().features.enabled(Feature::Apps) {
         let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
-        Some(filter_connectors_for_input(connectors, &input))
+        Some(filter_connectors_for_input(
+            connectors,
+            &input,
+            tool_selection.explicit_app_paths,
+            tool_selection.skill_name_counts_lower,
+        ))
     } else {
         None
     };
@@ -3573,7 +3818,9 @@ async fn run_sampling_request(
         )
         .await
         {
-            Ok(output) => return Ok(output),
+            Ok(output) => {
+                return Ok(output);
+            }
             Err(CodexErr::ContextWindowExceeded) => {
                 sess.set_total_tokens_full(&turn_context).await;
                 return Err(CodexErr::ContextWindowExceeded);
@@ -3594,6 +3841,17 @@ async fn run_sampling_request(
 
         // Use the configured provider-specific stream retry budget.
         let max_retries = turn_context.client.get_provider().stream_max_retries();
+        if retries >= max_retries && client_session.try_switch_fallback_transport() {
+            sess.send_event(
+                &turn_context,
+                EventMsg::Warning(WarningEvent {
+                    message: format!("Falling back from WebSockets to HTTPS transport. {err:#}"),
+                }),
+            )
+            .await;
+            retries = 0;
+            continue;
+        }
         if retries < max_retries {
             retries += 1;
             let delay = match &err {
@@ -3954,6 +4212,7 @@ mod tests {
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::registry::ToolHandler;
     use crate::turn_diff_tracker::TurnDiffTracker;
+    use codex_app_server_protocol::AppInfo;
     use codex_app_server_protocol::AuthMode;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
@@ -3975,6 +4234,30 @@ mod tests {
     struct InstructionsTestCase {
         slug: &'static str,
         expects_apply_patch_instructions: bool,
+    }
+
+    fn user_message(text: &str) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: text.to_string(),
+            }],
+            end_turn: None,
+        }
+    }
+
+    fn make_connector(id: &str, name: &str) -> AppInfo {
+        AppInfo {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: None,
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            install_url: None,
+            is_accessible: true,
+        }
     }
 
     #[tokio::test]
@@ -4041,6 +4324,43 @@ mod tests {
             let base_instructions = session.get_base_instructions().await;
             assert_eq!(base_instructions.text, model_info.base_instructions);
         }
+    }
+
+    #[test]
+    fn filter_connectors_for_input_skips_duplicate_slug_mentions() {
+        let connectors = vec![
+            make_connector("one", "Foo Bar"),
+            make_connector("two", "Foo-Bar"),
+        ];
+        let input = vec![user_message("use $foo-bar")];
+        let explicit_app_paths = Vec::new();
+        let skill_name_counts_lower = HashMap::new();
+
+        let selected = filter_connectors_for_input(
+            connectors,
+            &input,
+            &explicit_app_paths,
+            &skill_name_counts_lower,
+        );
+
+        assert_eq!(selected, Vec::new());
+    }
+
+    #[test]
+    fn filter_connectors_for_input_skips_when_skill_name_conflicts() {
+        let connectors = vec![make_connector("one", "Todoist")];
+        let input = vec![user_message("use $todoist")];
+        let explicit_app_paths = Vec::new();
+        let skill_name_counts_lower = HashMap::from([("todoist".to_string(), 1)]);
+
+        let selected = filter_connectors_for_input(
+            connectors,
+            &input,
+            &explicit_app_paths,
+            &skill_name_counts_lower,
+        );
+
+        assert_eq!(selected, Vec::new());
     }
 
     #[tokio::test]
@@ -4351,6 +4671,8 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
+            codex_home: config.codex_home.clone(),
+            thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
@@ -4432,6 +4754,8 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
+            codex_home: config.codex_home.clone(),
+            thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
@@ -4736,6 +5060,8 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
+            codex_home: config.codex_home.clone(),
+            thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
@@ -4774,6 +5100,7 @@ mod tests {
             file_watcher,
             agent_control,
             state_db: None,
+            transport_manager: TransportManager::new(),
         };
         let live_agents_reload = config.features.enabled(Feature::LiveAgentsReload);
         let live_skills_reload = config.features.enabled(Feature::LiveSkillsReload);
@@ -4792,6 +5119,7 @@ mod tests {
             model_info,
             conversation_id,
             "turn_id".to_string(),
+            services.transport_manager.clone(),
         );
 
         let session = Session {
@@ -4859,6 +5187,8 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
+            codex_home: config.codex_home.clone(),
+            thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
@@ -4897,6 +5227,7 @@ mod tests {
             file_watcher,
             agent_control,
             state_db: None,
+            transport_manager: TransportManager::new(),
         };
         let live_agents_reload = config.features.enabled(Feature::LiveAgentsReload);
         let live_skills_reload = config.features.enabled(Feature::LiveSkillsReload);
@@ -4915,6 +5246,7 @@ mod tests {
             model_info,
             conversation_id,
             "turn_id".to_string(),
+            services.transport_manager.clone(),
         ));
 
         let session = Arc::new(Session {

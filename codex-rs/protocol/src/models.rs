@@ -674,7 +674,7 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                         image_index += 1;
                         local_image_content_items_with_label_number(&path, Some(image_index))
                     }
-                    UserInput::Skill { .. } => Vec::new(), // Skill bodies are injected later in core
+                    UserInput::Skill { .. } | UserInput::Mention { .. } => Vec::new(), // Tool bodies are injected later in core
                 })
                 .collect::<Vec<ContentItem>>(),
         }

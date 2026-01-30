@@ -111,14 +111,16 @@ pub enum Feature {
     EnableRequestCompression,
     /// Enable collab tools.
     Collab,
-    /// Enable connectors (apps).
-    Connectors,
+    /// Enable apps.
+    Apps,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,
     /// Reload AGENTS.md-based instructions when AGENTS files change on disk.
     LiveAgentsReload,
     /// Reload skill metadata when skill files change on disk.
     LiveSkillsReload,
+    /// Prompt for missing skill env var dependencies.
+    SkillEnvVarDependencyPrompt,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     Steer,
     /// Enable collaboration modes (Plan, Code, Pair Programming, Execute).
@@ -522,9 +524,13 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::Connectors,
-        key: "connectors",
-        stage: Stage::UnderDevelopment,
+        id: Feature::Apps,
+        key: "apps",
+        stage: Stage::Experimental {
+            name: "Apps",
+            menu_description: "Use a connected ChatGPT App using \"$\". Install Apps via /apps command. Restart Codex after enabling.",
+            announcement: "NEW: Use ChatGPT Apps (Connectors) in Codex via $ mentions. Enable in /experimental and restart Codex!",
+        },
         default_enabled: false,
     },
     FeatureSpec {
@@ -554,6 +560,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::SkillEnvVarDependencyPrompt,
+        key: "skill_env_var_dependency_prompt",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::Steer,
         key: "steer",
         stage: Stage::Experimental {
@@ -572,11 +584,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Personality,
         key: "personality",
-        stage: Stage::Experimental {
-            name: "Personality",
-            menu_description: "Choose a communication style for Codex.",
-            announcement: "NEW! Update codex's communication style with /personality. Enable in /experimental!",
-        },
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {

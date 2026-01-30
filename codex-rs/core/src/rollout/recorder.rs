@@ -7,6 +7,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use codex_protocol::ThreadId;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::BaseInstructions;
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -68,6 +69,7 @@ pub enum RolloutRecorderParams {
         forked_from_id: Option<ThreadId>,
         source: SessionSource,
         base_instructions: BaseInstructions,
+        dynamic_tools: Vec<DynamicToolSpec>,
     },
     Resume {
         path: PathBuf,
@@ -91,12 +93,14 @@ impl RolloutRecorderParams {
         forked_from_id: Option<ThreadId>,
         source: SessionSource,
         base_instructions: BaseInstructions,
+        dynamic_tools: Vec<DynamicToolSpec>,
     ) -> Self {
         Self::Create {
             conversation_id,
             forked_from_id,
             source,
             base_instructions,
+            dynamic_tools,
         }
     }
 
@@ -259,6 +263,7 @@ impl RolloutRecorder {
                 forked_from_id,
                 source,
                 base_instructions,
+                dynamic_tools,
             } => {
                 let LogFileInfo {
                     file,
@@ -288,6 +293,11 @@ impl RolloutRecorder {
                         source,
                         model_provider: Some(config.model_provider_id.clone()),
                         base_instructions: Some(base_instructions),
+                        dynamic_tools: if dynamic_tools.is_empty() {
+                            None
+                        } else {
+                            Some(dynamic_tools)
+                        },
                     }),
                 )
             }

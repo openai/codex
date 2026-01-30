@@ -13,6 +13,7 @@ use crate::config::ConstraintError;
 pub enum RequirementSource {
     Unknown,
     MdmManagedPreferences { domain: String, key: String },
+    CloudRequirements,
     SystemRequirementsToml { file: AbsolutePathBuf },
     LegacyManagedConfigTomlFromFile { file: AbsolutePathBuf },
     LegacyManagedConfigTomlFromMdm,
@@ -24,6 +25,9 @@ impl fmt::Display for RequirementSource {
             RequirementSource::Unknown => write!(f, "<unspecified>"),
             RequirementSource::MdmManagedPreferences { domain, key } => {
                 write!(f, "MDM {domain}:{key}")
+            }
+            RequirementSource::CloudRequirements => {
+                write!(f, "cloud requirements")
             }
             RequirementSource::SystemRequirementsToml { file } => {
                 write!(f, "{}", file.as_path().display())
@@ -441,6 +445,33 @@ mod tests {
                 field_name: "sandbox_mode",
                 candidate: "DangerFullAccess".into(),
                 allowed: "[ReadOnly]".into(),
+                requirement_source: source_location,
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn constraint_error_includes_cloud_requirements_source() -> Result<()> {
+        let source: ConfigRequirementsToml = from_str(
+            r#"
+                allowed_approval_policies = ["on-request"]
+            "#,
+        )?;
+
+        let source_location = RequirementSource::CloudRequirements;
+
+        let mut target = ConfigRequirementsWithSources::default();
+        target.merge_unset_fields(source_location.clone(), source);
+        let requirements = ConfigRequirements::try_from(target)?;
+
+        assert_eq!(
+            requirements.approval_policy.can_set(&AskForApproval::Never),
+            Err(ConstraintError::InvalidValue {
+                field_name: "approval_policy",
+                candidate: "Never".into(),
+                allowed: "[OnRequest]".into(),
                 requirement_source: source_location,
             })
         );

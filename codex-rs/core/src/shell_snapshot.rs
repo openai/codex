@@ -19,6 +19,8 @@ use tokio::fs;
 use tokio::process::Command;
 use tokio::sync::watch;
 use tokio::time::timeout;
+use tracing::Instrument;
+use tracing::info_span;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShellSnapshot {
@@ -42,17 +44,21 @@ impl ShellSnapshot {
 
         let snapshot_shell = shell.clone();
         let snapshot_session_id = session_id;
-        tokio::spawn(async move {
-            let timer = otel_manager.start_timer("codex.shell_snapshot.duration_ms", &[]);
-            let snapshot =
-                ShellSnapshot::try_new(&codex_home, snapshot_session_id, &snapshot_shell)
-                    .await
-                    .map(Arc::new);
-            let success = if snapshot.is_some() { "true" } else { "false" };
-            let _ = timer.map(|timer| timer.record(&[("success", success)]));
-            otel_manager.counter("codex.shell_snapshot", 1, &[("success", success)]);
-            let _ = shell_snapshot_tx.send(snapshot);
-        });
+        let snapshot_span = info_span!("shell_snapshot", thread_id = %snapshot_session_id);
+        tokio::spawn(
+            async move {
+                let timer = otel_manager.start_timer("codex.shell_snapshot.duration_ms", &[]);
+                let snapshot =
+                    ShellSnapshot::try_new(&codex_home, snapshot_session_id, &snapshot_shell)
+                        .await
+                        .map(Arc::new);
+                let success = if snapshot.is_some() { "true" } else { "false" };
+                let _ = timer.map(|timer| timer.record(&[("success", success)]));
+                otel_manager.counter("codex.shell_snapshot", 1, &[("success", success)]);
+                let _ = shell_snapshot_tx.send(snapshot);
+            }
+            .instrument(snapshot_span),
+        );
     }
 
     async fn try_new(codex_home: &Path, session_id: ThreadId, shell: &Shell) -> Option<Self> {

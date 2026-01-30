@@ -6,6 +6,7 @@ pub(crate) use skill_dependencies::maybe_prompt_and_install_mcp_dependencies;
 use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use async_channel::unbounded;
 use codex_protocol::protocol::McpListToolsResponseEvent;
@@ -25,7 +26,7 @@ use crate::mcp_connection_manager::SandboxState;
 
 const MCP_TOOL_NAME_PREFIX: &str = "mcp";
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
-pub(crate) const CODEX_APPS_MCP_SERVER_NAME: &str = "codex_apps_mcp";
+pub(crate) const CODEX_APPS_MCP_SERVER_NAME: &str = "codex_apps";
 const CODEX_CONNECTORS_TOKEN_ENV_VAR: &str = "CODEX_CONNECTORS_TOKEN";
 
 fn codex_apps_mcp_bearer_token_env_var() -> Option<String> {
@@ -97,7 +98,7 @@ fn codex_apps_mcp_server_config(config: &Config, auth: Option<&CodexAuth>) -> Mc
         },
         enabled: true,
         disabled_reason: None,
-        startup_timeout_sec: None,
+        startup_timeout_sec: Some(Duration::from_secs(30)),
         tool_timeout_sec: None,
         enabled_tools: None,
         disabled_tools: None,
@@ -128,7 +129,7 @@ pub(crate) fn effective_mcp_servers(
 ) -> HashMap<String, McpServerConfig> {
     with_codex_apps_mcp(
         config.mcp_servers.get().clone(),
-        config.features.enabled(Feature::Connectors),
+        config.features.enabled(Feature::Apps),
         auth,
         config,
     )

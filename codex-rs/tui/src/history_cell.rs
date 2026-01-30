@@ -558,13 +558,19 @@ pub(crate) fn new_unified_exec_interaction(
 
 #[derive(Debug)]
 struct UnifiedExecProcessesCell {
-    processes: Vec<String>,
+    processes: Vec<UnifiedExecProcessDetails>,
 }
 
 impl UnifiedExecProcessesCell {
-    fn new(processes: Vec<String>) -> Self {
+    fn new(processes: Vec<UnifiedExecProcessDetails>) -> Self {
         Self { processes }
     }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct UnifiedExecProcessDetails {
+    pub(crate) command_display: String,
+    pub(crate) recent_chunks: Vec<String>,
 }
 
 impl HistoryCell for UnifiedExecProcessesCell {
@@ -589,10 +595,11 @@ impl HistoryCell for UnifiedExecProcessesCell {
         let truncation_suffix = " [...]";
         let truncation_suffix_width = UnicodeWidthStr::width(truncation_suffix);
         let mut shown = 0usize;
-        for command in &self.processes {
+        for process in &self.processes {
             if shown >= max_processes {
                 break;
             }
+            let command = &process.command_display;
             let (snippet, snippet_truncated) = {
                 let (first_line, has_more_lines) = match command.split_once('\n') {
                     Some((first, _)) => (first, true),
@@ -627,6 +634,32 @@ impl HistoryCell for UnifiedExecProcessesCell {
                 let (truncated, _, _) = take_prefix_by_width(&snippet, budget);
                 out.push(vec![prefix.dim(), truncated.cyan()].into());
             }
+
+            let chunk_prefix_first = "    ↳ ";
+            let chunk_prefix_next = "      ";
+            for (idx, chunk) in process.recent_chunks.iter().enumerate() {
+                let chunk_prefix = if idx == 0 {
+                    chunk_prefix_first
+                } else {
+                    chunk_prefix_next
+                };
+                let chunk_prefix_width = UnicodeWidthStr::width(chunk_prefix);
+                if wrap_width <= chunk_prefix_width {
+                    out.push(Line::from(chunk_prefix.dim()));
+                    continue;
+                }
+                let budget = wrap_width.saturating_sub(chunk_prefix_width);
+                let (truncated, remainder, _) = take_prefix_by_width(chunk, budget);
+                if !remainder.is_empty() && budget > truncation_suffix_width {
+                    let available = budget.saturating_sub(truncation_suffix_width);
+                    let (shorter, _, _) = take_prefix_by_width(chunk, available);
+                    out.push(
+                        vec![chunk_prefix.dim(), shorter.dim(), truncation_suffix.dim()].into(),
+                    );
+                } else {
+                    out.push(vec![chunk_prefix.dim(), truncated.dim()].into());
+                }
+            }
             shown += 1;
         }
 
@@ -650,7 +683,9 @@ impl HistoryCell for UnifiedExecProcessesCell {
     }
 }
 
-pub(crate) fn new_unified_exec_processes_output(processes: Vec<String>) -> CompositeHistoryCell {
+pub(crate) fn new_unified_exec_processes_output(
+    processes: Vec<UnifiedExecProcessDetails>,
+) -> CompositeHistoryCell {
     let command = PlainHistoryCell::new(vec!["/ps".magenta().into()]);
     let summary = UnifiedExecProcessesCell::new(processes);
     CompositeHistoryCell::new(vec![Box::new(command), Box::new(summary)])
@@ -2022,8 +2057,14 @@ mod tests {
     #[test]
     fn ps_output_multiline_snapshot() {
         let cell = new_unified_exec_processes_output(vec![
-            "echo hello\nand then some extra text".to_string(),
-            "rg \"foo\" src".to_string(),
+            UnifiedExecProcessDetails {
+                command_display: "echo hello\nand then some extra text".to_string(),
+                recent_chunks: vec!["hello".to_string(), "done".to_string()],
+            },
+            UnifiedExecProcessDetails {
+                command_display: "rg \"foo\" src".to_string(),
+                recent_chunks: vec!["src/main.rs:12:foo".to_string()],
+            },
         ]);
         let rendered = render_lines(&cell.display_lines(40)).join("\n");
         insta::assert_snapshot!(rendered);
@@ -2031,9 +2072,12 @@ mod tests {
 
     #[test]
     fn ps_output_long_command_snapshot() {
-        let cell = new_unified_exec_processes_output(vec![String::from(
-            "rg \"foo\" src --glob '**/*.rs' --max-count 1000 --no-ignore --hidden --follow --glob '!target/**'",
-        )]);
+        let cell = new_unified_exec_processes_output(vec![UnifiedExecProcessDetails {
+            command_display: String::from(
+                "rg \"foo\" src --glob '**/*.rs' --max-count 1000 --no-ignore --hidden --follow --glob '!target/**'",
+            ),
+            recent_chunks: vec!["searching...".to_string()],
+        }]);
         let rendered = render_lines(&cell.display_lines(36)).join("\n");
         insta::assert_snapshot!(rendered);
     }
@@ -2041,9 +2085,27 @@ mod tests {
     #[test]
     fn ps_output_many_sessions_snapshot() {
         let cell = new_unified_exec_processes_output(
-            (0..20).map(|idx| format!("command {idx}")).collect(),
+            (0..20)
+                .map(|idx| UnifiedExecProcessDetails {
+                    command_display: format!("command {idx}"),
+                    recent_chunks: Vec::new(),
+                })
+                .collect(),
         );
         let rendered = render_lines(&cell.display_lines(32)).join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn ps_output_chunk_leading_whitespace_snapshot() {
+        let cell = new_unified_exec_processes_output(vec![UnifiedExecProcessDetails {
+            command_display: "just fix".to_string(),
+            recent_chunks: vec![
+                "  indented first".to_string(),
+                "    more indented".to_string(),
+            ],
+        }]);
+        let rendered = render_lines(&cell.display_lines(60)).join("\n");
         insta::assert_snapshot!(rendered);
     }
 

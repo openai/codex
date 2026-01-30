@@ -210,6 +210,10 @@ async fn forward_events(
                         msg: EventMsg::SessionConfigured(_),
                     } => {}
                     Event {
+                        id: _,
+                        msg: EventMsg::ThreadNameUpdated(_),
+                    } => {}
+                    Event {
                         id,
                         msg: EventMsg::ExecApprovalRequest(event),
                     } => {

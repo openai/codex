@@ -376,6 +376,7 @@ impl ConfigService {
             cwd,
             &self.cli_overrides,
             self.loader_overrides.clone(),
+            None,
         )
         .await
     }
