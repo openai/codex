@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use std::sync::Arc;
 
 use crate::function_tool::FunctionCallError;
 use crate::mcp_tool_call::handle_mcp_tool_call;
@@ -42,7 +43,7 @@ impl ToolHandler for McpHandler {
         let arguments_str = raw_arguments;
 
         let response = handle_mcp_tool_call(
-            session.as_ref(),
+            Arc::clone(&session),
             turn.as_ref(),
             call_id.clone(),
             server,
