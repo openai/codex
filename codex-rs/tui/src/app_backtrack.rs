@@ -38,6 +38,7 @@ use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::user_input::TextElement;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
@@ -84,6 +85,8 @@ pub(crate) struct BacktrackSelection {
     pub(crate) text_elements: Vec<TextElement>,
     /// Local image paths associated with the selected user message.
     pub(crate) local_image_paths: Vec<PathBuf>,
+    /// Collaboration mode active when the selected message was sent.
+    pub(crate) collaboration_mode: Option<CollaborationModeMask>,
 }
 
 /// An in-flight rollback requested from core.
@@ -203,6 +206,10 @@ impl App {
             return;
         }
 
+        let collaboration_override = selection
+            .collaboration_mode
+            .clone()
+            .and_then(|mask| self.chat_widget.set_collaboration_mask_from_history(mask));
         let prefill = selection.prefill.clone();
         let text_elements = selection.text_elements.clone();
         let local_image_paths = selection.local_image_paths.clone();
@@ -211,6 +218,21 @@ impl App {
             thread_id: self.chat_widget.thread_id(),
         });
         self.chat_widget.submit_op(Op::ThreadRollback { num_turns });
+        if let Some(collaboration_mode) = collaboration_override
+            && self.chat_widget.thread_id().is_some()
+        {
+            self.chat_widget.submit_op(Op::OverrideTurnContext {
+                cwd: None,
+                approval_policy: None,
+                sandbox_policy: None,
+                windows_sandbox_level: None,
+                model: None,
+                effort: None,
+                summary: None,
+                collaboration_mode: Some(collaboration_mode),
+                personality: None,
+            });
+        }
         if !prefill.is_empty() || !text_elements.is_empty() || !local_image_paths.is_empty() {
             self.chat_widget
                 .set_composer_text(prefill, text_elements, local_image_paths);
@@ -487,7 +509,7 @@ impl App {
             return None;
         }
 
-        let (prefill, text_elements, local_image_paths) =
+        let (prefill, text_elements, local_image_paths, collaboration_mode) =
             nth_user_position(&self.transcript_cells, nth_user_message)
                 .and_then(|idx| self.transcript_cells.get(idx))
                 .and_then(|cell| cell.as_any().downcast_ref::<UserHistoryCell>())
@@ -496,15 +518,17 @@ impl App {
                         cell.message.clone(),
                         cell.text_elements.clone(),
                         cell.local_image_paths.clone(),
+                        cell.collaboration_mode.clone(),
                     )
                 })
-                .unwrap_or_else(|| (String::new(), Vec::new(), Vec::new()));
+                .unwrap_or_else(|| (String::new(), Vec::new(), Vec::new(), None));
 
         Some(BacktrackSelection {
             nth_user_message,
             prefill,
             text_elements,
             local_image_paths,
+            collaboration_mode,
         })
     }
 
@@ -574,6 +598,7 @@ mod tests {
                 message: "first user".to_string(),
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
+                collaboration_mode: None,
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("assistant")], true))
                 as Arc<dyn HistoryCell>,
@@ -592,6 +617,7 @@ mod tests {
                 message: "first".to_string(),
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
+                collaboration_mode: None,
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("after")], false))
                 as Arc<dyn HistoryCell>,
@@ -622,6 +648,7 @@ mod tests {
                 message: "first".to_string(),
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
+                collaboration_mode: None,
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("between")], false))
                 as Arc<dyn HistoryCell>,
@@ -629,6 +656,7 @@ mod tests {
                 message: "second".to_string(),
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
+                collaboration_mode: None,
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("tail")], false))
                 as Arc<dyn HistoryCell>,

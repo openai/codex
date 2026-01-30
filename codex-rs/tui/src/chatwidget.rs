@@ -3261,6 +3261,7 @@ impl ChatWidget {
                 text,
                 text_elements,
                 local_image_paths,
+                self.active_collaboration_mask.clone(),
             ));
         }
 
@@ -3522,6 +3523,7 @@ impl ChatWidget {
                 event.message,
                 event.text_elements,
                 event.local_images,
+                None,
             ));
         }
 
@@ -5365,6 +5367,18 @@ impl ChatWidget {
         self.update_collaboration_mode_indicator();
         self.refresh_model_display();
         self.request_redraw();
+    }
+
+    pub(crate) fn set_collaboration_mask_from_history(
+        &mut self,
+        mask: CollaborationModeMask,
+    ) -> Option<CollaborationMode> {
+        if !self.collaboration_modes_enabled() {
+            return None;
+        }
+        let next_mode = self.current_collaboration_mode.apply_mask(&mask);
+        self.set_collaboration_mask(mask);
+        Some(next_mode)
     }
 
     fn connectors_enabled(&self) -> bool {

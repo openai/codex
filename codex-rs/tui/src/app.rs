@@ -2911,6 +2911,7 @@ mod tests {
                 message: text.to_string(),
                 text_elements,
                 local_image_paths,
+                collaboration_mode: None,
             }) as Arc<dyn HistoryCell>
         };
         let agent_cell = |text: &str| -> Arc<dyn HistoryCell> {
