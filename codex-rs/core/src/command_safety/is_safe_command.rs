@@ -136,24 +136,35 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
 
         // Git
         Some("git") => {
+            // Global config overrides like `-c core.pager=...` can force git
+            // to execute arbitrary external commands. With no sandboxing, we
+            // should always prompt in those cases.
+            if git_has_config_override_global_option(command) {
+                return false;
+            }
+
             let Some((subcommand_idx, subcommand)) =
                 find_git_subcommand(command, &["status", "log", "diff", "show", "branch"])
             else {
                 return false;
             };
 
+            let subcommand_args = &command[subcommand_idx + 1..];
+
             match subcommand {
-                "status" | "log" | "diff" | "show" => true,
-                "branch" => git_branch_is_read_only(&command[subcommand_idx + 1..]),
+                "status" | "log" | "diff" | "show" => {
+                    git_subcommand_args_are_read_only(subcommand_args)
+                }
+                "branch" => {
+                    git_subcommand_args_are_read_only(subcommand_args)
+                        && git_branch_is_read_only(subcommand_args)
+                }
                 other => {
                     debug_assert!(false, "unexpected git subcommand from matcher: {other}");
                     false
                 }
             }
         }
-
-        // Rust
-        Some("cargo") if command.get(1).map(String::as_str) == Some("check") => true,
 
         // Special-case `sed -n {N|M,N}p`
         Some("sed")
@@ -197,6 +208,32 @@ fn git_branch_is_read_only(branch_args: &[String]) -> bool {
     }
 
     saw_read_only_flag
+}
+
+fn git_has_config_override_global_option(command: &[String]) -> bool {
+    command.iter().map(String::as_str).any(|arg| {
+        matches!(arg, "-c" | "--config-env")
+            || (arg.starts_with("-c") && arg.len() > 2)
+            || arg.starts_with("--config-env=")
+    })
+}
+
+fn git_subcommand_args_are_read_only(args: &[String]) -> bool {
+    // Flags that can write to disk or execute external tools should never be
+    // auto-approved on an unsandboxed machine.
+    const UNSAFE_GIT_FLAGS: &[&str] = &[
+        "--output",
+        "--ext-diff",
+        "--textconv",
+        "--exec",
+        "--paginate",
+    ];
+
+    !args.iter().map(String::as_str).any(|arg| {
+        UNSAFE_GIT_FLAGS.contains(&arg)
+            || arg.starts_with("--output=")
+            || arg.starts_with("--exec=")
+    })
 }
 
 // (bash parsing helpers implemented in crate::bash)
@@ -318,6 +355,47 @@ mod tests {
         assert!(!is_known_safe_command(&vec_str(&[
             "git", "checkout", "status",
         ])));
+    }
+
+    #[test]
+    fn git_output_and_config_override_flags_are_not_safe() {
+        assert!(!is_known_safe_command(&vec_str(&[
+            "git",
+            "log",
+            "--output=/tmp/git-log-out-test",
+            "-n",
+            "1",
+        ])));
+        assert!(!is_known_safe_command(&vec_str(&[
+            "git",
+            "diff",
+            "--output",
+            "/tmp/git-diff-out-test",
+        ])));
+        assert!(!is_known_safe_command(&vec_str(&[
+            "git",
+            "show",
+            "--output=/tmp/git-show-out-test",
+            "HEAD",
+        ])));
+        assert!(!is_known_safe_command(&vec_str(&[
+            "git",
+            "-c",
+            "core.pager=cat",
+            "log",
+            "-n",
+            "1",
+        ])));
+        assert!(!is_known_safe_command(&vec_str(&[
+            "git",
+            "-ccore.pager=cat",
+            "status",
+        ])));
+    }
+
+    #[test]
+    fn cargo_check_is_not_safe() {
+        assert!(!is_known_safe_command(&vec_str(&["cargo", "check"])));
     }
 
     #[test]
