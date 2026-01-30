@@ -5515,6 +5515,21 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn replace_collaboration_mask(
+        &mut self,
+        mask: Option<CollaborationModeMask>,
+    ) -> Option<CollaborationModeMask> {
+        if !self.collaboration_modes_enabled() {
+            return None;
+        }
+        let previous = self.active_collaboration_mask.clone();
+        self.active_collaboration_mask = mask;
+        self.update_collaboration_mode_indicator();
+        self.refresh_model_display();
+        self.request_redraw();
+        previous
+    }
+
     fn connectors_enabled(&self) -> bool {
         self.config.features.enabled(Feature::Apps)
     }
