@@ -61,7 +61,7 @@ pub(crate) fn find_git_subcommand<'a>(
     subcommands: &[&str],
 ) -> Option<(usize, &'a str)> {
     let cmd0 = command.first().map(String::as_str)?;
-    if !(cmd0.ends_with("git") || cmd0.ends_with("/git")) {
+    if !cmd0.ends_with("git") {
         return None;
     }
 
@@ -104,7 +104,7 @@ fn is_dangerous_to_call_with_exec(command: &[String]) -> bool {
     let cmd0 = command.first().map(String::as_str);
 
     match cmd0 {
-        Some(cmd) if cmd.ends_with("git") || cmd.ends_with("/git") => {
+        Some(cmd) if cmd.ends_with("git") => {
             let Some((subcommand_idx, subcommand)) =
                 find_git_subcommand(command, &["reset", "rm", "branch", "push", "clean"])
             else {
@@ -134,6 +134,8 @@ fn is_dangerous_to_call_with_exec(command: &[String]) -> bool {
 }
 
 fn git_branch_is_delete(branch_args: &[String]) -> bool {
+    // Git allows stacking short flags (for example, `-dv` or `-vd`). Treat any
+    // `-d*`/`-D*` group as a delete flag unless it is exactly `-d`/`-D`.
     branch_args.iter().any(|arg| {
         matches!(arg.as_str(), "-d" | "-D" | "--delete")
             || arg.starts_with("--delete=")
@@ -238,6 +240,19 @@ mod tests {
             "bash",
             "-lc",
             "git branch --delete feature",
+        ])));
+    }
+
+    #[test]
+    fn git_branch_delete_with_stacked_short_flags_is_dangerous() {
+        assert!(command_might_be_dangerous(&vec_str(&[
+            "git", "branch", "-dv", "feature",
+        ])));
+        assert!(command_might_be_dangerous(&vec_str(&[
+            "git", "branch", "-vd", "feature",
+        ])));
+        assert!(command_might_be_dangerous(&vec_str(&[
+            "git", "branch", "-Dvv", "feature",
         ])));
     }
 
