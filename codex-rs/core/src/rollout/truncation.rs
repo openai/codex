@@ -185,16 +185,19 @@ pub(crate) fn truncate_rollout_drop_last_n_user_turns(
     }
 
     let user_turns = effective_user_turns(items);
-    let Some(first_turn) = user_turns.first() else {
+    let Some(_) = user_turns.first() else {
         return items.to_vec();
     };
 
     let n_from_end = usize::try_from(num_turns).unwrap_or(usize::MAX);
-    let cut_idx = if n_from_end >= user_turns.len() {
-        first_turn.source_index
-    } else {
-        user_turns[user_turns.len().saturating_sub(n_from_end)].source_index
-    };
+    if n_from_end >= user_turns.len() {
+        let Some(first_user_idx) = user_message_positions_in_rollout(items).first().copied() else {
+            return items.to_vec();
+        };
+        return items[..first_user_idx].to_vec();
+    }
+
+    let cut_idx = user_turns[user_turns.len().saturating_sub(n_from_end)].source_index;
 
     items[..cut_idx].to_vec()
 }
@@ -239,6 +242,17 @@ mod tests {
         ResponseItem::Message {
             id: None,
             role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: text.to_string(),
+            }],
+            end_turn: None,
+        }
+    }
+
+    fn system_msg(text: &str) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: "system".to_string(),
             content: vec![ContentItem::OutputText {
                 text: text.to_string(),
             }],
@@ -370,6 +384,30 @@ mod tests {
 
         let indices: Vec<usize> = turns.iter().map(|turn| turn.source_index).collect();
         assert_eq!(indices, vec![2, 2, 3]);
+    }
+
+    #[test]
+    fn truncate_rollout_drop_last_n_user_turns_oversize_clears_user_history() {
+        let summary = format!("{SUMMARY_PREFIX}\nsummary");
+        let system = system_msg("system");
+        let rollout_items = vec![
+            RolloutItem::ResponseItem(system.clone()),
+            RolloutItem::ResponseItem(user_input_msg("u1")),
+            RolloutItem::ResponseItem(assistant_msg("a1")),
+            RolloutItem::ResponseItem(user_input_msg("u2")),
+            RolloutItem::ResponseItem(assistant_msg("a2")),
+            RolloutItem::Compacted(CompactedItem {
+                message: summary,
+                replacement_history: None,
+            }),
+        ];
+
+        let truncated = truncate_rollout_drop_last_n_user_turns(&rollout_items, 99);
+        let expected = vec![RolloutItem::ResponseItem(system)];
+        assert_eq!(
+            serde_json::to_value(&truncated).unwrap(),
+            serde_json::to_value(&expected).unwrap()
+        );
     }
 
     #[test]
