@@ -1129,9 +1129,7 @@ mod tests {
                         }
                         SummaryLeft::None => {}
                     }
-                    if show_context
-                        && let Some(line) = &right_line
-                    {
+                    if show_context && let Some(line) = &right_line {
                         render_context_right(area, f.buffer_mut(), line);
                     }
                 } else {
@@ -1151,9 +1149,7 @@ mod tests {
                                 | FooterMode::QuitShortcutReminder
                                 | FooterMode::ShortcutOverlay
                         );
-                    if show_context
-                        && let Some(line) = &right_line
-                    {
+                    if show_context && let Some(line) = &right_line {
                         render_context_right(area, f.buffer_mut(), line);
                     }
                 }
@@ -1276,9 +1272,7 @@ mod tests {
                         }
                         SummaryLeft::None => {}
                     }
-                    if show_context
-                        && let Some(line) = &right_line
-                    {
+                    if show_context && let Some(line) = &right_line {
                         render_context_right(area, f.buffer_mut(), line);
                     }
                 } else {
@@ -1298,9 +1292,7 @@ mod tests {
                                 | FooterMode::QuitShortcutReminder
                                 | FooterMode::ShortcutOverlay
                         );
-                    if show_context
-                        && let Some(line) = &right_line
-                    {
+                    if show_context && let Some(line) = &right_line {
                         render_context_right(area, f.buffer_mut(), line);
                     }
                 }
