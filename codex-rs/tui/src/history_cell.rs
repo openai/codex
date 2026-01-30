@@ -1873,6 +1873,7 @@ impl HistoryCell for RequestUserInputResultCell {
     }
 }
 
+/// Wrap a plain string with textwrap and prefix each line, while applying a style to the content.
 fn wrap_with_prefix(
     text: &str,
     width: usize,
@@ -1893,6 +1894,8 @@ fn wrap_with_prefix(
     prefix_lines(wrapped_lines, initial_prefix, subsequent_prefix)
 }
 
+/// Split a request_user_input answer into option labels and an optional freeform note.
+/// Notes are encoded as "user_note: <text>" entries in the answers list.
 fn split_request_user_input_answer(
     answer: &RequestUserInputAnswer,
 ) -> (Vec<String>, Option<String>) {

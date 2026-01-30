@@ -3519,6 +3519,11 @@ impl ChatWidget {
                 self.on_elicitation_request(ev);
             }
             EventMsg::RequestUserInput(ev) => {
+                // Replay should not reopen interactive question UIs for now; we only replay the
+                // persisted tool call/output items. Once we reconstruct answers on replay,
+                // remove this guard and render the questions from history instead.
+                // TODO: Support request_user_input replay by reconstructing question/answer
+                // history and rendering without re-prompting.
                 if !from_replay {
                     self.on_request_user_input(ev);
                 }
