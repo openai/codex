@@ -315,6 +315,7 @@ mod tests {
                 allowed_sandbox_modes: None,
                 mcp_servers: None,
                 rules: None,
+                enforce_residency: None,
             })
         );
     }

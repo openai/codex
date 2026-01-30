@@ -451,6 +451,7 @@ async fn load_requirements_toml_produces_expected_constraints() -> anyhow::Resul
         &requirements_file,
         r#"
 allowed_approval_policies = ["never", "on-request"]
+enforce_residency = "us"
 "#,
     )
     .await?;
@@ -465,7 +466,6 @@ allowed_approval_policies = ["never", "on-request"]
             .cloned(),
         Some(vec![AskForApproval::Never, AskForApproval::OnRequest])
     );
-
     let config_requirements: ConfigRequirements = config_requirements_toml.try_into()?;
     assert_eq!(
         config_requirements.approval_policy.value(),
@@ -479,6 +479,10 @@ allowed_approval_policies = ["never", "on-request"]
             .approval_policy
             .can_set(&AskForApproval::OnFailure)
             .is_err()
+    );
+    assert_eq!(
+        config_requirements.enforce_residency.value(),
+        Some(crate::config_loader::ResidencyRequirement::Us)
     );
     Ok(())
 }
@@ -503,6 +507,7 @@ allowed_approval_policies = ["on-request"]
             allowed_sandbox_modes: None,
             mcp_servers: None,
             rules: None,
+            enforce_residency: None,
         },
     );
     load_requirements_toml(&mut config_requirements_toml, &requirements_file).await?;
@@ -537,6 +542,7 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
         allowed_sandbox_modes: None,
         mcp_servers: None,
         rules: None,
+        enforce_residency: None,
     };
     let expected = requirements.clone();
     let cloud_requirements = CloudRequirementsLoader::new(async move { Some(requirements) });
