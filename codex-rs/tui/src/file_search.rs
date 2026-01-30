@@ -43,7 +43,7 @@ impl FileSearchManager {
     }
 
     /// Updates the directory used for file searches.
-    /// This should be called when the session's CWD changes (e.g., on new session, resume, or fork).
+    /// This should be called when the session's CWD changes on resume.
     /// Drops the current session so it will be recreated with the new directory on next query.
     pub fn update_search_dir(&mut self, new_dir: PathBuf) {
         self.search_dir = new_dir;
