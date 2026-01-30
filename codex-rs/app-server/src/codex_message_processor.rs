@@ -146,6 +146,7 @@ use codex_core::ThreadSortKey as CoreThreadSortKey;
 use codex_core::auth::CLIENT_ID;
 use codex_core::auth::login_with_api_key;
 use codex_core::auth::login_with_chatgpt_auth_tokens;
+use codex_core::auth::login_with_chatgpt_proxy;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigService;
@@ -616,6 +617,14 @@ impl CodexMessageProcessor {
             LoginAccountParams::Chatgpt => {
                 self.login_chatgpt_v2(request_id).await;
             }
+            LoginAccountParams::ChatgptProxy {
+                account_id,
+                email,
+                plan_type,
+            } => {
+                self.login_chatgpt_proxy(request_id, account_id, email, plan_type)
+                    .await;
+            }
             LoginAccountParams::ChatgptAuthTokens {
                 id_token,
                 access_token,
@@ -629,7 +638,7 @@ impl CodexMessageProcessor {
     fn external_auth_active_error(&self) -> JSONRPCErrorError {
         JSONRPCErrorError {
             code: INVALID_REQUEST_ERROR_CODE,
-            message: "External auth is active. Use account/login/start (chatgptAuthTokens) to update it or account/logout to clear it."
+            message: "External auth is active. Use account/login/start (chatgptAuthTokens or chatgptProxy) to update it or account/logout to clear it."
                 .to_string(),
             data: None,
         }
@@ -1011,6 +1020,89 @@ impl CodexMessageProcessor {
         }
     }
 
+    async fn login_chatgpt_proxy(
+        &mut self,
+        request_id: RequestId,
+        account_id: Option<String>,
+        email: Option<String>,
+        plan_type: Option<codex_protocol::account::PlanType>,
+    ) {
+        if matches!(
+            self.config.forced_login_method,
+            Some(ForcedLoginMethod::Api)
+        ) {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "ChatGPT proxy auth is disabled. Use API key login instead.".to_string(),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        // Cancel any active login attempt to avoid persisting managed auth state.
+        {
+            let mut guard = self.active_login.lock().await;
+            if let Some(active) = guard.take() {
+                drop(active);
+            }
+        }
+
+        if let Some(expected_workspace) = self.config.forced_chatgpt_workspace_id.as_deref()
+            && account_id.as_deref() != Some(expected_workspace)
+        {
+            let actual_workspace = account_id.as_deref().unwrap_or("<missing>");
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!(
+                    "ChatGPT proxy auth must use workspace {expected_workspace}, but received {actual_workspace}."
+                ),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        if let Err(err) = login_with_chatgpt_proxy(
+            &self.config.codex_home,
+            account_id.as_deref(),
+            email.as_deref(),
+            plan_type,
+            self.config.cli_auth_credentials_store_mode,
+        ) {
+            let error = JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to set ChatGPT proxy auth: {err}"),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+        self.auth_manager.reload();
+
+        self.outgoing
+            .send_response(request_id, LoginAccountResponse::ChatgptProxy {})
+            .await;
+
+        let payload_login_completed = AccountLoginCompletedNotification {
+            login_id: None,
+            success: true,
+            error: None,
+        };
+        self.outgoing
+            .send_server_notification(ServerNotification::AccountLoginCompleted(
+                payload_login_completed,
+            ))
+            .await;
+
+        let payload_v2 = AccountUpdatedNotification {
+            auth_mode: self.auth_manager.get_auth_mode(),
+        };
+        self.outgoing
+            .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
+            .await;
+    }
+
     async fn login_chatgpt_auth_tokens(
         &mut self,
         request_id: RequestId,
@@ -1198,19 +1290,16 @@ impl CodexMessageProcessor {
             match self.auth_manager.auth().await {
                 Some(auth) => {
                     let auth_mode = auth.api_auth_mode();
-                    let (reported_auth_method, token_opt) = match auth.get_token() {
-                        Ok(token) if !token.is_empty() => {
-                            let tok = if include_token { Some(token) } else { None };
-                            (Some(auth_mode), tok)
-                        }
-                        Ok(_) => (None, None),
+                    let token_opt = match auth.bearer_token() {
+                        Ok(Some(token)) if include_token && !token.is_empty() => Some(token),
+                        Ok(_) => None,
                         Err(err) => {
-                            tracing::warn!("failed to get token for auth status: {err}");
-                            (None, None)
+                            tracing::warn!("failed to get bearer token for auth status: {err}");
+                            None
                         }
                     };
                     GetAuthStatusResponse {
-                        auth_method: reported_auth_method,
+                        auth_method: Some(auth_mode),
                         auth_token: token_opt,
                         requires_openai_auth: Some(true),
                     }
@@ -1264,6 +1353,15 @@ impl CodexMessageProcessor {
                             return;
                         }
                     }
+                }
+                CodexAuth::ChatgptProxy(_) => {
+                    let email = auth
+                        .get_account_email()
+                        .unwrap_or_else(|| "unknown".to_string());
+                    let plan_type = auth
+                        .account_plan_type()
+                        .unwrap_or(codex_protocol::account::PlanType::Unknown);
+                    Account::Chatgpt { email, plan_type }
                 }
             }),
             None => None,
