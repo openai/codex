@@ -7069,7 +7069,6 @@ mod tests {
 
         composer.set_text_content("This will be stashed".to_string(), Vec::new(), Vec::new());
 
-        // Press Enter: should dispatch the command, not submit literal text.
         let (result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
 
