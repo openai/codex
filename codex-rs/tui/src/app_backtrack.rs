@@ -206,10 +206,9 @@ impl App {
             return;
         }
 
-        let collaboration_override = selection
-            .collaboration_mode
-            .clone()
-            .and_then(|mask| self.chat_widget.set_collaboration_mask_from_history(mask));
+        if let Some(mask) = selection.collaboration_mode.clone() {
+            self.chat_widget.set_collaboration_mask(mask);
+        }
         let prefill = selection.prefill.clone();
         let text_elements = selection.text_elements.clone();
         let local_image_paths = selection.local_image_paths.clone();
@@ -218,21 +217,6 @@ impl App {
             thread_id: self.chat_widget.thread_id(),
         });
         self.chat_widget.submit_op(Op::ThreadRollback { num_turns });
-        if let Some(collaboration_mode) = collaboration_override
-            && self.chat_widget.thread_id().is_some()
-        {
-            self.chat_widget.submit_op(Op::OverrideTurnContext {
-                cwd: None,
-                approval_policy: None,
-                sandbox_policy: None,
-                windows_sandbox_level: None,
-                model: None,
-                effort: None,
-                summary: None,
-                collaboration_mode: Some(collaboration_mode),
-                personality: None,
-            });
-        }
         if !prefill.is_empty() || !text_elements.is_empty() || !local_image_paths.is_empty() {
             self.chat_widget
                 .set_composer_text(prefill, text_elements, local_image_paths);

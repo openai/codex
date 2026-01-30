@@ -2578,11 +2578,17 @@ mod handlers {
     use codex_protocol::request_user_input::RequestUserInputResponse;
 
     use crate::context_manager::is_user_turn_boundary;
+    use crate::models_manager::collaboration_mode_presets::mask_from_instructions;
     use codex_protocol::config_types::CollaborationMode;
+    use codex_protocol::config_types::CollaborationModeMask;
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::config_types::Settings;
     use codex_protocol::dynamic_tools::DynamicToolResponse;
     use codex_protocol::mcp::RequestId as ProtocolRequestId;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::COLLABORATION_MODE_CLOSE_TAG;
+    use codex_protocol::protocol::COLLABORATION_MODE_OPEN_TAG;
     use codex_protocol::user_input::UserInput;
     use codex_rmcp_client::ElicitationAction;
     use codex_rmcp_client::ElicitationResponse;
@@ -2976,6 +2982,13 @@ mod handlers {
 
         let mut history = sess.clone_history().await;
         history.drop_last_n_user_turns(num_turns);
+        if let Some(mask) = last_collaboration_mask(history.raw_items()) {
+            let mut state = sess.state.lock().await;
+            state.session_configuration.collaboration_mode = state
+                .session_configuration
+                .collaboration_mode
+                .apply_mask(&mask);
+        }
 
         // Replace with the raw items. We don't want to replace with a normalized
         // version of the history.
@@ -3100,6 +3113,33 @@ mod handlers {
         };
         sess.send_event_raw(event).await;
         true
+    }
+
+    fn last_collaboration_mask(items: &[ResponseItem]) -> Option<CollaborationModeMask> {
+        items.iter().rev().find_map(|item| {
+            let ResponseItem::Message { role, content, .. } = item else {
+                return None;
+            };
+            if role != "developer" {
+                return None;
+            }
+            let text = content.iter().find_map(|item| {
+                if let ContentItem::InputText { text } = item {
+                    Some(text.as_str())
+                } else {
+                    None
+                }
+            })?;
+            let instructions = extract_collaboration_instructions(text)?;
+            mask_from_instructions(instructions)
+        })
+    }
+
+    fn extract_collaboration_instructions(text: &str) -> Option<&str> {
+        let start = text.find(COLLABORATION_MODE_OPEN_TAG)? + COLLABORATION_MODE_OPEN_TAG.len();
+        let rest = text.get(start..)?;
+        let end = rest.find(COLLABORATION_MODE_CLOSE_TAG)?;
+        rest.get(..end)
     }
 
     pub async fn review(
