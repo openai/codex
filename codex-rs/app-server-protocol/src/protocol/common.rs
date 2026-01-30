@@ -75,6 +75,14 @@ macro_rules! client_request_definitions {
             )*
         }
 
+        impl ClientRequest {
+            pub fn request_id(&self) -> &RequestId {
+                match self {
+                    $(Self::$variant { request_id, .. } => request_id,)*
+                }
+            }
+        }
+
         pub fn export_client_responses(
             out_dir: &::std::path::Path,
         ) -> ::std::result::Result<(), ::ts_rs::ExportError> {
@@ -140,6 +148,14 @@ client_request_definitions! {
         params: v2::ThreadRollbackParams,
         response: v2::ThreadRollbackResponse,
     },
+    ThreadCompact => "thread/compact" {
+        params: v2::ThreadCompactParams,
+        response: v2::ThreadCompactResponse,
+    },
+    ThreadShutdown => "thread/shutdown" {
+        params: v2::ThreadShutdownParams,
+        response: v2::ThreadShutdownResponse,
+    },
     ThreadList => "thread/list" {
         params: v2::ThreadListParams,
         response: v2::ThreadListResponse,
@@ -200,6 +216,10 @@ client_request_definitions! {
     McpServerStatusList => "mcpServerStatus/list" {
         params: v2::ListMcpServerStatusParams,
         response: v2::ListMcpServerStatusResponse,
+    },
+    McpElicitationResolve => "mcp/elicitation/resolve" {
+        params: v2::McpElicitationResolveParams,
+        response: v2::McpElicitationResolveResponse,
     },
 
     LoginAccount => "account/login/start" {
