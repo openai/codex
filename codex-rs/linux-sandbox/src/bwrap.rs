@@ -68,6 +68,37 @@ pub(crate) fn create_bwrap_command_args(
 
     let mut args = Vec::new();
     args.push(path_to_string(&bwrap_path));
+    args.extend(create_bwrap_flags(command, sandbox_policy, cwd, options)?);
+    Ok(args)
+}
+
+/// Doc-hidden helper that builds bubblewrap arguments without a program path.
+///
+/// This is intended for experiments where we call a build-time bubblewrap
+/// `main` symbol via FFI rather than exec'ing the `bwrap` binary. The caller
+/// is responsible for providing a suitable `argv[0]`.
+#[doc(hidden)]
+pub(crate) fn create_bwrap_command_args_vendored(
+    command: Vec<String>,
+    sandbox_policy: &SandboxPolicy,
+    cwd: &Path,
+    options: BwrapOptions,
+) -> Result<Vec<String>> {
+    if sandbox_policy.has_full_disk_write_access() {
+        return Ok(command);
+    }
+
+    create_bwrap_flags(command, sandbox_policy, cwd, options)
+}
+
+/// Build the bubblewrap flags (everything after `argv[0]`).
+fn create_bwrap_flags(
+    command: Vec<String>,
+    sandbox_policy: &SandboxPolicy,
+    cwd: &Path,
+    options: BwrapOptions,
+) -> Result<Vec<String>> {
+    let mut args = Vec::new();
     args.push("--new-session".to_string());
     args.push("--die-with-parent".to_string());
     args.extend(create_filesystem_args(sandbox_policy, cwd)?);

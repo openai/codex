@@ -5,7 +5,9 @@ use std::path::PathBuf;
 
 use crate::bwrap::BwrapOptions;
 use crate::bwrap::create_bwrap_command_args;
+use crate::bwrap::create_bwrap_command_args_vendored;
 use crate::landlock::apply_sandbox_policy_to_current_thread;
+use crate::vendored_bwrap::exec_vendored_bwrap;
 
 #[derive(Debug, Parser)]
 /// CLI surface for the Linux sandbox helper.
@@ -32,6 +34,12 @@ pub struct LandlockCommand {
     /// When provided, this implies bubblewrap opt-in and avoids PATH lookups.
     #[arg(long = "bwrap-path", hide = true)]
     pub bwrap_path: Option<PathBuf>,
+
+    /// Experimental: call a build-time bubblewrap `main()` via FFI.
+    ///
+    /// This is opt-in and only works when the build script compiles bwrap.
+    #[arg(long = "use-vendored-bwrap", hide = true, default_value_t = false)]
+    pub use_vendored_bwrap: bool,
 
     /// Internal: apply seccomp and `no_new_privs` in the already-sandboxed
     /// process, then exec the user command.
@@ -65,11 +73,12 @@ pub fn run_main() -> ! {
         sandbox_policy,
         use_bwrap_sandbox,
         bwrap_path,
+        use_vendored_bwrap,
         apply_seccomp_then_exec,
         no_proc,
         command,
     } = LandlockCommand::parse();
-    let use_bwrap_sandbox = use_bwrap_sandbox || bwrap_path.is_some();
+    let use_bwrap_sandbox = use_bwrap_sandbox || bwrap_path.is_some() || use_vendored_bwrap;
 
     if command.is_empty() {
         panic!("No command specified to execute.");
@@ -106,6 +115,29 @@ pub fn run_main() -> ! {
         let options = BwrapOptions {
             mount_proc: !no_proc,
         };
+        if use_vendored_bwrap {
+            let mut argv0 = bwrap_path
+                .as_deref()
+                .map(|path| path.to_string_lossy().to_string())
+                .unwrap_or_else(|| "bwrap".to_string());
+            if argv0.is_empty() {
+                argv0 = "bwrap".to_string();
+            }
+
+            let mut argv = vec![argv0];
+            argv.extend(
+                create_bwrap_command_args_vendored(
+                    inner,
+                    &sandbox_policy,
+                    &sandbox_policy_cwd,
+                    options,
+                )
+                .unwrap_or_else(|err| {
+                    panic!("error building build-time bubblewrap command: {err:?}")
+                }),
+            );
+            exec_vendored_bwrap(argv);
+        }
         ensure_bwrap_available(bwrap_path.as_deref());
         create_bwrap_command_args(
             inner,
