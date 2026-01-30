@@ -120,8 +120,10 @@ impl CloudRequirementsService {
 
     async fn fetch(&self) -> Option<ConfigRequirementsToml> {
         let auth = self.auth_manager.auth().await?;
-        if !(auth.mode == AuthMode::ChatGPT
-            && auth.account_plan_type() == Some(PlanType::Enterprise))
+        if !(matches!(
+            auth.api_auth_mode(),
+            AuthMode::ChatGPT | AuthMode::ChatgptAuthTokens
+        ) && auth.account_plan_type() == Some(PlanType::Enterprise))
         {
             return None;
         }
