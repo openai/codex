@@ -469,10 +469,24 @@ fn push_log_filters<'a>(builder: &mut QueryBuilder<'a, Sqlite>, query: &'a LogQu
             .push_bind(file_like.as_str())
             .push(" || '%'");
     }
-    if let Some(thread_id) = query.thread_id.as_ref() {
-        builder
-            .push(" AND thread_id = ")
-            .push_bind(thread_id.as_str());
+    let has_thread_filter = !query.thread_ids.is_empty() || query.include_threadless;
+    if has_thread_filter {
+        builder.push(" AND (");
+        let mut needs_or = false;
+        for thread_id in &query.thread_ids {
+            if needs_or {
+                builder.push(" OR ");
+            }
+            builder.push("thread_id = ").push_bind(thread_id.as_str());
+            needs_or = true;
+        }
+        if query.include_threadless {
+            if needs_or {
+                builder.push(" OR ");
+            }
+            builder.push("thread_id IS NULL");
+        }
+        builder.push(")");
     }
     if let Some(after_id) = query.after_id {
         builder.push(" AND id > ").push_bind(after_id);

@@ -45,9 +45,13 @@ struct Args {
     #[arg(long)]
     file: Option<String>,
 
-    /// Match a specific thread id.
+    /// Match one or more thread ids. Repeat to include multiple threads.
+    #[arg(long = "thread-id")]
+    thread_id: Vec<String>,
+
+    /// Include logs that do not have a thread id.
     #[arg(long)]
-    thread_id: Option<String>,
+    threadless: bool,
 
     /// Number of matching rows to show before tailing.
     #[arg(long, default_value_t = 200)]
@@ -65,7 +69,8 @@ struct LogFilter {
     to_ts: Option<i64>,
     module_like: Option<String>,
     file_like: Option<String>,
-    thread_id: Option<String>,
+    thread_ids: Vec<String>,
+    include_threadless: bool,
 }
 
 #[tokio::main]
@@ -126,6 +131,12 @@ fn build_filter(args: &Args) -> anyhow::Result<LogFilter> {
         .context("failed to parse --to")?;
 
     let level_upper = args.level.as_ref().map(|level| level.to_ascii_uppercase());
+    let thread_ids = args
+        .thread_id
+        .iter()
+        .filter(|thread_id| !thread_id.is_empty())
+        .cloned()
+        .collect::<Vec<_>>();
 
     Ok(LogFilter {
         level_upper,
@@ -133,7 +144,8 @@ fn build_filter(args: &Args) -> anyhow::Result<LogFilter> {
         to_ts,
         module_like: args.module.clone(),
         file_like: args.file.clone(),
-        thread_id: args.thread_id.clone(),
+        thread_ids,
+        include_threadless: args.threadless,
     })
 }
 
@@ -211,7 +223,8 @@ fn to_log_query(
         to_ts: filter.to_ts,
         module_like: filter.module_like.clone(),
         file_like: filter.file_like.clone(),
-        thread_id: filter.thread_id.clone(),
+        thread_ids: filter.thread_ids.clone(),
+        include_threadless: filter.include_threadless,
         after_id,
         limit,
         descending,
