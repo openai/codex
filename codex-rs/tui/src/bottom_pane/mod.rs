@@ -413,7 +413,7 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    /// Restores composer text, images and pending pastes from a PreparedDraft
+    /// Restores composer text, images, pending pastes, and mention paths from a PreparedDraft
     pub(crate) fn restore_stash(&mut self, stash: PreparedDraft) {
         self.composer
             .set_text_content_with_local_images_and_pending_pastes(
@@ -421,6 +421,7 @@ impl BottomPane {
                 stash.text_elements,
                 stash.local_images,
                 stash.pending_pastes,
+                stash.mention_paths,
             );
         self.request_redraw();
     }
@@ -1305,6 +1306,7 @@ mod tests {
                 },
             ],
             pending_pastes: Vec::new(),
+            mention_paths: HashMap::new(),
         };
 
         pane.restore_stash(stash);

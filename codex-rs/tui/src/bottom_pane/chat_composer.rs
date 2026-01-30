@@ -263,7 +263,8 @@ enum PrepareMode {
 /// image attachments, and any pending paste payloads so the state can be
 /// restored later.
 pub(crate) struct PreparedDraft {
-    /// Composer text after any preprocessing (e.g., prompt expansion).
+    /// Composer text. For submission this is after preprocessing (e.g., prompt
+    /// expansion); for stash this is the raw user input.
     pub(crate) text: String,
     /// Text elements corresponding to placeholders within `text`.
     pub(crate) text_elements: Vec<TextElement>,
@@ -271,6 +272,8 @@ pub(crate) struct PreparedDraft {
     pub(crate) local_images: Vec<LocalImageAttachment>,
     /// Pending paste payloads keyed by placeholder inserted into `text`.
     pub(crate) pending_pastes: Vec<(String, String)>,
+    /// Mapping from mention names to their resolved paths.
+    pub(crate) mention_paths: HashMap<String, String>,
 }
 pub(crate) struct ChatComposer {
     textarea: TextArea,
@@ -781,14 +784,15 @@ impl ChatComposer {
         self.textarea.set_cursor(self.textarea.text().len());
     }
 
-    /// Replaces the entire composer with `text`, resets cursor, sets pending pastes, and
-    /// preserves placeholder-to-path mappings for local images.
+    /// Replaces the entire composer with `text`, resets cursor, sets pending pastes,
+    /// preserves placeholder-to-path mappings for local images, and restores mention paths.
     pub(crate) fn set_text_content_with_local_images_and_pending_pastes(
         &mut self,
         text: String,
         text_elements: Vec<TextElement>,
         local_images: Vec<LocalImageAttachment>,
         pending_pastes: Vec<(String, String)>,
+        mention_paths: HashMap<String, String>,
     ) {
         // Clear any existing content, placeholders, and attachments first.
         self.textarea.set_text_clearing_elements("");
@@ -814,6 +818,7 @@ impl ChatComposer {
         self.pending_pastes = pending_pastes;
         self.pending_pastes
             .retain(|(ph, _)| self.textarea.text().contains(ph));
+        self.mention_paths = mention_paths;
         self.textarea.set_cursor(0);
         self.sync_popups();
     }
@@ -1936,7 +1941,8 @@ impl ChatComposer {
             }
         }
 
-        if self.slash_commands_enabled() {
+        // Prompt expansion only applies to submission; stash preserves raw input.
+        if matches!(mode, PrepareMode::ForSubmit) && self.slash_commands_enabled() {
             let expanded_prompt =
                 match expand_custom_prompt(&text, &text_elements, &self.custom_prompts) {
                     Ok(expanded) => expanded,
@@ -1959,9 +1965,11 @@ impl ChatComposer {
                 text_elements = expanded.text_elements;
             }
         }
-        // Custom prompt expansion can remove or rewrite image placeholders, so prune any
-        // attachments that no longer have a corresponding placeholder in the expanded text.
-        self.prune_attached_images_for_submission(&text, &text_elements);
+        // Image pruning applies to all submissions (prompt expansion can rewrite placeholders,
+        // and users may delete placeholder text manually). Stash preserves raw attachments.
+        if matches!(mode, PrepareMode::ForSubmit) {
+            self.prune_attached_images_for_submission(&text, &text_elements);
+        }
         if text.is_empty() && self.attached_images.is_empty() {
             return None;
         }
@@ -1983,12 +1991,14 @@ impl ChatComposer {
         self.pending_pastes.clear();
 
         let local_images = self.local_images();
+        let mention_paths = self.mention_paths.clone();
 
         Some(PreparedDraft {
             text,
             text_elements,
             local_images,
             pending_pastes,
+            mention_paths,
         })
     }
 
@@ -7127,6 +7137,59 @@ mod tests {
         );
         assert!(composer.textarea.is_empty());
         assert!(composer.pending_pastes.is_empty());
+    }
+
+    #[test]
+    fn ctrl_s_stash_preserves_mention_paths() {
+        // Issue: mention_paths (file/skill mentions inserted via popup) should survive
+        // stash/restore cycle so they resolve correctly on submission.
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        // Simulate inserting a file mention via popup (which records the path mapping).
+        let text_with_mention = "Check $myfile for issues".to_string();
+        composer.set_text_content(text_with_mention.clone(), Vec::new(), Vec::new());
+        composer
+            .mention_paths
+            .insert("myfile".to_string(), "/path/to/myfile.rs".to_string());
+
+        // Stash the draft.
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+
+        let InputResult::Stashed(stash) = result else {
+            panic!("expected stashed result, got {result:?}");
+        };
+
+        // Verify mention_paths is preserved in the stash.
+        assert_eq!(stash.text, text_with_mention);
+        assert_eq!(
+            stash.mention_paths.get("myfile"),
+            Some(&"/path/to/myfile.rs".to_string())
+        );
+
+        // Restore the stash and verify mention_paths is restored.
+        composer.set_text_content_with_local_images_and_pending_pastes(
+            stash.text,
+            stash.text_elements,
+            stash.local_images,
+            stash.pending_pastes,
+            stash.mention_paths,
+        );
+
+        assert_eq!(composer.current_text(), text_with_mention);
+        let restored_paths = composer.take_mention_paths();
+        assert_eq!(
+            restored_paths.get("myfile"),
+            Some(&"/path/to/myfile.rs".to_string())
+        );
     }
 
     #[test]
