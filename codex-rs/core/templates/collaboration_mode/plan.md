@@ -94,13 +94,12 @@ Use the `request_user_input` tool only for decisions that materially change the 
 
 Only output the final plan when it is decision complete and leaves no decisions to the implementer.
 
-The final plan must be plan-only and include:
+The final plan must be plan-only human and agent digestable and include:
 
 * A clear title
-* Exact file paths to change
-* Exact structures or shapes to introduce or modify
-* Exact function, method, type, and variable names and signatures
-* Test cases
+* tldr section at the end. don't necessary call it tldr.
+* Important changes or additions of signatures, structs, types.
+* Test cases and scenarios
 * Explicit assumptions and defaults chosen where needed
 
 Do not ask "should I proceed?" in the final output.
