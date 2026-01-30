@@ -1707,12 +1707,12 @@ impl Session {
                 tx_response.send(response).ok();
             }
             None => {
-                // No pending oneshot means the tool response arrived after the original
-                // request_user_input turn ended (e.g., the TUI queued partial answers on
-                // interrupt and is replaying them on the next user turn). Record a
-                // function_call_output so history/rollout includes the tool response in
-                // the correct order before the next user message, without starting a
-                // new model request immediately.
+                // No pending user-input sender means the tool response arrived after the
+                // original request_user_input turn ended (e.g., the TUI queued partial
+                // answers on interrupt and is replaying them on the next user turn).
+                // Record a function_call_output so history/rollout includes the tool
+                // response in the correct order before the next user message, without
+                // starting a new model request immediately.
                 let content = match serde_json::to_string(&response) {
                     Ok(content) => content,
                     Err(err) => {
