@@ -28,8 +28,6 @@ const GPT_5_2_CODEX_INSTRUCTIONS: &str = include_str!("../../gpt-5.2-codex_promp
 const GPT_5_2_CODEX_INSTRUCTIONS_TEMPLATE: &str =
     include_str!("../../templates/model_instructions/gpt-5.2-codex_instructions_template.md");
 
-const GPT_5_2_CODEX_PERSONALITY_DEFAULT: &str =
-    include_str!("../../templates/personalities/gpt-5.2-codex_default.md");
 const GPT_5_2_CODEX_PERSONALITY_FRIENDLY: &str =
     include_str!("../../templates/personalities/gpt-5.2-codex_friendly.md");
 const GPT_5_2_CODEX_PERSONALITY_PRAGMATIC: &str =
@@ -178,7 +176,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             model_instructions_spec: Some(ModelInstructionsSpec {
                 template: Some(GPT_5_2_CODEX_INSTRUCTIONS_TEMPLATE.to_string()),
                 variables: Some(ModelInstructionsVariables {
-                    personality_default: Some(GPT_5_2_CODEX_PERSONALITY_DEFAULT.to_string()),
+                    personality_default: Some("".to_string()),
                     personality_friendly: Some(GPT_5_2_CODEX_PERSONALITY_FRIENDLY.to_string()),
                     personality_pragmatic: Some(GPT_5_2_CODEX_PERSONALITY_PRAGMATIC.to_string()),
                 }),
@@ -221,7 +219,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             model_instructions_spec: Some(ModelInstructionsSpec {
                 template: Some(GPT_5_2_CODEX_INSTRUCTIONS_TEMPLATE.to_string()),
                 variables: Some(ModelInstructionsVariables {
-                    personality_default: Some(GPT_5_2_CODEX_PERSONALITY_DEFAULT.to_string()),
+                    personality_default: Some("".to_string()),
                     personality_friendly: Some(GPT_5_2_CODEX_PERSONALITY_FRIENDLY.to_string()),
                     personality_pragmatic: Some(GPT_5_2_CODEX_PERSONALITY_PRAGMATIC.to_string()),
                 }),

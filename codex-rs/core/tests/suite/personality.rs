@@ -377,7 +377,7 @@ async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()>
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn ignores_remote_model_personality_if_feature_disabled() -> anyhow::Result<()> {
+async fn ignores_remote_model_personality_if_remote_models_disabled() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = MockServer::builder()
@@ -385,7 +385,7 @@ async fn ignores_remote_model_personality_if_feature_disabled() -> anyhow::Resul
         .start()
         .await;
 
-    let remote_slug = "codex-remote-personality";
+    let remote_slug = "gpt-5.2-codex";
     let remote_personality_message = "Friendly from remote template";
     let remote_model = ModelInfo {
         slug: remote_slug.to_string(),
@@ -435,8 +435,8 @@ async fn ignores_remote_model_personality_if_feature_disabled() -> anyhow::Resul
     let mut builder = test_codex()
         .with_auth(codex_core::CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
-            config.features.enable(Feature::RemoteModels);
-            config.features.disable(Feature::Personality);
+            config.features.disable(Feature::RemoteModels);
+            config.features.enable(Feature::Personality);
             config.model = Some(remote_slug.to_string());
             config.model_personality = Some(Personality::Friendly);
         });
@@ -473,12 +473,18 @@ async fn ignores_remote_model_personality_if_feature_disabled() -> anyhow::Resul
     let instructions_text = request.instructions_text();
 
     assert!(
-        instructions_text.contains("base instructions"),
-        "expected instructions to use base instructions, got: {instructions_text:?}"
+        instructions_text.contains("You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals."),
+        "expected instructions to use the template instructions, got: {instructions_text:?}"
     );
     assert!(
-        !instructions_text.contains("Friendly from remote"),
-        "expected friendly instructions to be ignored, got: {instructions_text:?}"
+        instructions_text.contains(
+            "You optimize for team morale and being a supportive teammate as much as code quality."
+        ),
+        "expected instructions to include the local friendly personality template, got: {instructions_text:?}"
+    );
+    assert!(
+        !instructions_text.contains("{{ personality_message }}"),
+        "expected legacy personality placeholder to be replaced, got: {instructions_text:?}"
     );
 
     Ok(())
