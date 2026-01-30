@@ -196,7 +196,7 @@ async fn maybe_request_mcp_tool_approval(
     }
 
     let metadata = lookup_mcp_tool_metadata(sess, server, tool_name).await?;
-    if !requires_mcp_tool_approval(Some(&metadata.annotations)) {
+    if !requires_mcp_tool_approval(&metadata.annotations) {
         return None;
     }
 
@@ -330,12 +330,9 @@ fn parse_mcp_tool_approval_response(
     }
 }
 
-fn requires_mcp_tool_approval(annotations: Option<&ToolAnnotations>) -> bool {
-    annotations.is_some_and(|annotations| {
-        annotations.read_only_hint == Some(false)
-            && (annotations.destructive_hint == Some(true)
-                || annotations.open_world_hint == Some(true))
-    })
+fn requires_mcp_tool_approval(annotations: &ToolAnnotations) -> bool {
+    annotations.read_only_hint == Some(false)
+        && (annotations.destructive_hint == Some(true) || annotations.open_world_hint == Some(true))
 }
 
 async fn notify_mcp_tool_call_skip(
@@ -383,23 +380,18 @@ mod tests {
     #[test]
     fn approval_required_when_read_only_false_and_destructive() {
         let annotations = annotations(Some(false), Some(true), None);
-        assert_eq!(requires_mcp_tool_approval(Some(&annotations)), true);
+        assert_eq!(requires_mcp_tool_approval(&annotations), true);
     }
 
     #[test]
     fn approval_required_when_read_only_false_and_open_world() {
         let annotations = annotations(Some(false), None, Some(true));
-        assert_eq!(requires_mcp_tool_approval(Some(&annotations)), true);
+        assert_eq!(requires_mcp_tool_approval(&annotations), true);
     }
 
     #[test]
     fn approval_not_required_when_read_only_true() {
         let annotations = annotations(Some(true), Some(true), Some(true));
-        assert_eq!(requires_mcp_tool_approval(Some(&annotations)), false);
-    }
-
-    #[test]
-    fn approval_not_required_when_no_annotations() {
-        assert_eq!(requires_mcp_tool_approval(None), false);
+        assert_eq!(requires_mcp_tool_approval(&annotations), false);
     }
 }
