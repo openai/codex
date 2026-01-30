@@ -1400,6 +1400,7 @@ dependencies = [
  "codex-state",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
+ "codex-utils-paths",
  "codex-utils-pty",
  "codex-utils-readiness",
  "codex-utils-string",
@@ -1842,6 +1843,7 @@ dependencies = [
  "codex-keyring-store",
  "codex-protocol",
  "codex-utils-cargo-bin",
+ "codex-utils-paths",
  "dirs",
  "futures",
  "keyring",
@@ -2026,6 +2028,15 @@ dependencies = [
  "pretty_assertions",
  "serde_json",
  "toml 0.9.5",
+]
+
+[[package]]
+name = "codex-utils-paths"
+version = "0.0.0"
+dependencies = [
+ "dirs",
+ "pretty_assertions",
+ "tempfile",
 ]
 
 [[package]]
