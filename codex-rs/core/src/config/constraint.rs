@@ -18,6 +18,12 @@ pub enum ConstraintError {
 
     #[error("field `{field_name}` cannot be empty")]
     EmptyField { field_name: String },
+
+    #[error("invalid rules in requirements (set by {requirement_source}): {reason}")]
+    ExecPolicyParse {
+        requirement_source: RequirementSource,
+        reason: String,
+    },
 }
 
 impl ConstraintError {

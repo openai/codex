@@ -22,6 +22,7 @@ pub struct PlanItemArg {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct UpdatePlanArgs {
+    /// Arguments for the `update_plan` todo/checklist tool (not plan mode).
     #[serde(default)]
     pub explanation: Option<String>,
     pub plan: Vec<PlanItemArg>,

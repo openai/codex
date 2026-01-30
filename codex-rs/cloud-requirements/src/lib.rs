@@ -8,7 +8,6 @@
 //! requirements before Codex will run.
 
 use async_trait::async_trait;
-use codex_app_server_protocol::AuthMode;
 use codex_backend_client::Client as BackendClient;
 use codex_core::AuthManager;
 use codex_core::auth::CodexAuth;
@@ -120,9 +119,7 @@ impl CloudRequirementsService {
 
     async fn fetch(&self) -> Option<ConfigRequirementsToml> {
         let auth = self.auth_manager.auth().await?;
-        if !(auth.mode == AuthMode::ChatGPT
-            && auth.account_plan_type() == Some(PlanType::Enterprise))
-        {
+        if !(auth.is_chatgpt_auth() && auth.account_plan_type() == Some(PlanType::Enterprise)) {
             return None;
         }
 
@@ -317,6 +314,7 @@ mod tests {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_sandbox_modes: None,
                 mcp_servers: None,
+                rules: None,
             })
         );
     }

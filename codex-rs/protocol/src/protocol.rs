@@ -14,6 +14,7 @@ use std::time::Duration;
 use crate::ThreadId;
 use crate::approvals::ElicitationRequestEvent;
 use crate::config_types::CollaborationMode;
+use crate::config_types::ModeKind;
 use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::config_types::WindowsSandboxLevel;
@@ -838,6 +839,7 @@ pub enum EventMsg {
     ItemCompleted(ItemCompletedEvent),
 
     AgentMessageContentDelta(AgentMessageContentDeltaEvent),
+    PlanDelta(PlanDeltaEvent),
     ReasoningContentDelta(ReasoningContentDeltaEvent),
     ReasoningRawContentDelta(ReasoningRawContentDeltaEvent),
 
@@ -1018,6 +1020,14 @@ impl HasLegacyEvent for AgentMessageContentDeltaEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+pub struct PlanDeltaEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub delta: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub struct ReasoningContentDeltaEvent {
     pub thread_id: String,
     pub turn_id: String,
@@ -1107,6 +1117,8 @@ pub struct TurnCompleteEvent {
 pub struct TurnStartedEvent {
     // TODO(aibrahim): make this not optional
     pub model_context_window: Option<i64>,
+    #[serde(default)]
+    pub collaboration_mode_kind: ModeKind,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, JsonSchema, TS)]
