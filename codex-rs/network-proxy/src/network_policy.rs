@@ -1,9 +1,11 @@
 use crate::reasons::REASON_POLICY_DENIED;
 use crate::runtime::HostBlockDecision;
 use crate::runtime::HostBlockReason;
+use crate::runtime::HostPolicyResult;
 use crate::state::NetworkProxyState;
 use anyhow::Result;
 use async_trait::async_trait;
+use rama_net::address::HostWithPort;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -83,6 +85,12 @@ impl<D: NetworkPolicyDecider + ?Sized> NetworkPolicyDecider for Arc<D> {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NetworkPolicyOutcome {
+    pub decision: NetworkDecision,
+    pub connector_target: Option<HostWithPort>,
+}
+
 #[async_trait]
 impl<F, Fut> NetworkPolicyDecider for F
 where
@@ -98,18 +106,30 @@ pub(crate) async fn evaluate_host_policy(
     state: &NetworkProxyState,
     decider: Option<&Arc<dyn NetworkPolicyDecider>>,
     request: &NetworkPolicyRequest,
-) -> Result<NetworkDecision> {
-    match state.host_blocked(&request.host, request.port).await? {
-        HostBlockDecision::Allowed => Ok(NetworkDecision::Allow),
+) -> Result<NetworkPolicyOutcome> {
+    let HostPolicyResult {
+        decision: host_decision,
+        connector_target,
+    } = state.host_blocked(&request.host, request.port).await?;
+    let decision = match host_decision {
+        HostBlockDecision::Allowed => NetworkDecision::Allow,
         HostBlockDecision::Blocked(HostBlockReason::NotAllowed) => {
             if let Some(decider) = decider {
-                Ok(decider.decide(request.clone()).await)
+                decider.decide(request.clone()).await
             } else {
-                Ok(NetworkDecision::deny(HostBlockReason::NotAllowed.as_str()))
+                NetworkDecision::deny(HostBlockReason::NotAllowed.as_str())
             }
         }
-        HostBlockDecision::Blocked(reason) => Ok(NetworkDecision::deny(reason.as_str())),
-    }
+        HostBlockDecision::Blocked(reason) => NetworkDecision::deny(reason.as_str()),
+    };
+    let connector_target = match decision {
+        NetworkDecision::Allow => connector_target,
+        NetworkDecision::Deny { .. } => None,
+    };
+    Ok(NetworkPolicyOutcome {
+        decision,
+        connector_target,
+    })
 }
 
 #[cfg(test)]
@@ -141,7 +161,7 @@ mod tests {
 
         let request = NetworkPolicyRequest::new(
             NetworkProtocol::Http,
-            "example.com".to_string(),
+            "8.8.8.8".to_string(),
             80,
             None,
             Some("GET".to_string()),
@@ -149,10 +169,10 @@ mod tests {
             None,
         );
 
-        let decision = evaluate_host_policy(&state, Some(&decider), &request)
+        let outcome = evaluate_host_policy(&state, Some(&decider), &request)
             .await
             .unwrap();
-        assert_eq!(decision, NetworkDecision::Allow);
+        assert_eq!(outcome.decision, NetworkDecision::Allow);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
@@ -182,11 +202,11 @@ mod tests {
             None,
         );
 
-        let decision = evaluate_host_policy(&state, Some(&decider), &request)
+        let outcome = evaluate_host_policy(&state, Some(&decider), &request)
             .await
             .unwrap();
         assert_eq!(
-            decision,
+            outcome.decision,
             NetworkDecision::Deny {
                 reason: REASON_DENIED.to_string()
             }
@@ -220,11 +240,11 @@ mod tests {
             None,
         );
 
-        let decision = evaluate_host_policy(&state, Some(&decider), &request)
+        let outcome = evaluate_host_policy(&state, Some(&decider), &request)
             .await
             .unwrap();
         assert_eq!(
-            decision,
+            outcome.decision,
             NetworkDecision::Deny {
                 reason: REASON_NOT_ALLOWED_LOCAL.to_string()
             }

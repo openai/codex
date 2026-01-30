@@ -14,6 +14,8 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use globset::GlobSet;
+use rama_net::address::Host as NetHost;
+use rama_net::address::HostWithPort;
 use serde::Serialize;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -60,6 +62,21 @@ impl std::fmt::Display for HostBlockReason {
 pub enum HostBlockDecision {
     Allowed,
     Blocked(HostBlockReason),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostPolicyResult {
+    pub decision: HostBlockDecision,
+    pub connector_target: Option<HostWithPort>,
+}
+
+impl HostPolicyResult {
+    const fn blocked(reason: HostBlockReason) -> Self {
+        Self {
+            decision: HostBlockDecision::Blocked(reason),
+            connector_target: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -188,11 +205,11 @@ impl NetworkProxyState {
         }
     }
 
-    pub async fn host_blocked(&self, host: &str, port: u16) -> Result<HostBlockDecision> {
+    pub async fn host_blocked(&self, host: &str, port: u16) -> Result<HostPolicyResult> {
         self.reload_if_needed().await?;
         let host = match Host::parse(host) {
             Ok(host) => host,
-            Err(_) => return Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowed)),
+            Err(_) => return Ok(HostPolicyResult::blocked(HostBlockReason::NotAllowed)),
         };
         let (deny_set, allow_set, allow_local_binding, allowed_domains_empty, allowed_domains) = {
             let guard = self.state.read().await;
@@ -212,19 +229,20 @@ impl NetworkProxyState {
         //  2) local/private networking is opt-in (defense-in-depth)
         //  3) allowlist is enforced when configured
         if deny_set.is_match(host_str) {
-            return Ok(HostBlockDecision::Blocked(HostBlockReason::Denied));
+            return Ok(HostPolicyResult::blocked(HostBlockReason::Denied));
         }
 
         let is_allowlisted = allow_set.is_match(host_str);
+        let mut connector_target = None;
         if !allow_local_binding {
             // If the intent is "prevent access to local/internal networks", we must not rely solely
             // on string checks like `localhost` / `127.0.0.1`. Attackers can use DNS rebinding or
             // public suffix services that map hostnames onto private IPs.
             //
-            // We therefore do a best-effort DNS + IP classification check before allowing the
-            // request. Explicit local/loopback literals are allowed only when explicitly
-            // allowlisted; hostnames that resolve to local/private IPs are blocked even if
-            // allowlisted.
+            // We therefore do a DNS + IP classification check before allowing the request and
+            // reuse the resolved IPs for the eventual connect to avoid DNS rebinding gaps.
+            // Explicit local/loopback literals are allowed only when explicitly allowlisted;
+            // hostnames that resolve to local/private IPs are blocked even if allowlisted.
             let local_literal = {
                 let host_no_scope = host_str
                     .split_once('%')
@@ -241,18 +259,34 @@ impl NetworkProxyState {
 
             if local_literal {
                 if !is_explicit_local_allowlisted(&allowed_domains, &host) {
-                    return Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal));
+                    return Ok(HostPolicyResult::blocked(HostBlockReason::NotAllowedLocal));
                 }
-            } else if host_resolves_to_non_public_ip(host_str, port).await {
-                return Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal));
+            } else {
+                let resolved_ips = match resolve_host_ips(host_str, port).await {
+                    Some(resolved_ips) => resolved_ips,
+                    None => {
+                        return Ok(HostPolicyResult::blocked(HostBlockReason::NotAllowedLocal));
+                    }
+                };
+                if resolved_ips.iter().copied().any(is_non_public_ip) {
+                    return Ok(HostPolicyResult::blocked(HostBlockReason::NotAllowedLocal));
+                }
+                connector_target = resolved_ips
+                    .first()
+                    .copied()
+                    .map(|ip| HostWithPort::new(NetHost::Address(ip), port));
             }
         }
 
-        if allowed_domains_empty || !is_allowlisted {
-            Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowed))
+        let decision = if allowed_domains_empty || !is_allowlisted {
+            HostBlockDecision::Blocked(HostBlockReason::NotAllowed)
         } else {
-            Ok(HostBlockDecision::Allowed)
-        }
+            HostBlockDecision::Allowed
+        };
+        Ok(HostPolicyResult {
+            decision,
+            connector_target,
+        })
     }
 
     pub async fn record_blocked(&self, entry: BlockedRequest) -> Result<()> {
@@ -382,26 +416,20 @@ pub(crate) fn unix_socket_permissions_supported() -> bool {
     cfg!(target_os = "macos")
 }
 
-async fn host_resolves_to_non_public_ip(host: &str, port: u16) -> bool {
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        return is_non_public_ip(ip);
+async fn resolve_host_ips(host: &str, port: u16) -> Option<Vec<IpAddr>> {
+    let host_no_scope = host.split_once('%').map(|(ip, _)| ip).unwrap_or(host);
+    if let Ok(ip) = host_no_scope.parse::<IpAddr>() {
+        return Some(vec![ip]);
     }
 
-    // If DNS lookup fails, default to "not local/private" rather than blocking. In practice, the
-    // subsequent connect attempt will fail anyway, and blocking on transient resolver issues would
-    // make the proxy fragile. The allowlist/denylist remains the primary control plane.
+    // If DNS lookup fails, return `None` so callers can decide whether to block. We treat this as
+    // a hard failure when local binding is disabled to avoid DNS rebinding gaps.
     let addrs = match timeout(DNS_LOOKUP_TIMEOUT, lookup_host((host, port))).await {
         Ok(Ok(addrs)) => addrs,
-        Ok(Err(_)) | Err(_) => return false,
+        Ok(Err(_)) | Err(_) => return None,
     };
-
-    for addr in addrs {
-        if is_non_public_ip(addr.ip()) {
-            return true;
-        }
-    }
-
-    false
+    let ips = addrs.map(|addr| addr.ip()).collect::<Vec<_>>();
+    if ips.is_empty() { None } else { Some(ips) }
 }
 
 fn log_policy_changes(previous: &NetworkProxyConfig, next: &NetworkProxyConfig) {
@@ -525,7 +553,11 @@ mod tests {
         });
 
         assert_eq!(
-            state.host_blocked("example.com", 80).await.unwrap(),
+            state
+                .host_blocked("example.com", 80)
+                .await
+                .unwrap()
+                .decision,
             HostBlockDecision::Blocked(HostBlockReason::Denied)
         );
     }
@@ -533,18 +565,18 @@ mod tests {
     #[tokio::test]
     async fn host_blocked_requires_allowlist_match() {
         let state = network_proxy_state_for_policy(NetworkPolicy {
-            allowed_domains: vec!["example.com".to_string()],
+            allowed_domains: vec!["1.1.1.1".to_string()],
             ..NetworkPolicy::default()
         });
 
         assert_eq!(
-            state.host_blocked("example.com", 80).await.unwrap(),
+            state.host_blocked("1.1.1.1", 80).await.unwrap().decision,
             HostBlockDecision::Allowed
         );
         assert_eq!(
             // Use a public IP literal to avoid relying on ambient DNS behavior (some networks
             // resolve unknown hostnames to private IPs, which would trigger `not_allowed_local`).
-            state.host_blocked("8.8.8.8", 80).await.unwrap(),
+            state.host_blocked("8.8.8.8", 80).await.unwrap().decision,
             HostBlockDecision::Blocked(HostBlockReason::NotAllowed)
         );
     }
@@ -553,15 +585,20 @@ mod tests {
     async fn host_blocked_subdomain_wildcards_exclude_apex() {
         let state = network_proxy_state_for_policy(NetworkPolicy {
             allowed_domains: vec!["*.openai.com".to_string()],
+            allow_local_binding: true,
             ..NetworkPolicy::default()
         });
 
         assert_eq!(
-            state.host_blocked("api.openai.com", 80).await.unwrap(),
+            state
+                .host_blocked("api.openai.com", 80)
+                .await
+                .unwrap()
+                .decision,
             HostBlockDecision::Allowed
         );
         assert_eq!(
-            state.host_blocked("openai.com", 80).await.unwrap(),
+            state.host_blocked("openai.com", 80).await.unwrap().decision,
             HostBlockDecision::Blocked(HostBlockReason::NotAllowed)
         );
     }
@@ -575,11 +612,11 @@ mod tests {
         });
 
         assert_eq!(
-            state.host_blocked("127.0.0.1", 80).await.unwrap(),
+            state.host_blocked("127.0.0.1", 80).await.unwrap().decision,
             HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal)
         );
         assert_eq!(
-            state.host_blocked("localhost", 80).await.unwrap(),
+            state.host_blocked("localhost", 80).await.unwrap().decision,
             HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal)
         );
     }
@@ -593,7 +630,7 @@ mod tests {
         });
 
         assert_eq!(
-            state.host_blocked("127.0.0.1", 80).await.unwrap(),
+            state.host_blocked("127.0.0.1", 80).await.unwrap().decision,
             HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal)
         );
     }
@@ -607,7 +644,7 @@ mod tests {
         });
 
         assert_eq!(
-            state.host_blocked("10.0.0.1", 80).await.unwrap(),
+            state.host_blocked("10.0.0.1", 80).await.unwrap().decision,
             HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal)
         );
     }
@@ -621,7 +658,7 @@ mod tests {
         });
 
         assert_eq!(
-            state.host_blocked("localhost", 80).await.unwrap(),
+            state.host_blocked("localhost", 80).await.unwrap().decision,
             HostBlockDecision::Allowed
         );
     }
@@ -635,7 +672,7 @@ mod tests {
         });
 
         assert_eq!(
-            state.host_blocked("10.0.0.1", 80).await.unwrap(),
+            state.host_blocked("10.0.0.1", 80).await.unwrap().decision,
             HostBlockDecision::Allowed
         );
     }
@@ -649,7 +686,11 @@ mod tests {
         });
 
         assert_eq!(
-            state.host_blocked("fe80::1%lo0", 80).await.unwrap(),
+            state
+                .host_blocked("fe80::1%lo0", 80)
+                .await
+                .unwrap()
+                .decision,
             HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal)
         );
     }
@@ -663,7 +704,11 @@ mod tests {
         });
 
         assert_eq!(
-            state.host_blocked("fe80::1%lo0", 80).await.unwrap(),
+            state
+                .host_blocked("fe80::1%lo0", 80)
+                .await
+                .unwrap()
+                .decision,
             HostBlockDecision::Allowed
         );
     }
@@ -677,7 +722,7 @@ mod tests {
         });
 
         assert_eq!(
-            state.host_blocked("10.0.0.1", 80).await.unwrap(),
+            state.host_blocked("10.0.0.1", 80).await.unwrap().decision,
             HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal)
         );
     }
@@ -691,7 +736,7 @@ mod tests {
         });
 
         assert_eq!(
-            state.host_blocked("127.0.0.1", 80).await.unwrap(),
+            state.host_blocked("127.0.0.1", 80).await.unwrap().decision,
             HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal)
         );
     }

@@ -42,6 +42,7 @@ use rama_http_backend::server::layer::upgrade::Upgraded;
 use rama_net::Protocol;
 use rama_net::address::ProxyAddress;
 use rama_net::client::ConnectorService;
+use rama_net::client::ConnectorTarget;
 use rama_net::client::EstablishedClientConnection;
 use rama_net::http::RequestContext;
 use rama_net::proxy::ProxyRequest;
@@ -156,8 +157,16 @@ async fn http_connect_accept(
         None,
     );
 
-    match evaluate_host_policy(&app_state, policy_decider.as_ref(), &request).await {
-        Ok(NetworkDecision::Deny { reason }) => {
+    let outcome = match evaluate_host_policy(&app_state, policy_decider.as_ref(), &request).await {
+        Ok(outcome) => outcome,
+        Err(err) => {
+            error!("failed to evaluate host for CONNECT {host}: {err}");
+            return Err(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"));
+        }
+    };
+
+    match outcome.decision {
+        NetworkDecision::Deny { reason } => {
             let _ = app_state
                 .record_blocked(BlockedRequest::new(
                     host.clone(),
@@ -172,14 +181,14 @@ async fn http_connect_accept(
             warn!("CONNECT blocked (client={client}, host={host}, reason={reason})");
             return Err(blocked_text(&reason));
         }
-        Ok(NetworkDecision::Allow) => {
+        NetworkDecision::Allow => {
             let client = client.as_deref().unwrap_or_default();
             info!("CONNECT allowed (client={client}, host={host})");
         }
-        Err(err) => {
-            error!("failed to evaluate host for CONNECT {host}: {err}");
-            return Err(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"));
-        }
+    }
+
+    if let Some(target) = outcome.connector_target {
+        req.extensions_mut().insert(ConnectorTarget(target));
     }
 
     let mode = app_state
@@ -296,7 +305,7 @@ async fn forward_connect_tunnel(
 
 async fn http_plain_proxy(
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
-    req: Request,
+    mut req: Request,
 ) -> Result<Response, Infallible> {
     let app_state = match req.extensions().get::<Arc<NetworkProxyState>>().cloned() {
         Some(state) => state,
@@ -435,8 +444,16 @@ async fn http_plain_proxy(
         None,
     );
 
-    match evaluate_host_policy(&app_state, policy_decider.as_ref(), &request).await {
-        Ok(NetworkDecision::Deny { reason }) => {
+    let outcome = match evaluate_host_policy(&app_state, policy_decider.as_ref(), &request).await {
+        Ok(outcome) => outcome,
+        Err(err) => {
+            error!("failed to evaluate host for {host}: {err}");
+            return Ok(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"));
+        }
+    };
+
+    match outcome.decision {
+        NetworkDecision::Deny { reason } => {
             let _ = app_state
                 .record_blocked(BlockedRequest::new(
                     host.clone(),
@@ -451,11 +468,7 @@ async fn http_plain_proxy(
             warn!("request blocked (client={client}, host={host}, reason={reason})");
             return Ok(json_blocked(&host, &reason));
         }
-        Ok(NetworkDecision::Allow) => {}
-        Err(err) => {
-            error!("failed to evaluate host for {host}: {err}");
-            return Ok(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"));
-        }
+        NetworkDecision::Allow => {}
     }
 
     if !method_allowed {
@@ -480,6 +493,10 @@ async fn http_plain_proxy(
     let client = client.as_deref().unwrap_or_default();
     let method = req.method();
     info!("request allowed (client={client}, host={host}, method={method})");
+
+    if let Some(target) = outcome.connector_target {
+        req.extensions_mut().insert(ConnectorTarget(target));
+    }
 
     let allow_upstream_proxy = match app_state
         .allow_upstream_proxy()
