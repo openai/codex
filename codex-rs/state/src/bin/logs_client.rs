@@ -244,11 +244,11 @@ fn to_log_query(
 }
 
 fn format_row(row: &LogRow) -> String {
-    let timestamp = format_timestamp(row.ts, row.ts_nanos);
+    let timestamp = formatter::ts(row.ts, row.ts_nanos);
     let level = row.level.as_str();
     let target = row.target.as_str();
     let message = row.message.as_deref().unwrap_or("");
-    let level_colored = color_level(level);
+    let level_colored = formatter::level(level);
     let timestamp_colored = timestamp.dimmed().to_string();
     let thread_id = row.thread_id.as_deref().unwrap_or("-");
     let thread_id_colored = thread_id.blue().dimmed().to_string();
@@ -260,59 +260,66 @@ fn format_row(row: &LogRow) -> String {
 }
 
 fn heuristic_formatting(message: &str) -> String {
-    if matches_apply_patch(message) {
-        format_apply_patch(message)
+    if matcher::apply_patch(message) {
+        formatter::apply_patch(message)
     } else {
         message.bold().to_string()
     }
 }
 
-fn matches_apply_patch(message: &str) -> bool {
-    message.starts_with("ToolCall: apply_patch")
-}
-
-fn format_apply_patch(message: &str) -> String {
-    message
-        .lines()
-        .map(format_apply_patch_line)
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn format_apply_patch_line(line: &str) -> String {
-    if line.starts_with('+') {
-        line.green().bold().to_string()
-    } else if line.starts_with('-') {
-        line.red().bold().to_string()
-    } else {
-        line.bold().to_string()
+mod matcher {
+    pub(super) fn apply_patch(message: &str) -> bool {
+        message.starts_with("ToolCall: apply_patch")
     }
 }
 
-fn color_level(level: &str) -> String {
-    let padded = format!("{level:<5}");
-    if level.eq_ignore_ascii_case("error") {
-        return padded.red().bold().to_string();
-    }
-    if level.eq_ignore_ascii_case("warn") {
-        return padded.yellow().bold().to_string();
-    }
-    if level.eq_ignore_ascii_case("info") {
-        return padded.green().bold().to_string();
-    }
-    if level.eq_ignore_ascii_case("debug") {
-        return padded.blue().bold().to_string();
-    }
-    if level.eq_ignore_ascii_case("trace") {
-        return padded.magenta().bold().to_string();
-    }
-    padded.bold().to_string()
-}
+mod formatter {
+    use chrono::DateTime;
+    use chrono::SecondsFormat;
+    use chrono::Utc;
+    use owo_colors::OwoColorize;
 
-fn format_timestamp(ts: i64, ts_nanos: i64) -> String {
-    let nanos = u32::try_from(ts_nanos).unwrap_or(0);
-    match DateTime::<Utc>::from_timestamp(ts, nanos) {
-        Some(dt) => dt.to_rfc3339_opts(SecondsFormat::Millis, true),
-        None => format!("{ts}.{ts_nanos:09}Z"),
+    pub(super) fn apply_patch(message: &str) -> String {
+        message
+            .lines()
+            .map(|line| {
+                if line.starts_with('+') {
+                    line.green().bold().to_string()
+                } else if line.starts_with('-') {
+                    line.red().bold().to_string()
+                } else {
+                    line.bold().to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    pub(super) fn ts(ts: i64, ts_nanos: i64) -> String {
+        let nanos = u32::try_from(ts_nanos).unwrap_or(0);
+        match DateTime::<Utc>::from_timestamp(ts, nanos) {
+            Some(dt) => dt.to_rfc3339_opts(SecondsFormat::Millis, true),
+            None => format!("{ts}.{ts_nanos:09}Z"),
+        }
+    }
+
+    pub(super) fn level(level: &str) -> String {
+        let padded = format!("{level:<5}");
+        if level.eq_ignore_ascii_case("error") {
+            return padded.red().bold().to_string();
+        }
+        if level.eq_ignore_ascii_case("warn") {
+            return padded.yellow().bold().to_string();
+        }
+        if level.eq_ignore_ascii_case("info") {
+            return padded.green().bold().to_string();
+        }
+        if level.eq_ignore_ascii_case("debug") {
+            return padded.blue().bold().to_string();
+        }
+        if level.eq_ignore_ascii_case("trace") {
+            return padded.magenta().bold().to_string();
+        }
+        padded.bold().to_string()
     }
 }
