@@ -60,8 +60,8 @@ fn apply_event_msg(metadata: &mut ThreadMetadata, event: &EventMsg) {
         }
         EventMsg::UserMessage(user) => {
             metadata.has_user_event = true;
-            if metadata.title.is_empty() {
-                metadata.title = strip_user_message_prefix(user.message.as_str()).to_string();
+            if metadata.name.is_empty() {
+                metadata.name = strip_user_message_prefix(user.message.as_str()).to_string();
             }
         }
         _ => {}
@@ -71,8 +71,8 @@ fn apply_event_msg(metadata: &mut ThreadMetadata, event: &EventMsg) {
 fn apply_response_item(metadata: &mut ThreadMetadata, item: &ResponseItem) {
     if let Some(text) = extract_user_message_text(item) {
         metadata.has_user_event = true;
-        if metadata.title.is_empty() {
-            metadata.title = text;
+        if metadata.name.is_empty() {
+            metadata.name = text;
         }
     }
 }
@@ -163,7 +163,7 @@ mod tests {
             source: "cli".to_string(),
             model_provider: "openai".to_string(),
             cwd: PathBuf::from("/tmp"),
-            title: "hello".to_string(),
+            name: "hello".to_string(),
             sandbox_policy: "read-only".to_string(),
             approval_mode: "on-request".to_string(),
             tokens_used: 1,
@@ -175,8 +175,8 @@ mod tests {
         };
         let mut other = base.clone();
         other.tokens_used = 2;
-        other.title = "world".to_string();
+        other.name = "world".to_string();
         let diffs = base.diff_fields(&other);
-        assert_eq!(diffs, vec!["title", "tokens_used"]);
+        assert_eq!(diffs, vec!["name", "tokens_used"]);
     }
 }

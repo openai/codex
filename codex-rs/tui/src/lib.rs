@@ -32,6 +32,7 @@ use codex_core::find_thread_path_by_name_str;
 use codex_core::path_utils;
 use codex_core::protocol::AskForApproval;
 use codex_core::read_session_meta_line;
+use codex_core::state_db;
 use codex_core::terminal::Multiplexer;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_protocol::config_types::AltScreenMode;
@@ -400,6 +401,25 @@ pub async fn run_main(
     .map_err(|err| std::io::Error::other(err.to_string()))
 }
 
+async fn find_rollout_path_by_name(
+    config: &Config,
+    name: &str,
+    archived_only: Option<bool>,
+) -> std::io::Result<Option<PathBuf>> {
+    if let Some(db) = state_db::get_state_db(config, None).await {
+        if let Some(path) = db
+            .find_rollout_path_by_name(name, archived_only)
+            .await
+            .ok()
+            .flatten()
+        {
+            return Ok(Some(path));
+        }
+    }
+
+    find_thread_path_by_name_str(&config.codex_home, name).await
+}
+
 async fn run_ratatui_app(
     cli: Cli,
     initial_config: Config,
@@ -534,7 +554,7 @@ async fn run_ratatui_app(
             let path = if is_uuid {
                 find_thread_path_by_id_str(&config.codex_home, id_str).await?
             } else {
-                find_thread_path_by_name_str(&config.codex_home, id_str).await?
+                find_rollout_path_by_name(&config, id_str, Some(false)).await?
             };
             match path {
                 Some(path) => resume_picker::SessionSelection::Fork(path),
@@ -590,7 +610,7 @@ async fn run_ratatui_app(
         let path = if is_uuid {
             find_thread_path_by_id_str(&config.codex_home, id_str).await?
         } else {
-            find_thread_path_by_name_str(&config.codex_home, id_str).await?
+            find_rollout_path_by_name(&config, id_str, Some(false)).await?
         };
         match path {
             Some(path) => resume_picker::SessionSelection::Resume(path),

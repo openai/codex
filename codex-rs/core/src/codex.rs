@@ -3033,6 +3033,13 @@ mod handlers {
             sess.send_event_raw(event).await;
             return;
         }
+        if let Some(state_db) = sess.services.state_db.as_ref()
+            && let Err(err) = state_db
+                .update_thread_name(sess.conversation_id, name.as_str())
+                .await
+        {
+            warn!("Failed to update thread name in state db: {err}");
+        }
 
         {
             let mut state = sess.state.lock().await;

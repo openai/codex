@@ -67,6 +67,7 @@ use crate::event_processor::EventProcessor;
 use codex_core::default_client::set_default_originator;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::find_thread_path_by_name_str;
+use codex_core::state_db;
 
 enum InitialOperation {
     UserTurn {
@@ -625,8 +626,20 @@ async fn resolve_resume_path(
             let path = find_thread_path_by_id_str(&config.codex_home, id_str).await?;
             Ok(path)
         } else {
-            let path = find_thread_path_by_name_str(&config.codex_home, id_str).await?;
-            Ok(path)
+            let db_path = if let Some(db) = state_db::get_state_db(config, None).await {
+                db.find_rollout_path_by_name(id_str, Some(false))
+                    .await
+                    .ok()
+                    .flatten()
+            } else {
+                None
+            };
+            match db_path {
+                Some(path) => Ok(Some(path)),
+                None => find_thread_path_by_name_str(&config.codex_home, id_str)
+                    .await
+                    .map_err(Into::into),
+            }
         }
     } else {
         Ok(None)

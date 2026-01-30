@@ -2,6 +2,7 @@ use anyhow::Result;
 use codex_core::features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMeta;
@@ -17,6 +18,7 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::fs;
@@ -275,6 +277,54 @@ async fn tool_call_logs_include_thread_id() -> Result<()> {
             .is_some_and(|text| text.starts_with("ToolCall:")),
         "expected ToolCall message, got {message:?}"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn thread_rename_updates_state_db_name() -> Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::Sqlite);
+    });
+    let test = builder.build(&server).await?;
+
+    let db_path = test.config.codex_home.join(STATE_DB_FILENAME);
+    for _ in 0..100 {
+        if tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    let db = test.codex.state_db().expect("state db enabled");
+    let thread_id = test.session_configured.session_id;
+    let new_name = "renamed thread";
+
+    test.codex
+        .submit(Op::SetThreadName {
+            name: new_name.to_string(),
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ThreadNameUpdated(_))
+    })
+    .await;
+
+    let mut metadata = None;
+    for _ in 0..100 {
+        metadata = db.get_thread(thread_id).await?;
+        if metadata
+            .as_ref()
+            .is_some_and(|entry| entry.name == new_name)
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    let metadata = metadata.expect("thread should exist in state db");
+    assert_eq!(metadata.name, new_name);
 
     Ok(())
 }

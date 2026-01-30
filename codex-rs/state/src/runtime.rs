@@ -95,7 +95,7 @@ SELECT
     source,
     model_provider,
     cwd,
-    title,
+    name,
     sandbox_policy,
     approval_mode,
     tokens_used,
@@ -139,6 +139,31 @@ WHERE id = ?
             .map(PathBuf::from))
     }
 
+    /// Find a rollout path by thread name using the underlying database.
+    pub async fn find_rollout_path_by_name(
+        &self,
+        name: &str,
+        archived_only: Option<bool>,
+    ) -> anyhow::Result<Option<PathBuf>> {
+        let mut builder =
+            QueryBuilder::<Sqlite>::new("SELECT rollout_path FROM threads WHERE name = ");
+        builder.push_bind(name);
+        match archived_only {
+            Some(true) => {
+                builder.push(" AND archived = 1");
+            }
+            Some(false) => {
+                builder.push(" AND archived = 0");
+            }
+            None => {}
+        }
+        builder.push(" ORDER BY updated_at DESC, id DESC LIMIT 1");
+        let row = builder.build().fetch_optional(self.pool.as_ref()).await?;
+        Ok(row
+            .and_then(|r| r.try_get::<String, _>("rollout_path").ok())
+            .map(PathBuf::from))
+    }
+
     /// List threads using the underlying database.
     pub async fn list_threads(
         &self,
@@ -161,7 +186,7 @@ SELECT
     source,
     model_provider,
     cwd,
-    title,
+    name,
     sandbox_policy,
     approval_mode,
     tokens_used,
@@ -315,7 +340,7 @@ INSERT INTO threads (
     source,
     model_provider,
     cwd,
-    title,
+    name,
     sandbox_policy,
     approval_mode,
     tokens_used,
@@ -333,7 +358,7 @@ ON CONFLICT(id) DO UPDATE SET
     source = excluded.source,
     model_provider = excluded.model_provider,
     cwd = excluded.cwd,
-    title = excluded.title,
+    name = excluded.name,
     sandbox_policy = excluded.sandbox_policy,
     approval_mode = excluded.approval_mode,
     tokens_used = excluded.tokens_used,
@@ -352,7 +377,7 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.source.as_str())
         .bind(metadata.model_provider.as_str())
         .bind(metadata.cwd.display().to_string())
-        .bind(metadata.title.as_str())
+        .bind(metadata.name.as_str())
         .bind(metadata.sandbox_policy.as_str())
         .bind(metadata.approval_mode.as_str())
         .bind(metadata.tokens_used)
@@ -364,6 +389,16 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.git_origin_url.as_deref())
         .execute(self.pool.as_ref())
         .await?;
+        Ok(())
+    }
+
+    /// Update the thread name for an existing thread.
+    pub async fn update_thread_name(&self, thread_id: ThreadId, name: &str) -> anyhow::Result<()> {
+        sqlx::query("UPDATE threads SET name = ? WHERE id = ?")
+            .bind(name)
+            .bind(thread_id.to_string())
+            .execute(self.pool.as_ref())
+            .await?;
         Ok(())
     }
 
