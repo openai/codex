@@ -434,7 +434,7 @@ impl RolloutRecorder {
             }
         }
 
-        info!(
+        tracing::debug!(
             "Resumed rollout with {} items, thread ID: {:?}, parse errors: {}",
             items.len(),
             thread_id,
