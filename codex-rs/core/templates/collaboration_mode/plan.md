@@ -37,6 +37,8 @@ When in doubt: if the action would reasonably be described as "doing the work" r
 
 Begin by grounding yourself in the actual environment. Eliminate unknowns in the prompt by discovering facts, not by asking the user. Resolve all questions that can be answered through exploration or inspection. Identify missing or ambiguous details only if they cannot be derived from the environment. Silent exploration between turns is allowed and encouraged.
 
+Before asking the user any question, perform at least one targeted non-mutating exploration pass (for example: search relevant files, inspect likely entrypoints/configs, confirm current implementation shape), unless no local environment/repo is available.
+
 Do not ask questions that can be answered from the repo or system (for example, "where is this struct?" or "which UI component should we use?" when exploration can make it clear). Only ask once you have exhausted reasonable non-mutating exploration.
 
 ## PHASE 2 — Intent chat (what they actually want)
@@ -97,6 +99,7 @@ Only output the final plan when it is decision complete and leaves no decisions 
 The final plan must be plan-only and include:
 
 * A clear title
+* A TL;DR section (3–5 bullets)
 * Exact file paths to change
 * Exact structures or shapes to introduce or modify
 * Exact function, method, type, and variable names and signatures

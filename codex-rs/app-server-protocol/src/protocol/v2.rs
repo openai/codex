@@ -817,7 +817,7 @@ pub enum Account {
 
     #[serde(rename = "chatgpt", rename_all = "camelCase")]
     #[ts(rename = "chatgpt", rename_all = "camelCase")]
-    Chatgpt { email: String, plan_type: PlanType },
+    ChatGpt { email: String, plan_type: PlanType },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -834,12 +834,12 @@ pub enum LoginAccountParams {
     },
     #[serde(rename = "chatgpt")]
     #[ts(rename = "chatgpt")]
-    Chatgpt,
+    ChatGpt,
     /// [UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.
     /// The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.
     #[serde(rename = "chatgptAuthTokens")]
     #[ts(rename = "chatgptAuthTokens")]
-    ChatgptAuthTokens {
+    ChatGptAuthTokens {
         /// ID token (JWT) supplied by the client.
         ///
         /// This token is used for identity and account metadata (email, plan type,
@@ -865,7 +865,7 @@ pub enum LoginAccountResponse {
     ApiKey {},
     #[serde(rename = "chatgpt", rename_all = "camelCase")]
     #[ts(rename = "chatgpt", rename_all = "camelCase")]
-    Chatgpt {
+    ChatGpt {
         // Use plain String for identifiers to avoid TS/JSON Schema quirks around uuid-specific types.
         // Convert to/from UUIDs at the application layer as needed.
         login_id: String,
@@ -874,7 +874,7 @@ pub enum LoginAccountResponse {
     },
     #[serde(rename = "chatgptAuthTokens", rename_all = "camelCase")]
     #[ts(rename = "chatgptAuthTokens", rename_all = "camelCase")]
-    ChatgptAuthTokens {},
+    ChatGptAuthTokens {},
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -908,7 +908,7 @@ pub struct LogoutAccountResponse {}
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub enum ChatgptAuthTokensRefreshReason {
+pub enum ChatGptAuthTokensRefreshReason {
     /// Codex attempted a backend request and received `401 Unauthorized`.
     Unauthorized,
 }
@@ -916,8 +916,8 @@ pub enum ChatgptAuthTokensRefreshReason {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ChatgptAuthTokensRefreshParams {
-    pub reason: ChatgptAuthTokensRefreshReason,
+pub struct ChatGptAuthTokensRefreshParams {
+    pub reason: ChatGptAuthTokensRefreshReason,
     /// Workspace/account identifier that Codex was previously using.
     ///
     /// Clients that manage multiple accounts/workspaces can use this as a hint
@@ -931,7 +931,7 @@ pub struct ChatgptAuthTokensRefreshParams {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ChatgptAuthTokensRefreshResponse {
+pub struct ChatGptAuthTokensRefreshResponse {
     pub id_token: String,
     pub access_token: String,
 }
