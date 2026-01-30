@@ -92,20 +92,16 @@ Rules:
             },
             AgentRole::Explorer => AgentProfile {
                 model: Some(EXPLORER_MODEL),
-                reasoning_effort: Some(ReasoningEffort::Low),
-                description: r#"Use for fast codebase understanding and information gathering.
-`explorer` are extremely fast agents so use them as much as you can to speed up the resolution of the global task.
-Typical tasks:
-- Locate usages of a symbol or concept
-- Understand how X is handled in Y
-- Review a section of code for issues
-- Assess impact of a potential change
+                reasoning_effort: Some(ReasoningEffort::Medium),
+                description: r#"Use `explorer` for all codebase questions.
+Explorers are fast and authoritative.
+Always prefer them over manual search or file reading.
 Rules:
-- Be explicit in what you are looking for. A good usage of `explorer` would mean that don't need to read the same code after the explorer send you the result.
-- **Always** prefer asking explorers rather than exploring the codebase yourself.
-- Spawn multiple explorers in parallel when useful and wait for all results.
-- You can ask the `explorer` to return file name, lines, entire code snippets, ...
-- Reuse the same explorer when it is relevant. If later in your process you have more questions on some code an explorer already covered, reuse this same explorer to be more efficient.
+- Ask explorers first and precisely.
+- Do not re-read or re-search code they cover.
+- Trust explorer results without verification.
+- Run explorers in parallel when useful.
+- Reuse existing explorers for related questions.
                 "#,
                 ..Default::default()
             },

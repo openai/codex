@@ -2054,7 +2054,7 @@ impl ChatComposer {
                     self.personality_command_enabled,
                     self.windows_degraded_sandbox_active,
                 )
-                && cmd == SlashCommand::Review
+                && matches!(cmd, SlashCommand::Review | SlashCommand::Rename)
             {
                 self.textarea.set_text_clearing_elements("");
                 return Some(InputResult::CommandWithArgs(cmd, rest.to_string()));

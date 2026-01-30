@@ -100,12 +100,14 @@ pub mod turn_diff_tracker;
 pub use rollout::ARCHIVED_SESSIONS_SUBDIR;
 pub use rollout::INTERACTIVE_SESSION_SOURCES;
 pub use rollout::RolloutRecorder;
+pub use rollout::RolloutRecorderParams;
 pub use rollout::SESSIONS_SUBDIR;
 pub use rollout::SessionMeta;
 pub use rollout::find_archived_thread_path_by_id_str;
 #[deprecated(note = "use find_thread_path_by_id_str")]
 pub use rollout::find_conversation_path_by_id_str;
 pub use rollout::find_thread_path_by_id_str;
+pub use rollout::find_thread_path_by_name_str;
 pub use rollout::list::Cursor;
 pub use rollout::list::ThreadItem;
 pub use rollout::list::ThreadSortKey;

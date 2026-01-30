@@ -308,6 +308,9 @@ async fn run_codex_tool_session_inner(
                     EventMsg::SessionConfigured(_) => {
                         tracing::error!("unexpected SessionConfigured event");
                     }
+                    EventMsg::ThreadNameUpdated(_) => {
+                        // Ignore session metadata updates in MCP tool runner.
+                    }
                     EventMsg::AgentMessageDelta(_) => {
                         // TODO: think how we want to support this in the MCP
                     }

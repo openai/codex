@@ -110,6 +110,8 @@ use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackParams;
+use codex_app_server_protocol::ThreadSetNameParams;
+use codex_app_server_protocol::ThreadSetNameResponse;
 use codex_app_server_protocol::ThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
 use codex_app_server_protocol::ThreadStartParams;
@@ -417,6 +419,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadArchive { request_id, params } => {
                 self.thread_archive(request_id, params).await;
+            }
+            ClientRequest::ThreadSetName { request_id, params } => {
+                self.thread_set_name(request_id, params).await;
             }
             ClientRequest::ThreadUnarchive { request_id, params } => {
                 self.thread_unarchive(request_id, params).await;
@@ -1875,6 +1880,36 @@ impl CodexMessageProcessor {
                 self.outgoing.send_error(request_id, err).await;
             }
         }
+    }
+
+    async fn thread_set_name(&self, request_id: RequestId, params: ThreadSetNameParams) {
+        let ThreadSetNameParams { thread_id, name } = params;
+        let Some(name) = codex_core::util::normalize_thread_name(&name) else {
+            self.send_invalid_request_error(
+                request_id,
+                "thread name must not be empty".to_string(),
+            )
+            .await;
+            return;
+        };
+
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        if let Err(err) = thread.submit(Op::SetThreadName { name }).await {
+            self.send_internal_error(request_id, format!("failed to set thread name: {err}"))
+                .await;
+            return;
+        }
+
+        self.outgoing
+            .send_response(request_id, ThreadSetNameResponse {})
+            .await;
     }
 
     async fn thread_unarchive(&mut self, request_id: RequestId, params: ThreadUnarchiveParams) {

@@ -273,6 +273,11 @@ pub enum Op {
     /// to generate a summary which will be returned as an AgentMessage event.
     Compact,
 
+    /// Set a user-facing thread name in the persisted rollout metadata.
+    /// This is a local-only operation handled by codex-core; it does not
+    /// involve the model.
+    SetThreadName { name: String },
+
     /// Request Codex to undo a turn (turn are stacked so it is the same effect as CMD + Z).
     Undo,
 
@@ -734,6 +739,9 @@ pub enum EventMsg {
 
     /// Ack the client's configure message.
     SessionConfigured(SessionConfiguredEvent),
+
+    /// Updated session metadata (e.g., thread name changes).
+    ThreadNameUpdated(ThreadNameUpdatedEvent),
 
     /// Incremental MCP startup progress updates.
     McpStartupUpdate(McpStartupUpdateEvent),
@@ -2186,10 +2194,14 @@ pub struct SkillsListEntry {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct SessionConfiguredEvent {
-    /// Name left as session_id instead of thread_id for backwards compatibility.
     pub session_id: ThreadId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forked_from_id: Option<ThreadId>,
+
+    /// Optional user-facing thread name (may be unset).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub thread_name: Option<String>,
 
     /// Tell the client what model is being queried.
     pub model: String,
@@ -2224,6 +2236,14 @@ pub struct SessionConfiguredEvent {
     /// Path in which the rollout is stored. Can be `None` for ephemeral threads
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rollout_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ThreadNameUpdatedEvent {
+    pub thread_id: ThreadId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub thread_name: Option<String>,
 }
 
 /// User's decision in response to an ExecApprovalRequest.
@@ -2569,6 +2589,7 @@ mod tests {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
                 forked_from_id: None,
+                thread_name: None,
                 model: "codex-mini-latest".to_string(),
                 model_provider_id: "openai".to_string(),
                 approval_policy: AskForApproval::Never,
