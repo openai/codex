@@ -1798,7 +1798,7 @@ impl HistoryCell for RequestUserInputResultCell {
             .count();
         let unanswered = total.saturating_sub(answered);
 
-        let mut header = vec!["Questions:".bold()];
+        let mut header = vec!["Questions".bold()];
         header.push(format!(" {answered}/{total} answered").dim());
         if self.interrupted {
             header.push(" (interrupted)".cyan());
