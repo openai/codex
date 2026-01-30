@@ -314,6 +314,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 );
                 let empty = CoreRequestUserInputResponse {
                     answers: HashMap::new(),
+                    interrupted: false,
                 };
                 if let Err(err) = conversation
                     .submit(Op::UserInputAnswer {
@@ -1496,6 +1497,7 @@ async fn on_request_user_input_response(
             error!("request failed: {err:?}");
             let empty = CoreRequestUserInputResponse {
                 answers: HashMap::new(),
+                interrupted: false,
             };
             if let Err(err) = conversation
                 .submit(Op::UserInputAnswer {
@@ -1516,6 +1518,7 @@ async fn on_request_user_input_response(
             error!("failed to deserialize ToolRequestUserInputResponse: {err}");
             ToolRequestUserInputResponse {
                 answers: HashMap::new(),
+                interrupted: false,
             }
         });
     let response = CoreRequestUserInputResponse {
@@ -1531,6 +1534,7 @@ async fn on_request_user_input_response(
                 )
             })
             .collect(),
+        interrupted: response.interrupted,
     };
 
     if let Err(err) = conversation

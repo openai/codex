@@ -404,12 +404,14 @@ where
         _ = cancel_token.cancelled() => {
             let empty = RequestUserInputResponse {
                 answers: HashMap::new(),
+                interrupted: false,
             };
             parent_session.cancel_request_user_input(sub_id).await;
             empty
         }
         response = fut => response.unwrap_or_else(|| RequestUserInputResponse {
             answers: HashMap::new(),
+            interrupted: false,
         }),
     }
 }

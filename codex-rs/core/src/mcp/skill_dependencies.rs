@@ -105,6 +105,7 @@ async fn should_install_mcp_dependencies(
         _ = cancellation_token.cancelled() => {
             let empty = RequestUserInputResponse {
                 answers: HashMap::new(),
+                interrupted: false,
             };
             sess.notify_user_input_response(sub_id, None, empty.clone())
                 .await;
@@ -112,6 +113,7 @@ async fn should_install_mcp_dependencies(
         }
         response = response_fut => response.unwrap_or_else(|| RequestUserInputResponse {
             answers: HashMap::new(),
+            interrupted: false,
         }),
     };
 

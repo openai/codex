@@ -1491,9 +1491,14 @@ impl App {
                 turn_id,
                 call_id,
                 answers,
+                interrupted,
             } => {
-                self.chat_widget
-                    .queue_request_user_input_answers(turn_id, call_id, answers);
+                self.chat_widget.queue_request_user_input_answers(
+                    turn_id,
+                    call_id,
+                    answers,
+                    interrupted,
+                );
             }
             AppEvent::StartCommitAnimation => {
                 if self

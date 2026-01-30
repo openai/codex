@@ -167,7 +167,10 @@ async fn request_user_input_round_trip_resolves_pending() -> anyhow::Result<()> 
             answers: vec!["yes".to_string()],
         },
     );
-    let response = RequestUserInputResponse { answers };
+    let response = RequestUserInputResponse {
+        answers,
+        interrupted: false,
+    };
     codex
         .submit(Op::UserInputAnswer {
             id: request.turn_id.clone(),
@@ -309,17 +312,14 @@ async fn request_user_input_partial_answers_replayed_after_interrupt() -> anyhow
             answers: vec!["yes".to_string()],
         },
     );
-    answers.insert(
-        codex_protocol::request_user_input::INTERRUPTED_ANSWER_ID_BASE.to_string(),
-        RequestUserInputAnswer {
-            answers: vec![codex_protocol::request_user_input::INTERRUPTED_ANSWER_TEXT.to_string()],
-        },
-    );
     codex
         .submit(Op::UserInputAnswer {
             id: request.turn_id.clone(),
             call_id: Some(request.call_id.clone()),
-            response: RequestUserInputResponse { answers },
+            response: RequestUserInputResponse {
+                answers,
+                interrupted: true,
+            },
         })
         .await?;
 
@@ -375,11 +375,9 @@ async fn request_user_input_partial_answers_replayed_after_interrupt() -> anyhow
         output_json,
         json!({
             "answers": {
-                "confirm_path": { "answers": ["yes"] },
-                "__codex_request_user_input_interrupted__": {
-                    "answers": ["interrupted_with_unanswered_questions"]
-                }
-            }
+                "confirm_path": { "answers": ["yes"] }
+            },
+            "interrupted": true
         })
     );
 

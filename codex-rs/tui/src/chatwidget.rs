@@ -393,6 +393,7 @@ struct PendingRequestUserInputAnswers {
     turn_id: String,
     call_id: String,
     answers: HashMap<String, RequestUserInputAnswer>,
+    interrupted: bool,
 }
 
 #[derive(Default)]
@@ -3222,8 +3223,9 @@ impl ChatWidget {
         turn_id: String,
         call_id: String,
         answers: HashMap<String, RequestUserInputAnswer>,
+        interrupted: bool,
     ) {
-        if answers.is_empty() {
+        if answers.is_empty() && !interrupted {
             return;
         }
         if let Some(existing) = self
@@ -3233,6 +3235,7 @@ impl ChatWidget {
         {
             existing.turn_id = turn_id;
             existing.answers = answers;
+            existing.interrupted = interrupted;
             return;
         }
         self.pending_request_user_input_answers
@@ -3240,6 +3243,7 @@ impl ChatWidget {
                 turn_id,
                 call_id,
                 answers,
+                interrupted,
             });
     }
 
@@ -3252,6 +3256,7 @@ impl ChatWidget {
                 call_id: Some(call_id),
                 response: RequestUserInputResponse {
                     answers: pending.answers,
+                    interrupted: pending.interrupted,
                 },
             });
         }

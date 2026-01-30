@@ -119,6 +119,7 @@ pub(crate) enum AppEvent {
         turn_id: String,
         call_id: String,
         answers: HashMap<String, RequestUserInputAnswer>,
+        interrupted: bool,
     },
 
     StartCommitAnimation,
