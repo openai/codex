@@ -772,19 +772,41 @@ impl ChatComposer {
         self.textarea.set_cursor(self.textarea.text().len());
     }
 
-    /// Replaces the entire composer with `text`, resets cursor and sets pending pastes.
-    pub(crate) fn set_text_content_with_pending_pastes(
+    /// Replaces the entire composer with `text`, resets cursor, sets pending pastes, and
+    /// preserves placeholder-to-path mappings for local images.
+    pub(crate) fn set_text_content_with_local_images_and_pending_pastes(
         &mut self,
         text: String,
         text_elements: Vec<TextElement>,
-        local_image_paths: Vec<PathBuf>,
+        local_images: Vec<LocalImageAttachment>,
         pending_pastes: Vec<(String, String)>,
     ) {
-        self.set_text_content(text, text_elements, local_image_paths);
+        // Clear any existing content, placeholders, and attachments first.
+        self.textarea.set_text_clearing_elements("");
+        self.pending_pastes.clear();
+        self.attached_images.clear();
+        self.mention_paths.clear();
+
+        self.textarea.set_text_with_elements(&text, &text_elements);
+
+        let image_placeholders: HashSet<String> = text_elements
+            .iter()
+            .filter_map(|elem| elem.placeholder(&text).map(str::to_string))
+            .collect();
+        self.attached_images = local_images
+            .into_iter()
+            .filter(|img| image_placeholders.contains(&img.placeholder))
+            .map(|img| AttachedImage {
+                placeholder: img.placeholder,
+                path: img.path,
+            })
+            .collect();
+
         self.pending_pastes = pending_pastes;
-        // drops any pending pastes that no longer have placeholders in text
         self.pending_pastes
             .retain(|(ph, _)| self.textarea.text().contains(ph));
+        self.textarea.set_cursor(0);
+        self.sync_popups();
     }
 
     pub(crate) fn clear_for_ctrl_c(&mut self) -> Option<String> {

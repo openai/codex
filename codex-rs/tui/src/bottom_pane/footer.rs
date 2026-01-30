@@ -118,7 +118,7 @@ pub(crate) enum FooterMode {
     ShortcutOverlay,
     /// Transient "press Esc again" hint shown after the first Esc while idle.
     EscHint,
-/// Base single-line footer when the composer is empty.
+    /// Base single-line footer when the composer is empty.
     ComposerEmpty,
     /// Base single-line footer when the composer contains a draft.
     ///

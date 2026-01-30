@@ -413,31 +413,16 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    /// Replace the composer text with `text`.
-    pub(crate) fn set_composer_text_with_pending_pastes(
-        &mut self,
-        text: String,
-        text_elements: Vec<TextElement>,
-        local_image_paths: Vec<PathBuf>,
-        pending_pastes: Vec<(String, String)>,
-    ) {
-        self.composer.set_text_content_with_pending_pastes(
-            text,
-            text_elements,
-            local_image_paths,
-            pending_pastes,
-        );
-        self.request_redraw();
-    }
-
     /// Restores composer text, images and pending pastes from a PreparedDraft
     pub(crate) fn restore_stash(&mut self, stash: PreparedDraft) {
-        self.set_composer_text_with_pending_pastes(
-            stash.text,
-            stash.text_elements,
-            stash.local_images.into_iter().map(|img| img.path).collect(),
-            stash.pending_pastes,
-        );
+        self.composer
+            .set_text_content_with_local_images_and_pending_pastes(
+                stash.text,
+                stash.text_elements,
+                stash.local_images,
+                stash.pending_pastes,
+            );
+        self.request_redraw();
     }
 
     #[allow(dead_code)]
@@ -894,9 +879,11 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use codex_core::protocol::Op;
+    use codex_protocol::models::local_image_label_text;
     use codex_protocol::protocol::SkillScope;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
+    use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use std::cell::Cell;
@@ -1272,6 +1259,69 @@ mod tests {
         assert_snapshot!(
             "status_and_queued_messages_and_stash_snapshot",
             render_snapshot(&pane, area)
+        );
+    }
+
+    #[test]
+    fn restore_stash_preserves_image_placeholders() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        let placeholder1 = local_image_label_text(1);
+        let placeholder3 = local_image_label_text(3);
+        let text = format!("{placeholder1} then {placeholder3}");
+        let mut text_elements = Vec::new();
+        for placeholder in [&placeholder1, &placeholder3] {
+            let start = text
+                .find(placeholder)
+                .expect("placeholder should exist in text");
+            let end = start + placeholder.len();
+            text_elements.push(TextElement::new((start..end).into(), None));
+        }
+
+        let path1 = PathBuf::from("/tmp/image1.png");
+        let path3 = PathBuf::from("/tmp/image3.png");
+        let stash = PreparedDraft {
+            text: text.clone(),
+            text_elements,
+            local_images: vec![
+                LocalImageAttachment {
+                    placeholder: placeholder1.clone(),
+                    path: path1.clone(),
+                },
+                LocalImageAttachment {
+                    placeholder: placeholder3.clone(),
+                    path: path3.clone(),
+                },
+            ],
+            pending_pastes: Vec::new(),
+        };
+
+        pane.restore_stash(stash);
+
+        assert_eq!(pane.composer.current_text(), text);
+        assert_eq!(
+            pane.composer.local_images(),
+            vec![
+                LocalImageAttachment {
+                    placeholder: placeholder1,
+                    path: path1,
+                },
+                LocalImageAttachment {
+                    placeholder: placeholder3,
+                    path: path3,
+                },
+            ]
         );
     }
 
