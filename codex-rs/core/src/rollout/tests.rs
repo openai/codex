@@ -724,7 +724,7 @@ async fn test_head_summary_includes_first_user_message_beyond_head_limit() {
         .iter()
         .filter_map(|value| serde_json::from_value::<ResponseItem>(value.clone()).ok())
         .find_map(|item| match event_mapping::parse_turn_item(&item) {
-            Some(TurnItem::UserMessage(user)) => Some(user.message().to_string()),
+            Some(TurnItem::UserMessage(user)) => Some(user.message()),
             _ => None,
         });
 
