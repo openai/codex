@@ -160,7 +160,7 @@ async fn send_chunks(
     total_match_count: usize,
     running: bool,
 ) {
-    let chunk_count = (files.len().max(1) + DEFAULT_CHUNK_SIZE - 1) / DEFAULT_CHUNK_SIZE;
+    let chunk_count = files.len().max(1).div_ceil(DEFAULT_CHUNK_SIZE);
     for chunk_index in 0..chunk_count {
         let start = chunk_index * DEFAULT_CHUNK_SIZE;
         let end = (start + DEFAULT_CHUNK_SIZE).min(files.len());
