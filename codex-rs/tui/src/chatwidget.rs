@@ -815,6 +815,9 @@ impl ChatWidget {
             &model_for_header,
             event,
             self.show_welcome_banner,
+            self.auth_manager
+                .auth_cached()
+                .and_then(|auth| auth.account_plan_type()),
         );
         self.apply_session_info_cell(session_info_cell);
 

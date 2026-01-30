@@ -1,9 +1,14 @@
 use codex_core::features::FEATURES;
+use codex_protocol::account::PlanType;
 use lazy_static::lazy_static;
 use rand::Rng;
 
 const ANNOUNCEMENT_TIP_URL: &str =
     "https://raw.githubusercontent.com/openai/codex/main/announcement_tip.toml";
+
+const PAID_TOOLTIP: &str = "*New* You can get more credits to extend your pro plan usage!";
+const OTHER_TOOLTIP: &str = "Upgrade your ChatGPT plan to use Codex!";
+
 const RAW_TOOLTIPS: &str = include_str!("../tooltips.txt");
 
 lazy_static! {
@@ -28,11 +33,27 @@ fn experimental_tooltips() -> Vec<&'static str> {
 }
 
 /// Pick a random tooltip to show to the user when starting Codex.
-pub(crate) fn random_tooltip() -> Option<String> {
+pub(crate) fn get_tooltip(plan: Option<PlanType>) -> Option<String> {
     if let Some(announcement) = announcement::fetch_announcement_tip() {
         return Some(announcement);
     }
+
     let mut rng = rand::rng();
+
+    // Leave small chance for a random tooltip to be shown.
+    if rng.random_ratio(8, 10) {
+        match plan {
+            Some(PlanType::Plus)
+            | Some(PlanType::Business)
+            | Some(PlanType::Team)
+            | Some(PlanType::Enterprise)
+            | Some(PlanType::Pro) => {
+                return Some(PAID_TOOLTIP.to_string());
+            }
+            _ => return Some(OTHER_TOOLTIP.to_string()),
+        }
+    }
+
     pick_tooltip(&mut rng).map(str::to_string)
 }
 
