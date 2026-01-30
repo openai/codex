@@ -300,7 +300,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     item_id: request.call_id,
                     questions,
                 };
-                let call_id = request.call_id;
+                let call_id = request.call_id.clone();
                 let rx = outgoing
                     .send_request(ServerRequestPayload::ToolRequestUserInput(params))
                     .await;
