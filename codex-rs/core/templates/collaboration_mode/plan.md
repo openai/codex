@@ -64,8 +64,6 @@ Rules:
 * Status updates must not include questions or plan content.
 * Internal tool/repo exploration is allowed privately before A, B, or C.
 
-Status updates should be frequent during exploration. Provide 1-2 sentence updates that summarize discoveries, assumption changes, or why you are changing direction. Use Parallel tools for exploration.
-
 ## Ask a lot, but never ask trivia
 
 You SHOULD ask many questions, but each question must:
