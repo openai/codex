@@ -176,6 +176,7 @@ use crate::skills::injection::app_id_from_path;
 use crate::skills::injection::tool_kind_for_path;
 use crate::skills::resolve_skill_dependencies_for_turn;
 use crate::state::ActiveTurn;
+use crate::state::RunningTask;
 use crate::state::SessionServices;
 use crate::state::SessionState;
 use crate::state_db;
@@ -2135,12 +2136,12 @@ impl Session {
     pub async fn inject_input(&self, input: Vec<UserInput>) -> Result<(), Vec<UserInput>> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
-            Some(at) => {
+            Some(at) if at.tasks.values().any(RunningTask::accepts_pending_input) => {
                 let mut ts = at.turn_state.lock().await;
                 ts.push_pending_input(input.into());
                 Ok(())
             }
-            None => Err(input),
+            Some(_) | None => Err(input),
         }
     }
 
@@ -2151,14 +2152,14 @@ impl Session {
     ) -> Result<(), Vec<ResponseInputItem>> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
-            Some(at) => {
+            Some(at) if at.tasks.values().any(RunningTask::accepts_pending_input) => {
                 let mut ts = at.turn_state.lock().await;
                 for item in input {
                     ts.push_pending_input(item);
                 }
                 Ok(())
             }
-            None => Err(input),
+            Some(_) | None => Err(input),
         }
     }
 
@@ -2515,6 +2516,7 @@ mod handlers {
     use crate::rollout::session_index;
     use crate::tasks::CompactTask;
     use crate::tasks::RegularTask;
+    use crate::tasks::SpawnAbortPolicy;
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandTask;
     use codex_protocol::custom_prompts::CustomPrompt;
@@ -2702,10 +2704,11 @@ mod handlers {
         previous_context: &mut Option<Arc<TurnContext>>,
     ) {
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
-        sess.spawn_task(
+        sess.spawn_task_with_policy(
             Arc::clone(&turn_context),
             Vec::new(),
             UserShellCommandTask::new(command),
+            SpawnAbortPolicy::KeepActiveTurn,
         )
         .await;
         *previous_context = Some(turn_context);

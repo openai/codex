@@ -45,6 +45,12 @@ pub(crate) use user_shell::UserShellCommandTask;
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
 const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn on purpose. If any tools/commands were aborted, they may have partially executed; verify current state before retrying.";
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SpawnAbortPolicy {
+    AbortActiveTurn,
+    KeepActiveTurn,
+}
+
 /// Thin wrapper that exposes the parts of [`Session`] task runners need.
 #[derive(Clone)]
 pub(crate) struct SessionTaskContext {
@@ -83,6 +89,11 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
     /// surface it in telemetry and UI.
     fn kind(&self) -> TaskKind;
 
+    /// Whether this task can consume pending user input injected mid-turn.
+    fn accepts_pending_input(&self) -> bool {
+        true
+    }
+
     /// Executes the task until completion or cancellation.
     ///
     /// Implementations typically stream protocol events using `session` and
@@ -116,7 +127,20 @@ impl Session {
         input: Vec<UserInput>,
         task: T,
     ) {
-        self.abort_all_tasks(TurnAbortReason::Replaced).await;
+        self.spawn_task_with_policy(turn_context, input, task, SpawnAbortPolicy::AbortActiveTurn)
+            .await;
+    }
+
+    pub async fn spawn_task_with_policy<T: SessionTask>(
+        self: &Arc<Self>,
+        turn_context: Arc<TurnContext>,
+        input: Vec<UserInput>,
+        task: T,
+        policy: SpawnAbortPolicy,
+    ) {
+        if policy == SpawnAbortPolicy::AbortActiveTurn {
+            self.abort_all_tasks(TurnAbortReason::Replaced).await;
+        }
         self.seed_initial_context_if_needed(turn_context.as_ref())
             .await;
 
@@ -206,9 +230,14 @@ impl Session {
 
     async fn register_new_active_task(&self, task: RunningTask) {
         let mut active = self.active_turn.lock().await;
-        let mut turn = ActiveTurn::default();
-        turn.add_task(task);
-        *active = Some(turn);
+        match active.as_mut() {
+            Some(turn) => turn.add_task(task),
+            None => {
+                let mut turn = ActiveTurn::default();
+                turn.add_task(task);
+                *active = Some(turn);
+            }
+        }
     }
 
     async fn take_all_running_tasks(&self) -> Vec<RunningTask> {

@@ -50,6 +50,12 @@ pub(crate) struct RunningTask {
     pub(crate) _timer: Option<codex_otel::Timer>,
 }
 
+impl RunningTask {
+    pub(crate) fn accepts_pending_input(&self) -> bool {
+        self.task.accepts_pending_input()
+    }
+}
+
 impl ActiveTurn {
     pub(crate) fn add_task(&mut self, task: RunningTask) {
         let sub_id = task.turn_context.sub_id.clone();
