@@ -728,9 +728,7 @@ impl Session {
             workspaces: BTreeMap<String, TurnMetadataWorkspace>,
         }
 
-        if get_git_repo_root(cwd).is_none() {
-            return None;
-        }
+        get_git_repo_root(cwd)?;
         let git_info = collect_git_info(cwd).await?;
         let latest_git_commit_hash = git_info.commit_hash;
         let associated_remote_urls = get_git_remote_urls(cwd).await;
