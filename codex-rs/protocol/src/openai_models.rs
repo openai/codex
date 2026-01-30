@@ -188,7 +188,7 @@ pub struct ModelInfo {
     pub upgrade: Option<ModelInfoUpgrade>,
     pub base_instructions: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_instructions_template: Option<ModelInstructionsTemplate>,
+    pub model_instructions_spec: Option<ModelInstructionsSpec>,
     pub supports_reasoning_summaries: bool,
     pub support_verbosity: bool,
     pub default_verbosity: Option<Verbosity>,
@@ -217,27 +217,33 @@ impl ModelInfo {
     }
 
     pub fn supports_personality(&self) -> bool {
-        self.model_instructions_template
+        self.model_instructions_spec
             .as_ref()
-            .is_some_and(ModelInstructionsTemplate::supports_personality)
+            .is_some_and(ModelInstructionsSpec::supports_personality)
     }
 
     pub fn get_model_instructions(&self, personality: Option<Personality>) -> String {
-        if let Some(model_instructions_template) = &self.model_instructions_template
-            && let Some(template) = &model_instructions_template.template
-        {
-            if let Some(personality_message) =
-                model_instructions_template.get_personality_message(personality)
-            {
+        if let Some(model_instructions_spec) = &self.model_instructions_spec {
+            if let Some(template) = &model_instructions_spec.template {
+                let personality_message = model_instructions_spec
+                    .get_personality_message(personality)
+                    .unwrap_or_default();
                 template.replace(PERSONALITY_PLACEHOLDER, personality_message.as_str())
             } else {
-                template.replace(PERSONALITY_PLACEHOLDER, "")
+                if let Some(personality) = personality {
+                    warn!(
+                        model = %self.slug,
+                        %personality,
+                        "Model personality requested but model_instructions_spec template is missing, falling back to base instructions."
+                    );
+                }
+                self.base_instructions.clone()
             }
         } else if let Some(personality) = personality {
             warn!(
                 model = %self.slug,
                 %personality,
-                "Model personality requested but model_instructions_template is invalid, falling back to base instructions."
+                "Model personality requested but model_instructions_spec is missing, falling back to base instructions."
             );
             self.base_instructions.clone()
         } else {
@@ -249,16 +255,16 @@ impl ModelInfo {
 /// A strongly-typed template for assembling model instructions. If populated and valid, will override
 /// base_instructions.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
-pub struct ModelInstructionsTemplate {
+pub struct ModelInstructionsSpec {
     pub template: Option<String>,
-    pub variables: Option<InstructionsVariables>,
+    pub variables: Option<ModelInstructionsVariables>,
 }
 
-impl ModelInstructionsTemplate {
+impl ModelInstructionsSpec {
     fn has_personality_placeholder(&self) -> bool {
         self.template
             .as_ref()
-            .map(|template| template.contains(PERSONALITY_PLACEHOLDER))
+            .map(|spec| spec.contains(PERSONALITY_PLACEHOLDER))
             .unwrap_or(false)
     }
 
@@ -267,46 +273,38 @@ impl ModelInstructionsTemplate {
             && self
                 .variables
                 .as_ref()
-                .and_then(|variables| variables.personality.as_ref())
-                .is_some_and(PersonalityVariable::is_complete)
+                .is_some_and(ModelInstructionsVariables::is_complete)
     }
 
     pub fn get_personality_message(&self, personality: Option<Personality>) -> Option<String> {
         self.variables
             .as_ref()
-            .and_then(|variables| variables.personality.as_ref())
-            .and_then(|template| template.get_personality_message(personality))
+            .and_then(|variables| variables.get_personality_message(personality))
     }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
-pub struct InstructionsVariables {
-    pub personality: Option<PersonalityVariable>,
+pub struct ModelInstructionsVariables {
+    pub personality_default: Option<String>,
+    pub personality_friendly: Option<String>,
+    pub personality_pragmatic: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
-pub struct PersonalityVariable {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub friendly: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pragmatic: Option<String>,
-}
-
-impl PersonalityVariable {
+impl ModelInstructionsVariables {
     pub fn is_complete(&self) -> bool {
-        self.default.is_some() && self.friendly.is_some() && self.pragmatic.is_some()
+        self.personality_default.is_some()
+            && self.personality_friendly.is_some()
+            && self.personality_pragmatic.is_some()
     }
 
     pub fn get_personality_message(&self, personality: Option<Personality>) -> Option<String> {
         if let Some(personality) = personality {
             match personality {
-                Personality::Friendly => self.friendly.clone(),
-                Personality::Pragmatic => self.pragmatic.clone(),
+                Personality::Friendly => self.personality_friendly.clone(),
+                Personality::Pragmatic => self.personality_pragmatic.clone(),
             }
         } else {
-            self.default.clone()
+            self.personality_default.clone()
         }
     }
 }
@@ -446,7 +444,7 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
-    fn test_model(template: Option<ModelInstructionsTemplate>) -> ModelInfo {
+    fn test_model(spec: Option<ModelInstructionsSpec>) -> ModelInfo {
         ModelInfo {
             slug: "test-model".to_string(),
             display_name: "Test Model".to_string(),
@@ -459,7 +457,7 @@ mod tests {
             priority: 1,
             upgrade: None,
             base_instructions: "base".to_string(),
-            model_instructions_template: template,
+            model_instructions_spec: spec,
             supports_reasoning_summaries: false,
             support_verbosity: false,
             default_verbosity: None,
@@ -473,21 +471,19 @@ mod tests {
         }
     }
 
-    fn personality_template() -> PersonalityVariable {
-        PersonalityVariable {
-            default: Some("default".to_string()),
-            friendly: Some("friendly".to_string()),
-            pragmatic: Some("pragmatic".to_string()),
+    fn personality_variables() -> ModelInstructionsVariables {
+        ModelInstructionsVariables {
+            personality_default: Some("default".to_string()),
+            personality_friendly: Some("friendly".to_string()),
+            personality_pragmatic: Some("pragmatic".to_string()),
         }
     }
 
     #[test]
     fn get_model_instructions_uses_template_when_placeholder_present() {
-        let model = test_model(Some(ModelInstructionsTemplate {
+        let model = test_model(Some(ModelInstructionsSpec {
             template: Some("Hello {{ personality }}".to_string()),
-            variables: Some(InstructionsVariables {
-                personality: Some(personality_template()),
-            }),
+            variables: Some(personality_variables()),
         }));
 
         let instructions = model.get_model_instructions(Some(Personality::Friendly));
@@ -497,14 +493,12 @@ mod tests {
 
     #[test]
     fn get_model_instructions_always_strips_placeholder() {
-        let model = test_model(Some(ModelInstructionsTemplate {
+        let model = test_model(Some(ModelInstructionsSpec {
             template: Some("Hello\n{{ personality }}".to_string()),
-            variables: Some(InstructionsVariables {
-                personality: Some(PersonalityVariable {
-                    default: None,
-                    friendly: Some("friendly".to_string()),
-                    pragmatic: None,
-                }),
+            variables: Some(ModelInstructionsVariables {
+                personality_default: None,
+                personality_friendly: Some("friendly".to_string()),
+                personality_pragmatic: None,
             }),
         }));
         assert_eq!(
@@ -517,9 +511,13 @@ mod tests {
         );
         assert_eq!(model.get_model_instructions(None), "Hello\n");
 
-        let model_no_personality = test_model(Some(ModelInstructionsTemplate {
+        let model_no_personality = test_model(Some(ModelInstructionsSpec {
             template: Some("Hello\n{{ personality }}".to_string()),
-            variables: Some(InstructionsVariables { personality: None }),
+            variables: Some(ModelInstructionsVariables {
+                personality_default: None,
+                personality_friendly: None,
+                personality_pragmatic: None,
+            }),
         }));
         assert_eq!(
             model_no_personality.get_model_instructions(Some(Personality::Friendly)),
@@ -534,10 +532,12 @@ mod tests {
 
     #[test]
     fn get_model_instructions_falls_back_when_template_is_missing() {
-        let model = test_model(Some(ModelInstructionsTemplate {
+        let model = test_model(Some(ModelInstructionsSpec {
             template: None,
-            variables: Some(InstructionsVariables {
-                personality: Some(personality_template()),
+            variables: Some(ModelInstructionsVariables {
+                personality_default: None,
+                personality_friendly: None,
+                personality_pragmatic: None,
             }),
         }));
 
@@ -548,7 +548,7 @@ mod tests {
 
     #[test]
     fn get_personality_message_returns_default_when_personality_is_none() {
-        let personality_template = personality_template();
+        let personality_template = personality_variables();
         assert_eq!(
             personality_template.get_personality_message(None),
             Some("default".to_string())
@@ -557,51 +557,51 @@ mod tests {
 
     #[test]
     fn get_personality_message() {
-        let personality_template = personality_template();
+        let personality_variables = personality_variables();
         assert_eq!(
-            personality_template.get_personality_message(Some(Personality::Friendly)),
+            personality_variables.get_personality_message(Some(Personality::Friendly)),
             Some("friendly".to_string())
         );
         assert_eq!(
-            personality_template.get_personality_message(Some(Personality::Pragmatic)),
+            personality_variables.get_personality_message(Some(Personality::Pragmatic)),
             Some("pragmatic".to_string())
         );
         assert_eq!(
-            personality_template.get_personality_message(None),
+            personality_variables.get_personality_message(None),
             Some("default".to_string())
         );
 
-        let personality_template = PersonalityVariable {
-            default: Some("default".to_string()),
-            friendly: None,
-            pragmatic: None,
+        let personality_variables = ModelInstructionsVariables {
+            personality_default: Some("default".to_string()),
+            personality_friendly: None,
+            personality_pragmatic: None,
         };
         assert_eq!(
-            personality_template.get_personality_message(Some(Personality::Friendly)),
+            personality_variables.get_personality_message(Some(Personality::Friendly)),
             None
         );
         assert_eq!(
-            personality_template.get_personality_message(Some(Personality::Pragmatic)),
+            personality_variables.get_personality_message(Some(Personality::Pragmatic)),
             None
         );
         assert_eq!(
-            personality_template.get_personality_message(None),
+            personality_variables.get_personality_message(None),
             Some("default".to_string())
         );
 
-        let personality_template = PersonalityVariable {
-            default: None,
-            friendly: Some("friendly".to_string()),
-            pragmatic: Some("pragmatic".to_string()),
+        let personality_variables = ModelInstructionsVariables {
+            personality_default: None,
+            personality_friendly: Some("friendly".to_string()),
+            personality_pragmatic: Some("pragmatic".to_string()),
         };
         assert_eq!(
-            personality_template.get_personality_message(Some(Personality::Friendly)),
+            personality_variables.get_personality_message(Some(Personality::Friendly)),
             Some("friendly".to_string())
         );
         assert_eq!(
-            personality_template.get_personality_message(Some(Personality::Pragmatic)),
+            personality_variables.get_personality_message(Some(Personality::Pragmatic)),
             Some("pragmatic".to_string())
         );
-        assert_eq!(personality_template.get_personality_message(None), None);
+        assert_eq!(personality_variables.get_personality_message(None), None);
     }
 }
