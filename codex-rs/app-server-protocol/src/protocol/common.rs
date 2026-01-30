@@ -30,7 +30,7 @@ pub enum AuthMode {
     /// OpenAI API key provided by the caller and stored by Codex.
     ApiKey,
     /// ChatGPT OAuth managed by Codex (tokens persisted and refreshed by Codex).
-    ChatGPT,
+    Chatgpt,
     /// [UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.
     ///
     /// ChatGPT auth tokens are supplied by an external host app and are only
@@ -941,7 +941,7 @@ mod tests {
             serde_json::to_value(&api_key)?,
         );
 
-        let chatgpt = v2::Account::Chatgpt {
+        let chatgpt = v2::Account::ChatGpt {
             email: "user@example.com".to_string(),
             plan_type: PlanType::Plus,
         };
