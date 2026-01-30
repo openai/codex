@@ -96,7 +96,6 @@ pub fn run_main() -> ! {
     } else if use_bwrap_sandbox {
         // Outer stage: bubblewrap first, then re-enter this binary in the
         // sandboxed environment to apply seccomp.
-        ensure_bwrap_available(bwrap_path.as_deref());
         let inner = build_inner_seccomp_command(
             &sandbox_policy_cwd,
             &sandbox_policy,
@@ -107,6 +106,7 @@ pub fn run_main() -> ! {
         let options = BwrapOptions {
             mount_proc: !no_proc,
         };
+        ensure_bwrap_available(bwrap_path.as_deref());
         create_bwrap_command_args(
             inner,
             &sandbox_policy,

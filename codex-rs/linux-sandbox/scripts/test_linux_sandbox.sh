@@ -18,6 +18,7 @@ set -euo pipefail
 #   CODEX_LINUX_SANDBOX_DEBUG=1      # default: 0 (pass debug env var through)
 #   CODEX_LINUX_SANDBOX_USE_BWRAP=1  # default: 1 (run the bwrap suite)
 #   CODEX_LINUX_SANDBOX_USE_LEGACY=1 # default: 1 (run the legacy suite)
+#   CODEX_LINUX_SANDBOX_BWRAP_PATH   # default: $(command -v bwrap)
 
 if [[ "$(uname -s)" != "Linux" ]]; then
   echo "This script is intended to run on Linux." >&2
@@ -28,7 +29,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 CODEX_RS_DIR="${REPO_ROOT}/codex-rs"
 
-if ! command -v bwrap >/dev/null 2>&1; then
+BWRAP_PATH="${CODEX_LINUX_SANDBOX_BWRAP_PATH:-$(command -v bwrap || true)}"
+if [[ -z "${BWRAP_PATH}" ]]; then
   echo "bubblewrap (bwrap) is required but was not found on PATH." >&2
   exit 1
 fi
@@ -69,7 +71,7 @@ run_sandbox() {
 
   local bwrap_flag=()
   if [[ "${use_bwrap}" == "1" ]]; then
-    bwrap_flag=(--use-bwrap-sandbox)
+    bwrap_flag=(--bwrap-path "${BWRAP_PATH}")
   fi
 
   "${debug_env[@]}" "${SANDBOX_BIN}" \
