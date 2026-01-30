@@ -443,6 +443,11 @@
           "minimum": 0.0,
           "type": "integer"
         },
+        "supports_websockets": {
+          "default": false,
+          "description": "Whether this provider supports the Responses API WebSocket transport.",
+          "type": "boolean"
+        },
         "wire_api": {
           "allOf": [
             {
@@ -1078,13 +1083,6 @@
           "description": "The Responses API exposed by OpenAI at `/v1/responses`.",
           "enum": [
             "responses"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Experimental: Responses API over WebSocket transport.",
-          "enum": [
-            "responses_websocket"
           ],
           "type": "string"
         },

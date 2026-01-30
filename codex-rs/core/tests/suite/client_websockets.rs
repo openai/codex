@@ -10,6 +10,7 @@ use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::TransportManager;
 use codex_core::WireApi;
+use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::SessionSource;
 use codex_otel::OtelManager;
@@ -188,7 +189,7 @@ fn websocket_provider(server: &WebSocketTestServer) -> ModelProviderInfo {
         env_key: None,
         env_key_instructions: None,
         experimental_bearer_token: None,
-        wire_api: WireApi::ResponsesWebsocket,
+        wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -196,6 +197,7 @@ fn websocket_provider(server: &WebSocketTestServer) -> ModelProviderInfo {
         stream_max_retries: Some(0),
         stream_idle_timeout_ms: Some(5_000),
         requires_openai_auth: false,
+        supports_websockets: true,
     }
 }
 
@@ -204,6 +206,7 @@ async fn websocket_harness(server: &WebSocketTestServer) -> WebsocketTestHarness
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model = Some(MODEL.to_string());
+    config.features.enable(Feature::ResponsesWebsockets);
     let config = Arc::new(config);
     let model_info = ModelsManager::construct_model_info_offline(MODEL, &config);
     let conversation_id = ThreadId::new();
