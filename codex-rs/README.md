@@ -32,6 +32,8 @@ Codex supports a rich set of configuration options. Note that the Rust CLI uses 
 
 Codex CLI functions as an MCP client that allows the Codex CLI and IDE extension to connect to MCP servers on startup. See the [`configuration documentation`](../docs/config.md#connecting-to-mcp-servers) for details.
 
+If you use MCP servers that require OAuth, configure where credentials are stored via `mcp_oauth_credentials_store` in `config.toml`. Supported values are `auto` (default; use the OS keyring if available, otherwise fall back to a file), `keyring`, and `file`.
+
 #### MCP server (experimental)
 
 Codex can be launched as an MCP _server_ by running `codex mcp-server`. This allows _other_ MCP clients to use Codex as a tool for another agent.
