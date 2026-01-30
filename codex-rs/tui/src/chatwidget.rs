@@ -6423,8 +6423,8 @@ pub fn build_status_line_payload(chat: &ChatWidget, config: &Config) -> serde_js
         .unwrap_or_else(|| cwd.clone());
 
     let workspace = serde_json::json!({
-        "project_dir": project_dir,
-        "current_dir": cwd,
+        "project_dir": project_dir.to_string_lossy(),
+        "current_dir": cwd.to_string_lossy(),
     });
 
     payload.insert("workspace".to_string(), workspace);
