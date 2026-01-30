@@ -1601,6 +1601,7 @@ pub(crate) fn new_mcp_tools_output(
                 args,
                 env,
                 env_vars,
+                inherit_env,
                 cwd,
             } => {
                 let args_suffix = if args.is_empty() {
@@ -1613,6 +1614,10 @@ pub(crate) fn new_mcp_tools_output(
 
                 if let Some(cwd) = cwd.as_ref() {
                     lines.push(vec!["    • Cwd: ".into(), cwd.display().to_string().into()].into());
+                }
+
+                if *inherit_env {
+                    lines.push(vec!["    • Inherit Env: ".into(), "true".into()].into());
                 }
 
                 let env_display = format_env_display(env.as_ref(), env_vars);

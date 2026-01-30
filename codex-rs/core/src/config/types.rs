@@ -93,6 +93,8 @@ pub(crate) struct RawMcpServerConfig {
     #[serde(default)]
     pub env_vars: Option<Vec<String>>,
     #[serde(default)]
+    pub inherit_env: Option<bool>,
+    #[serde(default)]
     pub cwd: Option<PathBuf>,
     pub http_headers: Option<HashMap<String, String>>,
     #[serde(default)]
@@ -169,6 +171,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
                 args: raw.args.clone().unwrap_or_default(),
                 env: raw.env.clone(),
                 env_vars: raw.env_vars.clone().unwrap_or_default(),
+                inherit_env: raw.inherit_env.unwrap_or(false),
                 cwd: raw.cwd.take(),
             }
         } else if let Some(url) = raw.url.clone() {
@@ -216,6 +219,11 @@ pub enum McpServerTransportConfig {
         env: Option<HashMap<String, String>>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         env_vars: Vec<String>,
+        /// When true, inherit the full environment from the parent process
+        /// instead of using a minimal whitelist. Useful for shell-like MCP
+        /// servers (e.g., nushell) that need access to user configuration.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        inherit_env: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cwd: Option<PathBuf>,
     },

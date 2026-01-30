@@ -221,6 +221,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
                 args: command_args,
                 env: env_map,
                 env_vars: Vec::new(),
+                inherit_env: false,
                 cwd: None,
             }
         }
@@ -421,6 +422,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                         args,
                         env,
                         env_vars,
+                        inherit_env,
                         cwd,
                     } => serde_json::json!({
                         "type": "stdio",
@@ -428,6 +430,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                         "args": args,
                         "env": env,
                         "env_vars": env_vars,
+                        "inherit_env": inherit_env,
                         "cwd": cwd,
                     }),
                     McpServerTransportConfig::StreamableHttp {
@@ -482,6 +485,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                 env,
                 env_vars,
                 cwd,
+                ..
             } => {
                 let args_display = if args.is_empty() {
                     "-".to_string()
@@ -660,6 +664,7 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
                 args,
                 env,
                 env_vars,
+                inherit_env,
                 cwd,
             } => serde_json::json!({
                 "type": "stdio",
@@ -667,6 +672,7 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
                 "args": args,
                 "env": env,
                 "env_vars": env_vars,
+                "inherit_env": inherit_env,
                 "cwd": cwd,
             }),
             McpServerTransportConfig::StreamableHttp {
@@ -732,6 +738,7 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
             args,
             env,
             env_vars,
+            inherit_env,
             cwd,
         } => {
             println!("  transport: stdio");
@@ -748,6 +755,9 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(|| "-".to_string());
             println!("  cwd: {cwd_display}");
+            if *inherit_env {
+                println!("  inherit_env: true");
+            }
             let env_display = format_env_display(env.as_ref(), env_vars);
             println!("  env: {env_display}");
         }

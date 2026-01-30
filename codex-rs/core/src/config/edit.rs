@@ -107,6 +107,7 @@ mod document_helpers {
                 args,
                 env,
                 env_vars,
+                inherit_env,
                 cwd,
             } => {
                 entry["command"] = value(command.clone());
@@ -120,6 +121,9 @@ mod document_helpers {
                 }
                 if !env_vars.is_empty() {
                     entry["env_vars"] = array_from_iter(env_vars.iter().cloned());
+                }
+                if *inherit_env {
+                    entry["inherit_env"] = value(true);
                 }
                 if let Some(cwd) = cwd {
                     entry["cwd"] = value(cwd.to_string_lossy().to_string());

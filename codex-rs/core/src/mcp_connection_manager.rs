@@ -884,11 +884,12 @@ async fn make_rmcp_client(
             args,
             env,
             env_vars,
+            inherit_env,
             cwd,
         } => {
             let command_os: OsString = command.into();
             let args_os: Vec<OsString> = args.into_iter().map(Into::into).collect();
-            RmcpClient::new_stdio_client(command_os, args_os, env, &env_vars, cwd)
+            RmcpClient::new_stdio_client(command_os, args_os, env, &env_vars, inherit_env, cwd)
                 .await
                 .map_err(|err| StartupOutcomeError::from(anyhow!(err)))
         }

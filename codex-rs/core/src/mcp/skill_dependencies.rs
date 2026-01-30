@@ -398,6 +398,7 @@ fn mcp_dependency_to_server_config(
                 args: Vec::new(),
                 env: None,
                 env_vars: Vec::new(),
+                inherit_env: false,
                 cwd: None,
             },
             enabled: true,

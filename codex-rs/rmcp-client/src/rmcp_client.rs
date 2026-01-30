@@ -120,6 +120,7 @@ impl RmcpClient {
         args: Vec<OsString>,
         env: Option<HashMap<String, String>>,
         env_vars: &[String],
+        inherit_env: bool,
         cwd: Option<PathBuf>,
     ) -> io::Result<Self> {
         let program_name = program.to_string_lossy().into_owned();
@@ -134,10 +135,17 @@ impl RmcpClient {
         command
             .kill_on_drop(true)
             .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .env_clear()
-            .envs(envs)
-            .args(&args);
+            .stdout(Stdio::piped());
+
+        if inherit_env {
+            // Inherit full environment, then apply any explicit overrides
+            command.envs(envs);
+        } else {
+            // Clear environment and only pass whitelisted variables
+            command.env_clear().envs(envs);
+        }
+
+        command.args(&args);
         if let Some(cwd) = cwd {
             command.current_dir(cwd);
         }
