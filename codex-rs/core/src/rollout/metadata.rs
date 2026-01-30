@@ -187,6 +187,22 @@ pub(crate) async fn backfill_sessions(
                     warn!("failed to upsert rollout {}: {err}", path.display());
                 } else {
                     stats.upserted = stats.upserted.saturating_add(1);
+                    if let Ok(meta_line) = rollout::list::read_session_meta_line(&path).await {
+                        if let Err(err) = runtime
+                            .replace_dynamic_tools(
+                                meta_line.meta.id,
+                                meta_line.meta.dynamic_tools.as_deref(),
+                            )
+                            .await
+                        {
+                            warn!("failed to backfill dynamic tools {}: {err}", path.display());
+                        }
+                    } else {
+                        warn!(
+                            "failed to read session meta for dynamic tools {}",
+                            path.display()
+                        );
+                    }
                 }
             }
             Err(err) => {
