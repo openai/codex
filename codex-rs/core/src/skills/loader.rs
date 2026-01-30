@@ -72,8 +72,8 @@ struct DependencyTool {
 }
 
 const SKILLS_FILENAME: &str = "SKILL.md";
-const SKILLS_METADATA_DIR: &str = "agent";
-const SKILLS_METADATA_FILENAME: &str = "openai.yaml";
+const SKILLS_METADATA_DIR: &str = "agents";
+const SKILLS_METADATA_FILENAME: &str = "codex.yaml";
 const SKILLS_DIR_NAME: &str = "skills";
 const MAX_NAME_LEN: usize = 64;
 const MAX_DESCRIPTION_LEN: usize = 1024;
@@ -986,16 +986,13 @@ mod tests {
         write_skill_interface_at(
             skill_dir,
             r##"
-{
-  "interface": {
-    "display_name": "UI Skill",
-    "short_description": "  short    desc   ",
-    "icon_small": "./assets/small-400px.png",
-    "icon_large": "./assets/large-logo.svg",
-    "brand_color": "#3B82F6",
-    "default_prompt": "  default   prompt   "
-  }
-}
+interface:
+  display_name: "UI Skill"
+  short_description: "  short    desc   "
+  icon_small: "./assets/small-400px.png"
+  icon_large: "./assets/large-logo.svg"
+  brand_color: "#3B82F6"
+  default_prompt: "  default   prompt   "
 "##,
         );
 
@@ -1007,8 +1004,13 @@ mod tests {
             "unexpected errors: {:?}",
             outcome.errors
         );
+        let user_skills: Vec<SkillMetadata> = outcome
+            .skills
+            .into_iter()
+            .filter(|skill| skill.scope == SkillScope::User)
+            .collect();
         assert_eq!(
-            outcome.skills,
+            user_skills,
             vec![SkillMetadata {
                 name: "ui-skill".to_string(),
                 description: "from json".to_string(),
