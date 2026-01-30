@@ -279,6 +279,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                         header: question.header,
                         question: question.question,
                         is_other: question.is_other,
+                        is_secret: question.is_secret,
                         options: question.options.map(|options| {
                             options
                                 .into_iter()

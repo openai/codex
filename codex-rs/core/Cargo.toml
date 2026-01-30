@@ -37,6 +37,7 @@ codex-keyring-store = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-rmcp-client = { workspace = true }
+codex-state = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-pty = { workspace = true }
 codex-utils-readiness = { workspace = true }
@@ -55,6 +56,7 @@ indoc = { workspace = true }
 keyring = { workspace = true, features = ["crypto-rust"] }
 libc = { workspace = true }
 mcp-types = { workspace = true }
+multimap = { workspace = true }
 once_cell = { workspace = true }
 os_info = { workspace = true }
 rand = { workspace = true }

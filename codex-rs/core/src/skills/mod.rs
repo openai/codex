@@ -1,3 +1,4 @@
+mod env_var_dependencies;
 pub mod injection;
 pub mod loader;
 pub mod manager;
@@ -5,8 +6,11 @@ pub mod model;
 pub mod render;
 pub mod system;
 
+pub(crate) use env_var_dependencies::collect_env_var_dependencies;
+pub(crate) use env_var_dependencies::resolve_skill_dependencies_for_turn;
 pub(crate) use injection::SkillInjections;
 pub(crate) use injection::build_skill_injections;
+pub(crate) use injection::collect_explicit_skill_mentions;
 pub use loader::load_skills;
 pub use manager::SkillsManager;
 pub use model::SkillError;

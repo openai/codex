@@ -39,6 +39,8 @@ use codex_windows_sandbox::sandbox_dir;
 use codex_windows_sandbox::sandbox_secrets_dir;
 use codex_windows_sandbox::string_from_sid_bytes;
 use codex_windows_sandbox::to_wide;
+use codex_windows_sandbox::SetupErrorCode;
+use codex_windows_sandbox::SetupFailure;
 use codex_windows_sandbox::SETUP_VERSION;
 
 pub const SANDBOX_USERS_GROUP: &str = "CodexSandboxUsers";
@@ -122,9 +124,10 @@ pub fn ensure_local_user(name: &str, password: &str, log: &mut File) -> Result<(
             );
             if upd != NERR_Success {
                 super::log_line(log, &format!("NetUserSetInfo failed for {name} code {upd}"))?;
-                return Err(anyhow::anyhow!(
-                    "failed to create/update user {name}, code {status}/{upd}"
-                ));
+                return Err(anyhow::Error::new(SetupFailure::new(
+                    SetupErrorCode::HelperUserCreateOrUpdateFailed,
+                    format!("failed to create/update user {name}, code {status}/{upd}"),
+                )));
             }
         }
 
@@ -174,7 +177,10 @@ pub fn ensure_local_group(name: &str, comment: &str, log: &mut File) -> Result<(
                 log,
                 &format!("NetLocalGroupAdd failed for {name} code {status} parm_err={parm_err}"),
             )?;
-            anyhow::bail!("failed to create local group {name}, code {status}");
+            return Err(anyhow::Error::new(SetupFailure::new(
+                SetupErrorCode::HelperUsersGroupCreateFailed,
+                format!("failed to create local group {name}, code {status}"),
+            )));
         }
     }
     Ok(())
@@ -394,11 +400,37 @@ fn write_secrets(
     online_pwd: &str,
 ) -> Result<()> {
     let sandbox_dir = sandbox_dir(codex_home);
-    std::fs::create_dir_all(&sandbox_dir)?;
+    std::fs::create_dir_all(&sandbox_dir).map_err(|err| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperUsersFileWriteFailed,
+            format!(
+                "failed to create sandbox dir {}: {err}",
+                sandbox_dir.display()
+            ),
+        ))
+    })?;
     let secrets_dir = sandbox_secrets_dir(codex_home);
-    std::fs::create_dir_all(&secrets_dir)?;
-    let offline_blob = dpapi_protect(offline_pwd.as_bytes())?;
-    let online_blob = dpapi_protect(online_pwd.as_bytes())?;
+    std::fs::create_dir_all(&secrets_dir).map_err(|err| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperUsersFileWriteFailed,
+            format!(
+                "failed to create secrets dir {}: {err}",
+                secrets_dir.display()
+            ),
+        ))
+    })?;
+    let offline_blob = dpapi_protect(offline_pwd.as_bytes()).map_err(|err| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperDpapiProtectFailed,
+            format!("dpapi protect failed for offline user: {err}"),
+        ))
+    })?;
+    let online_blob = dpapi_protect(online_pwd.as_bytes()).map_err(|err| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperDpapiProtectFailed,
+            format!("dpapi protect failed for online user: {err}"),
+        ))
+    })?;
     let users = SandboxUsersFile {
         version: SETUP_VERSION,
         offline: SandboxUserRecord {
@@ -420,7 +452,35 @@ fn write_secrets(
     };
     let users_path = secrets_dir.join("sandbox_users.json");
     let marker_path = sandbox_dir.join("setup_marker.json");
-    std::fs::write(users_path, serde_json::to_vec_pretty(&users)?)?;
-    std::fs::write(marker_path, serde_json::to_vec_pretty(&marker)?)?;
+    let users_json = serde_json::to_vec_pretty(&users).map_err(|err| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperUsersFileWriteFailed,
+            format!("serialize sandbox users failed: {err}"),
+        ))
+    })?;
+    std::fs::write(&users_path, users_json).map_err(|err| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperUsersFileWriteFailed,
+            format!(
+                "write sandbox users file {} failed: {err}",
+                users_path.display()
+            ),
+        ))
+    })?;
+    let marker_json = serde_json::to_vec_pretty(&marker).map_err(|err| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperSetupMarkerWriteFailed,
+            format!("serialize setup marker failed: {err}"),
+        ))
+    })?;
+    std::fs::write(&marker_path, marker_json).map_err(|err| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperSetupMarkerWriteFailed,
+            format!(
+                "write setup marker file {} failed: {err}",
+                marker_path.display()
+            ),
+        ))
+    })?;
     Ok(())
 }

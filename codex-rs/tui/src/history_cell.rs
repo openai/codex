@@ -43,6 +43,8 @@ use codex_core::protocol::FileChange;
 use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SessionConfiguredEvent;
+use codex_core::web_search::web_search_detail;
+use codex_protocol::models::WebSearchAction;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
@@ -1342,49 +1344,147 @@ pub(crate) fn new_active_mcp_tool_call(
     McpToolCallCell::new(call_id, invocation, animations_enabled)
 }
 
-pub(crate) fn new_web_search_call(query: String) -> PrefixedWrappedHistoryCell {
-    let text: Text<'static> = Line::from(vec!["Searched".bold(), " ".into(), query.into()]).into();
-    PrefixedWrappedHistoryCell::new(text, "• ".dim(), "  ")
+fn web_search_header(completed: bool) -> &'static str {
+    if completed {
+        "Searched"
+    } else {
+        "Searching the web"
+    }
 }
 
-/// If the first content is an image, return a new cell with the image.
-/// TODO(rgwood-dd): Handle images properly even if they're not the first result.
+#[derive(Debug)]
+pub(crate) struct WebSearchCell {
+    call_id: String,
+    query: String,
+    action: Option<WebSearchAction>,
+    start_time: Instant,
+    completed: bool,
+    animations_enabled: bool,
+}
+
+impl WebSearchCell {
+    pub(crate) fn new(
+        call_id: String,
+        query: String,
+        action: Option<WebSearchAction>,
+        animations_enabled: bool,
+    ) -> Self {
+        Self {
+            call_id,
+            query,
+            action,
+            start_time: Instant::now(),
+            completed: false,
+            animations_enabled,
+        }
+    }
+
+    pub(crate) fn call_id(&self) -> &str {
+        &self.call_id
+    }
+
+    pub(crate) fn update(&mut self, action: WebSearchAction, query: String) {
+        self.action = Some(action);
+        self.query = query;
+    }
+
+    pub(crate) fn complete(&mut self) {
+        self.completed = true;
+    }
+}
+
+impl HistoryCell for WebSearchCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let bullet = if self.completed {
+            "•".dim()
+        } else {
+            spinner(Some(self.start_time), self.animations_enabled)
+        };
+        let header = web_search_header(self.completed);
+        let detail = web_search_detail(self.action.as_ref(), &self.query);
+        let text: Text<'static> = if detail.is_empty() {
+            Line::from(vec![header.bold()]).into()
+        } else {
+            Line::from(vec![header.bold(), " ".into(), detail.into()]).into()
+        };
+        PrefixedWrappedHistoryCell::new(text, vec![bullet, " ".into()], "  ").display_lines(width)
+    }
+}
+
+pub(crate) fn new_active_web_search_call(
+    call_id: String,
+    query: String,
+    animations_enabled: bool,
+) -> WebSearchCell {
+    WebSearchCell::new(call_id, query, None, animations_enabled)
+}
+
+pub(crate) fn new_web_search_call(
+    call_id: String,
+    query: String,
+    action: WebSearchAction,
+) -> WebSearchCell {
+    let mut cell = WebSearchCell::new(call_id, query, Some(action), false);
+    cell.complete();
+    cell
+}
+
+/// Returns an additional history cell if an MCP tool result includes a decodable image.
+///
+/// This intentionally returns at most one cell: the first image in `CallToolResult.content` that
+/// successfully base64-decodes and parses as an image. This is used as a lightweight “image output
+/// exists” affordance separate from the main MCP tool call cell.
+///
+/// Manual testing tip:
+/// - Run the rmcp stdio test server (`codex-rs/rmcp-client/src/bin/test_stdio_server.rs`) and
+///   register it as an MCP server via `codex mcp add`.
+/// - Use its `image_scenario` tool with cases like `text_then_image`,
+///   `invalid_base64_then_image`, or `invalid_image_bytes_then_image` to ensure this path triggers
+///   even when the first block is not a valid image.
 fn try_new_completed_mcp_tool_call_with_image_output(
     result: &Result<mcp_types::CallToolResult, String>,
 ) -> Option<CompletedMcpToolCallWithImageOutput> {
-    match result {
-        Ok(mcp_types::CallToolResult { content, .. }) => {
-            if let Some(mcp_types::ContentBlock::ImageContent(image)) = content.first() {
-                let raw_data = match base64::engine::general_purpose::STANDARD.decode(&image.data) {
-                    Ok(data) => data,
-                    Err(e) => {
-                        error!("Failed to decode image data: {e}");
-                        return None;
-                    }
-                };
-                let reader = match ImageReader::new(Cursor::new(raw_data)).with_guessed_format() {
-                    Ok(reader) => reader,
-                    Err(e) => {
-                        error!("Failed to guess image format: {e}");
-                        return None;
-                    }
-                };
+    let image = result
+        .as_ref()
+        .ok()?
+        .content
+        .iter()
+        .find_map(decode_mcp_image)?;
 
-                let image = match reader.decode() {
-                    Ok(image) => image,
-                    Err(e) => {
-                        error!("Image decoding failed: {e}");
-                        return None;
-                    }
-                };
+    Some(CompletedMcpToolCallWithImageOutput { _image: image })
+}
 
-                Some(CompletedMcpToolCallWithImageOutput { _image: image })
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
+/// Decodes an MCP `ImageContent` block into an in-memory image.
+///
+/// Returns `None` when the block is not an image, when base64 decoding fails, when the format
+/// cannot be inferred, or when the image decoder rejects the bytes.
+fn decode_mcp_image(block: &mcp_types::ContentBlock) -> Option<DynamicImage> {
+    let image = match block {
+        mcp_types::ContentBlock::ImageContent(image) => image,
+        _ => return None,
+    };
+    let raw_data = base64::engine::general_purpose::STANDARD
+        .decode(&image.data)
+        .map_err(|e| {
+            error!("Failed to decode image data: {e}");
+            e
+        })
+        .ok()?;
+    let reader = ImageReader::new(Cursor::new(raw_data))
+        .with_guessed_format()
+        .map_err(|e| {
+            error!("Failed to guess image format: {e}");
+            e
+        })
+        .ok()?;
+
+    reader
+        .decode()
+        .map_err(|e| {
+            error!("Image decoding failed: {e}");
+            e
+        })
+        .ok()
 }
 
 #[allow(clippy::disallowed_methods)]
@@ -1837,6 +1937,7 @@ mod tests {
     use codex_core::config::types::McpServerConfig;
     use codex_core::config::types::McpServerTransportConfig;
     use codex_core::protocol::McpAuthStatus;
+    use codex_protocol::models::WebSearchAction;
     use codex_protocol::parse_command::ParsedCommand;
     use dirs::home_dir;
     use pretty_assertions::assert_eq;
@@ -1846,9 +1947,12 @@ mod tests {
     use codex_core::protocol::ExecCommandSource;
     use mcp_types::CallToolResult;
     use mcp_types::ContentBlock;
+    use mcp_types::ImageContent;
     use mcp_types::TextContent;
     use mcp_types::Tool;
     use mcp_types::ToolInputSchema;
+
+    const SMALL_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
     async fn test_config() -> Config {
         let codex_home = std::env::temp_dir();
         ConfigBuilder::default()
@@ -1872,6 +1976,15 @@ mod tests {
 
     fn render_transcript(cell: &dyn HistoryCell) -> Vec<String> {
         render_lines(&cell.transcript_lines(u16::MAX))
+    }
+
+    fn image_block(data: &str) -> ContentBlock {
+        ContentBlock::ImageContent(ImageContent {
+            annotations: None,
+            data: data.to_string(),
+            mime_type: "image/png".into(),
+            r#type: "image".into(),
+        })
     }
 
     #[test]
@@ -2060,8 +2173,12 @@ mod tests {
 
     #[test]
     fn web_search_history_cell_snapshot() {
+        let query =
+            "example search query with several generic words to exercise wrapping".to_string();
         let cell = new_web_search_call(
-            "example search query with several generic words to exercise wrapping".to_string(),
+            "call-1".to_string(),
+            query.clone(),
+            WebSearchAction::Search { query: Some(query) },
         );
         let rendered = render_lines(&cell.display_lines(64)).join("\n");
 
@@ -2070,8 +2187,12 @@ mod tests {
 
     #[test]
     fn web_search_history_cell_wraps_with_indented_continuation() {
+        let query =
+            "example search query with several generic words to exercise wrapping".to_string();
         let cell = new_web_search_call(
-            "example search query with several generic words to exercise wrapping".to_string(),
+            "call-1".to_string(),
+            query.clone(),
+            WebSearchAction::Search { query: Some(query) },
         );
         let rendered = render_lines(&cell.display_lines(64));
 
@@ -2086,7 +2207,12 @@ mod tests {
 
     #[test]
     fn web_search_history_cell_short_query_does_not_wrap() {
-        let cell = new_web_search_call("short query".to_string());
+        let query = "short query".to_string();
+        let cell = new_web_search_call(
+            "call-1".to_string(),
+            query.clone(),
+            WebSearchAction::Search { query: Some(query) },
+        );
         let rendered = render_lines(&cell.display_lines(64));
 
         assert_eq!(rendered, vec!["• Searched short query".to_string()]);
@@ -2094,8 +2220,12 @@ mod tests {
 
     #[test]
     fn web_search_history_cell_transcript_snapshot() {
+        let query =
+            "example search query with several generic words to exercise wrapping".to_string();
         let cell = new_web_search_call(
-            "example search query with several generic words to exercise wrapping".to_string(),
+            "call-1".to_string(),
+            query.clone(),
+            WebSearchAction::Search { query: Some(query) },
         );
         let rendered = render_lines(&cell.transcript_lines(64)).join("\n");
 
@@ -2149,6 +2279,63 @@ mod tests {
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
 
         insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn completed_mcp_tool_call_image_after_text_returns_extra_cell() {
+        let invocation = McpInvocation {
+            server: "image".into(),
+            tool: "generate".into(),
+            arguments: Some(json!({
+                "prompt": "tiny image",
+            })),
+        };
+
+        let result = CallToolResult {
+            content: vec![
+                ContentBlock::TextContent(TextContent {
+                    annotations: None,
+                    text: "Here is the image:".into(),
+                    r#type: "text".into(),
+                }),
+                image_block(SMALL_PNG_BASE64),
+            ],
+            is_error: None,
+            structured_content: None,
+        };
+
+        let mut cell = new_active_mcp_tool_call("call-image".into(), invocation, true);
+        let extra_cell = cell
+            .complete(Duration::from_millis(25), Ok(result))
+            .expect("expected image cell");
+
+        let rendered = render_lines(&extra_cell.display_lines(80));
+        assert_eq!(rendered, vec!["tool result (image output)"]);
+    }
+
+    #[test]
+    fn completed_mcp_tool_call_skips_invalid_image_blocks() {
+        let invocation = McpInvocation {
+            server: "image".into(),
+            tool: "generate".into(),
+            arguments: Some(json!({
+                "prompt": "tiny image",
+            })),
+        };
+
+        let result = CallToolResult {
+            content: vec![image_block("not-base64"), image_block(SMALL_PNG_BASE64)],
+            is_error: None,
+            structured_content: None,
+        };
+
+        let mut cell = new_active_mcp_tool_call("call-image-2".into(), invocation, true);
+        let extra_cell = cell
+            .complete(Duration::from_millis(25), Ok(result))
+            .expect("expected image cell");
+
+        let rendered = render_lines(&extra_cell.display_lines(80));
+        assert_eq!(rendered, vec!["tool result (image output)"]);
     }
 
     #[test]

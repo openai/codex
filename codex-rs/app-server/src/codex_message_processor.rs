@@ -13,7 +13,6 @@ use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::AccountUpdatedNotification;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
-use codex_app_server_protocol::AppInfo as ApiAppInfo;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::ArchiveConversationParams;
@@ -58,6 +57,7 @@ use codex_app_server_protocol::ListConversationsResponse;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::LoginAccountParams;
+use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::LoginApiKeyParams;
 use codex_app_server_protocol::LoginApiKeyResponse;
 use codex_app_server_protocol::LoginChatGptCompleteNotification;
@@ -142,6 +142,7 @@ use codex_core::ThreadManager;
 use codex_core::ThreadSortKey as CoreThreadSortKey;
 use codex_core::auth::CLIENT_ID;
 use codex_core::auth::login_with_api_key;
+use codex_core::auth::login_with_chatgpt_auth_tokens;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigService;
@@ -169,6 +170,9 @@ use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::rollout_date_parts;
 use codex_core::sandboxing::SandboxPermissions;
+use codex_core::state_db::get_state_db;
+use codex_core::token_data::parse_id_token;
+use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
@@ -176,6 +180,7 @@ use codex_login::run_login_server;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::dynamic_tools::DynamicToolSpec as CoreDynamicToolSpec;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
@@ -605,6 +610,22 @@ impl CodexMessageProcessor {
             LoginAccountParams::Chatgpt => {
                 self.login_chatgpt_v2(request_id).await;
             }
+            LoginAccountParams::ChatgptAuthTokens {
+                id_token,
+                access_token,
+            } => {
+                self.login_chatgpt_auth_tokens(request_id, id_token, access_token)
+                    .await;
+            }
+        }
+    }
+
+    fn external_auth_active_error(&self) -> JSONRPCErrorError {
+        JSONRPCErrorError {
+            code: INVALID_REQUEST_ERROR_CODE,
+            message: "External auth is active. Use account/login/start (chatgptAuthTokens) to update it or account/logout to clear it."
+                .to_string(),
+            data: None,
         }
     }
 
@@ -612,6 +633,10 @@ impl CodexMessageProcessor {
         &mut self,
         params: &LoginApiKeyParams,
     ) -> std::result::Result<(), JSONRPCErrorError> {
+        if self.auth_manager.is_external_auth_active() {
+            return Err(self.external_auth_active_error());
+        }
+
         if matches!(
             self.config.forced_login_method,
             Some(ForcedLoginMethod::Chatgpt)
@@ -703,6 +728,10 @@ impl CodexMessageProcessor {
         &self,
     ) -> std::result::Result<LoginServerOptions, JSONRPCErrorError> {
         let config = self.config.as_ref();
+
+        if self.auth_manager.is_external_auth_active() {
+            return Err(self.external_auth_active_error());
+        }
 
         if matches!(config.forced_login_method, Some(ForcedLoginMethod::Api)) {
             return Err(JSONRPCErrorError {
@@ -962,6 +991,98 @@ impl CodexMessageProcessor {
         }
     }
 
+    async fn login_chatgpt_auth_tokens(
+        &mut self,
+        request_id: RequestId,
+        id_token: String,
+        access_token: String,
+    ) {
+        if matches!(
+            self.config.forced_login_method,
+            Some(ForcedLoginMethod::Api)
+        ) {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "External ChatGPT auth is disabled. Use API key login instead."
+                    .to_string(),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        // Cancel any active login attempt to avoid persisting managed auth state.
+        {
+            let mut guard = self.active_login.lock().await;
+            if let Some(active) = guard.take() {
+                drop(active);
+            }
+        }
+
+        let id_token_info = match parse_id_token(&id_token) {
+            Ok(info) => info,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("invalid id token: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        if let Some(expected_workspace) = self.config.forced_chatgpt_workspace_id.as_deref()
+            && id_token_info.chatgpt_account_id.as_deref() != Some(expected_workspace)
+        {
+            let account_id = id_token_info.chatgpt_account_id;
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!(
+                    "External auth must use workspace {expected_workspace}, but received {account_id:?}."
+                ),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        if let Err(err) =
+            login_with_chatgpt_auth_tokens(&self.config.codex_home, &id_token, &access_token)
+        {
+            let error = JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to set external auth: {err}"),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+        self.auth_manager.reload();
+
+        self.outgoing
+            .send_response(request_id, LoginAccountResponse::ChatgptAuthTokens {})
+            .await;
+
+        let payload_login_completed = AccountLoginCompletedNotification {
+            login_id: None,
+            success: true,
+            error: None,
+        };
+        self.outgoing
+            .send_server_notification(ServerNotification::AccountLoginCompleted(
+                payload_login_completed,
+            ))
+            .await;
+
+        let payload_v2 = AccountUpdatedNotification {
+            auth_mode: self.auth_manager.get_auth_mode(),
+        };
+        self.outgoing
+            .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
+            .await;
+    }
+
     async fn logout_common(&mut self) -> std::result::Result<Option<AuthMode>, JSONRPCErrorError> {
         // Cancel any active login attempt.
         {
@@ -1024,6 +1145,9 @@ impl CodexMessageProcessor {
     }
 
     async fn refresh_token_if_requested(&self, do_refresh: bool) {
+        if self.auth_manager.is_external_auth_active() {
+            return;
+        }
         if do_refresh && let Err(err) = self.auth_manager.refresh_token().await {
             tracing::warn!("failed to refresh token while getting account: {err}");
         }
@@ -1098,7 +1222,7 @@ impl CodexMessageProcessor {
         let account = match self.auth_manager.auth_cached() {
             Some(auth) => Some(match auth.mode {
                 AuthMode::ApiKey => Account::ApiKey {},
-                AuthMode::ChatGPT => {
+                AuthMode::ChatGPT | AuthMode::ChatgptAuthTokens => {
                     let email = auth.get_account_email();
                     let plan_type = auth.account_plan_type();
 
@@ -1157,7 +1281,7 @@ impl CodexMessageProcessor {
             });
         };
 
-        if auth.mode != AuthMode::ChatGPT {
+        if !matches!(auth.mode, AuthMode::ChatGPT | AuthMode::ChatgptAuthTokens) {
             return Err(JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
                 message: "chatgpt authentication required to read rate limits".to_string(),
@@ -1259,12 +1383,14 @@ impl CodexMessageProcessor {
         let timeout_ms = params
             .timeout_ms
             .and_then(|timeout_ms| u64::try_from(timeout_ms).ok());
+        let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
         let exec_params = ExecParams {
             command: params.command,
             cwd,
             expiration: timeout_ms.into(),
             env,
             sandbox_permissions: SandboxPermissions::UseDefault,
+            windows_sandbox_level,
             justification: None,
             arg0: None,
         };
@@ -1605,6 +1731,7 @@ impl CodexMessageProcessor {
     }
 
     async fn thread_archive(&mut self, request_id: RequestId, params: ThreadArchiveParams) {
+        // TODO(jif) mostly rewrite this using sqlite after phase 1
         let thread_id = match ThreadId::from_string(&params.thread_id) {
             Ok(id) => id,
             Err(err) => {
@@ -1654,6 +1781,7 @@ impl CodexMessageProcessor {
     }
 
     async fn thread_unarchive(&mut self, request_id: RequestId, params: ThreadUnarchiveParams) {
+        // TODO(jif) mostly rewrite this using sqlite after phase 1
         let thread_id = match ThreadId::from_string(&params.thread_id) {
             Ok(id) => id,
             Err(err) => {
@@ -1696,6 +1824,7 @@ impl CodexMessageProcessor {
 
         let rollout_path_display = archived_path.display().to_string();
         let fallback_provider = self.config.model_provider_id.clone();
+        let state_db_ctx = get_state_db(&self.config, None).await;
         let archived_folder = self
             .config
             .codex_home
@@ -1774,6 +1903,11 @@ impl CodexMessageProcessor {
                     message: format!("failed to unarchive thread: {err}"),
                     data: None,
                 })?;
+            if let Some(ctx) = state_db_ctx {
+                let _ = ctx
+                    .mark_unarchived(thread_id, restored_path.as_path())
+                    .await;
+            }
             let summary =
                 read_summary_from_rollout(restored_path.as_path(), fallback_provider.as_str())
                     .await
@@ -2503,7 +2637,6 @@ impl CodexMessageProcessor {
         };
 
         let fallback_provider = self.config.model_provider_id.as_str();
-
         match read_summary_from_rollout(&path, fallback_provider).await {
             Ok(summary) => {
                 let response = GetConversationSummaryResponse { summary };
@@ -3526,8 +3659,13 @@ impl CodexMessageProcessor {
             });
         }
 
+        let mut state_db_ctx = None;
+
         // If the thread is active, request shutdown and wait briefly.
         if let Some(conversation) = self.thread_manager.remove_thread(&thread_id).await {
+            if let Some(ctx) = conversation.state_db() {
+                state_db_ctx = Some(ctx);
+            }
             info!("thread {thread_id} was active; shutting down");
             // Request shutdown.
             match conversation.submit(Op::Shutdown).await {
@@ -3554,14 +3692,24 @@ impl CodexMessageProcessor {
             }
         }
 
+        if state_db_ctx.is_none() {
+            state_db_ctx = get_state_db(&self.config, None).await;
+        }
+
         // Move the rollout file to archived.
-        let result: std::io::Result<()> = async {
+        let result: std::io::Result<()> = async move {
             let archive_folder = self
                 .config
                 .codex_home
                 .join(codex_core::ARCHIVED_SESSIONS_SUBDIR);
             tokio::fs::create_dir_all(&archive_folder).await?;
-            tokio::fs::rename(&canonical_rollout_path, &archive_folder.join(&file_name)).await?;
+            let archived_path = archive_folder.join(&file_name);
+            tokio::fs::rename(&canonical_rollout_path, &archived_path).await?;
+            if let Some(ctx) = state_db_ctx {
+                let _ = ctx
+                    .mark_archived(thread_id, archived_path.as_path(), Utc::now())
+                    .await;
+            }
             Ok(())
         }
         .await;
@@ -3685,7 +3833,7 @@ impl CodexMessageProcessor {
             }
         };
 
-        if !config.features.enabled(Feature::Connectors) {
+        if !config.features.enabled(Feature::Apps) {
             self.outgoing
                 .send_response(
                     request_id,
@@ -3748,18 +3896,7 @@ impl CodexMessageProcessor {
         }
 
         let end = start.saturating_add(effective_limit).min(total);
-        let data = connectors[start..end]
-            .iter()
-            .cloned()
-            .map(|connector| ApiAppInfo {
-                id: connector.connector_id,
-                name: connector.connector_name,
-                description: connector.connector_description,
-                logo_url: connector.logo_url,
-                install_url: connector.install_url,
-                is_accessible: connector.is_accessible,
-            })
-            .collect();
+        let data = connectors[start..end].to_vec();
 
         let next_cursor = if end < total {
             Some(end.to_string())
@@ -3887,6 +4024,7 @@ impl CodexMessageProcessor {
                     cwd: params.cwd,
                     approval_policy: params.approval_policy.map(AskForApproval::to_core),
                     sandbox_policy: params.sandbox_policy.map(|p| p.to_core()),
+                    windows_sandbox_level: None,
                     model: params.model,
                     effort: params.effort.map(Some),
                     summary: params.summary,
@@ -4515,6 +4653,22 @@ fn skills_to_info(
                         icon_large: interface.icon_large,
                         brand_color: interface.brand_color,
                         default_prompt: interface.default_prompt,
+                    }
+                }),
+                dependencies: skill.dependencies.clone().map(|dependencies| {
+                    codex_app_server_protocol::SkillDependencies {
+                        tools: dependencies
+                            .tools
+                            .into_iter()
+                            .map(|tool| codex_app_server_protocol::SkillToolDependency {
+                                r#type: tool.r#type,
+                                value: tool.value,
+                                description: tool.description,
+                                transport: tool.transport,
+                                command: tool.command,
+                                url: tool.url,
+                            })
+                            .collect(),
                     }
                 }),
                 path: skill.path.clone(),

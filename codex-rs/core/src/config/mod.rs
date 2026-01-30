@@ -7,6 +7,7 @@ use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerDisabledReason;
 use crate::config::types::McpServerTransportConfig;
 use crate::config::types::Notice;
+use crate::config::types::NotificationMethod;
 use crate::config::types::Notifications;
 use crate::config::types::OtelConfig;
 use crate::config::types::OtelConfigToml;
@@ -38,6 +39,7 @@ use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_protocol::config_types::AltScreenMode;
@@ -49,6 +51,7 @@ use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -190,9 +193,12 @@ pub struct Config {
     /// If unset the feature is disabled.
     pub notify: Option<Vec<String>>,
 
-    /// TUI notifications preference. When set, the TUI will send OSC 9 notifications on approvals
-    /// and turn completions when not focused.
+    /// TUI notifications preference. When set, the TUI will send terminal notifications on
+    /// approvals and turn completions when not focused.
     pub tui_notifications: Notifications,
+
+    /// Notification method for terminal notifications (osc9 or bel).
+    pub tui_notification_method: NotificationMethod,
 
     /// Enable ASCII animations and shimmer effects in the TUI.
     pub animations: bool,
@@ -1056,6 +1062,7 @@ impl ConfigToml {
         &self,
         sandbox_mode_override: Option<SandboxMode>,
         profile_sandbox_mode: Option<SandboxMode>,
+        windows_sandbox_level: WindowsSandboxLevel,
         resolved_cwd: &Path,
     ) -> SandboxPolicyResolution {
         let resolved_sandbox_mode = sandbox_mode_override
@@ -1094,7 +1101,7 @@ impl ConfigToml {
         if cfg!(target_os = "windows")
             && matches!(resolved_sandbox_mode, SandboxMode::WorkspaceWrite)
             // If the experimental Windows sandbox is enabled, do not force a downgrade.
-            && crate::safety::get_platform_sandbox().is_none()
+            && windows_sandbox_level == codex_protocol::config_types::WindowsSandboxLevel::Disabled
         {
             sandbox_policy = SandboxPolicy::new_read_only_policy();
             forced_auto_mode_downgraded_on_windows = true;
@@ -1218,6 +1225,20 @@ fn resolve_web_search_mode(
     None
 }
 
+pub(crate) fn resolve_web_search_mode_for_turn(
+    explicit_mode: Option<WebSearchMode>,
+    sandbox_policy: &SandboxPolicy,
+) -> WebSearchMode {
+    if let Some(mode) = explicit_mode {
+        return mode;
+    }
+    if matches!(sandbox_policy, SandboxPolicy::DangerFullAccess) {
+        WebSearchMode::Live
+    } else {
+        WebSearchMode::Cached
+    }
+}
+
 impl Config {
     #[cfg(test)]
     fn load_from_base_config_with_overrides(
@@ -1284,17 +1305,6 @@ impl Config {
         };
 
         let features = Features::from_config(&cfg, &config_profile, feature_overrides);
-        let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features);
-        #[cfg(target_os = "windows")]
-        {
-            // Base flag controls sandbox on/off; elevated only applies when base is enabled.
-            let sandbox_enabled = features.enabled(Feature::WindowsSandbox);
-            crate::safety::set_windows_sandbox_enabled(sandbox_enabled);
-            let elevated_enabled =
-                sandbox_enabled && features.enabled(Feature::WindowsSandboxElevated);
-            crate::safety::set_windows_elevated_sandbox_enabled(elevated_enabled);
-        }
-
         let resolved_cwd = {
             use std::env;
 
@@ -1321,10 +1331,16 @@ impl Config {
             .get_active_project(&resolved_cwd)
             .unwrap_or(ProjectConfig { trust_level: None });
 
+        let windows_sandbox_level = WindowsSandboxLevel::from_features(&features);
         let SandboxPolicyResolution {
             policy: mut sandbox_policy,
             forced_auto_mode_downgraded_on_windows,
-        } = cfg.derive_sandbox_policy(sandbox_mode, config_profile.sandbox_mode, &resolved_cwd);
+        } = cfg.derive_sandbox_policy(
+            sandbox_mode,
+            config_profile.sandbox_mode,
+            windows_sandbox_level,
+            &resolved_cwd,
+        );
         if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = &mut sandbox_policy {
             for path in additional_writable_roots {
                 if !writable_roots.iter().any(|existing| existing == &path) {
@@ -1344,6 +1360,7 @@ impl Config {
                     AskForApproval::default()
                 }
             });
+        let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features);
         // TODO(dylan): We should be able to leverage ConfigLayerStack so that
         // we can reliably check this at every config level.
         let did_user_set_custom_approval_policy_or_sandbox_mode = approval_policy_override
@@ -1355,12 +1372,6 @@ impl Config {
             || cfg.sandbox_mode.is_some();
 
         let mut model_providers = built_in_model_providers();
-        if features.enabled(Feature::ResponsesWebsockets)
-            && let Some(provider) = model_providers.get_mut("openai")
-            && provider.is_openai()
-        {
-            provider.wire_api = crate::model_provider_info::WireApi::ResponsesWebsocket;
-        }
         // Merge user-defined providers into the built-in list.
         for (key, provider) in cfg.model_providers.into_iter() {
             model_providers.entry(key).or_insert(provider);
@@ -1594,6 +1605,11 @@ impl Config {
                 .as_ref()
                 .map(|t| t.notifications.clone())
                 .unwrap_or_default(),
+            tui_notification_method: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.notification_method)
+                .unwrap_or_default(),
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
             show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
             experimental_mode: cfg.tui.as_ref().and_then(|t| t.experimental_mode),
@@ -1666,20 +1682,19 @@ impl Config {
         }
     }
 
-    pub fn set_windows_sandbox_globally(&mut self, value: bool) {
-        crate::safety::set_windows_sandbox_enabled(value);
+    pub fn set_windows_sandbox_enabled(&mut self, value: bool) {
         if value {
             self.features.enable(Feature::WindowsSandbox);
+            self.forced_auto_mode_downgraded_on_windows = false;
         } else {
             self.features.disable(Feature::WindowsSandbox);
         }
-        self.forced_auto_mode_downgraded_on_windows = !value;
     }
 
-    pub fn set_windows_elevated_sandbox_globally(&mut self, value: bool) {
-        crate::safety::set_windows_elevated_sandbox_enabled(value);
+    pub fn set_windows_elevated_sandbox_enabled(&mut self, value: bool) {
         if value {
             self.features.enable(Feature::WindowsSandboxElevated);
+            self.forced_auto_mode_downgraded_on_windows = false;
         } else {
             self.features.disable(Feature::WindowsSandboxElevated);
         }
@@ -1753,6 +1768,7 @@ mod tests {
     use crate::config::types::FeedbackConfigToml;
     use crate::config::types::HistoryPersistence;
     use crate::config::types::McpServerTransportConfig;
+    use crate::config::types::NotificationMethod;
     use crate::config::types::Notifications;
     use crate::config_loader::RequirementSource;
     use crate::features::Feature;
@@ -1849,6 +1865,7 @@ persistence = "none"
             tui,
             Tui {
                 notifications: Notifications::Enabled(true),
+                notification_method: NotificationMethod::Auto,
                 animations: true,
                 show_tooltips: true,
                 experimental_mode: None,
@@ -1871,6 +1888,7 @@ network_access = false  # This should be ignored.
         let resolution = sandbox_full_access_cfg.derive_sandbox_policy(
             sandbox_mode_override,
             None,
+            WindowsSandboxLevel::Disabled,
             &PathBuf::from("/tmp/test"),
         );
         assert_eq!(
@@ -1894,6 +1912,7 @@ network_access = true  # This should be ignored.
         let resolution = sandbox_read_only_cfg.derive_sandbox_policy(
             sandbox_mode_override,
             None,
+            WindowsSandboxLevel::Disabled,
             &PathBuf::from("/tmp/test"),
         );
         assert_eq!(
@@ -1925,6 +1944,7 @@ exclude_slash_tmp = true
         let resolution = sandbox_workspace_write_cfg.derive_sandbox_policy(
             sandbox_mode_override,
             None,
+            WindowsSandboxLevel::Disabled,
             &PathBuf::from("/tmp/test"),
         );
         if cfg!(target_os = "windows") {
@@ -1973,6 +1993,7 @@ trust_level = "trusted"
         let resolution = sandbox_workspace_write_cfg.derive_sandbox_policy(
             sandbox_mode_override,
             None,
+            WindowsSandboxLevel::Disabled,
             &PathBuf::from("/tmp/test"),
         );
         if cfg!(target_os = "windows") {
@@ -2264,7 +2285,7 @@ trust_level = "trusted"
     }
 
     #[test]
-    fn web_search_mode_uses_none_if_unset() {
+    fn web_search_mode_defaults_to_none_if_unset() {
         let cfg = ConfigToml::default();
         let profile = ConfigProfile::default();
         let features = Features::with_defaults();
@@ -2302,6 +2323,30 @@ trust_level = "trusted"
             resolve_web_search_mode(&cfg, &profile, &features),
             Some(WebSearchMode::Disabled)
         );
+    }
+
+    #[test]
+    fn web_search_mode_for_turn_defaults_to_cached_when_unset() {
+        let mode = resolve_web_search_mode_for_turn(None, &SandboxPolicy::ReadOnly);
+
+        assert_eq!(mode, WebSearchMode::Cached);
+    }
+
+    #[test]
+    fn web_search_mode_for_turn_defaults_to_live_for_danger_full_access() {
+        let mode = resolve_web_search_mode_for_turn(None, &SandboxPolicy::DangerFullAccess);
+
+        assert_eq!(mode, WebSearchMode::Live);
+    }
+
+    #[test]
+    fn web_search_mode_for_turn_prefers_explicit_value() {
+        let mode = resolve_web_search_mode_for_turn(
+            Some(WebSearchMode::Cached),
+            &SandboxPolicy::DangerFullAccess,
+        );
+
+        assert_eq!(mode, WebSearchMode::Cached);
     }
 
     #[test]
@@ -2504,7 +2549,7 @@ profile = "project"
     }
 
     #[test]
-    fn responses_websockets_feature_updates_openai_provider() -> std::io::Result<()> {
+    fn responses_websockets_feature_does_not_change_wire_api() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let mut entries = BTreeMap::new();
         entries.insert("responses_websockets".to_string(), true);
@@ -2521,7 +2566,7 @@ profile = "project"
 
         assert_eq!(
             config.model_provider.wire_api,
-            crate::model_provider_info::WireApi::ResponsesWebsocket
+            crate::model_provider_info::WireApi::Responses
         );
 
         Ok(())
@@ -3641,6 +3686,7 @@ model_verbosity = "high"
             stream_max_retries: Some(10),
             stream_idle_timeout_ms: Some(300_000),
             requires_openai_auth: false,
+            supports_websockets: false,
         };
         let model_provider_map = {
             let mut model_provider_map = built_in_model_providers();
@@ -3749,6 +3795,7 @@ model_verbosity = "high"
                 check_for_update_on_startup: true,
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
+                tui_notification_method: Default::default(),
                 animations: true,
                 show_tooltips: true,
                 experimental_mode: None,
@@ -3832,6 +3879,7 @@ model_verbosity = "high"
             check_for_update_on_startup: true,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
             experimental_mode: None,
@@ -3930,6 +3978,7 @@ model_verbosity = "high"
             check_for_update_on_startup: true,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
             experimental_mode: None,
@@ -4014,6 +4063,7 @@ model_verbosity = "high"
             check_for_update_on_startup: true,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
             experimental_mode: None,
@@ -4187,7 +4237,12 @@ trust_level = "untrusted"
         let cfg = toml::from_str::<ConfigToml>(config_with_untrusted)
             .expect("TOML deserialization should succeed");
 
-        let resolution = cfg.derive_sandbox_policy(None, None, &PathBuf::from("/tmp/test"));
+        let resolution = cfg.derive_sandbox_policy(
+            None,
+            None,
+            WindowsSandboxLevel::Disabled,
+            &PathBuf::from("/tmp/test"),
+        );
 
         // Verify that untrusted projects get WorkspaceWrite (or ReadOnly on Windows due to downgrade)
         if cfg!(target_os = "windows") {
@@ -4366,13 +4421,17 @@ mcp_oauth_callback_port = 5678
 
 #[cfg(test)]
 mod notifications_tests {
+    use crate::config::types::NotificationMethod;
     use crate::config::types::Notifications;
     use assert_matches::assert_matches;
     use serde::Deserialize;
 
     #[derive(Deserialize, Debug, PartialEq)]
     struct TuiTomlTest {
+        #[serde(default)]
         notifications: Notifications,
+        #[serde(default)]
+        notification_method: NotificationMethod,
     }
 
     #[derive(Deserialize, Debug, PartialEq)]
@@ -4402,5 +4461,16 @@ mod notifications_tests {
             parsed.tui.notifications,
             Notifications::Custom(ref v) if v == &vec!["foo".to_string()]
         );
+    }
+
+    #[test]
+    fn test_tui_notification_method() {
+        let toml = r#"
+            [tui]
+            notification_method = "bel"
+        "#;
+        let parsed: RootTomlTest =
+            toml::from_str(toml).expect("deserialize notification_method=\"bel\"");
+        assert_eq!(parsed.tui.notification_method, NotificationMethod::Bel);
     }
 }

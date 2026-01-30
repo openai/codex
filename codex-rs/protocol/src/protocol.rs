@@ -16,14 +16,17 @@ use crate::approvals::ElicitationRequestEvent;
 use crate::config_types::CollaborationMode;
 use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use crate::config_types::WindowsSandboxLevel;
 use crate::custom_prompts::CustomPrompt;
 use crate::dynamic_tools::DynamicToolCallRequest;
 use crate::dynamic_tools::DynamicToolResponse;
+use crate::dynamic_tools::DynamicToolSpec;
 use crate::items::TurnItem;
 use crate::message_history::HistoryEntry;
 use crate::models::BaseInstructions;
 use crate::models::ContentItem;
 use crate::models::ResponseItem;
+use crate::models::WebSearchAction;
 use crate::num_format::format_with_separators;
 use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crate::parse_command::ParsedCommand;
@@ -156,6 +159,10 @@ pub enum Op {
         /// Updated sandbox policy for tool calls.
         #[serde(skip_serializing_if = "Option::is_none")]
         sandbox_policy: Option<SandboxPolicy>,
+
+        /// Updated Windows sandbox mode for tool execution.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        windows_sandbox_level: Option<WindowsSandboxLevel>,
 
         /// Updated model slug. When set, the model info is derived
         /// automatically.
@@ -919,6 +926,10 @@ pub enum AgentStatus {
 pub enum CodexErrorInfo {
     ContextWindowExceeded,
     UsageLimitExceeded,
+    ModelCap {
+        model: String,
+        reset_after_seconds: Option<u64>,
+    },
     HttpConnectionFailed {
         http_status_code: Option<u16>,
     },
@@ -1041,6 +1052,7 @@ impl HasLegacyEvent for ReasoningRawContentDeltaEvent {
 impl HasLegacyEvent for EventMsg {
     fn as_legacy_events(&self, show_raw_agent_reasoning: bool) -> Vec<EventMsg> {
         match self {
+            EventMsg::ItemStarted(event) => event.as_legacy_events(show_raw_agent_reasoning),
             EventMsg::ItemCompleted(event) => event.as_legacy_events(show_raw_agent_reasoning),
             EventMsg::AgentMessageContentDelta(event) => {
                 event.as_legacy_events(show_raw_agent_reasoning)
@@ -1402,6 +1414,7 @@ pub struct WebSearchBeginEvent {
 pub struct WebSearchEndEvent {
     pub call_id: String,
     pub query: String,
+    pub action: WebSearchAction,
 }
 
 // Conversation kept for backward compatibility.
@@ -1501,6 +1514,22 @@ impl InitialHistory {
             }),
         }
     }
+
+    pub fn get_dynamic_tools(&self) -> Option<Vec<DynamicToolSpec>> {
+        match self {
+            InitialHistory::New => None,
+            InitialHistory::Resumed(resumed) => {
+                resumed.history.iter().find_map(|item| match item {
+                    RolloutItem::SessionMeta(meta_line) => meta_line.meta.dynamic_tools.clone(),
+                    _ => None,
+                })
+            }
+            InitialHistory::Forked(items) => items.iter().find_map(|item| match item {
+                RolloutItem::SessionMeta(meta_line) => meta_line.meta.dynamic_tools.clone(),
+                _ => None,
+            }),
+        }
+    }
 }
 
 fn session_cwd_from_items(items: &[RolloutItem]) -> Option<PathBuf> {
@@ -1587,6 +1616,8 @@ pub struct SessionMeta {
     /// but may be missing for older sessions. If not present, fall back to rendering the base_instructions
     /// from ModelsManager.
     pub base_instructions: Option<BaseInstructions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
 }
 
 impl Default for SessionMeta {
@@ -1601,6 +1632,7 @@ impl Default for SessionMeta {
             source: SessionSource::default(),
             model_provider: None,
             base_instructions: None,
+            dynamic_tools: None,
         }
     }
 }
@@ -2085,11 +2117,14 @@ pub struct SkillMetadata {
     pub description: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    /// Legacy short_description from SKILL.md. Prefer SKILL.toml interface.short_description.
+    /// Legacy short_description from SKILL.md. Prefer SKILL.json interface.short_description.
     pub short_description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub interface: Option<SkillInterface>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub dependencies: Option<SkillDependencies>,
     pub path: PathBuf,
     pub scope: SkillScope,
     pub enabled: bool,
@@ -2109,6 +2144,31 @@ pub struct SkillInterface {
     pub brand_color: Option<String>,
     #[ts(optional)]
     pub default_prompt: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq, Eq)]
+pub struct SkillDependencies {
+    pub tools: Vec<SkillToolDependency>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq, Eq)]
+pub struct SkillToolDependency {
+    #[serde(rename = "type")]
+    #[ts(rename = "type")]
+    pub r#type: String,
+    pub value: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub transport: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub url: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -2375,6 +2435,9 @@ mod tests {
             item: TurnItem::WebSearch(WebSearchItem {
                 id: "search-1".into(),
                 query: "find docs".into(),
+                action: WebSearchAction::Search {
+                    query: Some("find docs".into()),
+                },
             }),
         };
 

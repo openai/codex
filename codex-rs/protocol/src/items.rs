@@ -1,6 +1,8 @@
+use crate::models::WebSearchAction;
 use crate::protocol::AgentMessageEvent;
 use crate::protocol::AgentReasoningEvent;
 use crate::protocol::AgentReasoningRawContentEvent;
+use crate::protocol::ContextCompactedEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::UserMessageEvent;
 use crate::protocol::WebSearchEndEvent;
@@ -20,6 +22,7 @@ pub enum TurnItem {
     AgentMessage(AgentMessageItem),
     Reasoning(ReasoningItem),
     WebSearch(WebSearchItem),
+    ContextCompaction(ContextCompactionItem),
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -49,10 +52,34 @@ pub struct ReasoningItem {
     pub raw_content: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
 pub struct WebSearchItem {
     pub id: String,
     pub query: String,
+    pub action: WebSearchAction,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+pub struct ContextCompactionItem {
+    pub id: String,
+}
+
+impl ContextCompactionItem {
+    pub fn new() -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+        }
+    }
+
+    pub fn as_legacy_event(&self) -> EventMsg {
+        EventMsg::ContextCompacted(ContextCompactedEvent {})
+    }
+}
+
+impl Default for ContextCompactionItem {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl UserMessageItem {
@@ -181,6 +208,7 @@ impl WebSearchItem {
         EventMsg::WebSearchEnd(WebSearchEndEvent {
             call_id: self.id.clone(),
             query: self.query.clone(),
+            action: self.action.clone(),
         })
     }
 }
@@ -192,6 +220,7 @@ impl TurnItem {
             TurnItem::AgentMessage(item) => item.id.clone(),
             TurnItem::Reasoning(item) => item.id.clone(),
             TurnItem::WebSearch(item) => item.id.clone(),
+            TurnItem::ContextCompaction(item) => item.id.clone(),
         }
     }
 
@@ -201,6 +230,7 @@ impl TurnItem {
             TurnItem::AgentMessage(item) => item.as_legacy_events(),
             TurnItem::WebSearch(item) => vec![item.as_legacy_event()],
             TurnItem::Reasoning(item) => item.as_legacy_events(show_raw_agent_reasoning),
+            TurnItem::ContextCompaction(item) => vec![item.as_legacy_event()],
         }
     }
 }

@@ -88,19 +88,22 @@ impl ToolOrchestrator {
         // 2) First attempt under the selected sandbox.
         let initial_sandbox = match tool.sandbox_mode_for_first_attempt(req) {
             SandboxOverride::BypassSandboxFirstAttempt => crate::exec::SandboxType::None,
-            SandboxOverride::NoOverride => self
-                .sandbox
-                .select_initial(&turn_ctx.sandbox_policy, tool.sandbox_preference()),
+            SandboxOverride::NoOverride => self.sandbox.select_initial(
+                &turn_ctx.sandbox_policy,
+                tool.sandbox_preference(),
+                turn_ctx.windows_sandbox_level,
+            ),
         };
 
         // Platform-specific flag gating is handled by SandboxManager::select_initial
-        // via crate::safety::get_platform_sandbox().
+        // via crate::safety::get_platform_sandbox(..).
         let initial_attempt = SandboxAttempt {
             sandbox: initial_sandbox,
             policy: &turn_ctx.sandbox_policy,
             manager: &self.sandbox,
             sandbox_cwd: &turn_ctx.cwd,
             codex_linux_sandbox_exe: turn_ctx.codex_linux_sandbox_exe.as_ref(),
+            windows_sandbox_level: turn_ctx.windows_sandbox_level,
         };
 
         match tool.run(req, &initial_attempt, tool_ctx).await {
@@ -151,6 +154,7 @@ impl ToolOrchestrator {
                     manager: &self.sandbox,
                     sandbox_cwd: &turn_ctx.cwd,
                     codex_linux_sandbox_exe: None,
+                    windows_sandbox_level: turn_ctx.windows_sandbox_level,
                 };
 
                 // Second attempt.

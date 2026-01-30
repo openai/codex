@@ -9,6 +9,7 @@ pub const INTERACTIVE_SESSION_SOURCES: &[SessionSource] =
 
 pub(crate) mod error;
 pub mod list;
+pub(crate) mod metadata;
 pub(crate) mod policy;
 pub mod recorder;
 pub(crate) mod truncation;
