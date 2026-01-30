@@ -1835,15 +1835,15 @@ impl HistoryCell for RequestUserInputResultCell {
                     width,
                     "    answer: ".dim(),
                     "            ".dim(),
-                    Style::default().fg(Color::Green),
+                    Style::default(),
                 ));
             }
             if let Some(note) = note {
                 lines.extend(wrap_with_prefix(
                     &note,
                     width,
-                    "    note: ".dim(),
-                    "          ".dim(),
+                    "    answer: ".dim(),
+                    "            ".dim(),
                     Style::default().add_modifier(Modifier::DIM),
                 ));
             }
