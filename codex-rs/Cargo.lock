@@ -1425,6 +1425,7 @@ dependencies = [
  "maplit",
  "mcp-types",
  "multimap",
+ "notify",
  "once_cell",
  "openssl-sys",
  "os_info",

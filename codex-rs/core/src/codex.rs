@@ -114,6 +114,8 @@ use crate::error::Result as CodexResult;
 use crate::exec::StreamOutput;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::feedback_tags;
+use crate::file_watcher::FileWatcher;
+use crate::file_watcher::FileWatcherEvent;
 use crate::instructions::UserInstructions;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::auth::compute_auth_statuses;
@@ -269,6 +271,7 @@ impl Codex {
         auth_manager: Arc<AuthManager>,
         models_manager: Arc<ModelsManager>,
         skills_manager: Arc<SkillsManager>,
+        file_watcher: Arc<FileWatcher>,
         conversation_history: InitialHistory,
         session_source: SessionSource,
         agent_control: AgentControl,
@@ -318,7 +321,7 @@ impl Codex {
         // Resolve base instructions for the session. Priority order:
         // 1. config.base_instructions override
         // 2. conversation history => session_meta.base_instructions
-        // 3. base_intructions for current model
+        // 3. base_instructions for current model
         let model_info = models_manager.get_model_info(model.as_str(), &config).await;
         let base_instructions = config
             .base_instructions
@@ -378,6 +381,7 @@ impl Codex {
             conversation_history,
             session_source_clone,
             skills_manager,
+            file_watcher,
             agent_control,
         )
         .instrument(session_init_span)
@@ -467,6 +471,10 @@ pub(crate) struct Session {
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) services: SessionServices,
+    agents_changed: Arc<AtomicBool>,
+    agents_watch_dirs: Vec<PathBuf>,
+    live_agents_reload: bool,
+    live_skills_reload: bool,
     next_internal_sub_id: AtomicU64,
 }
 
@@ -634,6 +642,66 @@ impl Session {
         per_turn_config
     }
 
+    // Build the directories we watch for `AGENTS.md` changes: project search
+    // roots (falling back to `cwd`) plus the user's `codex_home`.
+    fn build_agents_watch_dirs(config: &Config) -> Vec<PathBuf> {
+        let mut dirs = match crate::project_doc::project_doc_search_dirs(config) {
+            Ok(dirs) => dirs,
+            Err(err) => {
+                warn!("failed to compute AGENTS.md search dirs: {err}");
+                vec![config.cwd.clone()]
+            }
+        };
+        dirs.push(config.codex_home.clone());
+        dirs
+    }
+
+    fn start_file_watcher_listener(self: &Arc<Self>) {
+        if !self.live_agents_reload && !self.live_skills_reload {
+            return;
+        }
+        let mut rx = self.services.file_watcher.subscribe();
+        let agents_changed = Arc::clone(&self.agents_changed);
+        let agents_watch_dirs = self.agents_watch_dirs.clone();
+        let live_agents_reload = self.live_agents_reload;
+        let live_skills_reload = self.live_skills_reload;
+        let weak_sess = Arc::downgrade(self);
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(FileWatcherEvent::AgentsChanged { paths }) => {
+                        if live_agents_reload
+                            && paths.iter().any(|path| {
+                                agents_watch_dirs.iter().any(|root| path.starts_with(root))
+                            })
+                            && !agents_changed.swap(true, Ordering::SeqCst)
+                        {
+                            info!(
+                                "AGENTS change detected; will refresh instructions next turn: {:?}",
+                                paths
+                            );
+                        }
+                    }
+                    Ok(FileWatcherEvent::SkillsChanged { .. }) => {
+                        if !live_skills_reload {
+                            continue;
+                        }
+                        let Some(sess) = weak_sess.upgrade() else {
+                            break;
+                        };
+                        let event = Event {
+                            id: sess.next_internal_sub_id_with_prefix("skills-update"),
+                            msg: EventMsg::SkillsUpdateAvailable,
+                        };
+                        sess.send_event_raw(event).await;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                }
+            }
+        });
+    }
+
     pub(crate) async fn codex_home(&self) -> PathBuf {
         let state = self.state.lock().await;
         state.session_configuration.codex_home().clone()
@@ -709,6 +777,7 @@ impl Session {
         initial_history: InitialHistory,
         session_source: SessionSource,
         skills_manager: Arc<SkillsManager>,
+        file_watcher: Arc<FileWatcher>,
         agent_control: AgentControl,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
@@ -890,6 +959,13 @@ impl Session {
             };
         session_configuration.thread_name = thread_name.clone();
         let state = SessionState::new(session_configuration.clone());
+        let live_agents_reload = config.features.enabled(Feature::LiveAgentsReload);
+        let live_skills_reload = config.features.enabled(Feature::LiveSkillsReload);
+        let agents_watch_dirs = if live_agents_reload {
+            Self::build_agents_watch_dirs(&config)
+        } else {
+            Vec::new()
+        };
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -905,6 +981,7 @@ impl Session {
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
+            file_watcher,
             agent_control,
             state_db: state_db_ctx.clone(),
             transport_manager: TransportManager::new(),
@@ -919,6 +996,10 @@ impl Session {
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
             services,
+            agents_changed: Arc::new(AtomicBool::new(false)),
+            agents_watch_dirs,
+            live_agents_reload,
+            live_skills_reload,
             next_internal_sub_id: AtomicU64::new(0),
         });
 
@@ -947,6 +1028,9 @@ impl Session {
         for event in events {
             sess.send_event_raw(event).await;
         }
+
+        // Start the watcher after SessionConfigured so it cannot emit earlier events.
+        sess.start_file_watcher_listener();
 
         // Construct sandbox_state before initialize() so it can be sent to each
         // MCP server immediately after it becomes ready (avoiding blocking).
@@ -999,10 +1083,14 @@ impl Session {
     }
 
     fn next_internal_sub_id(&self) -> String {
+        self.next_internal_sub_id_with_prefix("auto-compact")
+    }
+
+    fn next_internal_sub_id_with_prefix(&self, prefix: &str) -> String {
         let id = self
             .next_internal_sub_id
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        format!("auto-compact-{id}")
+        format!("{prefix}-{id}")
     }
 
     async fn get_total_token_usage(&self) -> i64 {
@@ -1845,6 +1933,35 @@ impl Session {
         state.session_configuration.collaboration_mode.clone()
     }
 
+    // If `AGENTS.md` changed, reload skills, recompute user instructions, and
+    // update session state; otherwise return `None`.
+    pub(crate) async fn refresh_user_instructions_if_needed(&self) -> Option<String> {
+        if !self.live_agents_reload {
+            return None;
+        }
+        if !self.agents_changed.swap(false, Ordering::SeqCst) {
+            return None;
+        }
+
+        let config = {
+            let state = self.state.lock().await;
+            Arc::clone(&state.session_configuration.original_config_do_not_use)
+        };
+        let skills_outcome = self.services.skills_manager.skills_for_config(&config);
+        for err in &skills_outcome.errors {
+            error!(
+                "failed to load skill {}: {}",
+                err.path.display(),
+                err.message
+            );
+        }
+        let enabled_skills = skills_outcome.enabled_skills();
+        let user_instructions = get_user_instructions(&config, Some(&enabled_skills)).await;
+        let mut state = self.state.lock().await;
+        state.session_configuration.user_instructions = user_instructions.clone();
+        user_instructions
+    }
+
     async fn send_raw_response_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {
         for item in items {
             self.send_event(
@@ -2507,6 +2624,7 @@ mod handlers {
 
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
+    use crate::instructions::UserInstructions;
 
     use crate::mcp::auth::compute_auth_statuses;
     use crate::mcp::collect_mcp_snapshot_from_manager;
@@ -2664,6 +2782,7 @@ mod handlers {
             .collaboration_mode
             .clone();
         let next_collaboration_mode = updates.collaboration_mode.clone();
+        let refreshed_user_instructions = sess.refresh_user_instructions_if_needed().await;
         let Ok(current_context) = sess.new_turn_with_sub_id(sub_id, updates).await else {
             // new_turn_with_sub_id already emits the error event.
             return;
@@ -2676,12 +2795,21 @@ mod handlers {
         // Attempt to inject input into current task
         if let Err(items) = sess.inject_input(items).await {
             sess.seed_initial_context_if_needed(&current_context).await;
-            let update_items = sess.build_settings_update_items(
+            let mut update_items = sess.build_settings_update_items(
                 previous_context.as_ref(),
                 &current_context,
                 &previous_collaboration_mode,
                 next_collaboration_mode.as_ref(),
             );
+            if let Some(user_instructions) = refreshed_user_instructions {
+                update_items.push(
+                    UserInstructions {
+                        text: user_instructions,
+                        directory: current_context.cwd.to_string_lossy().into_owned(),
+                    }
+                    .into(),
+                );
+            }
             if !update_items.is_empty() {
                 sess.record_conversation_items(&current_context, &update_items)
                     .await;
@@ -4050,7 +4178,10 @@ pub(crate) use tests::make_session_and_context_with_rx;
 mod tests {
     use super::*;
     use crate::CodexAuth;
+    use crate::config::CONFIG_TOML_FILE;
     use crate::config::ConfigBuilder;
+    use crate::config::ConfigToml;
+    use crate::config::ProjectConfig;
     use crate::config::test_config;
     use crate::exec::ExecToolCallOutput;
     use crate::function_tool::FunctionCallError;
@@ -4058,6 +4189,7 @@ mod tests {
     use crate::tools::format_exec_output_str;
 
     use codex_protocol::ThreadId;
+    use codex_protocol::config_types::TrustLevel;
     use codex_protocol::models::FunctionCallOutputPayload;
 
     use crate::protocol::CompactedItem;
@@ -4093,6 +4225,8 @@ mod tests {
     use pretty_assertions::assert_eq;
     use serde::Deserialize;
     use serde_json::json;
+    use std::collections::HashMap;
+    use std::fs;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration as StdDuration;
@@ -4826,6 +4960,43 @@ mod tests {
             .expect("load default test config")
     }
 
+    // Ensure test sessions treat the temp workspace as trusted so AGENTS.md
+    // and project-doc instructions are loaded consistently.
+    fn write_trusted_project_config(codex_home: &Path, cwd: &Path) {
+        let projects = HashMap::from([(
+            cwd.to_string_lossy().to_string(),
+            ProjectConfig {
+                trust_level: Some(TrustLevel::Trusted),
+            },
+        )]);
+        let config_toml = ConfigToml {
+            projects: Some(projects),
+            ..Default::default()
+        };
+        let config_toml_str = toml::to_string(&config_toml).expect("serialize config toml");
+        fs::write(codex_home.join(CONFIG_TOML_FILE), config_toml_str).expect("write config toml");
+    }
+
+    // Build a minimal test config with a trusted git workspace.
+    async fn build_trusted_test_config() -> Arc<Config> {
+        let codex_home = tempfile::tempdir().expect("create temp dir");
+        let codex_home_path = codex_home.keep();
+        let cwd = tempfile::tempdir().expect("create temp cwd");
+        let cwd_path = cwd.keep();
+        fs::create_dir(cwd_path.join(".git")).expect("create git marker");
+        write_trusted_project_config(&codex_home_path, &cwd_path);
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home_path)
+            .harness_overrides(crate::config::ConfigOverrides {
+                cwd: Some(cwd_path),
+                ..Default::default()
+            })
+            .build()
+            .await
+            .expect("load overridden test config");
+        Arc::new(config)
+    }
+
     fn otel_manager(
         conversation_id: ThreadId,
         config: &Config,
@@ -4847,9 +5018,7 @@ mod tests {
 
     pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         let (tx_event, _rx_event) = async_channel::unbounded();
-        let codex_home = tempfile::tempdir().expect("create temp dir");
-        let config = build_test_config(codex_home.path()).await;
-        let config = Arc::new(config);
+        let config = build_trusted_test_config().await;
         let conversation_id = ThreadId::default();
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
@@ -4859,6 +5028,7 @@ mod tests {
         ));
         let agent_control = AgentControl::default();
         let exec_policy = ExecPolicyManager::default();
+        let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
         let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
@@ -4871,12 +5041,15 @@ mod tests {
                 developer_instructions: None,
             },
         };
+        let skills_outcome = skills_manager.skills_for_config(config.as_ref());
+        let enabled_skills = skills_outcome.enabled_skills();
+        let user_instructions = get_user_instructions(config.as_ref(), Some(&enabled_skills)).await;
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
-            user_instructions: config.user_instructions.clone(),
+            user_instructions,
             personality: config.model_personality,
             base_instructions: config
                 .base_instructions
@@ -4909,6 +5082,7 @@ mod tests {
         mark_state_initial_context_seeded(&mut state);
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
 
+        let file_watcher = Arc::new(FileWatcher::noop());
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
@@ -4923,9 +5097,17 @@ mod tests {
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
+            file_watcher,
             agent_control,
             state_db: None,
             transport_manager: TransportManager::new(),
+        };
+        let live_agents_reload = config.features.enabled(Feature::LiveAgentsReload);
+        let live_skills_reload = config.features.enabled(Feature::LiveSkillsReload);
+        let agents_watch_dirs = if live_agents_reload {
+            Session::build_agents_watch_dirs(config.as_ref())
+        } else {
+            Vec::new()
         };
 
         let turn_context = Session::make_turn_context(
@@ -4949,6 +5131,10 @@ mod tests {
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
             services,
+            agents_changed: Arc::new(AtomicBool::new(false)),
+            agents_watch_dirs,
+            live_agents_reload,
+            live_skills_reload,
             next_internal_sub_id: AtomicU64::new(0),
         };
 
@@ -4963,9 +5149,7 @@ mod tests {
         async_channel::Receiver<Event>,
     ) {
         let (tx_event, rx_event) = async_channel::unbounded();
-        let codex_home = tempfile::tempdir().expect("create temp dir");
-        let config = build_test_config(codex_home.path()).await;
-        let config = Arc::new(config);
+        let config = build_trusted_test_config().await;
         let conversation_id = ThreadId::default();
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
@@ -5025,6 +5209,7 @@ mod tests {
         mark_state_initial_context_seeded(&mut state);
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
 
+        let file_watcher = Arc::new(FileWatcher::noop());
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
@@ -5039,9 +5224,17 @@ mod tests {
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
+            file_watcher,
             agent_control,
             state_db: None,
             transport_manager: TransportManager::new(),
+        };
+        let live_agents_reload = config.features.enabled(Feature::LiveAgentsReload);
+        let live_skills_reload = config.features.enabled(Feature::LiveSkillsReload);
+        let agents_watch_dirs = if live_agents_reload {
+            Session::build_agents_watch_dirs(config.as_ref())
+        } else {
+            Vec::new()
         };
 
         let turn_context = Arc::new(Session::make_turn_context(
@@ -5065,6 +5258,10 @@ mod tests {
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
             services,
+            agents_changed: Arc::new(AtomicBool::new(false)),
+            agents_watch_dirs,
+            live_agents_reload,
+            live_skills_reload,
             next_internal_sub_id: AtomicU64::new(0),
         });
 
@@ -5209,7 +5406,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn abort_gracefuly_emits_turn_aborted_only() {
+    async fn abort_gracefully_emits_turn_aborted_only() {
         let (sess, tc, rx) = make_session_and_context_with_rx().await;
         let input = vec![UserInput::Text {
             text: "hello".to_string(),
