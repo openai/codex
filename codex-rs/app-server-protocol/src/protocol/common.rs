@@ -30,7 +30,7 @@ pub enum AuthMode {
     /// OpenAI API key provided by the caller and stored by Codex.
     ApiKey,
     /// ChatGPT OAuth managed by Codex (tokens persisted and refreshed by Codex).
-    ChatGPT,
+    ChatGpt,
     /// [UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.
     ///
     /// ChatGPT auth tokens are supplied by an external host app and are only
@@ -38,7 +38,7 @@ pub enum AuthMode {
     #[serde(rename = "chatgptAuthTokens")]
     #[ts(rename = "chatgptAuthTokens")]
     #[strum(serialize = "chatgptAuthTokens")]
-    ChatgptAuthTokens,
+    ChatGptAuthTokens,
 }
 
 /// Generates an `enum ClientRequest` where each variant is a request that the
@@ -549,9 +549,9 @@ server_request_definitions! {
         response: v2::DynamicToolCallResponse,
     },
 
-    ChatgptAuthTokensRefresh => "account/chatgptAuthTokens/refresh" {
-        params: v2::ChatgptAuthTokensRefreshParams,
-        response: v2::ChatgptAuthTokensRefreshResponse,
+    ChatGptAuthTokensRefresh => "account/chatgptAuthTokens/refresh" {
+        params: v2::ChatGptAuthTokensRefreshParams,
+        response: v2::ChatGptAuthTokensRefreshResponse,
     },
 
     /// DEPRECATED APIs below
@@ -776,10 +776,10 @@ mod tests {
 
     #[test]
     fn serialize_chatgpt_auth_tokens_refresh_request() -> Result<()> {
-        let request = ServerRequest::ChatgptAuthTokensRefresh {
+        let request = ServerRequest::ChatGptAuthTokensRefresh {
             request_id: RequestId::Integer(8),
-            params: v2::ChatgptAuthTokensRefreshParams {
-                reason: v2::ChatgptAuthTokensRefreshReason::Unauthorized,
+            params: v2::ChatGptAuthTokensRefreshParams {
+                reason: v2::ChatGptAuthTokensRefreshReason::Unauthorized,
                 previous_account_id: Some("org-123".to_string()),
             },
         };
@@ -855,7 +855,7 @@ mod tests {
     fn serialize_account_login_chatgpt() -> Result<()> {
         let request = ClientRequest::LoginAccount {
             request_id: RequestId::Integer(3),
-            params: v2::LoginAccountParams::Chatgpt,
+            params: v2::LoginAccountParams::ChatGpt,
         };
         assert_eq!(
             json!({
@@ -890,7 +890,7 @@ mod tests {
     fn serialize_account_login_chatgpt_auth_tokens() -> Result<()> {
         let request = ClientRequest::LoginAccount {
             request_id: RequestId::Integer(5),
-            params: v2::LoginAccountParams::ChatgptAuthTokens {
+            params: v2::LoginAccountParams::ChatGptAuthTokens {
                 access_token: "access-token".to_string(),
                 id_token: "id-token".to_string(),
             },
@@ -941,7 +941,7 @@ mod tests {
             serde_json::to_value(&api_key)?,
         );
 
-        let chatgpt = v2::Account::Chatgpt {
+        let chatgpt = v2::Account::ChatGpt {
             email: "user@example.com".to_string(),
             plan_type: PlanType::Plus,
         };

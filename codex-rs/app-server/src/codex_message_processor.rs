@@ -613,10 +613,10 @@ impl CodexMessageProcessor {
                 self.login_api_key_v2(request_id, LoginApiKeyParams { api_key })
                     .await;
             }
-            LoginAccountParams::Chatgpt => {
+            LoginAccountParams::ChatGpt => {
                 self.login_chatgpt_v2(request_id).await;
             }
-            LoginAccountParams::ChatgptAuthTokens {
+            LoginAccountParams::ChatGptAuthTokens {
                 id_token,
                 access_token,
             } => {
@@ -645,7 +645,7 @@ impl CodexMessageProcessor {
 
         if matches!(
             self.config.forced_login_method,
-            Some(ForcedLoginMethod::Chatgpt)
+            Some(ForcedLoginMethod::ChatGpt)
         ) {
             return Err(JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
@@ -935,7 +935,7 @@ impl CodexMessageProcessor {
                         }
                     });
 
-                    let response = codex_app_server_protocol::LoginAccountResponse::Chatgpt {
+                    let response = codex_app_server_protocol::LoginAccountResponse::ChatGpt {
                         login_id: login_id.to_string(),
                         auth_url,
                     };
@@ -1081,7 +1081,7 @@ impl CodexMessageProcessor {
         self.auth_manager.reload();
 
         self.outgoing
-            .send_response(request_id, LoginAccountResponse::ChatgptAuthTokens {})
+            .send_response(request_id, LoginAccountResponse::ChatGptAuthTokens {})
             .await;
 
         let payload_login_completed = AccountLoginCompletedNotification {
@@ -1251,7 +1251,7 @@ impl CodexMessageProcessor {
                     let plan_type = auth.account_plan_type();
 
                     match (email, plan_type) {
-                        (Some(email), Some(plan_type)) => Account::Chatgpt { email, plan_type },
+                        (Some(email), Some(plan_type)) => Account::ChatGpt { email, plan_type },
                         _ => {
                             let error = JSONRPCErrorError {
                                 code: INVALID_REQUEST_ERROR_CODE,

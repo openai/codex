@@ -167,11 +167,11 @@ impl CodexAuth {
         };
 
         match auth_mode {
-            ApiAuthMode::ChatGPT => {
+            ApiAuthMode::ChatGpt => {
                 let storage = create_auth_storage(codex_home.to_path_buf(), storage_mode);
                 Ok(Self::ChatGpt(ChatGptAuth { state, storage }))
             }
-            ApiAuthMode::ChatgptAuthTokens => {
+            ApiAuthMode::ChatGptAuthTokens => {
                 Ok(Self::ChatGptAuthTokens(ChatGptAuthTokens { state }))
             }
             ApiAuthMode::ApiKey => unreachable!("api key mode is handled above"),
@@ -196,8 +196,8 @@ impl CodexAuth {
     pub fn api_auth_mode(&self) -> ApiAuthMode {
         match self {
             Self::ApiKey(_) => ApiAuthMode::ApiKey,
-            Self::ChatGpt(_) => ApiAuthMode::ChatGPT,
-            Self::ChatGptAuthTokens(_) => ApiAuthMode::ChatgptAuthTokens,
+            Self::ChatGpt(_) => ApiAuthMode::ChatGpt,
+            Self::ChatGptAuthTokens(_) => ApiAuthMode::ChatGptAuthTokens,
         }
     }
 
@@ -294,7 +294,7 @@ impl CodexAuth {
     /// Consider this private to integration tests.
     pub fn create_dummy_chatgpt_auth_for_testing() -> Self {
         let auth_dot_json = AuthDotJson {
-            auth_mode: Some(ApiAuthMode::ChatGPT),
+            auth_mode: Some(ApiAuthMode::ChatGpt),
             openai_api_key: None,
             tokens: Some(TokenData {
                 id_token: Default::default(),
@@ -436,12 +436,12 @@ pub fn enforce_login_restrictions(config: &Config) -> std::io::Result<()> {
     if let Some(required_method) = config.forced_login_method {
         let method_violation = match (required_method, auth.internal_auth_mode()) {
             (ForcedLoginMethod::Api, AuthMode::ApiKey) => None,
-            (ForcedLoginMethod::Chatgpt, AuthMode::ChatGPT) => None,
+            (ForcedLoginMethod::ChatGpt, AuthMode::ChatGPT) => None,
             (ForcedLoginMethod::Api, AuthMode::ChatGPT) => Some(
                 "API key login is required, but ChatGPT is currently being used. Logging out."
                     .to_string(),
             ),
-            (ForcedLoginMethod::Chatgpt, AuthMode::ApiKey) => Some(
+            (ForcedLoginMethod::ChatGpt, AuthMode::ApiKey) => Some(
                 "ChatGPT login is required, but an API key is currently being used. Logging out."
                     .to_string(),
             ),
@@ -727,7 +727,7 @@ impl AuthDotJson {
         };
 
         Self {
-            auth_mode: Some(ApiAuthMode::ChatgptAuthTokens),
+            auth_mode: Some(ApiAuthMode::ChatGptAuthTokens),
             openai_api_key: None,
             tokens: Some(tokens),
             last_refresh: Some(Utc::now()),
@@ -750,14 +750,14 @@ impl AuthDotJson {
         if self.openai_api_key.is_some() {
             return ApiAuthMode::ApiKey;
         }
-        ApiAuthMode::ChatGPT
+        ApiAuthMode::ChatGpt
     }
 
     fn storage_mode(
         &self,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
     ) -> AuthCredentialsStoreMode {
-        if self.resolved_mode() == ApiAuthMode::ChatgptAuthTokens {
+        if self.resolved_mode() == ApiAuthMode::ChatGptAuthTokens {
             AuthCredentialsStoreMode::Ephemeral
         } else {
             auth_credentials_store_mode
@@ -1547,7 +1547,7 @@ mod tests {
         login_with_api_key(codex_home.path(), "sk-test", AuthCredentialsStoreMode::File)
             .expect("seed api key");
 
-        let config = build_config(codex_home.path(), Some(ForcedLoginMethod::Chatgpt), None).await;
+        let config = build_config(codex_home.path(), Some(ForcedLoginMethod::ChatGpt), None).await;
 
         let err = super::enforce_login_restrictions(&config)
             .expect_err("expected method mismatch to error");
@@ -1628,7 +1628,7 @@ mod tests {
         let _guard = EnvVarGuard::set(CODEX_API_KEY_ENV_VAR, "sk-env");
         let codex_home = tempdir().unwrap();
 
-        let config = build_config(codex_home.path(), Some(ForcedLoginMethod::Chatgpt), None).await;
+        let config = build_config(codex_home.path(), Some(ForcedLoginMethod::ChatGpt), None).await;
 
         let err = super::enforce_login_restrictions(&config)
             .expect_err("environment API key should not satisfy forced ChatGPT login");

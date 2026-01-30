@@ -6,9 +6,9 @@ use crate::config_api::ConfigApi;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::OutgoingMessageSender;
 use async_trait::async_trait;
-use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
-use codex_app_server_protocol::ChatgptAuthTokensRefreshReason;
-use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
+use codex_app_server_protocol::ChatGptAuthTokensRefreshParams;
+use codex_app_server_protocol::ChatGptAuthTokensRefreshReason;
+use codex_app_server_protocol::ChatGptAuthTokensRefreshResponse;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigBatchWriteParams;
@@ -52,9 +52,9 @@ struct ExternalAuthRefreshBridge {
 }
 
 impl ExternalAuthRefreshBridge {
-    fn map_reason(reason: ExternalAuthRefreshReason) -> ChatgptAuthTokensRefreshReason {
+    fn map_reason(reason: ExternalAuthRefreshReason) -> ChatGptAuthTokensRefreshReason {
         match reason {
-            ExternalAuthRefreshReason::Unauthorized => ChatgptAuthTokensRefreshReason::Unauthorized,
+            ExternalAuthRefreshReason::Unauthorized => ChatGptAuthTokensRefreshReason::Unauthorized,
         }
     }
 }
@@ -65,14 +65,14 @@ impl ExternalAuthRefresher for ExternalAuthRefreshBridge {
         &self,
         context: ExternalAuthRefreshContext,
     ) -> std::io::Result<ExternalAuthTokens> {
-        let params = ChatgptAuthTokensRefreshParams {
+        let params = ChatGptAuthTokensRefreshParams {
             reason: Self::map_reason(context.reason),
             previous_account_id: context.previous_account_id,
         };
 
         let (request_id, rx) = self
             .outgoing
-            .send_request_with_id(ServerRequestPayload::ChatgptAuthTokensRefresh(params))
+            .send_request_with_id(ServerRequestPayload::ChatGptAuthTokensRefresh(params))
             .await;
 
         let result = match timeout(EXTERNAL_AUTH_REFRESH_TIMEOUT, rx).await {
@@ -88,7 +88,7 @@ impl ExternalAuthRefresher for ExternalAuthRefreshBridge {
             }
         };
 
-        let response: ChatgptAuthTokensRefreshResponse =
+        let response: ChatGptAuthTokensRefreshResponse =
             serde_json::from_value(result).map_err(std::io::Error::other)?;
 
         Ok(ExternalAuthTokens {

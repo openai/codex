@@ -306,7 +306,7 @@ impl McpProcess {
         id_token: String,
         access_token: String,
     ) -> anyhow::Result<i64> {
-        let params = LoginAccountParams::ChatgptAuthTokens {
+        let params = LoginAccountParams::ChatGptAuthTokens {
             id_token,
             access_token,
         };
