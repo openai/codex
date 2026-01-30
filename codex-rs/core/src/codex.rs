@@ -1714,6 +1714,12 @@ impl Session {
                 // Record a function_call_output so history/rollout includes the tool
                 // response in the correct order before the next user message, without
                 // starting a new model request immediately.
+                if response.answers.is_empty() && !response.interrupted {
+                    warn!(
+                        "dropping empty request_user_input response for sub_id: {sub_id}; likely cancelled"
+                    );
+                    return;
+                }
                 let call_id = call_id.unwrap_or_else(|| sub_id.to_string());
                 let content = match serde_json::to_string(&response) {
                     Ok(content) => content,

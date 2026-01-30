@@ -35,6 +35,8 @@ pub struct RequestUserInputArgs {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct RequestUserInputAnswer {
+    /// Answers are strings; freeform notes are encoded as a `"user_note: <text>"`
+    /// entry in this list because the protocol has no dedicated note field.
     pub answers: Vec<String>,
 }
 
