@@ -3361,7 +3361,7 @@ mod tests {
             composer.set_context_window(Some(context_percent), None);
         }
 
-        // Empty textarea, code mode idle: shortcuts hint can show, and cycle hint is hidden.
+        // Empty textarea, agent idle: shortcuts hint can show, and cycle hint is hidden.
         snapshot_composer_state_with_width("footer_collapse_empty_full", 120, true, |composer| {
             setup_collab_footer(composer, 100, None);
         });
