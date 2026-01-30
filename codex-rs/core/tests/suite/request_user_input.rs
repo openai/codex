@@ -189,7 +189,8 @@ async fn request_user_input_round_trip_resolves_pending() -> anyhow::Result<()> 
         json!({
             "answers": {
                 "confirm_path": { "answers": ["yes"] }
-            }
+            },
+            "interrupted": false
         })
     );
 

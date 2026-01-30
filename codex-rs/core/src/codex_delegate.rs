@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
@@ -381,13 +380,15 @@ async fn handle_request_user_input(
         cancel_token,
     )
     .await;
-    let _ = codex
-        .submit(Op::UserInputAnswer {
-            id,
-            call_id: Some(call_id),
-            response,
-        })
-        .await;
+    if let Some(response) = response {
+        let _ = codex
+            .submit(Op::UserInputAnswer {
+                id,
+                call_id: Some(call_id),
+                response,
+            })
+            .await;
+    }
 }
 
 async fn await_user_input_with_cancel<F>(
@@ -395,24 +396,17 @@ async fn await_user_input_with_cancel<F>(
     parent_session: &Session,
     sub_id: &str,
     cancel_token: &CancellationToken,
-) -> RequestUserInputResponse
+) -> Option<RequestUserInputResponse>
 where
     F: core::future::Future<Output = Option<RequestUserInputResponse>>,
 {
     tokio::select! {
         biased;
         _ = cancel_token.cancelled() => {
-            let empty = RequestUserInputResponse {
-                answers: HashMap::new(),
-                interrupted: false,
-            };
             parent_session.cancel_request_user_input(sub_id).await;
-            empty
+            None
         }
-        response = fut => response.unwrap_or_else(|| RequestUserInputResponse {
-            answers: HashMap::new(),
-            interrupted: false,
-        }),
+        response = fut => response,
     }
 }
 
