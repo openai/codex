@@ -2854,6 +2854,12 @@ impl Renderable for ChatComposer {
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
+        self.render_with_mask(area, buf, None);
+    }
+}
+
+impl ChatComposer {
+    pub(crate) fn render_with_mask(&self, area: Rect, buf: &mut Buffer, mask_char: Option<char>) {
         let [composer_rect, textarea_rect, popup_rect] = self.layout_areas(area);
         match &self.active_popup {
             ActivePopup::Command(popup) => {
@@ -3018,7 +3024,12 @@ impl Renderable for ChatComposer {
         }
 
         let mut state = self.textarea_state.borrow_mut();
-        StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
+        if let Some(mask_char) = mask_char {
+            self.textarea
+                .render_ref_masked(textarea_rect, buf, &mut state, mask_char);
+        } else {
+            StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
+        }
         if self.textarea.text().is_empty() {
             let text = if self.input_enabled {
                 self.placeholder_text.as_str().to_string()

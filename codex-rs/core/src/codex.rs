@@ -169,10 +169,12 @@ use crate::skills::SkillInjections;
 use crate::skills::SkillMetadata;
 use crate::skills::SkillsManager;
 use crate::skills::build_skill_injections;
+use crate::skills::collect_env_var_dependencies;
 use crate::skills::collect_explicit_skill_mentions;
 use crate::skills::injection::ToolMentionKind;
 use crate::skills::injection::app_id_from_path;
 use crate::skills::injection::tool_kind_for_path;
+use crate::skills::resolve_skill_dependencies_for_turn;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
 use crate::state::SessionState;
@@ -323,6 +325,12 @@ impl Codex {
             .clone()
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
             .unwrap_or_else(|| model_info.get_model_instructions(config.model_personality));
+        // Respect explicit thread-start tools; fall back to persisted tools when resuming a thread.
+        let dynamic_tools = if dynamic_tools.is_empty() {
+            conversation_history.get_dynamic_tools().unwrap_or_default()
+        } else {
+            dynamic_tools
+        };
 
         // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.collaboration_mode
         // to avoid extracting these fields separately and constructing CollaborationMode here.
@@ -729,6 +737,7 @@ impl Session {
                         BaseInstructions {
                             text: session_configuration.base_instructions.clone(),
                         },
+                        session_configuration.dynamic_tools.clone(),
                     ),
                 )
             }
@@ -1303,27 +1312,31 @@ impl Session {
         previous: Option<&Arc<TurnContext>>,
         next: &TurnContext,
     ) -> Option<ResponseItem> {
-        let personality = next.personality?;
-        if let Some(prev) = previous
-            && prev.personality == Some(personality)
-        {
+        if !self.features.enabled(Feature::Personality) {
             return None;
         }
-        let model_info = next.client.get_model_info();
-        let personality_message = Self::personality_message_for(&model_info, personality);
+        let previous = previous?;
 
-        personality_message.map(|personality_message| {
-            DeveloperInstructions::personality_spec_message(personality_message).into()
-        })
+        // if a personality is specified and it's different from the previous one, build a personality update item
+        if let Some(personality) = next.personality
+            && next.personality != previous.personality
+        {
+            let model_info = next.client.get_model_info();
+            let personality_message = Self::personality_message_for(&model_info, personality);
+            personality_message.map(|personality_message| {
+                DeveloperInstructions::personality_spec_message(personality_message).into()
+            })
+        } else {
+            None
+        }
     }
 
     fn personality_message_for(model_info: &ModelInfo, personality: Personality) -> Option<String> {
         model_info
-            .model_instructions_template
+            .model_messages
             .as_ref()
-            .and_then(|template| template.personality_messages.as_ref())
-            .and_then(|messages| messages.0.get(&personality))
-            .cloned()
+            .and_then(|spec| spec.get_personality_message(Some(personality)))
+            .filter(|message| !message.is_empty())
     }
 
     fn build_collaboration_mode_update_item(
@@ -1862,14 +1875,32 @@ impl Session {
             items.push(DeveloperInstructions::new(developer_instructions.to_string()).into());
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
-        let collaboration_mode = {
+        let (collaboration_mode, base_instructions) = {
             let state = self.state.lock().await;
-            state.session_configuration.collaboration_mode.clone()
+            (
+                state.session_configuration.collaboration_mode.clone(),
+                state.session_configuration.base_instructions.clone(),
+            )
         };
         if let Some(collab_instructions) =
             DeveloperInstructions::from_collaboration_mode(&collaboration_mode)
         {
             items.push(collab_instructions.into());
+        }
+        if self.features.enabled(Feature::Personality)
+            && let Some(personality) = turn_context.personality
+        {
+            let model_info = turn_context.client.get_model_info();
+            let has_baked_personality = model_info.supports_personality()
+                && base_instructions == model_info.get_model_instructions(Some(personality));
+            if !has_baked_personality
+                && let Some(personality_message) =
+                    Self::personality_message_for(&model_info, personality)
+            {
+                items.push(
+                    DeveloperInstructions::personality_spec_message(personality_message).into(),
+                );
+            }
         }
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
             items.push(
@@ -1977,6 +2008,16 @@ impl Session {
     {
         let mut state = self.state.lock().await;
         state.record_mcp_dependency_prompted(names);
+    }
+
+    pub async fn dependency_env(&self) -> HashMap<String, String> {
+        let state = self.state.lock().await;
+        state.dependency_env()
+    }
+
+    pub async fn set_dependency_env(&self, values: HashMap<String, String>) {
+        let mut state = self.state.lock().await;
+        state.set_dependency_env(values);
     }
 
     pub(crate) async fn set_server_reasoning_included(&self, included: bool) {
@@ -3314,6 +3355,15 @@ pub(crate) async fn run_turn(
         )
     });
     let explicit_app_paths = collect_explicit_app_paths(&input);
+
+    let config = turn_context.client.config();
+    if config
+        .features
+        .enabled(Feature::SkillEnvVarDependencyPrompt)
+    {
+        let env_var_dependencies = collect_env_var_dependencies(&mentioned_skills);
+        resolve_skill_dependencies_for_turn(&sess, &turn_context, &env_var_dependencies).await;
+    }
 
     maybe_prompt_and_install_mcp_dependencies(
         sess.as_ref(),
