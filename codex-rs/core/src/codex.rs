@@ -168,6 +168,7 @@ use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
 use crate::rollout::map_session_init_error;
 use crate::rollout::metadata;
+use crate::rollout::truncation::apply_rollbacks_to_rollout;
 use crate::shell;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillError;
@@ -1754,7 +1755,7 @@ impl Session {
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
     ) -> Vec<ResponseItem> {
-        let rollout_items = crate::rollout::truncation::apply_rollbacks_to_rollout(rollout_items);
+        let rollout_items = apply_rollbacks_to_rollout(rollout_items);
         let mut history = ContextManager::new();
         for item in &rollout_items {
             match item {
@@ -2518,7 +2519,10 @@ mod handlers {
     use crate::mcp::collect_mcp_snapshot_from_manager;
     use crate::mcp::effective_mcp_servers;
     use crate::review_prompts::resolve_review_request;
+    use crate::rollout::RolloutRecorder;
     use crate::rollout::session_index;
+    use crate::rollout::truncation::apply_rollbacks_to_rollout;
+    use crate::rollout::truncation::truncate_rollout_drop_last_n_user_turns;
     use crate::tasks::CompactTask;
     use crate::tasks::RegularTask;
     use crate::tasks::UndoTask;
@@ -2982,16 +2986,12 @@ mod handlers {
         };
 
         if let Some(path) = rollout_path
-            && let Ok(initial_history) =
-                crate::rollout::RolloutRecorder::get_rollout_history(path.as_path()).await
+            && let Ok(initial_history) = RolloutRecorder::get_rollout_history(path.as_path()).await
         {
             let rollout_items = initial_history.get_rollout_items();
-            let effective =
-                crate::rollout::truncation::apply_rollbacks_to_rollout(rollout_items.as_slice());
-            let truncated = crate::rollout::truncation::truncate_rollout_drop_last_n_user_turns(
-                effective.as_slice(),
-                num_turns,
-            );
+            let effective = apply_rollbacks_to_rollout(rollout_items.as_slice());
+            let truncated =
+                truncate_rollout_drop_last_n_user_turns(effective.as_slice(), num_turns);
             let rebuilt = sess
                 .reconstruct_history_from_rollout(turn_context.as_ref(), &truncated)
                 .await;
