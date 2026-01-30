@@ -425,7 +425,7 @@ async fn turn_start_accepts_personality_override_v2() -> Result<()> {
         codex_home.path(),
         &server.uri(),
         "never",
-        &BTreeMap::default(),
+        &BTreeMap::from([(Feature::Personality, true)]),
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -473,6 +473,7 @@ async fn turn_start_accepts_personality_override_v2() -> Result<()> {
     if developer_texts.is_empty() {
         eprintln!("request body: {}", request.body_json());
     }
+
     assert!(
         developer_texts
             .iter()
