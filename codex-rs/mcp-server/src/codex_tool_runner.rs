@@ -291,7 +291,9 @@ async fn run_codex_tool_session_inner(
                         .await;
                         continue;
                     }
-                    EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message }) => {
+                    EventMsg::TurnComplete(TurnCompleteEvent {
+                        last_agent_message, ..
+                    }) => {
                         let text = match last_agent_message {
                             Some(msg) => msg,
                             None => "".to_string(),
@@ -324,6 +326,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::AgentReasoningRawContentDelta(_)
                     | EventMsg::TurnStarted(_)
                     | EventMsg::TokenCount(_)
+                    | EventMsg::TurnTimingUpdate(_)
                     | EventMsg::AgentReasoning(_)
                     | EventMsg::AgentReasoningSectionBreak(_)
                     | EventMsg::McpToolCallBegin(_)

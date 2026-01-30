@@ -63,14 +63,17 @@ pub(crate) async fn handle_mcp_tool_call(
     if let Err(e) = &result {
         tracing::warn!("MCP tool call error: {e:?}");
     }
+    let duration = start.elapsed();
     let tool_call_end_event = EventMsg::McpToolCallEnd(McpToolCallEndEvent {
         call_id: call_id.clone(),
         invocation,
-        duration: start.elapsed(),
+        duration,
         result: result.clone(),
     });
 
     notify_mcp_tool_call_event(sess, turn_context, tool_call_end_event.clone()).await;
+    turn_context.record_local_tool_call(duration);
+    sess.emit_turn_timing_update(turn_context).await;
 
     let status = if result.is_ok() { "ok" } else { "error" };
     turn_context

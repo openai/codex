@@ -59,6 +59,8 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnStartedEvent;
+use codex_protocol::protocol::TurnTimingStats;
+use codex_protocol::protocol::TurnTimingUpdateEvent;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
@@ -201,6 +203,8 @@ use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
+use codex_protocol::models::ReasoningItemContent;
+use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::render_command_prefix_list;
@@ -467,6 +471,54 @@ pub(crate) struct Session {
     next_internal_sub_id: AtomicU64,
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct TurnTimingState {
+    tool_calls: AtomicU64,
+    tool_duration_nanos: AtomicU64,
+    inference_calls: AtomicU64,
+    response_wait_nanos: AtomicU64,
+    inference_stream_nanos: AtomicU64,
+}
+
+impl TurnTimingState {
+    pub(crate) fn record_tool_call(&self, duration: std::time::Duration) {
+        self.tool_calls.fetch_add(1, Ordering::Relaxed);
+        self.tool_duration_nanos
+            .fetch_add(duration_nanos(duration), Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_inference_wait(&self, duration: std::time::Duration) {
+        self.inference_calls.fetch_add(1, Ordering::Relaxed);
+        self.response_wait_nanos
+            .fetch_add(duration_nanos(duration), Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_inference_stream(&self, duration: std::time::Duration) {
+        self.inference_stream_nanos
+            .fetch_add(duration_nanos(duration), Ordering::Relaxed);
+    }
+
+    pub(crate) fn snapshot(&self) -> TurnTimingStats {
+        TurnTimingStats {
+            tool_calls: self.tool_calls.load(Ordering::Relaxed),
+            inference_calls: self.inference_calls.load(Ordering::Relaxed),
+            local_tool_duration: std::time::Duration::from_nanos(
+                self.tool_duration_nanos.load(Ordering::Relaxed),
+            ),
+            response_wait_duration: std::time::Duration::from_nanos(
+                self.response_wait_nanos.load(Ordering::Relaxed),
+            ),
+            inference_stream_duration: std::time::Duration::from_nanos(
+                self.inference_stream_nanos.load(Ordering::Relaxed),
+            ),
+        }
+    }
+}
+
+fn duration_nanos(duration: std::time::Duration) -> u64 {
+    u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
+}
+
 /// The context needed for a single turn of the thread.
 #[derive(Debug)]
 pub(crate) struct TurnContext {
@@ -491,6 +543,7 @@ pub(crate) struct TurnContext {
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
     pub(crate) truncation_policy: TruncationPolicy,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
+    pub(crate) timing: TurnTimingState,
 }
 
 impl TurnContext {
@@ -504,6 +557,22 @@ impl TurnContext {
         self.compact_prompt
             .as_deref()
             .unwrap_or(compact::SUMMARIZATION_PROMPT)
+    }
+
+    pub(crate) fn record_local_tool_call(&self, duration: std::time::Duration) {
+        self.timing.record_tool_call(duration);
+    }
+
+    pub(crate) fn record_inference_wait(&self, duration: std::time::Duration) {
+        self.timing.record_inference_wait(duration);
+    }
+
+    pub(crate) fn record_inference_stream(&self, duration: std::time::Duration) {
+        self.timing.record_inference_stream(duration);
+    }
+
+    pub(crate) fn timing_snapshot(&self) -> TurnTimingStats {
+        self.timing.snapshot()
     }
 }
 
@@ -678,6 +747,7 @@ impl Session {
             tool_call_gate: Arc::new(ReadinessFlag::new()),
             truncation_policy: model_info.truncation_policy.into(),
             dynamic_tools: session_configuration.dynamic_tools.clone(),
+            timing: TurnTimingState::default(),
         }
     }
 
@@ -1374,6 +1444,14 @@ impl Session {
             };
             self.send_event_raw(legacy_event).await;
         }
+    }
+
+    pub(crate) async fn emit_turn_timing_update(&self, turn_context: &TurnContext) {
+        let event = EventMsg::TurnTimingUpdate(TurnTimingUpdateEvent {
+            turn_id: turn_context.sub_id.clone(),
+            stats: turn_context.timing_snapshot(),
+        });
+        self.send_event(turn_context, event).await;
     }
 
     pub(crate) async fn send_event_raw(&self, event: Event) {
@@ -3088,6 +3166,7 @@ async fn spawn_review_thread(
         tool_call_gate: Arc::new(ReadinessFlag::new()),
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         truncation_policy: model_info.truncation_policy.into(),
+        timing: TurnTimingState::default(),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -3640,6 +3719,71 @@ struct SamplingRequestResult {
     last_agent_message: Option<String>,
 }
 
+fn response_stream_started(event: &ResponseEvent) -> bool {
+    match event {
+        ResponseEvent::Created
+        | ResponseEvent::RateLimits(_)
+        | ResponseEvent::ModelsEtag(_)
+        | ResponseEvent::ServerReasoningIncluded(_)
+        | ResponseEvent::ReasoningSummaryPartAdded { .. }
+        | ResponseEvent::Completed { .. } => false,
+        ResponseEvent::OutputTextDelta(delta) => !delta.is_empty(),
+        ResponseEvent::ReasoningSummaryDelta { delta, .. } => !delta.is_empty(),
+        ResponseEvent::ReasoningContentDelta { delta, .. } => !delta.is_empty(),
+        ResponseEvent::OutputItemAdded(item) | ResponseEvent::OutputItemDone(item) => {
+            response_item_has_content(item)
+        }
+    }
+}
+
+fn response_item_has_content(item: &ResponseItem) -> bool {
+    match item {
+        ResponseItem::Message { content, .. } => content.iter().any(|entry| {
+            matches!(entry, ContentItem::OutputText { text } if !text.is_empty())
+        }),
+        ResponseItem::Reasoning {
+            summary,
+            content,
+            encrypted_content,
+            ..
+        } => {
+            let summary_has_text = summary.iter().any(|entry| {
+                matches!(entry, ReasoningItemReasoningSummary::SummaryText { text } if !text.is_empty())
+            });
+            let content_has_text = content.as_ref().is_some_and(|content| {
+                content.iter().any(|entry| {
+                    matches!(
+                        entry,
+                        ReasoningItemContent::ReasoningText { text }
+                            | ReasoningItemContent::Text { text }
+                            if !text.is_empty()
+                    )
+                })
+            });
+            let encrypted_has_text = encrypted_content
+                .as_ref()
+                .is_some_and(|text| !text.is_empty());
+            summary_has_text || content_has_text || encrypted_has_text
+        }
+        ResponseItem::LocalShellCall { .. } => true,
+        ResponseItem::FunctionCall { arguments, .. } => !arguments.is_empty(),
+        ResponseItem::FunctionCallOutput { output, .. } => {
+            !output.content.is_empty()
+                || output
+                    .content_items
+                    .as_ref()
+                    .is_some_and(|items| !items.is_empty())
+        }
+        ResponseItem::CustomToolCall { input, .. } => !input.is_empty(),
+        ResponseItem::CustomToolCallOutput { output, .. } => !output.is_empty(),
+        ResponseItem::WebSearchCall { action: Some(_), .. } => true,
+        ResponseItem::WebSearchCall { action: None, .. } => false,
+        ResponseItem::GhostSnapshot { .. } => true,
+        ResponseItem::Compaction { encrypted_content } => !encrypted_content.is_empty(),
+        ResponseItem::Other => true,
+    }
+}
+
 async fn drain_in_flight(
     in_flight: &mut FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>>,
     sess: Arc<Session>,
@@ -3706,11 +3850,27 @@ async fn try_run_sampling_request(
     );
 
     sess.persist_rollout_items(&[rollout_item]).await;
-    let mut stream = client_session
+    let response_wait_start = std::time::Instant::now();
+    let mut stream = match client_session
         .stream(prompt)
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)
-        .await??;
+        .await
+    {
+        Ok(result) => match result {
+            Ok(stream) => stream,
+            Err(err) => {
+                turn_context.record_inference_wait(response_wait_start.elapsed());
+                sess.emit_turn_timing_update(&turn_context).await;
+                return Err(err);
+            }
+        },
+        Err(codex_async_utils::CancelErr::Cancelled) => {
+            turn_context.record_inference_wait(response_wait_start.elapsed());
+            sess.emit_turn_timing_update(&turn_context).await;
+            return Err(CodexErr::TurnAborted);
+        }
+    };
 
     let tool_runtime = ToolCallRuntime::new(
         Arc::clone(&router),
@@ -3725,6 +3885,9 @@ async fn try_run_sampling_request(
     let mut active_item: Option<TurnItem> = None;
     let mut should_emit_turn_diff = false;
     let receiving_span = trace_span!("receiving_stream");
+    let mut inference_wait_recorded = false;
+    let mut inference_stream_started_at: Option<std::time::Instant> = None;
+    let mut inference_stream_recorded = false;
     let outcome: CodexResult<SamplingRequestResult> = loop {
         let handle_responses = trace_span!(
             parent: &receiving_span,
@@ -3753,6 +3916,15 @@ async fn try_run_sampling_request(
                 ));
             }
         };
+
+        if !inference_wait_recorded && response_stream_started(&event) {
+            turn_context.record_inference_wait(response_wait_start.elapsed());
+            sess.emit_turn_timing_update(&turn_context).await;
+            inference_wait_recorded = true;
+            if inference_stream_started_at.is_none() {
+                inference_stream_started_at = Some(std::time::Instant::now());
+            }
+        }
 
         sess.services
             .otel_manager
@@ -3811,6 +3983,13 @@ async fn try_run_sampling_request(
                 should_emit_turn_diff = true;
 
                 needs_follow_up |= sess.has_pending_input().await;
+                if !inference_stream_recorded {
+                    if let Some(start) = inference_stream_started_at {
+                        turn_context.record_inference_stream(start.elapsed());
+                        sess.emit_turn_timing_update(&turn_context).await;
+                        inference_stream_recorded = true;
+                    }
+                }
 
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
@@ -3883,6 +4062,17 @@ async fn try_run_sampling_request(
             }
         }
     };
+
+    if !inference_wait_recorded {
+        turn_context.record_inference_wait(response_wait_start.elapsed());
+        sess.emit_turn_timing_update(&turn_context).await;
+    }
+    if !inference_stream_recorded {
+        if let Some(start) = inference_stream_started_at {
+            turn_context.record_inference_stream(start.elapsed());
+            sess.emit_turn_timing_update(&turn_context).await;
+        }
+    }
 
     drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
 
