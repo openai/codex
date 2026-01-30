@@ -3,8 +3,6 @@ use std::time::Duration;
 
 use anyhow::Context;
 use chrono::DateTime;
-use chrono::SecondsFormat;
-use chrono::Utc;
 use clap::Parser;
 use codex_state::LogQuery;
 use codex_state::LogRow;
