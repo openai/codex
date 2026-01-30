@@ -27,15 +27,90 @@ pub fn command_might_be_dangerous(command: &[String]) -> bool {
     false
 }
 
+fn is_git_global_option_with_value(arg: &str) -> bool {
+    matches!(
+        arg,
+        "-C" | "-c"
+            | "--config-env"
+            | "--exec-path"
+            | "--git-dir"
+            | "--namespace"
+            | "--super-prefix"
+            | "--work-tree"
+    )
+}
+
+fn is_git_global_option_with_inline_value(arg: &str) -> bool {
+    matches!(
+        arg,
+        s if s.starts_with("--config-env=")
+            || s.starts_with("--exec-path=")
+            || s.starts_with("--git-dir=")
+            || s.starts_with("--namespace=")
+            || s.starts_with("--super-prefix=")
+            || s.starts_with("--work-tree=")
+    ) || ((arg.starts_with("-C") || arg.starts_with("-c")) && arg.len() > 2)
+}
+
+/// Find the first matching git subcommand, skipping known global options that
+/// may appear before it (e.g., `-C`, `-c`, `--git-dir`).
+fn find_git_subcommand<'a>(
+    command: &'a [String],
+    subcommands: &[&str],
+) -> Option<(usize, &'a str)> {
+    let cmd0 = command.first().map(String::as_str)?;
+    if !(cmd0.ends_with("git") || cmd0.ends_with("/git")) {
+        return None;
+    }
+
+    let mut skip_next = false;
+    for (idx, arg) in command.iter().enumerate().skip(1) {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+
+        let arg = arg.as_str();
+
+        if is_git_global_option_with_inline_value(arg) {
+            continue;
+        }
+
+        if is_git_global_option_with_value(arg) {
+            skip_next = true;
+            continue;
+        }
+
+        if arg == "--" || arg.starts_with('-') {
+            continue;
+        }
+
+        if subcommands.contains(&arg) {
+            return Some((idx, arg));
+        }
+    }
+
+    None
+}
+
 fn is_dangerous_to_call_with_exec(command: &[String]) -> bool {
     let cmd0 = command.first().map(String::as_str);
 
     match cmd0 {
         Some(cmd) if cmd.ends_with("git") || cmd.ends_with("/git") => {
-            match command.get(1).map(String::as_str) {
-                Some("reset" | "rm") => true,
-                Some("branch") => git_branch_is_delete(command),
-                _ => false,
+            let Some((subcommand_idx, subcommand)) =
+                find_git_subcommand(command, &["reset", "rm", "branch"])
+            else {
+                return false;
+            };
+
+            match subcommand {
+                "reset" | "rm" => true,
+                "branch" => git_branch_is_delete(&command[subcommand_idx + 1..]),
+                other => {
+                    debug_assert!(false, "unexpected git subcommand from matcher: {other}");
+                    false
+                }
             }
         }
 
@@ -49,8 +124,8 @@ fn is_dangerous_to_call_with_exec(command: &[String]) -> bool {
     }
 }
 
-fn git_branch_is_delete(command: &[String]) -> bool {
-    command.iter().skip(2).any(|arg| {
+fn git_branch_is_delete(branch_args: &[String]) -> bool {
+    branch_args.iter().any(|arg| {
         matches!(arg.as_str(), "-d" | "-D" | "--delete")
             || arg.starts_with("--delete=")
             || (arg.starts_with("-d") && arg != "-d")
@@ -135,6 +210,29 @@ mod tests {
         );
         assert_eq!(
             command_might_be_dangerous(&vec_str(&["bash", "-lc", "git branch --delete feature"])),
+            true
+        );
+    }
+
+    #[test]
+    fn git_branch_delete_with_global_options_is_dangerous() {
+        assert_eq!(
+            command_might_be_dangerous(&vec_str(&["git", "-C", ".", "branch", "-d", "feature"])),
+            true
+        );
+        assert_eq!(
+            command_might_be_dangerous(&vec_str(&[
+                "git",
+                "-c",
+                "color.ui=false",
+                "branch",
+                "-D",
+                "feature",
+            ])),
+            true
+        );
+        assert_eq!(
+            command_might_be_dangerous(&vec_str(&["bash", "-lc", "git -C . branch -d feature",])),
             true
         );
     }
