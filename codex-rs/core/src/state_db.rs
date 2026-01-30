@@ -11,6 +11,7 @@ use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
+use codex_state::DB_METRIC_COMPARE_ERROR;
 pub use codex_state::LogEntry;
 use codex_state::STATE_DB_FILENAME;
 use codex_state::ThreadMetadataBuilder;
@@ -282,9 +283,10 @@ pub async fn apply_rollout_items(
 pub fn record_discrepancy(stage: &str, reason: &str) {
     // We access the global metric because the call sites might not have access to the broader
     // OtelManager.
+    tracing::warn!("state db record_discrepancy: {stage}{reason}");
     if let Some(metric) = codex_otel::metrics::global() {
         let _ = metric.counter(
-            "codex.db.discrepancy",
+            DB_METRIC_COMPARE_ERROR,
             1,
             &[("stage", stage), ("reason", reason)],
         );
