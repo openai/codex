@@ -1629,7 +1629,9 @@ impl ChatWidget {
                     answers,
                     interrupted,
                 ));
-                if !self.pending_replay_turn_aborts.is_empty() {
+                if self.request_user_input_questions.is_empty()
+                    && !self.pending_replay_turn_aborts.is_empty()
+                {
                     self.flush_pending_replay_turn_aborts();
                 }
             }
