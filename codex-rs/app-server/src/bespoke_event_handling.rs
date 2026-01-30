@@ -274,6 +274,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         },
         EventMsg::RequestUserInput(request) => {
             if matches!(api_version, ApiVersion::V2) {
+                let call_id = request.call_id.clone();
                 let questions = request
                     .questions
                     .into_iter()
@@ -297,10 +298,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                 let params = ToolRequestUserInputParams {
                     thread_id: conversation_id.to_string(),
                     turn_id: request.turn_id,
-                    item_id: request.call_id,
+                    item_id: call_id.clone(),
                     questions,
                 };
-                let call_id = request.call_id.clone();
                 let rx = outgoing
                     .send_request(ServerRequestPayload::ToolRequestUserInput(params))
                     .await;
