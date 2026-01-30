@@ -759,20 +759,6 @@ impl Session {
         .flatten()
     }
 
-    async fn get_or_build_turn_metadata_header(&self, cwd: &Path) -> Option<String> {
-        if let Some(cached) = {
-            let state = self.state.lock().await;
-            state.cached_turn_metadata_header(cwd)
-        } {
-            return cached;
-        }
-
-        let header = Self::build_turn_metadata_header(cwd).await;
-        let mut state = self.state.lock().await;
-        state.set_turn_metadata_header_cache(cwd, header.clone());
-        header
-    }
-
     #[allow(clippy::too_many_arguments)]
     async fn new(
         mut session_configuration: SessionConfiguration,
@@ -1309,9 +1295,8 @@ impl Session {
         if let Some(final_schema) = final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
         }
-        turn_context.turn_metadata_header = self
-            .get_or_build_turn_metadata_header(turn_context.cwd.as_path())
-            .await;
+        turn_context.turn_metadata_header =
+            Self::build_turn_metadata_header(turn_context.cwd.as_path()).await;
         Arc::new(turn_context)
     }
 
@@ -3267,9 +3252,8 @@ async fn spawn_review_thread(
         parent_turn_context.client.transport_manager(),
     );
 
-    let turn_metadata_header = sess
-        .get_or_build_turn_metadata_header(parent_turn_context.cwd.as_path())
-        .await;
+    let turn_metadata_header =
+        Session::build_turn_metadata_header(parent_turn_context.cwd.as_path()).await;
     let review_turn_context = TurnContext {
         sub_id: sub_id.to_string(),
         client,
