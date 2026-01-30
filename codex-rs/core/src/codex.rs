@@ -324,6 +324,12 @@ impl Codex {
             .clone()
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
             .unwrap_or_else(|| model_info.get_model_instructions(config.model_personality));
+        // Respect explicit thread-start tools; fall back to persisted tools when resuming a thread.
+        let dynamic_tools = if dynamic_tools.is_empty() {
+            conversation_history.get_dynamic_tools().unwrap_or_default()
+        } else {
+            dynamic_tools
+        };
 
         // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.collaboration_mode
         // to avoid extracting these fields separately and constructing CollaborationMode here.
@@ -715,6 +721,7 @@ impl Session {
                         BaseInstructions {
                             text: session_configuration.base_instructions.clone(),
                         },
+                        session_configuration.dynamic_tools.clone(),
                     ),
                 )
             }
@@ -815,7 +822,7 @@ impl Session {
             session_configuration.collaboration_mode.model(),
             auth.and_then(CodexAuth::get_account_id),
             auth.and_then(CodexAuth::get_account_email),
-            auth.map(|a| a.mode),
+            auth.map(CodexAuth::api_auth_mode),
             config.otel.log_user_prompt,
             terminal::user_agent(),
             session_configuration.session_source.clone(),

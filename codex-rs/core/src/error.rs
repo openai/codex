@@ -375,9 +375,11 @@ impl std::fmt::Display for UsageLimitReachedError {
                     retry_suffix_after_or(self.resets_at.as_ref())
                 )
             }
-            Some(PlanType::Known(KnownPlan::Free)) => {
-                "You've hit your usage limit. Upgrade to Plus to continue using Codex (https://openai.com/chatgpt/pricing)."
-                    .to_string()
+            Some(PlanType::Known(KnownPlan::Free)) | Some(PlanType::Known(KnownPlan::Go)) => {
+                format!(
+                    "You've hit your usage limit. Upgrade to Plus to continue using Codex (https://openai.com/chatgpt/pricing),{}",
+                    retry_suffix_after_or(self.resets_at.as_ref())
+                )
             }
             Some(PlanType::Known(KnownPlan::Pro)) => format!(
                 "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits{}",
@@ -817,7 +819,20 @@ mod tests {
         };
         assert_eq!(
             err.to_string(),
-            "You've hit your usage limit. Upgrade to Plus to continue using Codex (https://openai.com/chatgpt/pricing)."
+            "You've hit your usage limit. Upgrade to Plus to continue using Codex (https://openai.com/chatgpt/pricing), or try again later."
+        );
+    }
+
+    #[test]
+    fn usage_limit_reached_error_formats_go_plan() {
+        let err = UsageLimitReachedError {
+            plan_type: Some(PlanType::Known(KnownPlan::Go)),
+            resets_at: None,
+            rate_limits: Some(rate_limit_snapshot()),
+        };
+        assert_eq!(
+            err.to_string(),
+            "You've hit your usage limit. Upgrade to Plus to continue using Codex (https://openai.com/chatgpt/pricing), or try again later."
         );
     }
 
