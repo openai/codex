@@ -380,18 +380,35 @@ pub(crate) fn get_limits_duration(windows_minutes: i64) -> String {
 }
 
 fn split_request_user_input_answers(
+    questions: &[RequestUserInputQuestion],
     mut answers: HashMap<String, RequestUserInputAnswer>,
 ) -> (HashMap<String, RequestUserInputAnswer>, bool) {
-    let interrupted = if let Some(answer) = answers.get(INTERRUPTED_ANSWER_ID_BASE) {
-        answer
+    let question_ids = questions
+        .iter()
+        .map(|question| question.id.as_str())
+        .collect::<HashSet<_>>();
+    let mut interrupted = false;
+    let mut marker_keys = Vec::new();
+    for (key, answer) in &answers {
+        if !key.starts_with(INTERRUPTED_ANSWER_ID_BASE) {
+            continue;
+        }
+        if question_ids.contains(key.as_str()) {
+            continue;
+        }
+        if answer
             .answers
             .iter()
             .any(|value| value == INTERRUPTED_ANSWER_TEXT)
-    } else {
-        false
-    };
+        {
+            interrupted = true;
+            marker_keys.push(key.clone());
+        }
+    }
     if interrupted {
-        answers.remove(INTERRUPTED_ANSWER_ID_BASE);
+        for key in marker_keys {
+            answers.remove(&key);
+        }
     }
     (answers, interrupted)
 }
@@ -1604,7 +1621,8 @@ impl ChatWidget {
                     }
                 };
                 self.request_user_input_questions.remove(&call_id);
-                let (answers, interrupted) = split_request_user_input_answers(response.answers);
+                let (answers, interrupted) =
+                    split_request_user_input_answers(&questions, response.answers);
                 self.add_to_history(history_cell::new_request_user_input_result(
                     questions,
                     answers,
