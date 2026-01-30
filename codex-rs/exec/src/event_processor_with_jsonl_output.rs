@@ -50,8 +50,8 @@ use codex_core::protocol::CollabCloseEndEvent;
 use codex_core::protocol::CollabWaitingBeginEvent;
 use codex_core::protocol::CollabWaitingEndEvent;
 use codex_protocol::models::WebSearchAction;
-use codex_protocol::plan_tool::StepStatus;
-use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::todo_tool::TodoStatus;
+use codex_protocol::todo_tool::UpdateTodoArgs;
 use serde_json::Value as JsonValue;
 use tracing::error;
 use tracing::warn;
@@ -176,7 +176,7 @@ impl EventProcessorWithJsonOutput {
                 };
                 vec![ThreadEvent::Error(ThreadErrorEvent { message })]
             }
-            protocol::EventMsg::PlanUpdate(ev) => self.handle_plan_update(ev),
+            protocol::EventMsg::TodoUpdate(ev) => self.handle_todo_update(ev),
             _ => Vec::new(),
         }
     }
@@ -700,18 +700,18 @@ impl EventProcessorWithJsonOutput {
         vec![ThreadEvent::ItemCompleted(ItemCompletedEvent { item })]
     }
 
-    fn todo_items_from_plan(&self, args: &UpdatePlanArgs) -> Vec<TodoItem> {
-        args.plan
+    fn todo_items_from_update(&self, args: &UpdateTodoArgs) -> Vec<TodoItem> {
+        args.todo_items()
             .iter()
             .map(|p| TodoItem {
                 text: p.step.clone(),
-                completed: matches!(p.status, StepStatus::Completed),
+                completed: matches!(p.status, TodoStatus::Completed),
             })
             .collect()
     }
 
-    fn handle_plan_update(&mut self, args: &UpdatePlanArgs) -> Vec<ThreadEvent> {
-        let items = self.todo_items_from_plan(args);
+    fn handle_todo_update(&mut self, args: &UpdateTodoArgs) -> Vec<ThreadEvent> {
+        let items = self.todo_items_from_update(args);
 
         if let Some(running) = &mut self.running_todo_list {
             running.items = items.clone();

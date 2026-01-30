@@ -70,10 +70,10 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::parse_command::ParsedCommand;
-use codex_protocol::plan_tool::PlanItemArg;
-use codex_protocol::plan_tool::StepStatus;
-use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::todo_tool::TodoItemArg;
+use codex_protocol::todo_tool::TodoStatus;
+use codex_protocol::todo_tool::UpdateTodoArgs;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -833,7 +833,7 @@ async fn make_chatwidget_manual(
         pre_review_token_info: None,
         needs_final_message_separator: false,
         had_work_activity: false,
-        saw_plan_update_this_turn: false,
+        saw_todo_update_this_turn: false,
         last_separator_elapsed_secs: None,
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
@@ -1270,7 +1270,7 @@ async fn plan_implementation_popup_skips_when_messages_queued() {
 }
 
 #[tokio::test]
-async fn plan_implementation_popup_shows_on_plan_update_without_message() {
+async fn plan_implementation_popup_shows_on_todo_update_without_message() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, true);
     let plan_mask =
@@ -1279,19 +1279,19 @@ async fn plan_implementation_popup_shows_on_plan_update_without_message() {
     chat.set_collaboration_mask(plan_mask);
 
     chat.on_task_started();
-    chat.on_plan_update(UpdatePlanArgs {
-        explanation: None,
-        plan: vec![PlanItemArg {
+    chat.on_todo_update(UpdateTodoArgs::new(
+        None,
+        vec![TodoItemArg {
             step: "First".to_string(),
-            status: StepStatus::Pending,
+            status: TodoStatus::Pending,
         }],
-    });
+    ));
     chat.on_task_complete(None, false);
 
     let popup = render_bottom_popup(&chat, 80);
     assert!(
         popup.contains(PLAN_IMPLEMENTATION_TITLE),
-        "expected plan popup after plan update, got {popup:?}"
+        "expected implementation popup after todo list update, got {popup:?}"
     );
 }
 
@@ -1307,13 +1307,13 @@ async fn plan_implementation_popup_skips_when_rate_limit_prompt_pending() {
     chat.set_collaboration_mask(plan_mask);
 
     chat.on_task_started();
-    chat.on_plan_update(UpdatePlanArgs {
-        explanation: None,
-        plan: vec![PlanItemArg {
+    chat.on_todo_update(UpdateTodoArgs::new(
+        None,
+        vec![TodoItemArg {
             step: "First".to_string(),
-            status: StepStatus::Pending,
+            status: TodoStatus::Pending,
         }],
-    });
+    ));
     chat.on_rate_limit_snapshot(Some(snapshot(92.0)));
     chat.on_task_complete(None, false);
 
@@ -4454,35 +4454,38 @@ async fn apply_patch_request_shows_diff_summary() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn plan_update_renders_history_cell() {
+async fn todo_update_renders_history_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    let update = UpdatePlanArgs {
-        explanation: Some("Adapting plan".to_string()),
-        plan: vec![
-            PlanItemArg {
+    let update = UpdateTodoArgs::new(
+        Some("Adapting plan".to_string()),
+        vec![
+            TodoItemArg {
                 step: "Explore codebase".into(),
-                status: StepStatus::Completed,
+                status: TodoStatus::Completed,
             },
-            PlanItemArg {
+            TodoItemArg {
                 step: "Implement feature".into(),
-                status: StepStatus::InProgress,
+                status: TodoStatus::InProgress,
             },
-            PlanItemArg {
+            TodoItemArg {
                 step: "Write tests".into(),
-                status: StepStatus::Pending,
+                status: TodoStatus::Pending,
             },
         ],
-    };
+    );
     chat.handle_codex_event(Event {
         id: "sub-1".into(),
-        msg: EventMsg::PlanUpdate(update),
+        msg: EventMsg::TodoUpdate(update),
     });
     let cells = drain_insert_history(&mut rx);
-    assert!(!cells.is_empty(), "expected plan update cell to be sent");
+    assert!(
+        !cells.is_empty(),
+        "expected todo list update cell to be sent"
+    );
     let blob = lines_to_single_string(cells.last().unwrap());
     assert!(
-        blob.contains("Updated Plan"),
-        "missing plan header: {blob:?}"
+        blob.contains("Updated Todo List"),
+        "missing todo list header: {blob:?}"
     );
     assert!(blob.contains("Explore codebase"));
     assert!(blob.contains("Implement feature"));

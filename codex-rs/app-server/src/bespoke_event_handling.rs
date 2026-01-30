@@ -9,6 +9,7 @@ use crate::codex_message_processor::summary_to_thread;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::outgoing_message::OutgoingNotification;
 use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
@@ -64,9 +65,9 @@ use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnDiffUpdatedNotification;
 use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptResponse;
-use codex_app_server_protocol::TurnPlanStep;
-use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::TurnTodoStep;
+use codex_app_server_protocol::TurnTodosUpdatedNotification as TurnTodoUpdatedNotification;
 use codex_app_server_protocol::build_turns_from_event_msgs;
 use codex_core::CodexThread;
 use codex_core::parse_command::shlex_join;
@@ -87,10 +88,10 @@ use codex_core::review_format::format_review_findings_block;
 use codex_core::review_prompts;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
-use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
+use codex_protocol::todo_tool::UpdateTodoArgs;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::path::PathBuf;
@@ -1107,11 +1108,11 @@ pub(crate) async fn apply_bespoke_event_handling(
             )
             .await;
         }
-        EventMsg::PlanUpdate(plan_update_event) => {
-            handle_turn_plan_update(
+        EventMsg::TodoUpdate(todo_update_event) => {
+            handle_turn_todo_update(
                 conversation_id,
                 &event_turn_id,
-                plan_update_event,
+                todo_update_event,
                 api_version,
                 outgoing.as_ref(),
             )
@@ -1141,27 +1142,40 @@ async fn handle_turn_diff(
     }
 }
 
-async fn handle_turn_plan_update(
+async fn handle_turn_todo_update(
     conversation_id: ThreadId,
     event_turn_id: &str,
-    plan_update_event: UpdatePlanArgs,
+    todo_update_event: UpdateTodoArgs,
     api_version: ApiVersion,
     outgoing: &OutgoingMessageSender,
 ) {
     if let ApiVersion::V2 = api_version {
-        let notification = TurnPlanUpdatedNotification {
+        let (explanation, todo_items) = todo_update_event.into_parts();
+        let steps: Vec<TurnTodoStep> = todo_items.into_iter().map(TurnTodoStep::from).collect();
+        let notification = TurnTodoUpdatedNotification {
             thread_id: conversation_id.to_string(),
             turn_id: event_turn_id.to_string(),
-            explanation: plan_update_event.explanation,
-            plan: plan_update_event
-                .plan
-                .into_iter()
-                .map(TurnPlanStep::from)
-                .collect(),
+            explanation,
+            todo: steps,
+        };
+        let legacy_params = match serde_json::to_value(&notification) {
+            Ok(params) => Some(params),
+            Err(err) => {
+                error!("failed to serialize legacy todo update notification: {err}");
+                None
+            }
         };
         outgoing
-            .send_server_notification(ServerNotification::TurnPlanUpdated(notification))
+            .send_server_notification(ServerNotification::TurnTodosUpdated(notification))
             .await;
+        if let Some(params) = legacy_params {
+            outgoing
+                .send_notification(OutgoingNotification {
+                    method: "turn/plan/updated".to_string(),
+                    params: Some(params),
+                })
+                .await;
+        }
     }
 }
 
@@ -1806,20 +1820,21 @@ mod tests {
     use anyhow::Result;
     use anyhow::anyhow;
     use anyhow::bail;
-    use codex_app_server_protocol::TurnPlanStepStatus;
+    use codex_app_server_protocol::TurnTodoStepStatus;
     use codex_core::protocol::CreditsSnapshot;
     use codex_core::protocol::McpInvocation;
     use codex_core::protocol::RateLimitSnapshot;
     use codex_core::protocol::RateLimitWindow;
     use codex_core::protocol::TokenUsage;
     use codex_core::protocol::TokenUsageInfo;
-    use codex_protocol::plan_tool::PlanItemArg;
-    use codex_protocol::plan_tool::StepStatus;
+    use codex_protocol::todo_tool::TodoItemArg;
+    use codex_protocol::todo_tool::TodoStatus;
     use mcp_types::CallToolResult;
     use mcp_types::ContentBlock;
     use mcp_types::TextContent;
     use pretty_assertions::assert_eq;
     use serde_json::Value as JsonValue;
+    use serde_json::to_value;
     use std::collections::HashMap;
     use std::time::Duration;
     use tokio::sync::Mutex;
@@ -1989,26 +2004,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_turn_plan_update_emits_notification_for_v2() -> Result<()> {
+    async fn test_handle_turn_todo_update_emits_notification_for_v2() -> Result<()> {
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = OutgoingMessageSender::new(tx);
-        let update = UpdatePlanArgs {
-            explanation: Some("need plan".to_string()),
-            plan: vec![
-                PlanItemArg {
+        let update = UpdateTodoArgs::new(
+            Some("need todo list".to_string()),
+            vec![
+                TodoItemArg {
                     step: "first".to_string(),
-                    status: StepStatus::Pending,
+                    status: TodoStatus::Pending,
                 },
-                PlanItemArg {
+                TodoItemArg {
                     step: "second".to_string(),
-                    status: StepStatus::Completed,
+                    status: TodoStatus::Completed,
                 },
             ],
-        };
+        );
 
         let conversation_id = ThreadId::new();
 
-        handle_turn_plan_update(
+        handle_turn_todo_update(
             conversation_id,
             "turn-123",
             update,
@@ -2020,19 +2035,43 @@ mod tests {
         let msg = rx
             .recv()
             .await
-            .ok_or_else(|| anyhow!("should send one notification"))?;
+            .ok_or_else(|| anyhow!("should send a notification"))?;
         match msg {
-            OutgoingMessage::AppServerNotification(ServerNotification::TurnPlanUpdated(n)) => {
+            OutgoingMessage::AppServerNotification(ServerNotification::TurnTodosUpdated(n)) => {
                 assert_eq!(n.thread_id, conversation_id.to_string());
                 assert_eq!(n.turn_id, "turn-123");
-                assert_eq!(n.explanation.as_deref(), Some("need plan"));
-                assert_eq!(n.plan.len(), 2);
-                assert_eq!(n.plan[0].step, "first");
-                assert_eq!(n.plan[0].status, TurnPlanStepStatus::Pending);
-                assert_eq!(n.plan[1].step, "second");
-                assert_eq!(n.plan[1].status, TurnPlanStepStatus::Completed);
+                assert_eq!(n.explanation.as_deref(), Some("need todo list"));
+                let json = to_value(&n)?;
+                assert_eq!(
+                    json.get("todo"),
+                    json.get("plan"),
+                    "legacy plan alias should mirror todo"
+                );
+                assert_eq!(n.todo.len(), 2);
+                assert_eq!(n.todo[0].step, "first");
+                assert_eq!(n.todo[0].status, TurnTodoStepStatus::Pending);
+                assert_eq!(n.todo[1].step, "second");
+                assert_eq!(n.todo[1].status, TurnTodoStepStatus::Completed);
             }
             other => bail!("unexpected message: {other:?}"),
+        }
+        let legacy_msg = rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow!("should send legacy notification"))?;
+        match legacy_msg {
+            OutgoingMessage::Notification(notification) => {
+                assert_eq!(notification.method, "turn/plan/updated");
+                let params = notification
+                    .params
+                    .ok_or_else(|| anyhow!("legacy notification missing params"))?;
+                assert_eq!(
+                    params.get("todo"),
+                    params.get("plan"),
+                    "legacy plan alias should mirror todo"
+                );
+            }
+            other => bail!("unexpected legacy message: {other:?}"),
         }
         assert!(rx.try_recv().is_err(), "no extra messages expected");
         Ok(())

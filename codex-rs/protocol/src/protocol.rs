@@ -29,8 +29,8 @@ use crate::models::WebSearchAction;
 use crate::num_format::format_with_separators;
 use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crate::parse_command::ParsedCommand;
-use crate::plan_tool::UpdatePlanArgs;
 use crate::request_user_input::RequestUserInputResponse;
+use crate::todo_tool::UpdateTodoArgs;
 use crate::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use mcp_types::CallToolResult;
@@ -810,7 +810,10 @@ pub enum EventMsg {
     /// Notification that skill data may have been updated and clients may want to reload.
     SkillsUpdateAvailable,
 
-    PlanUpdate(UpdatePlanArgs),
+    /// Todo list update from the todo_write tool. Primary event name is
+    /// `todo_update`; `plan_update` remains a legacy alias.
+    #[serde(alias = "plan_update")]
+    TodoUpdate(UpdateTodoArgs),
 
     TurnAborted(TurnAbortedEvent),
 

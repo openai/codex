@@ -17,8 +17,6 @@ use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
-use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
-use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
 use codex_protocol::protocol::AgentStatus as CoreAgentStatus;
 use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
@@ -36,6 +34,8 @@ use codex_protocol::protocol::SkillToolDependency as CoreSkillToolDependency;
 use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
+use codex_protocol::todo_tool::TodoItemArg as CoreTodoItemArg;
+use codex_protocol::todo_tool::TodoStatus as CoreTodoStatus;
 use codex_protocol::user_input::ByteRange as CoreByteRange;
 use codex_protocol::user_input::TextElement as CoreTextElement;
 use codex_protocol::user_input::UserInput as CoreUserInput;
@@ -46,7 +46,9 @@ use mcp_types::ResourceTemplate as McpResourceTemplate;
 use mcp_types::Tool as McpTool;
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
+use serde::Serializer;
 use serde_json::Value as JsonValue;
 use thiserror::Error;
 use ts_rs::TS;
@@ -2321,35 +2323,122 @@ pub struct TurnDiffUpdatedNotification {
     pub diff: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, JsonSchema, TS)]
+#[schemars(schema_with = "TurnTodosUpdatedNotificationWire::json_schema")]
 #[ts(export_to = "v2/")]
-pub struct TurnPlanUpdatedNotification {
+#[ts(as = "TurnTodosUpdatedNotificationWire")]
+/// Todo list update from the todo_write tool. `todo` is preferred; `plan` is a legacy alias.
+pub struct TurnTodosUpdatedNotification {
     pub thread_id: String,
     pub turn_id: String,
     pub explanation: Option<String>,
-    pub plan: Vec<TurnPlanStep>,
+    #[serde(default)]
+    pub todo: Vec<TurnTodoStep>,
+}
+
+#[derive(Serialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// Wire type that keeps serde, schemars, and ts-rs aligned on legacy aliases.
+struct TurnTodosUpdatedNotificationWire {
+    thread_id: String,
+    turn_id: String,
+    explanation: Option<String>,
+    #[serde(default)]
+    todo: Vec<TurnTodoStep>,
+    #[serde(default)]
+    plan: Vec<TurnTodoStep>,
+}
+
+impl<'de> Deserialize<'de> for TurnTodosUpdatedNotificationWire {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // Use Option<Vec<_>> so we can detect whether fields are present and
+        // prefer `todo` if both legacy aliases are sent.
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct WireIn {
+            thread_id: String,
+            turn_id: String,
+            explanation: Option<String>,
+            #[serde(default)]
+            todo: Option<Vec<TurnTodoStep>>,
+            #[serde(default)]
+            plan: Option<Vec<TurnTodoStep>>,
+        }
+
+        let wire = WireIn::deserialize(deserializer)?;
+        let todo = wire.todo.or(wire.plan).unwrap_or_default();
+        Ok(Self {
+            thread_id: wire.thread_id,
+            turn_id: wire.turn_id,
+            explanation: wire.explanation,
+            todo,
+            plan: Vec::new(),
+        })
+    }
+}
+
+impl Serialize for TurnTodosUpdatedNotification {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // Emit both `todo` and the legacy `plan` alias with identical data.
+        TurnTodosUpdatedNotificationWire {
+            thread_id: self.thread_id.clone(),
+            turn_id: self.turn_id.clone(),
+            explanation: self.explanation.clone(),
+            todo: self.todo.clone(),
+            plan: self.todo.clone(),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for TurnTodosUpdatedNotification {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = TurnTodosUpdatedNotificationWire::deserialize(deserializer)?;
+        Ok(Self {
+            thread_id: wire.thread_id,
+            turn_id: wire.turn_id,
+            explanation: wire.explanation,
+            todo: wire.todo,
+        })
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct TurnPlanStep {
+/// Todo step used by the todo list update notification.
+pub struct TurnTodoStep {
     pub step: String,
-    pub status: TurnPlanStepStatus,
+    pub status: TurnTodoStepStatus,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub enum TurnPlanStepStatus {
+/// Todo status used by the todo list update notification.
+pub enum TurnTodoStepStatus {
     Pending,
     InProgress,
     Completed,
 }
 
-impl From<CorePlanItemArg> for TurnPlanStep {
-    fn from(value: CorePlanItemArg) -> Self {
+#[deprecated(note = "use TurnTodoStep")]
+pub type TurnPlanStep = TurnTodoStep;
+#[deprecated(note = "use TurnTodoStepStatus")]
+pub type TurnPlanStepStatus = TurnTodoStepStatus;
+
+impl From<CoreTodoItemArg> for TurnTodoStep {
+    fn from(value: CoreTodoItemArg) -> Self {
         Self {
             step: value.step,
             status: value.status.into(),
@@ -2357,12 +2446,12 @@ impl From<CorePlanItemArg> for TurnPlanStep {
     }
 }
 
-impl From<CorePlanStepStatus> for TurnPlanStepStatus {
-    fn from(value: CorePlanStepStatus) -> Self {
+impl From<CoreTodoStatus> for TurnTodoStepStatus {
+    fn from(value: CoreTodoStatus) -> Self {
         match value {
-            CorePlanStepStatus::Pending => Self::Pending,
-            CorePlanStepStatus::InProgress => Self::InProgress,
-            CorePlanStepStatus::Completed => Self::Completed,
+            CoreTodoStatus::Pending => Self::Pending,
+            CoreTodoStatus::InProgress => Self::InProgress,
+            CoreTodoStatus::Completed => Self::Completed,
         }
     }
 }
@@ -2933,6 +3022,25 @@ mod tests {
                     "httpStatusCode": 401
                 }
             })
+        );
+    }
+
+    #[test]
+    fn turn_todos_updated_deserialize_prefers_todo_when_both_present() {
+        let value = json!({
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "todo": [{ "step": "current", "status": "completed" }],
+            "plan": [{ "step": "stale", "status": "pending" }],
+        });
+
+        let decoded = serde_json::from_value::<TurnTodosUpdatedNotification>(value).unwrap();
+        assert_eq!(
+            decoded.todo,
+            vec![TurnTodoStep {
+                step: "current".to_string(),
+                status: TurnTodoStepStatus::Completed,
+            }]
         );
     }
 }

@@ -45,8 +45,7 @@ use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 use crate::event_processor::handle_last_message;
 use codex_common::create_config_summary_entries;
-use codex_protocol::plan_tool::StepStatus;
-use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::todo_tool::TodoStatus;
 
 /// This should be configurable. When used in CI, users may not want to impose
 /// a limit so they can see the full transcript.
@@ -538,11 +537,11 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 ts_msg!(self, "model: {}", model);
                 eprintln!();
             }
-            EventMsg::PlanUpdate(plan_update_event) => {
-                let UpdatePlanArgs { explanation, plan } = plan_update_event;
+            EventMsg::TodoUpdate(todo_update_event) => {
+                let (explanation, todo_items) = todo_update_event.into_parts();
 
                 // Header
-                ts_msg!(self, "{}", "Plan update".style(self.magenta));
+                ts_msg!(self, "{}", "Todo list update".style(self.magenta));
 
                 // Optional explanation
                 if let Some(explanation) = explanation
@@ -551,21 +550,21 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     ts_msg!(self, "{}", explanation.style(self.italic));
                 }
 
-                // Pretty-print the plan items with simple status markers.
-                for item in plan {
-                    match item.status {
-                        StepStatus::Completed => {
-                            ts_msg!(self, "  {} {}", "✓".style(self.green), item.step);
+                // Pretty-print the todo items with simple status markers.
+                for todo_item in todo_items {
+                    match todo_item.status {
+                        TodoStatus::Completed => {
+                            ts_msg!(self, "  {} {}", "✓".style(self.green), todo_item.step);
                         }
-                        StepStatus::InProgress => {
-                            ts_msg!(self, "  {} {}", "→".style(self.cyan), item.step);
+                        TodoStatus::InProgress => {
+                            ts_msg!(self, "  {} {}", "→".style(self.cyan), todo_item.step);
                         }
-                        StepStatus::Pending => {
+                        TodoStatus::Pending => {
                             ts_msg!(
                                 self,
                                 "  {} {}",
                                 "•".style(self.dimmed),
-                                item.step.style(self.dimmed)
+                                todo_item.step.style(self.dimmed)
                             );
                         }
                     }

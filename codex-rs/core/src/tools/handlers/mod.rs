@@ -13,7 +13,7 @@ mod test_sync;
 mod unified_exec;
 mod view_image;
 
-pub use plan::PLAN_TOOL;
+pub use plan::TODO_WRITE_TOOL;
 use serde::Deserialize;
 
 use crate::function_tool::FunctionCallError;
@@ -24,7 +24,7 @@ pub use grep_files::GrepFilesHandler;
 pub use list_dir::ListDirHandler;
 pub use mcp::McpHandler;
 pub use mcp_resource::McpResourceHandler;
-pub use plan::PlanHandler;
+pub use plan::TodoWriteHandler;
 pub use read_file::ReadFileHandler;
 pub use request_user_input::RequestUserInputHandler;
 pub use shell::ShellCommandHandler;

@@ -434,7 +434,10 @@ macro_rules! server_notification_definitions {
     (
         $(
             $(#[$variant_meta:meta])*
-            $variant:ident $(=> $wire:literal)? ( $payload:ty )
+            // Optional wire name and aliases:
+            // `Variant => "wire/name", aliases(["old/name"]) (Payload)`
+            // expands to serde rename + alias attributes on the enum variant.
+            $variant:ident $(=> $wire:literal $(, aliases([$($alias:literal),* $(,)?]))? )? ( $payload:ty )
         ),* $(,)?
     ) => {
         /// Notification sent from the server to the client.
@@ -444,7 +447,16 @@ macro_rules! server_notification_definitions {
         pub enum ServerNotification {
             $(
                 $(#[$variant_meta])*
-                $(#[serde(rename = $wire)] #[ts(rename = $wire)] #[strum(serialize = $wire)])?
+                $(
+                    // If a wire name is provided, emit serde/TS/strum renames
+                    // plus any legacy serde aliases for compatibility.
+                    #[serde(rename = $wire)]
+                    #[ts(rename = $wire)]
+                    #[strum(serialize = $wire)]
+                    $(
+                        $(#[serde(alias = $alias)])*
+                    )?
+                )?
                 $variant($payload),
             )*
         }
@@ -592,7 +604,7 @@ server_notification_definitions! {
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
     TurnCompleted => "turn/completed" (v2::TurnCompletedNotification),
     TurnDiffUpdated => "turn/diff/updated" (v2::TurnDiffUpdatedNotification),
-    TurnPlanUpdated => "turn/plan/updated" (v2::TurnPlanUpdatedNotification),
+    TurnTodosUpdated => "turn/todos/updated", aliases(["turn/plan/updated"]) (v2::TurnTodosUpdatedNotification),
     ItemStarted => "item/started" (v2::ItemStartedNotification),
     ItemCompleted => "item/completed" (v2::ItemCompletedNotification),
     /// This event is internal-only. Used by Codex Cloud.

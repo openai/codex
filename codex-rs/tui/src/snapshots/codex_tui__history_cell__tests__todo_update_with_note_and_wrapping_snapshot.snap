@@ -2,7 +2,7 @@
 source: tui/src/history_cell.rs
 expression: rendered
 ---
-• Updated Plan
+• Updated Todo List
   └ I’ll update Grafana call
     error handling by adding
     retries and clearer
