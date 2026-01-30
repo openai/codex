@@ -223,7 +223,7 @@ pub enum Op {
         /// Turn id for the in-flight request.
         id: String,
         /// Call id for the original tool invocation, if known.
-        #[serde(skip_serializing_if = "Option::is_none", default)]
+        #[serde(default)]
         call_id: Option<String>,
         /// User-provided answers.
         response: RequestUserInputResponse,
