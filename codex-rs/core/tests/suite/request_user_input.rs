@@ -94,7 +94,7 @@ async fn request_user_input_round_trip_resolves_pending() -> anyhow::Result<()> 
             "id": "confirm_path",
             "header": "Confirm",
             "question": "Proceed with the plan?",
-            "isOther": false,
+            "isOther": true,
             "options": [{
                 "label": "Yes (Recommended)",
                 "description": "Continue the current plan."
@@ -214,7 +214,7 @@ where
             "id": "confirm_path",
             "header": "Confirm",
             "question": "Proceed with the plan?",
-            "isOther": false,
+            "isOther": true,
             "options": [{
                 "label": "Yes (Recommended)",
                 "description": "Continue the current plan."

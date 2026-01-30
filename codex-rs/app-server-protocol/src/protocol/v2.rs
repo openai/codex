@@ -2593,7 +2593,7 @@ pub struct ToolRequestUserInputOption {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-/// EXPERIMENTAL. Represents one request_user_input question and its optional options.
+/// EXPERIMENTAL. Represents one request_user_input question and its required options.
 pub struct ToolRequestUserInputQuestion {
     pub id: String,
     pub header: String,
