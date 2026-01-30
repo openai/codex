@@ -152,6 +152,7 @@ use codex_core::config::ConfigService;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::types::McpServerTransportConfig;
+use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::error::CodexErr;
 use codex_core::exec::ExecParams;
@@ -263,6 +264,7 @@ pub(crate) struct CodexMessageProcessor {
     codex_linux_sandbox_exe: Option<PathBuf>,
     config: Arc<Config>,
     cli_overrides: Vec<(String, TomlValue)>,
+    cloud_requirements: CloudRequirementsLoader,
     conversation_listeners: HashMap<Uuid, oneshot::Sender<()>>,
     listener_thread_ids_by_subscription: HashMap<Uuid, ThreadId>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
@@ -279,6 +281,17 @@ pub(crate) struct CodexMessageProcessor {
 pub(crate) enum ApiVersion {
     V1,
     V2,
+}
+
+pub(crate) struct CodexMessageProcessorArgs {
+    pub(crate) auth_manager: Arc<AuthManager>,
+    pub(crate) thread_manager: Arc<ThreadManager>,
+    pub(crate) outgoing: Arc<OutgoingMessageSender>,
+    pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
+    pub(crate) config: Arc<Config>,
+    pub(crate) cli_overrides: Vec<(String, TomlValue)>,
+    pub(crate) cloud_requirements: CloudRequirementsLoader,
+    pub(crate) feedback: CodexFeedback,
 }
 
 impl CodexMessageProcessor {
@@ -305,15 +318,17 @@ impl CodexMessageProcessor {
 
         Ok((thread_id, thread))
     }
-    pub fn new(
-        auth_manager: Arc<AuthManager>,
-        thread_manager: Arc<ThreadManager>,
-        outgoing: Arc<OutgoingMessageSender>,
-        codex_linux_sandbox_exe: Option<PathBuf>,
-        config: Arc<Config>,
-        cli_overrides: Vec<(String, TomlValue)>,
-        feedback: CodexFeedback,
-    ) -> Self {
+    pub fn new(args: CodexMessageProcessorArgs) -> Self {
+        let CodexMessageProcessorArgs {
+            auth_manager,
+            thread_manager,
+            outgoing,
+            codex_linux_sandbox_exe,
+            config,
+            cli_overrides,
+            cloud_requirements,
+            feedback,
+        } = args;
         Self {
             auth_manager,
             thread_manager,
@@ -321,6 +336,7 @@ impl CodexMessageProcessor {
             codex_linux_sandbox_exe,
             config,
             cli_overrides,
+            cloud_requirements,
             conversation_listeners: HashMap::new(),
             listener_thread_ids_by_subscription: HashMap::new(),
             active_login: Arc::new(Mutex::new(None)),
@@ -333,7 +349,10 @@ impl CodexMessageProcessor {
     }
 
     async fn load_latest_config(&self) -> Result<Config, JSONRPCErrorError> {
-        Config::load_with_cli_overrides(self.cli_overrides.clone())
+        codex_core::config::ConfigBuilder::default()
+            .cli_overrides(self.cli_overrides.clone())
+            .cloud_requirements(self.cloud_requirements.clone())
+            .build()
             .await
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
@@ -1519,6 +1538,7 @@ impl CodexMessageProcessor {
             &self.cli_overrides,
             Some(request_overrides),
             typesafe_overrides,
+            &self.cloud_requirements,
         )
         .await
         {
@@ -1603,6 +1623,7 @@ impl CodexMessageProcessor {
             &self.cli_overrides,
             config,
             typesafe_overrides,
+            &self.cloud_requirements,
         )
         .await
         {
@@ -2350,6 +2371,7 @@ impl CodexMessageProcessor {
             request_overrides,
             typesafe_overrides,
             history_cwd,
+            &self.cloud_requirements,
         )
         .await
         {
@@ -2542,6 +2564,7 @@ impl CodexMessageProcessor {
             request_overrides,
             typesafe_overrides,
             history_cwd,
+            &self.cloud_requirements,
         )
         .await
         {
@@ -3336,6 +3359,7 @@ impl CodexMessageProcessor {
             request_overrides,
             typesafe_overrides,
             history_cwd,
+            &self.cloud_requirements,
         )
         .await
         {
@@ -3524,6 +3548,7 @@ impl CodexMessageProcessor {
             request_overrides,
             typesafe_overrides,
             history_cwd,
+            &self.cloud_requirements,
         )
         .await
         {
@@ -4794,6 +4819,7 @@ async fn derive_config_from_params(
     cli_overrides: &[(String, TomlValue)],
     request_overrides: Option<HashMap<String, serde_json::Value>>,
     typesafe_overrides: ConfigOverrides,
+    cloud_requirements: &CloudRequirementsLoader,
 ) -> std::io::Result<Config> {
     let merged_cli_overrides = cli_overrides
         .iter()
@@ -4806,7 +4832,11 @@ async fn derive_config_from_params(
         )
         .collect::<Vec<_>>();
 
-    Config::load_with_cli_overrides_and_harness_overrides(merged_cli_overrides, typesafe_overrides)
+    codex_core::config::ConfigBuilder::default()
+        .cli_overrides(merged_cli_overrides)
+        .harness_overrides(typesafe_overrides)
+        .cloud_requirements(cloud_requirements.clone())
+        .build()
         .await
 }
 
@@ -4815,6 +4845,7 @@ async fn derive_config_for_cwd(
     request_overrides: Option<HashMap<String, serde_json::Value>>,
     typesafe_overrides: ConfigOverrides,
     cwd: Option<PathBuf>,
+    cloud_requirements: &CloudRequirementsLoader,
 ) -> std::io::Result<Config> {
     let merged_cli_overrides = cli_overrides
         .iter()
@@ -4831,6 +4862,7 @@ async fn derive_config_for_cwd(
         .cli_overrides(merged_cli_overrides)
         .harness_overrides(typesafe_overrides)
         .fallback_cwd(cwd)
+        .cloud_requirements(cloud_requirements.clone())
         .build()
         .await
 }

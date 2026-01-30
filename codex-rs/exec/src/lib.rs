@@ -13,6 +13,7 @@ pub mod exec_events;
 pub use cli::Cli;
 pub use cli::Command;
 pub use cli::ReviewArgs;
+use codex_cloud_requirements::cloud_requirements_loader;
 use codex_common::oss::ensure_oss_provider_ready;
 use codex_common::oss::get_default_model_for_oss_provider;
 use codex_common::oss::ollama_chat_deprecation_notice;
@@ -24,6 +25,7 @@ use codex_core::OLLAMA_OSS_PROVIDER_ID;
 use codex_core::ThreadManager;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
@@ -159,40 +161,51 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     // we load config.toml here to determine project state.
     #[allow(clippy::print_stderr)]
-    let config_toml = {
-        let codex_home = match find_codex_home() {
-            Ok(codex_home) => codex_home,
-            Err(err) => {
-                eprintln!("Error finding codex home: {err}");
-                std::process::exit(1);
-            }
-        };
-
-        match load_config_as_toml_with_cli_overrides(
-            &codex_home,
-            &config_cwd,
-            cli_kv_overrides.clone(),
-        )
-        .await
-        {
-            Ok(config_toml) => config_toml,
-            Err(err) => {
-                let config_error = err
-                    .get_ref()
-                    .and_then(|err| err.downcast_ref::<ConfigLoadError>())
-                    .map(ConfigLoadError::config_error);
-                if let Some(config_error) = config_error {
-                    eprintln!(
-                        "Error loading config.toml:\n{}",
-                        format_config_error_with_source(config_error)
-                    );
-                } else {
-                    eprintln!("Error loading config.toml: {err}");
-                }
-                std::process::exit(1);
-            }
+    let codex_home = match find_codex_home() {
+        Ok(codex_home) => codex_home,
+        Err(err) => {
+            eprintln!("Error finding codex home: {err}");
+            std::process::exit(1);
         }
     };
+
+    #[allow(clippy::print_stderr)]
+    let config_toml = match load_config_as_toml_with_cli_overrides(
+        &codex_home,
+        &config_cwd,
+        cli_kv_overrides.clone(),
+    )
+    .await
+    {
+        Ok(config_toml) => config_toml,
+        Err(err) => {
+            let config_error = err
+                .get_ref()
+                .and_then(|err| err.downcast_ref::<ConfigLoadError>())
+                .map(ConfigLoadError::config_error);
+            if let Some(config_error) = config_error {
+                eprintln!(
+                    "Error loading config.toml:\n{}",
+                    format_config_error_with_source(config_error)
+                );
+            } else {
+                eprintln!("Error loading config.toml: {err}");
+            }
+            std::process::exit(1);
+        }
+    };
+
+    let cloud_auth_manager = AuthManager::shared(
+        codex_home.clone(),
+        false,
+        config_toml.cli_auth_credentials_store.unwrap_or_default(),
+    );
+    let chatgpt_base_url = config_toml
+        .chatgpt_base_url
+        .clone()
+        .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
+    // TODO(gt): Make cloud requirements failures blocking once we can fail-closed.
+    let cloud_requirements = cloud_requirements_loader(cloud_auth_manager, chatgpt_base_url);
 
     let model_provider = if oss {
         let resolved = resolve_oss_provider(
@@ -246,8 +259,12 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         additional_writable_roots: add_dir,
     };
 
-    let config =
-        Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides).await?;
+    let config = ConfigBuilder::default()
+        .cli_overrides(cli_kv_overrides)
+        .harness_overrides(overrides)
+        .cloud_requirements(cloud_requirements)
+        .build()
+        .await?;
 
     if let Err(err) = enforce_login_restrictions(&config) {
         eprintln!("{err}");

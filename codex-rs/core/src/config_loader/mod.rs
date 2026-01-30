@@ -101,7 +101,7 @@ pub async fn load_config_layers_state(
     cwd: Option<AbsolutePathBuf>,
     cli_overrides: &[(String, TomlValue)],
     overrides: LoaderOverrides,
-    cloud_requirements: Option<CloudRequirementsLoader>, // TODO(gt): Once exec and app-server are wired up, we can remove the option.
+    cloud_requirements: CloudRequirementsLoader,
 ) -> io::Result<ConfigLayerStack> {
     let mut config_requirements_toml = ConfigRequirementsWithSources::default();
 
@@ -114,9 +114,7 @@ pub async fn load_config_layers_state(
     )
     .await?;
 
-    if let Some(loader) = cloud_requirements
-        && let Some(requirements) = loader.get().await
-    {
+    if let Some(requirements) = cloud_requirements.get().await {
         config_requirements_toml
             .merge_unset_fields(RequirementSource::CloudRequirements, requirements);
     }
