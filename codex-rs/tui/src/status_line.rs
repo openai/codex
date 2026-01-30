@@ -30,7 +30,10 @@ impl StatusLineRunner {
     }
 
     pub(crate) fn update_payload(&self, payload: String) -> anyhow::Result<()> {
-        let mut state = self.state.lock().expect("status line lock poisoned");
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.latest_payload = Some(payload);
         Ok(())
     }
@@ -46,7 +49,10 @@ impl StatusLineRunner {
             return Ok(());
         };
         {
-            let mut state = self.state.lock().expect("status line lock poisoned");
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if state.latest_payload.is_none() {
                 return Ok(());
             }
@@ -68,7 +74,9 @@ impl StatusLineRunner {
         let run = async move {
             loop {
                 let payload = {
-                    let state = state.lock().expect("status line lock poisoned");
+                    let state = state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     match state.latest_payload.clone() {
                         Some(payload) => payload,
                         None => break,
@@ -87,7 +95,9 @@ impl StatusLineRunner {
                 let mut emit_error_warning = None;
 
                 {
-                    let mut state = state.lock().expect("status line lock poisoned");
+                    let mut state = state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     match result {
                         Ok(line) => {
                             let parsed = ansi_escape_line(&line);
@@ -153,8 +163,11 @@ impl StatusLineRunner {
             std::thread::spawn(move || {
                 let runtime = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
-                    .build()
-                    .expect("status line runtime");
+                    .build();
+                let Ok(runtime) = runtime else {
+                    tracing::error!("status line runtime failed to build");
+                    return;
+                };
                 runtime.block_on(run);
             });
         }
