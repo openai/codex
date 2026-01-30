@@ -635,6 +635,7 @@ impl Session {
         per_turn_config.model_personality = session_configuration.personality;
         per_turn_config.web_search_mode = Some(resolve_web_search_mode_for_turn(
             per_turn_config.web_search_mode,
+            session_configuration.provider.is_azure_responses_endpoint(),
             session_configuration.sandbox_policy.get(),
         ));
         per_turn_config.features = config.features.clone();
