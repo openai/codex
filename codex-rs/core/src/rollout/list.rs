@@ -17,10 +17,13 @@ use uuid::Uuid;
 
 use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
+use crate::event_mapping::parse_turn_item;
 use crate::protocol::EventMsg;
 use crate::state_db;
 use codex_file_search as file_search;
 use codex_protocol::ThreadId;
+use codex_protocol::items::TurnItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMetaLine;
@@ -44,7 +47,9 @@ pub struct ThreadsPage {
 pub struct ThreadItem {
     /// Absolute path to the rollout file.
     pub path: PathBuf,
-    /// First up to `HEAD_RECORD_LIMIT` JSONL records parsed as JSON (includes meta line).
+    /// Parsed records used for summaries.
+    /// Includes the first `HEAD_RECORD_LIMIT` JSONL records (including meta line),
+    /// and may append the first user message found shortly after the head.
     pub head: Vec<serde_json::Value>,
     /// RFC3339 timestamp string for when the session was created, if available.
     /// created_at comes from the filename timestamp with second precision.
@@ -64,6 +69,7 @@ pub type ConversationsPage = ThreadsPage;
 #[derive(Default)]
 struct HeadTailSummary {
     head: Vec<serde_json::Value>,
+    first_user_message: Option<serde_json::Value>,
     saw_session_meta: bool,
     saw_user_event: bool,
     source: Option<SessionSource>,
@@ -940,6 +946,12 @@ impl<'a> ProviderMatcher<'a> {
     }
 }
 
+fn head_contains_user_message(head: &[serde_json::Value]) -> bool {
+    head.iter()
+        .filter_map(|value| serde_json::from_value::<ResponseItem>(value.clone()).ok())
+        .any(|item| matches!(parse_turn_item(&item), Some(TurnItem::UserMessage(_))))
+}
+
 async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTailSummary> {
     use tokio::io::AsyncBufReadExt;
 
@@ -985,10 +997,20 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                     .created_at
                     .clone()
                     .or_else(|| Some(rollout_line.timestamp.clone()));
+                let is_user_message =
+                    matches!(parse_turn_item(&item), Some(TurnItem::UserMessage(_)));
+                if is_user_message {
+                    summary.saw_user_event = true;
+                }
                 if summary.head.len() < head_limit
-                    && let Ok(val) = serde_json::to_value(item)
+                    && let Ok(val) = serde_json::to_value(&item)
                 {
                     summary.head.push(val);
+                } else if is_user_message
+                    && summary.first_user_message.is_none()
+                    && let Ok(val) = serde_json::to_value(&item)
+                {
+                    summary.first_user_message = Some(val);
                 }
             }
             RolloutItem::TurnContext(_) => {
@@ -1007,6 +1029,13 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
         if summary.saw_session_meta && summary.saw_user_event {
             break;
         }
+    }
+
+    if summary.first_user_message.is_some()
+        && !head_contains_user_message(&summary.head)
+        && let Some(first_user_message) = summary.first_user_message.take()
+    {
+        summary.head.push(first_user_message);
     }
 
     Ok(summary)

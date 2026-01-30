@@ -6,6 +6,7 @@ use std::fs::FileTimes;
 use std::fs::{self};
 use std::io::Write;
 use std::path::Path;
+use std::path::PathBuf;
 
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -16,6 +17,7 @@ use time::format_description::FormatItem;
 use time::macros::format_description;
 use uuid::Uuid;
 
+use crate::event_mapping;
 use crate::rollout::INTERACTIVE_SESSION_SOURCES;
 use crate::rollout::list::Cursor;
 use crate::rollout::list::ThreadItem;
@@ -25,6 +27,7 @@ use crate::rollout::list::get_threads;
 use crate::rollout::rollout_date_parts;
 use anyhow::Result;
 use codex_protocol::ThreadId;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
@@ -198,6 +201,77 @@ fn write_session_file_with_delayed_user_event(
     let times = FileTimes::new().set_modified(dt.into());
     file.set_times(times)?;
     Ok(())
+}
+
+fn write_session_file_with_delayed_user_response_item(
+    root: &Path,
+    ts_str: &str,
+    uuid: Uuid,
+    assistant_before_user: usize,
+) -> std::io::Result<PathBuf> {
+    let format: &[FormatItem] =
+        format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
+    let dt = PrimitiveDateTime::parse(ts_str, format)
+        .unwrap()
+        .assume_utc();
+    let dir = root
+        .join("sessions")
+        .join(format!("{:04}", dt.year()))
+        .join(format!("{:02}", u8::from(dt.month())))
+        .join(format!("{:02}", dt.day()));
+    fs::create_dir_all(&dir)?;
+
+    let filename = format!("rollout-{ts_str}-{uuid}.jsonl");
+    let file_path = dir.join(filename);
+    let mut file = File::create(&file_path)?;
+
+    let payload = serde_json::json!({
+        "id": uuid,
+        "timestamp": ts_str,
+        "cwd": ".",
+        "originator": "test_originator",
+        "cli_version": "test_version",
+        "source": "cli",
+        "model_provider": TEST_PROVIDER,
+    });
+    let meta = serde_json::json!({
+        "timestamp": ts_str,
+        "type": "session_meta",
+        "payload": payload,
+    });
+    writeln!(file, "{meta}")?;
+
+    for i in 0..assistant_before_user {
+        let assistant_line = serde_json::json!({
+            "timestamp": ts_str,
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {"type": "output_text", "text": format!("assistant-{i}")}
+                ]
+            }
+        });
+        writeln!(file, "{assistant_line}")?;
+    }
+
+    let user_line = serde_json::json!({
+        "timestamp": ts_str,
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "real question"}
+            ]
+        }
+    });
+    writeln!(file, "{user_line}")?;
+
+    let times = FileTimes::new().set_modified(dt.into());
+    file.set_times(times)?;
+    Ok(file_path)
 }
 
 fn write_session_file_with_meta_payload(
@@ -631,6 +705,30 @@ async fn test_list_threads_scans_past_head_for_user_event() {
     .unwrap();
 
     assert_eq!(page.items.len(), 1);
+}
+
+#[tokio::test]
+async fn test_head_summary_includes_first_user_message_beyond_head_limit() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+
+    let uuid = Uuid::from_u128(1234);
+    let ts = "2025-06-01T12-00-00";
+    let path = write_session_file_with_delayed_user_response_item(home, ts, uuid, 12).unwrap();
+
+    let head = crate::rollout::list::read_head_for_summary(&path)
+        .await
+        .unwrap();
+
+    let preview = head
+        .iter()
+        .filter_map(|value| serde_json::from_value::<ResponseItem>(value.clone()).ok())
+        .find_map(|item| match event_mapping::parse_turn_item(&item) {
+            Some(TurnItem::UserMessage(user)) => Some(user.message().to_string()),
+            _ => None,
+        });
+
+    assert_eq!(preview.as_deref(), Some("real question"));
 }
 
 #[tokio::test]
