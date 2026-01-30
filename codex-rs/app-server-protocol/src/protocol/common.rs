@@ -911,9 +911,35 @@ mod tests {
     }
 
     #[test]
+    fn serialize_account_login_chatgpt_proxy() -> Result<()> {
+        let request = ClientRequest::LoginAccount {
+            request_id: RequestId::Integer(6),
+            params: v2::LoginAccountParams::ChatgptProxy {
+                account_id: Some("acc-123".to_string()),
+                email: Some("user@example.com".to_string()),
+                plan_type: Some(PlanType::Pro),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "account/login/start",
+                "id": 6,
+                "params": {
+                    "type": "chatgptProxy",
+                    "accountId": "acc-123",
+                    "email": "user@example.com",
+                    "planType": "pro"
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn serialize_get_account() -> Result<()> {
         let request = ClientRequest::GetAccount {
-            request_id: RequestId::Integer(6),
+            request_id: RequestId::Integer(7),
             params: v2::GetAccountParams {
                 refresh_token: false,
             },
@@ -921,7 +947,7 @@ mod tests {
         assert_eq!(
             json!({
                 "method": "account/read",
-                "id": 6,
+                "id": 7,
                 "params": {
                     "refreshToken": false
                 }

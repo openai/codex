@@ -26,10 +26,12 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_core::AuthManager;
 use codex_core::ThreadManager;
+use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::ExternalAuthRefreshContext;
 use codex_core::auth::ExternalAuthRefreshReason;
 use codex_core::auth::ExternalAuthRefresher;
 use codex_core::auth::ExternalAuthTokens;
+use codex_core::auth::login_with_chatgpt_proxy;
 use codex_core::config::Config;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::default_client::SetOriginatorError;
@@ -38,11 +40,13 @@ use codex_core::default_client::get_codex_user_agent;
 use codex_core::default_client::set_default_originator;
 use codex_feedback::CodexFeedback;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::protocol::SessionSource;
 use tokio::sync::broadcast;
 use tokio::time::Duration;
 use tokio::time::timeout;
 use toml::Value as TomlValue;
+use tracing::warn;
 
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -115,6 +119,7 @@ impl MessageProcessor {
         config: Arc<Config>,
         cli_overrides: Vec<(String, TomlValue)>,
         loader_overrides: LoaderOverrides,
+        default_chatgpt_proxy_auth: bool,
         feedback: CodexFeedback,
         config_warnings: Vec<ConfigWarningNotification>,
     ) -> Self {
@@ -124,6 +129,23 @@ impl MessageProcessor {
             false,
             config.cli_auth_credentials_store_mode,
         );
+        if default_chatgpt_proxy_auth
+            && auth_manager.auth_cached().is_none()
+            && !matches!(config.forced_login_method, Some(ForcedLoginMethod::Api))
+        {
+            let account_id = config.forced_chatgpt_workspace_id.as_deref();
+            if let Err(err) = login_with_chatgpt_proxy(
+                &config.codex_home,
+                account_id,
+                None,
+                None,
+                AuthCredentialsStoreMode::Ephemeral,
+            ) {
+                warn!("failed to seed default ChatGPT proxy auth: {err}");
+            } else {
+                auth_manager.reload();
+            }
+        }
         auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id.clone());
         auth_manager.set_external_auth_refresher(Arc::new(ExternalAuthRefreshBridge {
             outgoing: outgoing.clone(),

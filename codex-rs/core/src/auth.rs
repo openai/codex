@@ -21,6 +21,7 @@ use codex_protocol::config_types::ForcedLoginMethod;
 pub use crate::auth::storage::AuthCredentialsStoreMode;
 pub use crate::auth::storage::AuthDotJson;
 use crate::auth::storage::AuthStorageBackend;
+use crate::auth::storage::ChatGptProxyAccount;
 use crate::auth::storage::create_auth_storage;
 use crate::config::Config;
 use crate::error::RefreshTokenFailedError;
@@ -53,6 +54,7 @@ pub enum CodexAuth {
     ApiKey(ApiKeyAuth),
     ChatGpt(ChatGptAuth),
     ChatGptAuthTokens(ChatGptAuthTokens),
+    ChatGptProxy(ChatGptProxy),
 }
 
 #[derive(Debug, Clone)]
@@ -69,6 +71,11 @@ pub struct ChatGptAuth {
 #[derive(Debug, Clone)]
 pub struct ChatGptAuthTokens {
     state: ChatGptAuthState,
+}
+
+#[derive(Debug, Clone)]
+pub struct ChatGptProxy {
+    account: ChatGptProxyAccount,
 }
 
 #[derive(Debug, Clone)]
@@ -160,6 +167,12 @@ impl CodexAuth {
             return Ok(CodexAuth::from_api_key_with_client(api_key, client));
         }
 
+        if let Some(proxy_account) = auth_dot_json.chatgpt_proxy.clone() {
+            return Ok(Self::ChatGptProxy(ChatGptProxy {
+                account: proxy_account,
+            }));
+        }
+
         let storage_mode = auth_dot_json.storage_mode(auth_credentials_store_mode);
         let state = ChatGptAuthState {
             auth_dot_json: Arc::new(Mutex::new(Some(auth_dot_json))),
@@ -189,14 +202,16 @@ impl CodexAuth {
     pub fn internal_auth_mode(&self) -> AuthMode {
         match self {
             Self::ApiKey(_) => AuthMode::ApiKey,
-            Self::ChatGpt(_) | Self::ChatGptAuthTokens(_) => AuthMode::ChatGPT,
+            Self::ChatGpt(_) | Self::ChatGptAuthTokens(_) | Self::ChatGptProxy(_) => {
+                AuthMode::ChatGPT
+            }
         }
     }
 
     pub fn api_auth_mode(&self) -> ApiAuthMode {
         match self {
             Self::ApiKey(_) => ApiAuthMode::ApiKey,
-            Self::ChatGpt(_) => ApiAuthMode::ChatGPT,
+            Self::ChatGpt(_) | Self::ChatGptProxy(_) => ApiAuthMode::ChatGPT,
             Self::ChatGptAuthTokens(_) => ApiAuthMode::ChatgptAuthTokens,
         }
     }
@@ -213,7 +228,7 @@ impl CodexAuth {
     pub fn api_key(&self) -> Option<&str> {
         match self {
             Self::ApiKey(auth) => Some(auth.api_key.as_str()),
-            Self::ChatGpt(_) | Self::ChatGptAuthTokens(_) => None,
+            Self::ChatGpt(_) | Self::ChatGptAuthTokens(_) | Self::ChatGptProxy(_) => None,
         }
     }
 
@@ -230,25 +245,40 @@ impl CodexAuth {
         }
     }
 
-    /// Returns the token string used for bearer authentication.
-    pub fn get_token(&self) -> Result<String, std::io::Error> {
+    /// Returns the token string used for bearer authentication, if available.
+    pub fn bearer_token(&self) -> Result<Option<String>, std::io::Error> {
         match self {
-            Self::ApiKey(auth) => Ok(auth.api_key.clone()),
+            Self::ApiKey(auth) => Ok(Some(auth.api_key.clone())),
             Self::ChatGpt(_) | Self::ChatGptAuthTokens(_) => {
                 let access_token = self.get_token_data()?.access_token;
-                Ok(access_token)
+                Ok(Some(access_token))
             }
+            Self::ChatGptProxy(_) => Ok(None),
         }
+    }
+
+    /// Returns the token string used for bearer authentication.
+    pub fn get_token(&self) -> Result<String, std::io::Error> {
+        let Some(token) = self.bearer_token()? else {
+            return Err(std::io::Error::other("Bearer token is not available."));
+        };
+        Ok(token)
     }
 
     /// Returns `None` if `is_chatgpt_auth()` is false.
     pub fn get_account_id(&self) -> Option<String> {
-        self.get_current_token_data().and_then(|t| t.account_id)
+        match self {
+            Self::ChatGptProxy(proxy) => proxy.account.account_id.clone(),
+            _ => self.get_current_token_data().and_then(|t| t.account_id),
+        }
     }
 
     /// Returns `None` if `is_chatgpt_auth()` is false.
     pub fn get_account_email(&self) -> Option<String> {
-        self.get_current_token_data().and_then(|t| t.id_token.email)
+        match self {
+            Self::ChatGptProxy(proxy) => proxy.account.email.clone(),
+            _ => self.get_current_token_data().and_then(|t| t.id_token.email),
+        }
     }
 
     /// Account-facing plan classification derived from the current token.
@@ -256,6 +286,9 @@ impl CodexAuth {
     /// mapped from the ID token's internal plan value. Prefer this when you
     /// need to make UI or product decisions based on the user's subscription.
     pub fn account_plan_type(&self) -> Option<AccountPlanType> {
+        if let Self::ChatGptProxy(proxy) = self {
+            return proxy.account.plan_type;
+        }
         let map_known = |kp: &InternalKnownPlan| match kp {
             InternalKnownPlan::Free => AccountPlanType::Free,
             InternalKnownPlan::Go => AccountPlanType::Go,
@@ -275,12 +308,22 @@ impl CodexAuth {
             })
     }
 
+    /// Returns the ChatGPT workspace/account identifier when available.
+    pub fn chatgpt_workspace_id(&self) -> Option<String> {
+        match self {
+            Self::ChatGptProxy(proxy) => proxy.account.account_id.clone(),
+            _ => self
+                .get_current_token_data()
+                .and_then(|t| t.id_token.chatgpt_account_id.or(t.account_id)),
+        }
+    }
+
     /// Returns `None` if `is_chatgpt_auth()` is false.
     fn get_current_auth_json(&self) -> Option<AuthDotJson> {
         let state = match self {
             Self::ChatGpt(auth) => &auth.state,
             Self::ChatGptAuthTokens(auth) => &auth.state,
-            Self::ApiKey(_) => return None,
+            Self::ApiKey(_) | Self::ChatGptProxy(_) => return None,
         };
         #[expect(clippy::unwrap_used)]
         state.auth_dot_json.lock().unwrap().clone()
@@ -303,6 +346,7 @@ impl CodexAuth {
                 account_id: Some("account_id".to_string()),
             }),
             last_refresh: Some(Utc::now()),
+            chatgpt_proxy: None,
         };
 
         let client = crate::default_client::create_client();
@@ -382,6 +426,7 @@ pub fn login_with_api_key(
         openai_api_key: Some(api_key.to_string()),
         tokens: None,
         last_refresh: None,
+        chatgpt_proxy: None,
     };
     save_auth(codex_home, &auth_dot_json, auth_credentials_store_mode)
 }
@@ -398,6 +443,28 @@ pub fn login_with_chatgpt_auth_tokens(
         &auth_dot_json,
         AuthCredentialsStoreMode::Ephemeral,
     )
+}
+
+/// Writes a tokenless ChatGPT proxy auth payload.
+pub fn login_with_chatgpt_proxy(
+    codex_home: &Path,
+    account_id: Option<&str>,
+    email: Option<&str>,
+    plan_type: Option<AccountPlanType>,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+) -> std::io::Result<()> {
+    let auth_dot_json = AuthDotJson {
+        auth_mode: Some(ApiAuthMode::ChatGPT),
+        openai_api_key: None,
+        tokens: None,
+        last_refresh: None,
+        chatgpt_proxy: Some(ChatGptProxyAccount {
+            account_id: account_id.map(str::to_string),
+            email: email.map(str::to_string),
+            plan_type,
+        }),
+    };
+    save_auth(codex_home, &auth_dot_json, auth_credentials_store_mode)
 }
 
 /// Persist the provided auth payload using the specified backend.
@@ -461,23 +528,10 @@ pub fn enforce_login_restrictions(config: &Config) -> std::io::Result<()> {
             return Ok(());
         }
 
-        let token_data = match auth.get_token_data() {
-            Ok(data) => data,
-            Err(err) => {
-                return logout_with_message(
-                    &config.codex_home,
-                    format!(
-                        "Failed to load ChatGPT credentials while enforcing workspace restrictions: {err}. Logging out."
-                    ),
-                    config.cli_auth_credentials_store_mode,
-                );
-            }
-        };
-
-        // workspace is the external identifier for account id.
-        let chatgpt_account_id = token_data.id_token.chatgpt_account_id.as_deref();
-        if chatgpt_account_id != Some(expected_account_id) {
-            let message = match chatgpt_account_id {
+        // Workspace is the external identifier for account id.
+        let chatgpt_account_id = auth.chatgpt_workspace_id();
+        if chatgpt_account_id.as_deref() != Some(expected_account_id) {
+            let message = match chatgpt_account_id.as_deref() {
                 Some(actual) => format!(
                     "Login is restricted to workspace {expected_account_id}, but current credentials belong to {actual}. Logging out."
                 ),
@@ -731,6 +785,7 @@ impl AuthDotJson {
             openai_api_key: None,
             tokens: Some(tokens),
             last_refresh: Some(Utc::now()),
+            chatgpt_proxy: None,
         }
     }
 
@@ -1143,7 +1198,7 @@ impl AuthManager {
                 self.reload();
                 Ok(())
             }
-            CodexAuth::ApiKey(_) => Ok(()),
+            CodexAuth::ApiKey(_) | CodexAuth::ChatGptProxy(_) => Ok(()),
         }
     }
 
@@ -1399,6 +1454,7 @@ mod tests {
                     account_id: None,
                 }),
                 last_refresh: Some(last_refresh),
+                chatgpt_proxy: None,
             },
             auth_dot_json
         );
@@ -1432,6 +1488,7 @@ mod tests {
             openai_api_key: Some("sk-test-key".to_string()),
             tokens: None,
             last_refresh: None,
+            chatgpt_proxy: None,
         };
         super::save_auth(dir.path(), &auth_dot_json, AuthCredentialsStoreMode::File)?;
         let auth_file = get_auth_file(dir.path());
