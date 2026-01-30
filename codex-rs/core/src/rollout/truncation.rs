@@ -4,6 +4,7 @@
 //! interpreting them via `event_mapping::parse_turn_item(...)`.
 
 use crate::compact::COMPACT_USER_MESSAGE_MAX_TOKENS;
+use crate::compact::is_summary_message;
 use crate::event_mapping;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
@@ -138,7 +139,12 @@ fn effective_user_turns(items: &[RolloutItem]) -> Vec<UserTurnRef> {
                 user_turns = match &compacted.replacement_history {
                     Some(replacement) => user_turns_from_replacement(replacement, idx),
                     None => {
-                        let mut selected = select_user_turns_for_compaction(&user_turns);
+                        let eligible: Vec<UserTurnRef> = user_turns
+                            .iter()
+                            .filter(|turn| !is_summary_message(&turn.text))
+                            .cloned()
+                            .collect();
+                        let mut selected = select_user_turns_for_compaction(&eligible);
                         let summary = if compacted.message.is_empty() {
                             "(no summary available)".to_string()
                         } else {
@@ -210,6 +216,7 @@ pub(crate) fn apply_rollbacks_to_rollout(items: &[RolloutItem]) -> Vec<RolloutIt
 mod tests {
     use super::*;
     use crate::codex::make_session_and_context;
+    use crate::compact::SUMMARY_PREFIX;
     use crate::protocol::CompactedItem;
     use assert_matches::assert_matches;
     use codex_protocol::models::ContentItem;
@@ -363,6 +370,28 @@ mod tests {
 
         let indices: Vec<usize> = turns.iter().map(|turn| turn.source_index).collect();
         assert_eq!(indices, vec![2, 2, 3]);
+    }
+
+    #[test]
+    fn effective_user_turns_skip_prior_compaction_summaries() {
+        let summary_one = format!("{SUMMARY_PREFIX}\nsummary one");
+        let summary_two = format!("{SUMMARY_PREFIX}\nsummary two");
+        let rollout_items = vec![
+            RolloutItem::ResponseItem(user_input_msg("u1")),
+            RolloutItem::Compacted(CompactedItem {
+                message: summary_one,
+                replacement_history: None,
+            }),
+            RolloutItem::ResponseItem(user_input_msg("u2")),
+            RolloutItem::Compacted(CompactedItem {
+                message: summary_two.clone(),
+                replacement_history: None,
+            }),
+        ];
+
+        let turns = effective_user_turns(&rollout_items);
+        let texts: Vec<String> = turns.iter().map(|turn| turn.text.clone()).collect();
+        assert_eq!(texts, vec!["u1".to_string(), "u2".to_string(), summary_two]);
     }
 
     #[test]
