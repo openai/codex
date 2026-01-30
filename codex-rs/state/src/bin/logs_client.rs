@@ -228,10 +228,45 @@ fn format_row(row: &LogRow) -> String {
     let thread_id = row.thread_id.as_deref().unwrap_or("-");
     let thread_id_colored = thread_id.blue().dimmed().to_string();
     let target_colored = target.dimmed().to_string();
-    let message_colored = message.bold().to_string();
+    let message_colored = heuristic_formatting(message);
     format!(
         "{timestamp_colored} {level_colored} [{thread_id_colored}] {target_colored} - {message_colored}"
     )
+}
+
+fn heuristic_formatting(message: &str) -> String {
+    if matcher::apply_patch(message) {
+        formatter::apply_patch(message)
+    } else {
+        message.bold().to_string()
+    }
+}
+
+mod matcher {
+
+    pub(super) fn apply_patch(message: &str) -> bool {
+        message.starts_with("ToolCall: apply_patch")
+    }
+}
+
+mod formatter {
+    use owo_colors::OwoColorize;
+
+    pub(super) fn apply_patch(message: &str) -> String {
+        message
+            .lines()
+            .map(|line| {
+                if line.starts_with('+') {
+                    line.green().bold().to_string()
+                } else if line.starts_with('-') {
+                    line.red().bold().to_string()
+                } else {
+                    line.bold().to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 }
 
 fn color_level(level: &str) -> String {
