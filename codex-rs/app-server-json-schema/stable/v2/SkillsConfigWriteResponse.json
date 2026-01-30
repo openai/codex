@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "effectiveEnabled": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "effectiveEnabled"
+  ],
+  "title": "SkillsConfigWriteResponse",
+  "type": "object"
+}

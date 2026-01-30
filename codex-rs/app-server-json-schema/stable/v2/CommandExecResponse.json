@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "exitCode": {
+      "format": "int32",
+      "type": "integer"
+    },
+    "stderr": {
+      "type": "string"
+    },
+    "stdout": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "exitCode",
+    "stderr",
+    "stdout"
+  ],
+  "title": "CommandExecResponse",
+  "type": "object"
+}

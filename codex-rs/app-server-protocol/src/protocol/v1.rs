@@ -432,6 +432,7 @@ pub struct SendUserMessageResponse {}
 #[serde(rename_all = "camelCase")]
 pub struct AddConversationListenerParams {
     pub conversation_id: ThreadId,
+    #[cfg(feature = "codex-experimental-api")]
     #[serde(default)]
     pub experimental_raw_events: bool,
 }

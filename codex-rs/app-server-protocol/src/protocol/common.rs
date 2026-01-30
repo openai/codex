@@ -35,6 +35,7 @@ pub enum AuthMode {
     ///
     /// ChatGPT auth tokens are supplied by an external host app and are only
     /// stored in memory. Token refresh must be handled by the external host app.
+    #[cfg(feature = "codex-experimental-api")]
     #[serde(rename = "chatgptAuthTokens")]
     #[ts(rename = "chatgptAuthTokens")]
     #[strum(serialize = "chatgptAuthTokens")]
@@ -52,6 +53,7 @@ macro_rules! client_request_definitions {
             $variant:ident $(=> $wire:literal)? {
                 params: $(#[$params_meta:meta])* $params:ty,
                 response: $response:ty,
+                $(cfg: $cfg:meta,)?
             }
         ),* $(,)?
     ) => {
@@ -61,6 +63,7 @@ macro_rules! client_request_definitions {
         pub enum ClientRequest {
             $(
                 $(#[$variant_meta])*
+                $(#[cfg($cfg)])?
                 $(#[serde(rename = $wire)] #[ts(rename = $wire)])?
                 $variant {
                     #[serde(rename = "id")]
@@ -83,7 +86,10 @@ macro_rules! client_request_definitions {
             out_dir: &::std::path::Path,
         ) -> ::std::result::Result<(), ::ts_rs::ExportError> {
             $(
-                <$response as ::ts_rs::TS>::export_all_to(out_dir)?;
+                $(#[cfg($cfg)])?
+                {
+                    <$response as ::ts_rs::TS>::export_all_to(out_dir)?;
+                }
             )*
             Ok(())
         }
@@ -94,7 +100,10 @@ macro_rules! client_request_definitions {
         ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
             let mut schemas = Vec::new();
             $(
-                schemas.push(write_json_schema::<$response>(out_dir, stringify!($response))?);
+                $(#[cfg($cfg)])?
+                {
+                    schemas.push(write_json_schema::<$response>(out_dir, stringify!($response))?);
+                }
             )*
             Ok(schemas)
         }
@@ -105,7 +114,10 @@ macro_rules! client_request_definitions {
         ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
             let mut schemas = Vec::new();
             $(
-                schemas.push(write_json_schema::<$params>(out_dir, stringify!($params))?);
+                $(#[cfg($cfg)])?
+                {
+                    schemas.push(write_json_schema::<$params>(out_dir, stringify!($params))?);
+                }
             )*
             Ok(schemas)
         }
@@ -197,6 +209,7 @@ client_request_definitions! {
     CollaborationModeList => "collaborationMode/list" {
         params: v2::CollaborationModeListParams,
         response: v2::CollaborationModeListResponse,
+        cfg: feature = "codex-experimental-api",
     },
 
     McpServerOauthLogin => "mcpServer/oauth/login" {
@@ -384,6 +397,7 @@ macro_rules! server_request_definitions {
             $variant:ident $(=> $wire:literal)? {
                 params: $params:ty,
                 response: $response:ty,
+                $(cfg: $cfg:meta,)?
             }
         ),* $(,)?
     ) => {
@@ -393,6 +407,7 @@ macro_rules! server_request_definitions {
         pub enum ServerRequest {
             $(
                 $(#[$variant_meta])*
+                $(#[cfg($cfg)])?
                 $(#[serde(rename = $wire)] #[ts(rename = $wire)])?
                 $variant {
                     #[serde(rename = "id")]
@@ -404,13 +419,16 @@ macro_rules! server_request_definitions {
 
         #[derive(Debug, Clone, PartialEq, JsonSchema)]
         pub enum ServerRequestPayload {
-            $( $variant($params), )*
+            $( $(#[$variant_meta])* $(#[cfg($cfg)])? $variant($params), )*
         }
 
         impl ServerRequestPayload {
             pub fn request_with_id(self, request_id: RequestId) -> ServerRequest {
                 match self {
-                    $(Self::$variant(params) => ServerRequest::$variant { request_id, params },)*
+                    $(
+                        $(#[cfg($cfg)])?
+                        Self::$variant(params) => ServerRequest::$variant { request_id, params },
+                    )*
                 }
             }
         }
@@ -419,7 +437,10 @@ macro_rules! server_request_definitions {
             out_dir: &::std::path::Path,
         ) -> ::std::result::Result<(), ::ts_rs::ExportError> {
             $(
-                <$response as ::ts_rs::TS>::export_all_to(out_dir)?;
+                $(#[cfg($cfg)])?
+                {
+                    <$response as ::ts_rs::TS>::export_all_to(out_dir)?;
+                }
             )*
             Ok(())
         }
@@ -430,10 +451,13 @@ macro_rules! server_request_definitions {
         ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
             let mut schemas = Vec::new();
             $(
-                schemas.push(crate::export::write_json_schema::<$response>(
-                    out_dir,
-                    concat!(stringify!($variant), "Response"),
-                )?);
+                $(#[cfg($cfg)])?
+                {
+                    schemas.push(crate::export::write_json_schema::<$response>(
+                        out_dir,
+                        concat!(stringify!($variant), "Response"),
+                    )?);
+                }
             )*
             Ok(schemas)
         }
@@ -444,10 +468,13 @@ macro_rules! server_request_definitions {
         ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
             let mut schemas = Vec::new();
             $(
-                schemas.push(crate::export::write_json_schema::<$params>(
-                    out_dir,
-                    concat!(stringify!($variant), "Params"),
-                )?);
+                $(#[cfg($cfg)])?
+                {
+                    schemas.push(crate::export::write_json_schema::<$params>(
+                        out_dir,
+                        concat!(stringify!($variant), "Params"),
+                    )?);
+                }
             )*
             Ok(schemas)
         }
@@ -557,6 +584,7 @@ server_request_definitions! {
     ToolRequestUserInput => "item/tool/requestUserInput" {
         params: v2::ToolRequestUserInputParams,
         response: v2::ToolRequestUserInputResponse,
+        cfg: feature = "codex-experimental-api",
     },
 
     /// Execute a dynamic tool call on the client.
@@ -568,6 +596,7 @@ server_request_definitions! {
     ChatgptAuthTokensRefresh => "account/chatgptAuthTokens/refresh" {
         params: v2::ChatgptAuthTokensRefreshParams,
         response: v2::ChatgptAuthTokensRefreshResponse,
+        cfg: feature = "codex-experimental-api",
     },
 
     /// DEPRECATED APIs below
@@ -789,6 +818,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "codex-experimental-api")]
     #[test]
     fn serialize_chatgpt_auth_tokens_refresh_request() -> Result<()> {
         let request = ServerRequest::ChatgptAuthTokensRefresh {
@@ -901,6 +931,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "codex-experimental-api")]
     #[test]
     fn serialize_account_login_chatgpt_auth_tokens() -> Result<()> {
         let request = ClientRequest::LoginAccount {
@@ -992,6 +1023,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "codex-experimental-api")]
     #[test]
     fn serialize_list_collaboration_modes() -> Result<()> {
         let request = ClientRequest::CollaborationModeList {

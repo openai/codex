@@ -1,0 +1,18 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "cwds": {
+      "description": "When empty, defaults to the current session working directory.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "forceReload": {
+      "description": "When true, bypass the skills cache and re-scan skills from disk.",
+      "type": "boolean"
+    }
+  },
+  "title": "SkillsListParams",
+  "type": "object"
+}

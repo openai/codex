@@ -1118,6 +1118,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-app-server-json-schema"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-utils-cargo-bin",
+ "include_dir",
+ "pretty_assertions",
+ "tempfile",
+]
+
+[[package]]
 name = "codex-app-server-protocol"
 version = "0.0.0"
 dependencies = [
@@ -1137,6 +1148,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-app-server-protocol-stable-export"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "codex-app-server-protocol",
+]
+
+[[package]]
 name = "codex-app-server-test-client"
 version = "0.0.0"
 dependencies = [
@@ -1147,6 +1167,17 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "codex-app-server-ts-types"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-utils-cargo-bin",
+ "include_dir",
+ "pretty_assertions",
+ "tempfile",
 ]
 
 [[package]]
@@ -1239,7 +1270,9 @@ dependencies = [
  "clap",
  "clap_complete",
  "codex-app-server",
+ "codex-app-server-json-schema",
  "codex-app-server-protocol",
+ "codex-app-server-ts-types",
  "codex-arg0",
  "codex-chatgpt",
  "codex-cloud-tasks",

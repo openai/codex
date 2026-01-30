@@ -1,0 +1,29 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "itemId": {
+      "type": "string"
+    },
+    "processId": {
+      "type": "string"
+    },
+    "stdin": {
+      "type": "string"
+    },
+    "threadId": {
+      "type": "string"
+    },
+    "turnId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "itemId",
+    "processId",
+    "stdin",
+    "threadId",
+    "turnId"
+  ],
+  "title": "TerminalInteractionNotification",
+  "type": "object"
+}
