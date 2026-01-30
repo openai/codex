@@ -1816,12 +1816,17 @@ impl HistoryCell for RequestUserInputResultCell {
             if answer_missing {
                 question_text.push_str(" (unanswered)");
             }
+            let question_style = if answer_missing {
+                Style::default().add_modifier(Modifier::DIM)
+            } else {
+                Style::default()
+            };
             lines.extend(wrap_with_prefix(
                 &question_text,
                 width,
                 "  • ".into(),
                 "    ".into(),
-                Style::default(),
+                question_style,
             ));
 
             let Some(answer) = answer.filter(|answer| !answer.answers.is_empty()) else {
