@@ -1109,6 +1109,9 @@ pub struct TurnTimingStats {
     pub local_tool_duration: Duration,
     #[ts(type = "string")]
     pub response_wait_duration: Duration,
+    #[serde(default)]
+    #[ts(type = "string")]
+    pub inference_stream_duration: Duration,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

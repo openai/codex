@@ -1904,17 +1904,18 @@ impl HistoryCell for FinalMessageSeparator {
                 "calls"
             };
             let response_wait = format_duration(timing.response_wait_duration);
+            let inference_stream = format_duration(timing.inference_stream_duration);
 
             let summary = if let Some(elapsed_seconds) = self
                 .elapsed_seconds
                 .map(super::status_indicator_widget::fmt_elapsed_compact)
             {
                 format!(
-                    "─ Worked for {elapsed_seconds} • Local tools: {tool_calls} {tool_label}, {tool_duration} • Inference: {inference_calls} {inference_label}, {response_wait} wait ─"
+                    "─ Worked for {elapsed_seconds} • Local tools: {tool_calls} {tool_label}, {tool_duration} • Inference: {inference_calls} {inference_label}, {response_wait} wait, {inference_stream} stream ─"
                 )
             } else {
                 format!(
-                    "─ Local tools: {tool_calls} {tool_label}, {tool_duration} • Inference: {inference_calls} {inference_label}, {response_wait} wait ─"
+                    "─ Local tools: {tool_calls} {tool_label}, {tool_duration} • Inference: {inference_calls} {inference_label}, {response_wait} wait, {inference_stream} stream ─"
                 )
             };
             let summary_width = summary.width();

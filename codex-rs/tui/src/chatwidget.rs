@@ -1783,6 +1783,9 @@ impl ChatWidget {
             response_wait_duration: current
                 .response_wait_duration
                 .saturating_sub(baseline.response_wait_duration),
+            inference_stream_duration: current
+                .inference_stream_duration
+                .saturating_sub(baseline.inference_stream_duration),
         };
         self.last_separator_timing = Some(current);
         Some(delta)

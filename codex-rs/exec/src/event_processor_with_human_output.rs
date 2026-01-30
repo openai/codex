@@ -30,6 +30,7 @@ use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnCompleteEvent;
 use codex_core::protocol::TurnDiffEvent;
+use codex_core::protocol::TurnTimingStats;
 use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_core::web_search::web_search_detail;
@@ -73,6 +74,11 @@ pub(crate) struct EventProcessorWithHumanOutput {
     last_message_path: Option<PathBuf>,
     last_total_token_usage: Option<codex_core::protocol::TokenUsageInfo>,
     final_message: Option<String>,
+    last_turn_started_at: Option<Instant>,
+    last_turn_elapsed: Option<std::time::Duration>,
+    last_turn_timing: Option<TurnTimingStats>,
+    turn_start_output_tokens: Option<i64>,
+    last_turn_output_tokens: Option<i64>,
 }
 
 impl EventProcessorWithHumanOutput {
@@ -99,6 +105,11 @@ impl EventProcessorWithHumanOutput {
                 last_message_path,
                 last_total_token_usage: None,
                 final_message: None,
+                last_turn_started_at: None,
+                last_turn_elapsed: None,
+                last_turn_timing: None,
+                turn_start_output_tokens: None,
+                last_turn_output_tokens: None,
             }
         } else {
             Self {
@@ -116,6 +127,11 @@ impl EventProcessorWithHumanOutput {
                 last_message_path,
                 last_total_token_usage: None,
                 final_message: None,
+                last_turn_started_at: None,
+                last_turn_elapsed: None,
+                last_turn_timing: None,
+                turn_start_output_tokens: None,
+                last_turn_output_tokens: None,
             }
         }
     }
@@ -244,7 +260,12 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 ts_msg!(self, "{}", message.style(self.dimmed));
             }
             EventMsg::TurnStarted(_) => {
-                // Ignore.
+                self.last_turn_started_at = Some(Instant::now());
+                self.turn_start_output_tokens = self
+                    .last_total_token_usage
+                    .as_ref()
+                    .map(|info| info.total_token_usage.output_tokens);
+                self.last_turn_output_tokens = None;
             }
             EventMsg::ElicitationRequest(ev) => {
                 ts_msg!(
@@ -260,7 +281,8 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 );
             }
             EventMsg::TurnComplete(TurnCompleteEvent {
-                last_agent_message, ..
+                last_agent_message,
+                timing,
             }) => {
                 let last_message = last_agent_message.as_deref();
                 if let Some(output_file) = self.last_message_path.as_deref() {
@@ -268,6 +290,18 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 }
 
                 self.final_message = last_agent_message;
+                self.last_turn_timing = timing;
+                self.last_turn_elapsed = self.last_turn_started_at.map(|start| start.elapsed());
+                self.last_turn_output_tokens = self
+                    .last_total_token_usage
+                    .as_ref()
+                    .map(|info| {
+                        let total = info.total_token_usage.output_tokens;
+                        match self.turn_start_output_tokens {
+                            Some(start) => total.saturating_sub(start),
+                            None => total,
+                        }
+                    });
 
                 return CodexStatus::InitiateShutdown;
             }
@@ -790,6 +824,58 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 "tokens used".style(self.magenta).style(self.italic),
                 format_with_separators(usage_info.total_token_usage.blended_total())
             );
+        }
+
+        if let Some(timing) = &self.last_turn_timing {
+            let tool_calls = timing.tool_calls;
+            let tool_label = if tool_calls == 1 { "call" } else { "calls" };
+            let tool_duration = format_duration(timing.local_tool_duration);
+
+            let inference_calls = timing.inference_calls;
+            let inference_label = if inference_calls == 1 {
+                "call"
+            } else {
+                "calls"
+            };
+            let response_wait = format_duration(timing.response_wait_duration);
+            let inference_stream = format_duration(timing.inference_stream_duration);
+
+            let mut parts = Vec::new();
+            if let Some(elapsed) = self.last_turn_elapsed {
+                parts.push(format!("Worked for {}", format_duration(elapsed)));
+            }
+            parts.push(format!(
+                "Local tools: {tool_calls} {tool_label}, {tool_duration}"
+            ));
+            parts.push(format!(
+                "Inference: {inference_calls} {inference_label}, {response_wait} wait, {inference_stream} stream"
+            ));
+            let summary = parts.join(" • ");
+            eprintln!("{summary}");
+        }
+
+        if let Some(output_tokens) = self.last_turn_output_tokens {
+            let output_tokens = output_tokens.max(0);
+            let mut detail = format!(
+                "Output tokens: {}",
+                format_with_separators(output_tokens)
+            );
+            if let Some(timing) = &self.last_turn_timing
+                && output_tokens > 0
+            {
+                let stream = timing.inference_stream_duration;
+                let per_token_ms = stream.as_secs_f64() * 1000.0 / output_tokens as f64;
+                let per_token = if per_token_ms >= 1000.0 {
+                    format!("{:.2}s/token", per_token_ms / 1000.0)
+                } else {
+                    format!("{:.2}ms/token", per_token_ms)
+                };
+                detail = format!(
+                    "{detail} • Stream: {} • {per_token}",
+                    format_duration(stream)
+                );
+            }
+            eprintln!("{detail}");
         }
 
         // If the user has not piped the final message to a file, they will see

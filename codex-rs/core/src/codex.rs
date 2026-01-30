@@ -203,6 +203,8 @@ use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
+use codex_protocol::models::ReasoningItemContent;
+use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::render_command_prefix_list;
@@ -469,6 +471,7 @@ pub(crate) struct TurnTimingState {
     tool_duration_nanos: AtomicU64,
     inference_calls: AtomicU64,
     response_wait_nanos: AtomicU64,
+    inference_stream_nanos: AtomicU64,
 }
 
 impl TurnTimingState {
@@ -484,6 +487,11 @@ impl TurnTimingState {
             .fetch_add(duration_nanos(duration), Ordering::Relaxed);
     }
 
+    pub(crate) fn record_inference_stream(&self, duration: std::time::Duration) {
+        self.inference_stream_nanos
+            .fetch_add(duration_nanos(duration), Ordering::Relaxed);
+    }
+
     pub(crate) fn snapshot(&self) -> TurnTimingStats {
         TurnTimingStats {
             tool_calls: self.tool_calls.load(Ordering::Relaxed),
@@ -493,6 +501,9 @@ impl TurnTimingState {
             ),
             response_wait_duration: std::time::Duration::from_nanos(
                 self.response_wait_nanos.load(Ordering::Relaxed),
+            ),
+            inference_stream_duration: std::time::Duration::from_nanos(
+                self.inference_stream_nanos.load(Ordering::Relaxed),
             ),
         }
     }
@@ -548,6 +559,10 @@ impl TurnContext {
 
     pub(crate) fn record_inference_wait(&self, duration: std::time::Duration) {
         self.timing.record_inference_wait(duration);
+    }
+
+    pub(crate) fn record_inference_stream(&self, duration: std::time::Duration) {
+        self.timing.record_inference_stream(duration);
     }
 
     pub(crate) fn timing_snapshot(&self) -> TurnTimingStats {
@@ -3697,14 +3712,69 @@ struct SamplingRequestResult {
     last_agent_message: Option<String>,
 }
 
-fn response_wait_started(event: &ResponseEvent) -> bool {
-    !matches!(
-        event,
+fn response_stream_started(event: &ResponseEvent) -> bool {
+    match event {
         ResponseEvent::Created
-            | ResponseEvent::RateLimits(_)
-            | ResponseEvent::ModelsEtag(_)
-            | ResponseEvent::ServerReasoningIncluded(_)
-    )
+        | ResponseEvent::RateLimits(_)
+        | ResponseEvent::ModelsEtag(_)
+        | ResponseEvent::ServerReasoningIncluded(_)
+        | ResponseEvent::ReasoningSummaryPartAdded { .. }
+        | ResponseEvent::Completed { .. } => false,
+        ResponseEvent::OutputTextDelta(delta) => !delta.is_empty(),
+        ResponseEvent::ReasoningSummaryDelta { delta, .. } => !delta.is_empty(),
+        ResponseEvent::ReasoningContentDelta { delta, .. } => !delta.is_empty(),
+        ResponseEvent::OutputItemAdded(item) | ResponseEvent::OutputItemDone(item) => {
+            response_item_has_content(item)
+        }
+    }
+}
+
+fn response_item_has_content(item: &ResponseItem) -> bool {
+    match item {
+        ResponseItem::Message { content, .. } => content.iter().any(|entry| {
+            matches!(entry, ContentItem::OutputText { text } if !text.is_empty())
+        }),
+        ResponseItem::Reasoning {
+            summary,
+            content,
+            encrypted_content,
+            ..
+        } => {
+            let summary_has_text = summary.iter().any(|entry| {
+                matches!(entry, ReasoningItemReasoningSummary::SummaryText { text } if !text.is_empty())
+            });
+            let content_has_text = content.as_ref().is_some_and(|content| {
+                content.iter().any(|entry| {
+                    matches!(
+                        entry,
+                        ReasoningItemContent::ReasoningText { text }
+                            | ReasoningItemContent::Text { text }
+                            if !text.is_empty()
+                    )
+                })
+            });
+            let encrypted_has_text = encrypted_content
+                .as_ref()
+                .is_some_and(|text| !text.is_empty());
+            summary_has_text || content_has_text || encrypted_has_text
+        }
+        ResponseItem::LocalShellCall { .. } => true,
+        ResponseItem::FunctionCall { arguments, .. } => !arguments.is_empty(),
+        ResponseItem::FunctionCallOutput { output, .. } => {
+            !output.content.is_empty()
+                || output
+                    .content_items
+                    .as_ref()
+                    .is_some_and(|items| !items.is_empty())
+        }
+        ResponseItem::CustomToolCall { input, .. } => !input.is_empty(),
+        ResponseItem::CustomToolCallOutput { output, .. } => !output.is_empty(),
+        ResponseItem::WebSearchCall { action: Some(_), .. } => true,
+        ResponseItem::WebSearchCall { action: None, .. } => false,
+        ResponseItem::GhostSnapshot { .. } => true,
+        ResponseItem::Compaction { encrypted_content } => !encrypted_content.is_empty(),
+        ResponseItem::Other => true,
+    }
 }
 
 async fn drain_in_flight(
@@ -3809,6 +3879,8 @@ async fn try_run_sampling_request(
     let mut should_emit_turn_diff = false;
     let receiving_span = trace_span!("receiving_stream");
     let mut inference_wait_recorded = false;
+    let mut inference_stream_started_at: Option<std::time::Instant> = None;
+    let mut inference_stream_recorded = false;
     let outcome: CodexResult<SamplingRequestResult> = loop {
         let handle_responses = trace_span!(
             parent: &receiving_span,
@@ -3838,10 +3910,13 @@ async fn try_run_sampling_request(
             }
         };
 
-        if !inference_wait_recorded && response_wait_started(&event) {
+        if !inference_wait_recorded && response_stream_started(&event) {
             turn_context.record_inference_wait(response_wait_start.elapsed());
             sess.emit_turn_timing_update(&turn_context).await;
             inference_wait_recorded = true;
+            if inference_stream_started_at.is_none() {
+                inference_stream_started_at = Some(std::time::Instant::now());
+            }
         }
 
         sess.services
@@ -3901,6 +3976,13 @@ async fn try_run_sampling_request(
                 should_emit_turn_diff = true;
 
                 needs_follow_up |= sess.has_pending_input().await;
+                if !inference_stream_recorded {
+                    if let Some(start) = inference_stream_started_at {
+                        turn_context.record_inference_stream(start.elapsed());
+                        sess.emit_turn_timing_update(&turn_context).await;
+                        inference_stream_recorded = true;
+                    }
+                }
 
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
@@ -3977,6 +4059,12 @@ async fn try_run_sampling_request(
     if !inference_wait_recorded {
         turn_context.record_inference_wait(response_wait_start.elapsed());
         sess.emit_turn_timing_update(&turn_context).await;
+    }
+    if !inference_stream_recorded {
+        if let Some(start) = inference_stream_started_at {
+            turn_context.record_inference_stream(start.elapsed());
+            sess.emit_turn_timing_update(&turn_context).await;
+        }
     }
 
     drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
