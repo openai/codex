@@ -382,19 +382,16 @@ pub(crate) fn get_limits_duration(windows_minutes: i64) -> String {
 fn split_request_user_input_answers(
     mut answers: HashMap<String, RequestUserInputAnswer>,
 ) -> (HashMap<String, RequestUserInputAnswer>, bool) {
-    let interrupted_key = answers
-        .iter()
-        .find(|(key, answer)| {
-            key.starts_with(INTERRUPTED_ANSWER_ID_BASE)
-                && answer
-                    .answers
-                    .iter()
-                    .any(|value| value == INTERRUPTED_ANSWER_TEXT)
-        })
-        .map(|(key, _)| key.clone());
-    let interrupted = interrupted_key.is_some();
-    if let Some(key) = interrupted_key {
-        answers.remove(&key);
+    let interrupted = if let Some(answer) = answers.get(INTERRUPTED_ANSWER_ID_BASE) {
+        answer
+            .answers
+            .iter()
+            .any(|value| value == INTERRUPTED_ANSWER_TEXT)
+    } else {
+        false
+    };
+    if interrupted {
+        answers.remove(INTERRUPTED_ANSWER_ID_BASE);
     }
     (answers, interrupted)
 }

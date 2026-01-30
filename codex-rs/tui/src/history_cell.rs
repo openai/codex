@@ -1819,12 +1819,10 @@ impl HistoryCell for RequestUserInputResultCell {
                 "    ".into(),
                 Style::default(),
             );
-            if answer_missing {
-                if let Some(last) = question_lines.last_mut() {
-                    let spans = last.spans.to_vec();
-                    last.spans = spans;
-                    last.spans.push(" (unanswered)".dim());
-                }
+            if answer_missing && let Some(last) = question_lines.last_mut() {
+                let spans = last.spans.to_vec();
+                last.spans = spans;
+                last.spans.push(" (unanswered)".dim());
             }
             lines.extend(question_lines);
 
