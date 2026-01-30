@@ -77,7 +77,7 @@ async fn models_client_hits_models_endpoint() {
             priority: 1,
             upgrade: None,
             base_instructions: "base instructions".to_string(),
-            model_instructions_template: None,
+            model_messages: None,
             supports_reasoning_summaries: false,
             support_verbosity: false,
             default_verbosity: None,

@@ -18,6 +18,7 @@ use crate::config::types::ShellEnvironmentPolicyToml;
 use crate::config::types::SkillsConfig;
 use crate::config::types::Tui;
 use crate::config::types::UriBasedFileOpener;
+use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::LoaderOverrides;
@@ -366,6 +367,7 @@ pub struct ConfigBuilder {
     cli_overrides: Option<Vec<(String, TomlValue)>>,
     harness_overrides: Option<ConfigOverrides>,
     loader_overrides: Option<LoaderOverrides>,
+    cloud_requirements: Option<CloudRequirementsLoader>,
     fallback_cwd: Option<PathBuf>,
 }
 
@@ -390,6 +392,11 @@ impl ConfigBuilder {
         self
     }
 
+    pub fn cloud_requirements(mut self, cloud_requirements: CloudRequirementsLoader) -> Self {
+        self.cloud_requirements = Some(cloud_requirements);
+        self
+    }
+
     pub fn fallback_cwd(mut self, fallback_cwd: Option<PathBuf>) -> Self {
         self.fallback_cwd = fallback_cwd;
         self
@@ -401,6 +408,7 @@ impl ConfigBuilder {
             cli_overrides,
             harness_overrides,
             loader_overrides,
+            cloud_requirements,
             fallback_cwd,
         } = self;
         let codex_home = codex_home.map_or_else(find_codex_home, std::io::Result::Ok)?;
@@ -413,9 +421,14 @@ impl ConfigBuilder {
             None => AbsolutePathBuf::current_dir()?,
         };
         harness_overrides.cwd = Some(cwd.to_path_buf());
-        let config_layer_stack =
-            load_config_layers_state(&codex_home, Some(cwd), &cli_overrides, loader_overrides)
-                .await?;
+        let config_layer_stack = load_config_layers_state(
+            &codex_home,
+            Some(cwd),
+            &cli_overrides,
+            loader_overrides,
+            cloud_requirements,
+        )
+        .await?;
         let merged_toml = config_layer_stack.effective_config();
 
         // Note that each layer in ConfigLayerStack should have resolved
@@ -511,6 +524,7 @@ pub async fn load_config_as_toml_with_cli_overrides(
         Some(cwd.clone()),
         &cli_overrides,
         LoaderOverrides::default(),
+        None,
     )
     .await?;
 
@@ -609,9 +623,14 @@ pub async fn load_global_mcp_servers(
     // There is no cwd/project context for this query, so this will not include
     // MCP servers defined in in-repo .codex/ folders.
     let cwd: Option<AbsolutePathBuf> = None;
-    let config_layer_stack =
-        load_config_layers_state(codex_home, cwd, &cli_overrides, LoaderOverrides::default())
-            .await?;
+    let config_layer_stack = load_config_layers_state(
+        codex_home,
+        cwd,
+        &cli_overrides,
+        LoaderOverrides::default(),
+        None,
+    )
+    .await?;
     let merged_toml = config_layer_stack.effective_config();
     let Some(servers_value) = merged_toml.get("mcp_servers") else {
         return Ok(BTreeMap::new());
@@ -1372,12 +1391,6 @@ impl Config {
             || cfg.sandbox_mode.is_some();
 
         let mut model_providers = built_in_model_providers();
-        if features.enabled(Feature::ResponsesWebsockets)
-            && let Some(provider) = model_providers.get_mut("openai")
-            && provider.is_openai()
-        {
-            provider.wire_api = crate::model_provider_info::WireApi::ResponsesWebsocket;
-        }
         // Merge user-defined providers into the built-in list.
         for (key, provider) in cfg.model_providers.into_iter() {
             model_providers.entry(key).or_insert(provider);
@@ -1499,6 +1512,7 @@ impl Config {
             approval_policy: mut constrained_approval_policy,
             sandbox_policy: mut constrained_sandbox_policy,
             mcp_servers,
+            exec_policy: _,
         } = requirements;
 
         constrained_approval_policy
@@ -2555,7 +2569,7 @@ profile = "project"
     }
 
     #[test]
-    fn responses_websockets_feature_updates_openai_provider() -> std::io::Result<()> {
+    fn responses_websockets_feature_does_not_change_wire_api() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let mut entries = BTreeMap::new();
         entries.insert("responses_websockets".to_string(), true);
@@ -2572,7 +2586,7 @@ profile = "project"
 
         assert_eq!(
             config.model_provider.wire_api,
-            crate::model_provider_info::WireApi::ResponsesWebsocket
+            crate::model_provider_info::WireApi::Responses
         );
 
         Ok(())
@@ -2618,7 +2632,8 @@ profile = "project"
 
         let cwd = AbsolutePathBuf::try_from(codex_home.path())?;
         let config_layer_stack =
-            load_config_layers_state(codex_home.path(), Some(cwd), &Vec::new(), overrides).await?;
+            load_config_layers_state(codex_home.path(), Some(cwd), &Vec::new(), overrides, None)
+                .await?;
         let cfg = deserialize_config_toml_with_base(
             config_layer_stack.effective_config(),
             codex_home.path(),
@@ -2745,6 +2760,7 @@ profile = "project"
             Some(cwd),
             &[("model".to_string(), TomlValue::String("cli".to_string()))],
             overrides,
+            None,
         )
         .await?;
 
@@ -3692,6 +3708,7 @@ model_verbosity = "high"
             stream_max_retries: Some(10),
             stream_idle_timeout_ms: Some(300_000),
             requires_openai_auth: false,
+            supports_websockets: false,
         };
         let model_provider_map = {
             let mut model_provider_map = built_in_model_providers();

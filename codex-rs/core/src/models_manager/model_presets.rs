@@ -1,4 +1,4 @@
-use codex_app_server_protocol::AuthMode;
+use crate::auth::AuthMode;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort;

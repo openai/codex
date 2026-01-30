@@ -18,12 +18,17 @@ fn record_duration_records_histogram() -> Result<()> {
     )?;
     metrics.shutdown()?;
 
+    let resource_metrics = latest_metrics(&exporter);
     let (bounds, bucket_counts, sum, count) =
-        histogram_data(&latest_metrics(&exporter), "codex.request_latency");
+        histogram_data(&resource_metrics, "codex.request_latency");
     assert!(!bounds.is_empty());
     assert_eq!(bucket_counts.iter().sum::<u64>(), 1);
     assert_eq!(sum, 15.0);
     assert_eq!(count, 1);
+    let metric = crate::harness::find_metric(&resource_metrics, "codex.request_latency")
+        .unwrap_or_else(|| panic!("metric codex.request_latency missing"));
+    assert_eq!(metric.unit(), "ms");
+    assert_eq!(metric.description(), "Duration in milliseconds.");
 
     Ok(())
 }
@@ -46,6 +51,10 @@ fn timer_result_records_success() -> Result<()> {
     assert!(!bounds.is_empty());
     assert_eq!(count, 1);
     assert_eq!(bucket_counts.iter().sum::<u64>(), 1);
+    let metric = crate::harness::find_metric(&resource_metrics, "codex.request_latency")
+        .unwrap_or_else(|| panic!("metric codex.request_latency missing"));
+    assert_eq!(metric.unit(), "ms");
+    assert_eq!(metric.description(), "Duration in milliseconds.");
     let attrs = attributes_to_map(
         match crate::harness::find_metric(&resource_metrics, "codex.request_latency").and_then(
             |metric| match metric.data() {

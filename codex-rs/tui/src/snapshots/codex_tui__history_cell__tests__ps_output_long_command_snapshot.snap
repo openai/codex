@@ -7,3 +7,4 @@ expression: rendered
 Background terminals
 
   • rg "foo" src --glob '**/*. [...]
+    ↳ searching...

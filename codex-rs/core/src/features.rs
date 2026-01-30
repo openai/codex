@@ -111,14 +111,18 @@ pub enum Feature {
     EnableRequestCompression,
     /// Enable collab tools.
     Collab,
-    /// Enable connectors (apps).
-    Connectors,
+    /// Enable apps.
+    Apps,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,
+    /// Prompt for missing skill env var dependencies.
+    SkillEnvVarDependencyPrompt,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     Steer,
     /// Enable collaboration modes (Plan, Code, Pair Programming, Execute).
     CollaborationModes,
+    /// Enable personality selection in the TUI.
+    Personality,
     /// Use the Responses API WebSocket transport for OpenAI by default.
     ResponsesWebsockets,
 }
@@ -460,7 +464,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RequestRule,
         key: "request_rule",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Smart approvals",
+            menu_description: "Get smarter \"Don't ask again\" rule requests.",
+            announcement: "NEW: Try Smart approvals to get smarter \"Don't ask again\" requests. Enable in /experimental!",
+        },
         default_enabled: false,
     },
     FeatureSpec {
@@ -516,9 +524,13 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::Connectors,
-        key: "connectors",
-        stage: Stage::UnderDevelopment,
+        id: Feature::Apps,
+        key: "apps",
+        stage: Stage::Experimental {
+            name: "Apps",
+            menu_description: "Use a connected ChatGPT App using \"$\". Install Apps via /apps command. Restart Codex after enabling.",
+            announcement: "NEW: Use ChatGPT Apps (Connectors) in Codex via $ mentions. Enable in /experimental and restart Codex!",
+        },
         default_enabled: false,
     },
     FeatureSpec {
@@ -526,6 +538,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "skill_mcp_dependency_install",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::SkillEnvVarDependencyPrompt,
+        key: "skill_env_var_dependency_prompt",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::Steer,
@@ -541,6 +559,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::CollaborationModes,
         key: "collaboration_modes",
         stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Personality,
+        key: "personality",
+        stage: Stage::Experimental {
+            name: "Personality",
+            menu_description: "Choose a communication style for Codex.",
+            announcement: "NEW: Pick a personality for Codex. Enable in /experimental!",
+        },
         default_enabled: false,
     },
     FeatureSpec {

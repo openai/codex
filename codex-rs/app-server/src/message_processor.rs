@@ -5,6 +5,10 @@ use crate::codex_message_processor::CodexMessageProcessor;
 use crate::config_api::ConfigApi;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::OutgoingMessageSender;
+use async_trait::async_trait;
+use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
+use codex_app_server_protocol::ChatgptAuthTokensRefreshReason;
+use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigBatchWriteParams;
@@ -19,8 +23,13 @@ use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ServerRequestPayload;
 use codex_core::AuthManager;
 use codex_core::ThreadManager;
+use codex_core::auth::ExternalAuthRefreshContext;
+use codex_core::auth::ExternalAuthRefreshReason;
+use codex_core::auth::ExternalAuthRefresher;
+use codex_core::auth::ExternalAuthTokens;
 use codex_core::config::Config;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::default_client::SetOriginatorError;
@@ -31,7 +40,63 @@ use codex_feedback::CodexFeedback;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use tokio::sync::broadcast;
+use tokio::time::Duration;
+use tokio::time::timeout;
 use toml::Value as TomlValue;
+
+const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Clone)]
+struct ExternalAuthRefreshBridge {
+    outgoing: Arc<OutgoingMessageSender>,
+}
+
+impl ExternalAuthRefreshBridge {
+    fn map_reason(reason: ExternalAuthRefreshReason) -> ChatgptAuthTokensRefreshReason {
+        match reason {
+            ExternalAuthRefreshReason::Unauthorized => ChatgptAuthTokensRefreshReason::Unauthorized,
+        }
+    }
+}
+
+#[async_trait]
+impl ExternalAuthRefresher for ExternalAuthRefreshBridge {
+    async fn refresh(
+        &self,
+        context: ExternalAuthRefreshContext,
+    ) -> std::io::Result<ExternalAuthTokens> {
+        let params = ChatgptAuthTokensRefreshParams {
+            reason: Self::map_reason(context.reason),
+            previous_account_id: context.previous_account_id,
+        };
+
+        let (request_id, rx) = self
+            .outgoing
+            .send_request_with_id(ServerRequestPayload::ChatgptAuthTokensRefresh(params))
+            .await;
+
+        let result = match timeout(EXTERNAL_AUTH_REFRESH_TIMEOUT, rx).await {
+            Ok(result) => result.map_err(|err| {
+                std::io::Error::other(format!("auth refresh request canceled: {err}"))
+            })?,
+            Err(_) => {
+                let _canceled = self.outgoing.cancel_request(&request_id).await;
+                return Err(std::io::Error::other(format!(
+                    "auth refresh request timed out after {}s",
+                    EXTERNAL_AUTH_REFRESH_TIMEOUT.as_secs()
+                )));
+            }
+        };
+
+        let response: ChatgptAuthTokensRefreshResponse =
+            serde_json::from_value(result).map_err(std::io::Error::other)?;
+
+        Ok(ExternalAuthTokens {
+            access_token: response.access_token,
+            id_token: response.id_token,
+        })
+    }
+}
 
 pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
@@ -59,6 +124,10 @@ impl MessageProcessor {
             false,
             config.cli_auth_credentials_store_mode,
         );
+        auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id.clone());
+        auth_manager.set_external_auth_refresher(Arc::new(ExternalAuthRefreshBridge {
+            outgoing: outgoing.clone(),
+        }));
         let thread_manager = Arc::new(ThreadManager::new(
             config.codex_home.clone(),
             auth_manager.clone(),
@@ -236,8 +305,9 @@ impl MessageProcessor {
     }
 
     /// Handle an error object received from the peer.
-    pub(crate) fn process_error(&mut self, err: JSONRPCError) {
+    pub(crate) async fn process_error(&mut self, err: JSONRPCError) {
         tracing::error!("<- error: {:?}", err);
+        self.outgoing.notify_client_error(err.id, err.error).await;
     }
 
     async fn handle_config_read(&self, request_id: RequestId, params: ConfigReadParams) {

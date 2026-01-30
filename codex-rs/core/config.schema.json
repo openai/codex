@@ -111,6 +111,13 @@
             "auto"
           ],
           "type": "string"
+        },
+        {
+          "description": "Store credentials in memory only for the current process.",
+          "enum": [
+            "ephemeral"
+          ],
+          "type": "string"
         }
       ]
     },
@@ -142,6 +149,9 @@
           "description": "Optional feature toggles scoped to this profile.",
           "properties": {
             "apply_patch_freeform": {
+              "type": "boolean"
+            },
+            "apps": {
               "type": "boolean"
             },
             "child_agents_md": {
@@ -180,6 +190,9 @@
             "include_apply_patch_tool": {
               "type": "boolean"
             },
+            "personality": {
+              "type": "boolean"
+            },
             "powershell_utf8": {
               "type": "boolean"
             },
@@ -199,6 +212,9 @@
               "type": "boolean"
             },
             "shell_tool": {
+              "type": "boolean"
+            },
+            "skill_env_var_dependency_prompt": {
               "type": "boolean"
             },
             "skill_mcp_dependency_install": {
@@ -433,6 +449,11 @@
           "format": "uint64",
           "minimum": 0.0,
           "type": "integer"
+        },
+        "supports_websockets": {
+          "default": false,
+          "description": "Whether this provider supports the Responses API WebSocket transport.",
+          "type": "boolean"
         },
         "wire_api": {
           "allOf": [
@@ -1073,13 +1094,6 @@
           "type": "string"
         },
         {
-          "description": "Experimental: Responses API over WebSocket transport.",
-          "enum": [
-            "responses_websocket"
-          ],
-          "type": "string"
-        },
-        {
           "description": "Regular Chat Completions compatible with `/v1/chat/completions`.",
           "enum": [
             "chat"
@@ -1162,6 +1176,9 @@
         "apply_patch_freeform": {
           "type": "boolean"
         },
+        "apps": {
+          "type": "boolean"
+        },
         "child_agents_md": {
           "type": "boolean"
         },
@@ -1198,6 +1215,9 @@
         "include_apply_patch_tool": {
           "type": "boolean"
         },
+        "personality": {
+          "type": "boolean"
+        },
         "powershell_utf8": {
           "type": "boolean"
         },
@@ -1217,6 +1237,9 @@
           "type": "boolean"
         },
         "shell_tool": {
+          "type": "boolean"
+        },
+        "skill_env_var_dependency_prompt": {
           "type": "boolean"
         },
         "skill_mcp_dependency_install": {

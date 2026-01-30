@@ -13,14 +13,13 @@ use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::http::header::AUTHORIZATION;
-use axum::routing::post;
+use axum::routing::get;
 use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_core::auth::AuthCredentialsStoreMode;
-use codex_core::connectors::ConnectorInfo;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::JsonObject;
@@ -71,19 +70,23 @@ async fn list_apps_returns_empty_when_connectors_disabled() -> Result<()> {
 #[tokio::test]
 async fn list_apps_returns_connectors_with_accessible_flags() -> Result<()> {
     let connectors = vec![
-        ConnectorInfo {
-            connector_id: "alpha".to_string(),
-            connector_name: "Alpha".to_string(),
-            connector_description: Some("Alpha connector".to_string()),
+        AppInfo {
+            id: "alpha".to_string(),
+            name: "Alpha".to_string(),
+            description: Some("Alpha connector".to_string()),
             logo_url: Some("https://example.com/alpha.png".to_string()),
+            logo_url_dark: None,
+            distribution_channel: None,
             install_url: None,
             is_accessible: false,
         },
-        ConnectorInfo {
-            connector_id: "beta".to_string(),
-            connector_name: "beta".to_string(),
-            connector_description: None,
+        AppInfo {
+            id: "beta".to_string(),
+            name: "beta".to_string(),
+            description: None,
             logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
             install_url: None,
             is_accessible: false,
         },
@@ -127,6 +130,8 @@ async fn list_apps_returns_connectors_with_accessible_flags() -> Result<()> {
             name: "Beta App".to_string(),
             description: None,
             logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
             install_url: Some("https://chatgpt.com/apps/beta/beta".to_string()),
             is_accessible: true,
         },
@@ -135,6 +140,8 @@ async fn list_apps_returns_connectors_with_accessible_flags() -> Result<()> {
             name: "Alpha".to_string(),
             description: Some("Alpha connector".to_string()),
             logo_url: Some("https://example.com/alpha.png".to_string()),
+            logo_url_dark: None,
+            distribution_channel: None,
             install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
             is_accessible: false,
         },
@@ -150,19 +157,23 @@ async fn list_apps_returns_connectors_with_accessible_flags() -> Result<()> {
 #[tokio::test]
 async fn list_apps_paginates_results() -> Result<()> {
     let connectors = vec![
-        ConnectorInfo {
-            connector_id: "alpha".to_string(),
-            connector_name: "Alpha".to_string(),
-            connector_description: Some("Alpha connector".to_string()),
+        AppInfo {
+            id: "alpha".to_string(),
+            name: "Alpha".to_string(),
+            description: Some("Alpha connector".to_string()),
             logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
             install_url: None,
             is_accessible: false,
         },
-        ConnectorInfo {
-            connector_id: "beta".to_string(),
-            connector_name: "beta".to_string(),
-            connector_description: None,
+        AppInfo {
+            id: "beta".to_string(),
+            name: "beta".to_string(),
+            description: None,
             logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
             install_url: None,
             is_accessible: false,
         },
@@ -206,6 +217,8 @@ async fn list_apps_paginates_results() -> Result<()> {
         name: "Beta App".to_string(),
         description: None,
         logo_url: None,
+        logo_url_dark: None,
+        distribution_channel: None,
         install_url: Some("https://chatgpt.com/apps/beta/beta".to_string()),
         is_accessible: true,
     }];
@@ -234,6 +247,8 @@ async fn list_apps_paginates_results() -> Result<()> {
         name: "Alpha".to_string(),
         description: Some("Alpha connector".to_string()),
         logo_url: None,
+        logo_url_dark: None,
+        distribution_channel: None,
         install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
         is_accessible: false,
     }];
@@ -289,13 +304,13 @@ impl ServerHandler for AppListMcpServer {
 }
 
 async fn start_apps_server(
-    connectors: Vec<ConnectorInfo>,
+    connectors: Vec<AppInfo>,
     tools: Vec<Tool>,
 ) -> Result<(String, JoinHandle<()>)> {
     let state = AppsServerState {
         expected_bearer: "Bearer chatgpt-token".to_string(),
         expected_account_id: "account-123".to_string(),
-        response: json!({ "connectors": connectors }),
+        response: json!({ "apps": connectors, "next_token": null }),
     };
     let state = Arc::new(state);
     let tools = Arc::new(tools);
@@ -313,7 +328,11 @@ async fn start_apps_server(
     );
 
     let router = Router::new()
-        .route("/aip/connectors/list_accessible", post(list_connectors))
+        .route("/connectors/directory/list", get(list_directory_connectors))
+        .route(
+            "/connectors/directory/list_workspace",
+            get(list_directory_connectors),
+        )
         .with_state(state)
         .nest_service("/api/codex/apps", mcp_service);
 
@@ -324,7 +343,7 @@ async fn start_apps_server(
     Ok((format!("http://{addr}"), handle))
 }
 
-async fn list_connectors(
+async fn list_directory_connectors(
     State(state): State<Arc<AppsServerState>>,
     headers: HeaderMap,
 ) -> Result<impl axum::response::IntoResponse, StatusCode> {

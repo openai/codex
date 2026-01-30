@@ -252,6 +252,9 @@ async fn run_codex_tool_session_inner(
                         .await;
                         continue;
                     }
+                    EventMsg::PlanDelta(_) => {
+                        continue;
+                    }
                     EventMsg::Error(err_event) => {
                         // Always respond in tools/call's expected shape, and include conversationId so the client can resume.
                         let result = create_call_tool_result_with_thread_id(
@@ -307,6 +310,9 @@ async fn run_codex_tool_session_inner(
                     }
                     EventMsg::SessionConfigured(_) => {
                         tracing::error!("unexpected SessionConfigured event");
+                    }
+                    EventMsg::ThreadNameUpdated(_) => {
+                        // Ignore session metadata updates in MCP tool runner.
                     }
                     EventMsg::AgentMessageDelta(_) => {
                         // TODO: think how we want to support this in the MCP

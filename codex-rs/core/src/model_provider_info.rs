@@ -5,10 +5,11 @@
 //!   2. User-defined entries inside `~/.codex/config.toml` under the `model_providers`
 //!      key. These override or extend the defaults at runtime.
 
+use crate::auth::AuthMode;
+use crate::error::EnvVarError;
 use codex_api::Provider as ApiProvider;
 use codex_api::WireApi as ApiWireApi;
 use codex_api::provider::RetryConfig as ApiRetryConfig;
-use codex_app_server_protocol::AuthMode;
 use http::HeaderMap;
 use http::header::HeaderName;
 use http::header::HeaderValue;
@@ -19,7 +20,6 @@ use std::collections::HashMap;
 use std::env::VarError;
 use std::time::Duration;
 
-use crate::error::EnvVarError;
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS: u64 = 300_000;
 const DEFAULT_STREAM_MAX_RETRIES: u64 = 5;
 const DEFAULT_REQUEST_MAX_RETRIES: u64 = 4;
@@ -42,10 +42,6 @@ const OPENAI_PROVIDER_NAME: &str = "OpenAI";
 pub enum WireApi {
     /// The Responses API exposed by OpenAI at `/v1/responses`.
     Responses,
-
-    /// Experimental: Responses API over WebSocket transport.
-    #[serde(rename = "responses_websocket")]
-    ResponsesWebsocket,
 
     /// Regular Chat Completions compatible with `/v1/chat/completions`.
     #[default]
@@ -105,6 +101,10 @@ pub struct ModelProviderInfo {
     /// and API key (if needed) comes from the "env_key" environment variable.
     #[serde(default)]
     pub requires_openai_auth: bool,
+
+    /// Whether this provider supports the Responses API WebSocket transport.
+    #[serde(default)]
+    pub supports_websockets: bool,
 }
 
 impl ModelProviderInfo {
@@ -137,7 +137,7 @@ impl ModelProviderInfo {
         &self,
         auth_mode: Option<AuthMode>,
     ) -> crate::error::Result<ApiProvider> {
-        let default_base_url = if matches!(auth_mode, Some(AuthMode::ChatGPT)) {
+        let default_base_url = if matches!(auth_mode, Some(AuthMode::Chatgpt)) {
             "https://chatgpt.com/backend-api/codex"
         } else {
             "https://api.openai.com/v1"
@@ -162,7 +162,6 @@ impl ModelProviderInfo {
             query_params: self.query_params.clone(),
             wire: match self.wire_api {
                 WireApi::Responses => ApiWireApi::Responses,
-                WireApi::ResponsesWebsocket => ApiWireApi::Responses,
                 WireApi::Chat => ApiWireApi::Chat,
             },
             headers,
@@ -254,6 +253,7 @@ impl ModelProviderInfo {
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: true,
+            supports_websockets: true,
         }
     }
 
@@ -332,6 +332,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
         requires_openai_auth: false,
+        supports_websockets: false,
     }
 }
 
@@ -360,6 +361,7 @@ base_url = "http://localhost:11434/v1"
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            supports_websockets: false,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -390,6 +392,7 @@ query_params = { api-version = "2025-04-01-preview" }
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            supports_websockets: false,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -423,6 +426,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            supports_websockets: false,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -454,6 +458,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
                 stream_max_retries: None,
                 stream_idle_timeout_ms: None,
                 requires_openai_auth: false,
+                supports_websockets: false,
             };
             let api = provider.to_api_provider(None).expect("api provider");
             assert!(
@@ -476,6 +481,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            supports_websockets: false,
         };
         let named_api = named_provider.to_api_provider(None).expect("api provider");
         assert!(named_api.is_azure_responses_endpoint());
@@ -500,6 +506,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
                 stream_max_retries: None,
                 stream_idle_timeout_ms: None,
                 requires_openai_auth: false,
+                supports_websockets: false,
             };
             let api = provider.to_api_provider(None).expect("api provider");
             assert!(

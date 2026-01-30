@@ -63,7 +63,7 @@ async fn turn_start_sends_originator_header() -> Result<()> {
         codex_home.path(),
         &server.uri(),
         "never",
-        &BTreeMap::default(),
+        &BTreeMap::from([(Feature::Personality, true)]),
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -138,7 +138,7 @@ async fn turn_start_emits_user_message_item_with_text_elements() -> Result<()> {
         codex_home.path(),
         &server.uri(),
         "never",
-        &BTreeMap::default(),
+        &BTreeMap::from([(Feature::Personality, true)]),
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -230,7 +230,7 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
         codex_home.path(),
         &server.uri(),
         "never",
-        &BTreeMap::default(),
+        &BTreeMap::from([(Feature::Personality, true)]),
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -425,7 +425,7 @@ async fn turn_start_accepts_personality_override_v2() -> Result<()> {
         codex_home.path(),
         &server.uri(),
         "never",
-        &BTreeMap::default(),
+        &BTreeMap::from([(Feature::Personality, true)]),
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -473,6 +473,7 @@ async fn turn_start_accepts_personality_override_v2() -> Result<()> {
     if developer_texts.is_empty() {
         eprintln!("request body: {}", request.body_json());
     }
+
     assert!(
         developer_texts
             .iter()
