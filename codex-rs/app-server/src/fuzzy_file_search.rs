@@ -9,7 +9,6 @@ use tracing::warn;
 
 const MATCH_LIMIT: usize = 50;
 const MAX_THREADS: usize = 12;
-const COMPUTE_INDICES: bool = true;
 
 pub(crate) async fn run_fuzzy_file_search(
     query: String,
@@ -34,13 +33,14 @@ pub(crate) async fn run_fuzzy_file_search(
     let mut files = match tokio::task::spawn_blocking(move || {
         file_search::run(
             query.as_str(),
-            limit,
             search_dirs,
-            Vec::new(),
-            threads,
-            cancellation_flag,
-            COMPUTE_INDICES,
-            true,
+            file_search::FileSearchOptions {
+                limit,
+                threads,
+                compute_indices: true,
+                ..Default::default()
+            },
+            Some(cancellation_flag),
         )
     })
     .await

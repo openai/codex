@@ -75,12 +75,9 @@ impl FileSearchManager {
         });
         let session = file_search::create_session(
             &self.search_dir,
-            file_search::SessionOptions {
-                limit: MAX_FILE_SEARCH_RESULTS,
-                exclude: Vec::new(),
-                threads: NUM_FILE_SEARCH_THREADS,
+            file_search::FileSearchOptions {
                 compute_indices: true,
-                respect_gitignore: true,
+                ..Default::default()
             },
             reporter,
         );
