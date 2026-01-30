@@ -12,6 +12,7 @@ use codex_core::ResponseItem;
 use codex_core::TransportManager;
 use codex_core::WEB_SEARCH_ELIGIBLE_HEADER;
 use codex_core::WireApi;
+use codex_core::X_CODEX_TURN_METADATA_HEADER;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
@@ -23,6 +24,7 @@ use core_test_support::load_default_config_for_test;
 use core_test_support::responses;
 use core_test_support::test_codex::test_codex;
 use futures::StreamExt;
+use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use wiremock::matchers::header;
 
@@ -121,6 +123,99 @@ async fn responses_stream_includes_subagent_header_on_review() {
     assert_eq!(
         request.header("x-openai-subagent").as_deref(),
         Some("review")
+    );
+}
+
+#[tokio::test]
+async fn responses_stream_includes_turn_metadata_header_when_set() {
+    core_test_support::skip_if_no_network!();
+
+    let server = responses::start_mock_server().await;
+    let response_body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_completed("resp-1"),
+    ]);
+
+    let request_recorder = responses::mount_sse_once(&server, response_body).await;
+
+    let provider = ModelProviderInfo {
+        name: "mock".into(),
+        base_url: Some(format!("{}/v1", server.uri())),
+        env_key: None,
+        env_key_instructions: None,
+        experimental_bearer_token: None,
+        wire_api: WireApi::Responses,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: Some(0),
+        stream_max_retries: Some(0),
+        stream_idle_timeout_ms: Some(5_000),
+        requires_openai_auth: false,
+    };
+
+    let codex_home = TempDir::new().expect("failed to create TempDir");
+    let mut config = load_default_config_for_test(&codex_home).await;
+    config.model_provider_id = provider.name.clone();
+    config.model_provider = provider.clone();
+    let effort = config.model_reasoning_effort;
+    let summary = config.model_reasoning_summary;
+    let model = ModelsManager::get_model_offline(config.model.as_deref());
+    config.model = Some(model.clone());
+    let config = Arc::new(config);
+
+    let conversation_id = ThreadId::new();
+    let auth_mode = AuthMode::ChatGPT;
+    let session_source = SessionSource::SubAgent(SubAgentSource::Review);
+    let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
+    let otel_manager = OtelManager::new(
+        conversation_id,
+        model.as_str(),
+        model_info.slug.as_str(),
+        None,
+        Some("test@test.com".to_string()),
+        Some(auth_mode),
+        false,
+        "test".to_string(),
+        session_source.clone(),
+    );
+
+    let turn_metadata =
+        r#"{"workspaces":{"/repo":{"latest_git_commit_hash":"abc123"}}}"#.to_string();
+    let mut client_session = ModelClient::new(
+        Arc::clone(&config),
+        None,
+        model_info,
+        otel_manager,
+        provider,
+        effort,
+        summary,
+        conversation_id,
+        session_source,
+    )
+    .new_session_with_turn_metadata(Some(turn_metadata.clone()));
+
+    let mut prompt = Prompt::default();
+    prompt.input = vec![ResponseItem::Message {
+        id: None,
+        role: "user".into(),
+        content: vec![ContentItem::InputText {
+            text: "hello".into(),
+        }],
+        end_turn: None,
+    }];
+
+    let mut stream = client_session.stream(&prompt).await.expect("stream failed");
+    while let Some(event) = stream.next().await {
+        if matches!(event, Ok(ResponseEvent::Completed { .. })) {
+            break;
+        }
+    }
+
+    let request = request_recorder.single_request();
+    assert_eq!(
+        request.header(X_CODEX_TURN_METADATA_HEADER).as_deref(),
+        Some(turn_metadata.as_str())
     );
 }
 
