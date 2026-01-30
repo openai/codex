@@ -188,7 +188,7 @@ pub struct ModelInfo {
     pub upgrade: Option<ModelInfoUpgrade>,
     pub base_instructions: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_instructions_spec: Option<ModelInstructionsSpec>,
+    pub model_instructions_spec: Option<ModelMessages>,
     pub supports_reasoning_summaries: bool,
     pub support_verbosity: bool,
     pub default_verbosity: Option<Verbosity>,
@@ -219,12 +219,12 @@ impl ModelInfo {
     pub fn supports_personality(&self) -> bool {
         self.model_instructions_spec
             .as_ref()
-            .is_some_and(ModelInstructionsSpec::supports_personality)
+            .is_some_and(ModelMessages::supports_personality)
     }
 
     pub fn get_model_instructions(&self, personality: Option<Personality>) -> String {
         if let Some(model_instructions_spec) = &self.model_instructions_spec
-            && let Some(template) = &model_instructions_spec.template
+            && let Some(template) = &model_instructions_spec.instructions_template
         {
             // if we have a template, always use it
             let personality_message = model_instructions_spec
@@ -244,17 +244,17 @@ impl ModelInfo {
     }
 }
 
-/// A strongly-typed template for assembling model instructions. If populated and valid, will override
-/// base_instructions.
+/// A strongly-typed template for assembling model instructions and developer messages. If
+/// instructions_* is populated and valid, it will override base_instructions.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
-pub struct ModelInstructionsSpec {
-    pub template: Option<String>,
-    pub variables: Option<ModelInstructionsVariables>,
+pub struct ModelMessages {
+    pub instructions_template: Option<String>,
+    pub instructions_variables: Option<ModelInstructionsVariables>,
 }
 
-impl ModelInstructionsSpec {
+impl ModelMessages {
     fn has_personality_placeholder(&self) -> bool {
-        self.template
+        self.instructions_template
             .as_ref()
             .map(|spec| spec.contains(PERSONALITY_PLACEHOLDER))
             .unwrap_or(false)
@@ -263,13 +263,13 @@ impl ModelInstructionsSpec {
     fn supports_personality(&self) -> bool {
         self.has_personality_placeholder()
             && self
-                .variables
+                .instructions_variables
                 .as_ref()
                 .is_some_and(ModelInstructionsVariables::is_complete)
     }
 
     pub fn get_personality_message(&self, personality: Option<Personality>) -> Option<String> {
-        self.variables
+        self.instructions_variables
             .as_ref()
             .and_then(|variables| variables.get_personality_message(personality))
     }
@@ -436,7 +436,7 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
-    fn test_model(spec: Option<ModelInstructionsSpec>) -> ModelInfo {
+    fn test_model(spec: Option<ModelMessages>) -> ModelInfo {
         ModelInfo {
             slug: "test-model".to_string(),
             display_name: "Test Model".to_string(),
@@ -473,9 +473,9 @@ mod tests {
 
     #[test]
     fn get_model_instructions_uses_template_when_placeholder_present() {
-        let model = test_model(Some(ModelInstructionsSpec {
-            template: Some("Hello {{ personality }}".to_string()),
-            variables: Some(personality_variables()),
+        let model = test_model(Some(ModelMessages {
+            instructions_template: Some("Hello {{ personality }}".to_string()),
+            instructions_variables: Some(personality_variables()),
         }));
 
         let instructions = model.get_model_instructions(Some(Personality::Friendly));
@@ -485,9 +485,9 @@ mod tests {
 
     #[test]
     fn get_model_instructions_always_strips_placeholder() {
-        let model = test_model(Some(ModelInstructionsSpec {
-            template: Some("Hello\n{{ personality }}".to_string()),
-            variables: Some(ModelInstructionsVariables {
+        let model = test_model(Some(ModelMessages {
+            instructions_template: Some("Hello\n{{ personality }}".to_string()),
+            instructions_variables: Some(ModelInstructionsVariables {
                 personality_default: None,
                 personality_friendly: Some("friendly".to_string()),
                 personality_pragmatic: None,
@@ -503,9 +503,9 @@ mod tests {
         );
         assert_eq!(model.get_model_instructions(None), "Hello\n");
 
-        let model_no_personality = test_model(Some(ModelInstructionsSpec {
-            template: Some("Hello\n{{ personality }}".to_string()),
-            variables: Some(ModelInstructionsVariables {
+        let model_no_personality = test_model(Some(ModelMessages {
+            instructions_template: Some("Hello\n{{ personality }}".to_string()),
+            instructions_variables: Some(ModelInstructionsVariables {
                 personality_default: None,
                 personality_friendly: None,
                 personality_pragmatic: None,
@@ -524,9 +524,9 @@ mod tests {
 
     #[test]
     fn get_model_instructions_falls_back_when_template_is_missing() {
-        let model = test_model(Some(ModelInstructionsSpec {
-            template: None,
-            variables: Some(ModelInstructionsVariables {
+        let model = test_model(Some(ModelMessages {
+            instructions_template: None,
+            instructions_variables: Some(ModelInstructionsVariables {
                 personality_default: None,
                 personality_friendly: None,
                 personality_pragmatic: None,

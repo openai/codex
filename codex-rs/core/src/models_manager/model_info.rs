@@ -2,8 +2,8 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::openai_models::ModelInstructionsSpec;
 use codex_protocol::openai_models::ModelInstructionsVariables;
+use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
@@ -173,9 +173,9 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
         model_info!(
             slug,
             base_instructions: GPT_5_2_CODEX_INSTRUCTIONS.to_string(),
-            model_instructions_spec: Some(ModelInstructionsSpec {
-                template: Some(GPT_5_2_CODEX_INSTRUCTIONS_TEMPLATE.to_string()),
-                variables: Some(ModelInstructionsVariables {
+            model_instructions_spec: Some(ModelMessages {
+                instructions_template: Some(GPT_5_2_CODEX_INSTRUCTIONS_TEMPLATE.to_string()),
+                instructions_variables: Some(ModelInstructionsVariables {
                     personality_default: Some("".to_string()),
                     personality_friendly: Some(GPT_5_2_CODEX_PERSONALITY_FRIENDLY.to_string()),
                     personality_pragmatic: Some(GPT_5_2_CODEX_PERSONALITY_PRAGMATIC.to_string()),
@@ -216,9 +216,9 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             context_window: Some(CONTEXT_WINDOW_272K),
             supported_reasoning_levels: supported_reasoning_level_low_medium_high_xhigh(),
             base_instructions: GPT_5_2_CODEX_INSTRUCTIONS.to_string(),
-            model_instructions_spec: Some(ModelInstructionsSpec {
-                template: Some(GPT_5_2_CODEX_INSTRUCTIONS_TEMPLATE.to_string()),
-                variables: Some(ModelInstructionsVariables {
+            model_instructions_spec: Some(ModelMessages {
+                instructions_template: Some(GPT_5_2_CODEX_INSTRUCTIONS_TEMPLATE.to_string()),
+                instructions_variables: Some(ModelInstructionsVariables {
                     personality_default: Some("".to_string()),
                     personality_friendly: Some(GPT_5_2_CODEX_PERSONALITY_FRIENDLY.to_string()),
                     personality_pragmatic: Some(GPT_5_2_CODEX_PERSONALITY_PRAGMATIC.to_string()),
