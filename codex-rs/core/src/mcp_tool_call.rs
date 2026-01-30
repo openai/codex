@@ -291,11 +291,11 @@ fn build_mcp_tool_approval_question(
             },
             RequestUserInputQuestionOption {
                 label: MCP_TOOL_APPROVAL_DECLINE.to_string(),
-                description: "Skip this tool call and continue.".to_string(),
+                description: "Decline this tool call and continue.".to_string(),
             },
             RequestUserInputQuestionOption {
                 label: MCP_TOOL_APPROVAL_CANCEL.to_string(),
-                description: "Stop this turn.".to_string(),
+                description: "Cancel this tool call".to_string(),
             },
         ]),
     }
