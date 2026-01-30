@@ -39,7 +39,7 @@ fn codex_apps_mcp_bearer_token_env_var() -> Option<String> {
 }
 
 fn codex_apps_mcp_bearer_token(auth: Option<&CodexAuth>) -> Option<String> {
-    let token = auth.and_then(|auth| auth.get_token().ok())?;
+    let token = auth.and_then(|auth| auth.bearer_token().ok()).flatten()?;
     let token = token.trim();
     if token.is_empty() {
         None

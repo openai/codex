@@ -16,6 +16,16 @@ use serde::Serialize;
 pub struct RateLimitStatusPayload {
     #[serde(rename = "plan_type")]
     pub plan_type: PlanType,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "user_id")]
+    pub user_id: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "account_id"
+    )]
+    pub account_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "email")]
+    pub email: Option<String>,
     #[serde(
         rename = "rate_limit",
         default,
@@ -36,6 +46,9 @@ impl RateLimitStatusPayload {
     pub fn new(plan_type: PlanType) -> RateLimitStatusPayload {
         RateLimitStatusPayload {
             plan_type,
+            user_id: None,
+            account_id: None,
+            email: None,
             rate_limit: None,
             credits: None,
         }

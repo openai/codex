@@ -38,6 +38,14 @@ impl PathStyle {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UsageMetadata {
+    pub user_id: Option<String>,
+    pub account_id: Option<String>,
+    pub email: Option<String>,
+    pub plan_type: AccountPlanType,
+}
+
 #[derive(Clone, Debug)]
 pub struct Client {
     base_url: String,
@@ -75,10 +83,10 @@ impl Client {
     }
 
     pub fn from_auth(base_url: impl Into<String>, auth: &CodexAuth) -> Result<Self> {
-        let token = auth.get_token().map_err(anyhow::Error::from)?;
-        let mut client = Self::new(base_url)?
-            .with_user_agent(get_codex_user_agent())
-            .with_bearer_token(token);
+        let mut client = Self::new(base_url)?.with_user_agent(get_codex_user_agent());
+        if let Some(token) = auth.bearer_token().map_err(anyhow::Error::from)? {
+            client = client.with_bearer_token(token);
+        }
         if let Some(account_id) = auth.get_account_id() {
             client = client.with_chatgpt_account_id(account_id);
         }
@@ -159,15 +167,32 @@ impl Client {
         }
     }
 
-    pub async fn get_rate_limits(&self) -> Result<RateLimitSnapshot> {
-        let url = match self.path_style {
+    fn usage_url(&self) -> String {
+        match self.path_style {
             PathStyle::CodexApi => format!("{}/api/codex/usage", self.base_url),
             PathStyle::ChatGptApi => format!("{}/wham/usage", self.base_url),
-        };
+        }
+    }
+
+    async fn fetch_usage_payload(&self) -> Result<RateLimitStatusPayload> {
+        let url = self.usage_url();
         let req = self.http.get(&url).headers(self.headers());
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
-        let payload: RateLimitStatusPayload = self.decode_json(&url, &ct, &body)?;
+        self.decode_json(&url, &ct, &body)
+    }
+
+    pub async fn get_rate_limits(&self) -> Result<RateLimitSnapshot> {
+        let payload = self.fetch_usage_payload().await?;
         Ok(Self::rate_limit_snapshot_from_payload(payload))
+    }
+
+    pub async fn get_rate_limits_with_metadata(
+        &self,
+    ) -> Result<(RateLimitSnapshot, UsageMetadata)> {
+        let payload = self.fetch_usage_payload().await?;
+        let metadata = Self::usage_metadata_from_payload(&payload);
+        let snapshot = Self::rate_limit_snapshot_from_payload(payload);
+        Ok((snapshot, metadata))
     }
 
     pub async fn list_tasks(
@@ -317,6 +342,15 @@ impl Client {
         }
     }
 
+    fn usage_metadata_from_payload(payload: &RateLimitStatusPayload) -> UsageMetadata {
+        UsageMetadata {
+            user_id: payload.user_id.clone(),
+            account_id: payload.account_id.clone(),
+            email: payload.email.clone(),
+            plan_type: Self::map_plan_type(payload.plan_type),
+        }
+    }
+
     fn map_rate_limit_window(
         window: Option<Option<Box<RateLimitWindowSnapshot>>>,
     ) -> Option<RateLimitWindow> {
@@ -372,5 +406,33 @@ impl Client {
 
         let seconds_i64 = i64::from(seconds);
         Some((seconds_i64 + 59) / 60)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Client;
+    use super::UsageMetadata;
+    use crate::types::PlanType;
+    use crate::types::RateLimitStatusPayload;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn usage_metadata_maps_optional_fields() {
+        let payload = RateLimitStatusPayload {
+            plan_type: PlanType::Plus,
+            user_id: Some("user-123".to_string()),
+            account_id: Some("acc-456".to_string()),
+            email: Some("user@example.com".to_string()),
+            rate_limit: None,
+            credits: None,
+        };
+
+        let metadata: UsageMetadata = Client::usage_metadata_from_payload(&payload);
+
+        assert_eq!(metadata.user_id, Some("user-123".to_string()));
+        assert_eq!(metadata.account_id, Some("acc-456".to_string()));
+        assert_eq!(metadata.email, Some("user@example.com".to_string()));
+        assert_eq!(metadata.plan_type, codex_protocol::account::PlanType::Plus);
     }
 }

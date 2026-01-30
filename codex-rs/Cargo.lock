@@ -1084,6 +1084,7 @@ dependencies = [
  "axum",
  "base64",
  "chrono",
+ "clap",
  "codex-app-server-protocol",
  "codex-arg0",
  "codex-backend-client",

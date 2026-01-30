@@ -915,7 +915,7 @@ mod tests {
     #[test]
     fn serialize_get_account() -> Result<()> {
         let request = ClientRequest::GetAccount {
-            request_id: RequestId::Integer(6),
+            request_id: RequestId::Integer(7),
             params: v2::GetAccountParams {
                 refresh_token: false,
             },
@@ -923,7 +923,7 @@ mod tests {
         assert_eq!(
             json!({
                 "method": "account/read",
-                "id": 6,
+                "id": 7,
                 "params": {
                     "refreshToken": false
                 }

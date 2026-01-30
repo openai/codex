@@ -10,6 +10,7 @@ use std::io::Result as IoResult;
 use std::path::PathBuf;
 
 use crate::message_processor::MessageProcessor;
+use crate::message_processor::MessageProcessorArgs;
 use crate::outgoing_message::OutgoingMessage;
 use crate::outgoing_message::OutgoingMessageSender;
 use codex_app_server_protocol::ConfigLayerSource;
@@ -168,6 +169,7 @@ pub async fn run_main(
     cli_config_overrides: CliConfigOverrides,
     loader_overrides: LoaderOverrides,
     default_analytics_enabled: bool,
+    default_chatgpt_proxy_auth: bool,
 ) -> IoResult<()> {
     // Set up channels.
     let (incoming_tx, mut incoming_rx) = mpsc::channel::<JSONRPCMessage>(CHANNEL_CAPACITY);
@@ -290,15 +292,16 @@ pub async fn run_main(
         let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
         let cli_overrides: Vec<(String, TomlValue)> = cli_kv_overrides.clone();
         let loader_overrides = loader_overrides_for_config_api;
-        let mut processor = MessageProcessor::new(
-            outgoing_message_sender,
+        let mut processor = MessageProcessor::new(MessageProcessorArgs {
+            outgoing: outgoing_message_sender,
             codex_linux_sandbox_exe,
-            std::sync::Arc::new(config),
+            config: std::sync::Arc::new(config),
             cli_overrides,
             loader_overrides,
-            feedback.clone(),
+            default_chatgpt_proxy_auth,
+            feedback: feedback.clone(),
             config_warnings,
-        );
+        });
         let mut thread_created_rx = processor.thread_created_receiver();
         async move {
             let mut listen_for_threads = true;
