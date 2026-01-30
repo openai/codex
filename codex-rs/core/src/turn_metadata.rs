@@ -23,15 +23,10 @@ struct TurnMetadata {
     workspaces: BTreeMap<String, TurnMetadataWorkspace>,
 }
 
-/// Build a per-turn metadata header value for the given working directory.
-///
-/// This is intentionally evaluated lazily at request send time so turns that
-/// never reach the model do not pay the git subprocess cost.
+/// this happens at request send time only
 pub(crate) async fn build_turn_metadata_header(cwd: &Path) -> Option<String> {
     let repo_root = get_git_repo_root(cwd)?;
 
-    // Keep git subprocess work bounded per command, without wrapping the
-    // entire metadata build in a separate timeout.
     let (latest_git_commit_hash, associated_remote_urls) = tokio::join!(
         get_head_commit_hash_with_timeout(cwd, TURN_METADATA_TIMEOUT),
         get_git_remote_urls_assume_git_repo_with_timeout(cwd, TURN_METADATA_TIMEOUT)
