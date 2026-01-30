@@ -1556,7 +1556,8 @@ impl ChatWidget {
     }
 
     fn flush_pending_replay_turn_aborts(&mut self) {
-        for reason in self.pending_replay_turn_aborts.drain(..) {
+        let pending = std::mem::take(&mut self.pending_replay_turn_aborts);
+        for reason in pending {
             self.on_interrupted_turn(reason);
         }
     }
