@@ -114,7 +114,8 @@ pub(crate) enum AppEvent {
 
     InsertHistoryCell(Box<dyn HistoryCell>),
 
-    /// Buffer request_user_input answers to be sent with the next user turn.
+    /// Buffer request_user_input answers (typically from an interrupted UI) so they
+    /// are sent before the next user turn, preserving tool call/output ordering.
     QueueRequestUserInputAnswers {
         turn_id: String,
         call_id: String,
