@@ -33,3 +33,7 @@ tokio = { workspace = true, features = [
     "rt-multi-thread",
     "signal",
 ] }
+
+[build-dependencies]
+cc = "1"
+pkg-config = "0.3"
