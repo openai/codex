@@ -97,6 +97,7 @@ pub(crate) struct BacktrackSelection {
 pub(crate) struct PendingBacktrackRollback {
     pub(crate) selection: BacktrackSelection,
     pub(crate) thread_id: Option<ThreadId>,
+    pub(crate) previous_collaboration_mask: Option<CollaborationModeMask>,
 }
 
 impl App {
@@ -206,15 +207,16 @@ impl App {
             return;
         }
 
-        if let Some(mask) = selection.collaboration_mode.clone() {
-            self.chat_widget.set_collaboration_mask(mask);
-        }
+        let previous_collaboration_mask = self
+            .chat_widget
+            .replace_collaboration_mask(selection.collaboration_mode.clone());
         let prefill = selection.prefill.clone();
         let text_elements = selection.text_elements.clone();
         let local_image_paths = selection.local_image_paths.clone();
         self.backtrack.pending_rollback = Some(PendingBacktrackRollback {
             selection,
             thread_id: self.chat_widget.thread_id(),
+            previous_collaboration_mask,
         });
         self.chat_widget.submit_op(Op::ThreadRollback { num_turns });
         if !prefill.is_empty() || !text_elements.is_empty() || !local_image_paths.is_empty() {
@@ -464,8 +466,14 @@ impl App {
                 codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
                 ..
             }) => {
-                // Core rejected the rollback; clear the guard so the user can retry.
-                self.backtrack.pending_rollback = None;
+                let Some(pending) = self.backtrack.pending_rollback.take() else {
+                    return;
+                };
+                if pending.thread_id != self.chat_widget.thread_id() {
+                    return;
+                }
+                self.chat_widget
+                    .replace_collaboration_mask(pending.previous_collaboration_mask);
             }
             _ => {}
         }
