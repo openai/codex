@@ -1753,7 +1753,7 @@ fn toml_uses_deprecated_instructions_file(value: &TomlValue) -> bool {
 /// - If `CODEX_HOME` is not set, this function does not verify that the
 ///   directory exists.
 pub fn find_codex_home() -> std::io::Result<PathBuf> {
-    codex_utils_paths::find_codex_home()
+    codex_utils_home_dir::find_codex_home()
 }
 
 /// Returns the path to the folder where Codex logs are stored. Does not verify
