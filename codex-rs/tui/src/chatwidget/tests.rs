@@ -70,6 +70,7 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Settings;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
@@ -3154,6 +3155,7 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
         upgrade: None,
         show_in_picker,
         supported_in_api: true,
+        input_modalities: default_input_modalities(),
     };
 
     chat.open_model_popup_with_presets(vec![
@@ -3392,6 +3394,7 @@ async fn single_reasoning_option_skips_selection() {
         upgrade: None,
         show_in_picker: true,
         supported_in_api: true,
+        input_modalities: default_input_modalities(),
     };
     chat.open_reasoning_popup(preset);
 

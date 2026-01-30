@@ -209,6 +209,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub fn set_image_paste_enabled(&mut self, enabled: bool) {
+        self.composer.set_image_paste_enabled(enabled);
+        self.request_redraw();
+    }
+
     pub fn set_connectors_snapshot(&mut self, snapshot: Option<ConnectorsSnapshot>) {
         self.composer.set_connector_mentions(snapshot);
         self.request_redraw();
