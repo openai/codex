@@ -12,6 +12,7 @@ use ts_rs::TS;
 
 use crate::config_types::CollaborationMode;
 use crate::config_types::SandboxMode;
+use crate::openai_models::ModelInfo;
 use crate::protocol::AskForApproval;
 use crate::protocol::COLLABORATION_MODE_CLOSE_TAG;
 use crate::protocol::COLLABORATION_MODE_OPEN_TAG;
@@ -301,17 +302,30 @@ impl DeveloperInstructions {
     }
 
     /// Returns developer instructions from a collaboration mode if they exist and are non-empty.
-    pub fn from_collaboration_mode(collaboration_mode: &CollaborationMode) -> Option<Self> {
-        collaboration_mode
+    /// Precedence:
+    /// 1. collaboration_mode.settings.developer_instructions if it exists
+    /// 2. model.collaboration_modes_messages for the collaboration_mode.mode if it exists
+    /// 3. None
+    pub fn from_collaboration_mode(
+        collaboration_mode: &CollaborationMode,
+        model: &ModelInfo,
+    ) -> Option<Self> {
+        let instructions = collaboration_mode
             .settings
             .developer_instructions
             .as_ref()
             .filter(|instructions| !instructions.is_empty())
-            .map(|instructions| {
-                DeveloperInstructions::new(format!(
-                    "{COLLABORATION_MODE_OPEN_TAG}{instructions}{COLLABORATION_MODE_CLOSE_TAG}"
-                ))
-            })
+            .or_else(|| {
+                model
+                    .model_instructions_template
+                    .as_ref()
+                    .and_then(|template| template.collaboration_modes_messages.as_ref())
+                    .and_then(|messages| messages.0.get(&collaboration_mode.mode))
+            })?;
+
+        Some(DeveloperInstructions::new(format!(
+            "{COLLABORATION_MODE_OPEN_TAG}{instructions}{COLLABORATION_MODE_CLOSE_TAG}"
+        )))
     }
 
     fn from_permissions_with_network(

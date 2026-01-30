@@ -11,6 +11,7 @@ use strum_macros::EnumIter;
 use tracing::warn;
 use ts_rs::TS;
 
+use crate::config_types::ModeKind;
 use crate::config_types::Personality;
 use crate::config_types::Verbosity;
 
@@ -252,6 +253,7 @@ impl ModelInfo {
 pub struct ModelInstructionsTemplate {
     pub template: String,
     pub personality_messages: Option<PersonalityMessages>,
+    pub collaboration_modes_messages: Option<CollaborationModesMessages>,
 }
 
 impl ModelInstructionsTemplate {
@@ -271,6 +273,11 @@ impl ModelInstructionsTemplate {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, TS, JsonSchema)]
 #[serde(transparent)]
 pub struct PersonalityMessages(pub BTreeMap<Personality, String>);
+
+// serializes as a dictionary from collaboration mode to message
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
+#[serde(transparent)]
+pub struct CollaborationModesMessages(pub BTreeMap<ModeKind, String>);
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct ModelInfoUpgrade {
@@ -446,6 +453,7 @@ mod tests {
         let model = test_model(Some(ModelInstructionsTemplate {
             template: "Hello {{ personality_message }}".to_string(),
             personality_messages: Some(personality_messages()),
+            collaboration_modes_messages: None,
         }));
 
         let instructions = model.get_model_instructions(Some(Personality::Friendly));
@@ -458,6 +466,7 @@ mod tests {
         let model = test_model(Some(ModelInstructionsTemplate {
             template: "Hello there".to_string(),
             personality_messages: Some(personality_messages()),
+            collaboration_modes_messages: None,
         }));
 
         let instructions = model.get_model_instructions(Some(Personality::Friendly));

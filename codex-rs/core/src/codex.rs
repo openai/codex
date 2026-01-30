@@ -1303,6 +1303,7 @@ impl Session {
 
     fn build_collaboration_mode_update_item(
         &self,
+        current_context: &TurnContext,
         previous_collaboration_mode: &CollaborationMode,
         next_collaboration_mode: Option<&CollaborationMode>,
     ) -> Option<ResponseItem> {
@@ -1312,7 +1313,8 @@ impl Session {
             }
             // If the next mode has empty developer instructions, this returns None and we emit no
             // update, so prior collaboration instructions remain in the prompt history.
-            Some(DeveloperInstructions::from_collaboration_mode(next_mode)?.into())
+            let model_info = current_context.client.get_model_info();
+            Some(DeveloperInstructions::from_collaboration_mode(next_mode, &model_info)?.into())
         } else {
             None
         }
@@ -1337,6 +1339,7 @@ impl Session {
             update_items.push(permissions_item);
         }
         if let Some(collaboration_mode_item) = self.build_collaboration_mode_update_item(
+            current_context,
             previous_collaboration_mode,
             next_collaboration_mode,
         ) {
@@ -1838,13 +1841,23 @@ impl Session {
             items.push(DeveloperInstructions::new(developer_instructions.to_string()).into());
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
-        let collaboration_mode = {
+        let session_configuration = {
             let state = self.state.lock().await;
-            state.session_configuration.collaboration_mode.clone()
+            state.session_configuration.clone()
         };
-        if let Some(collab_instructions) =
-            DeveloperInstructions::from_collaboration_mode(&collaboration_mode)
-        {
+        let per_turn_config = Self::build_per_turn_config(&session_configuration);
+        let model_info = self
+            .services
+            .models_manager
+            .get_model_info(
+                session_configuration.collaboration_mode.model(),
+                &per_turn_config,
+            )
+            .await;
+        if let Some(collab_instructions) = DeveloperInstructions::from_collaboration_mode(
+            &session_configuration.collaboration_mode,
+            &model_info,
+        ) {
             items.push(collab_instructions.into());
         }
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {

@@ -22,11 +22,18 @@ fn sse_completed(id: &str) -> String {
     sse(vec![ev_response_created(id), ev_completed(id)])
 }
 
+const TEST_COLLAB_MODEL: &str = "test-collab-template";
+const MODEL_FALLBACK_TEXT: &str = "model fallback";
+
 fn collab_mode_with_instructions(instructions: Option<&str>) -> CollaborationMode {
+    collab_mode_with_model("gpt-5.1", instructions)
+}
+
+fn collab_mode_with_model(model: &str, instructions: Option<&str>) -> CollaborationMode {
     CollaborationMode {
         mode: ModeKind::Custom,
         settings: Settings {
-            model: "gpt-5.1".to_string(),
+            model: model.to_string(),
             reasoning_effort: None,
             developer_instructions: instructions.map(str::to_string),
         },
@@ -524,6 +531,109 @@ async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
     assert_eq!(dev_texts.len(), 1);
     let collab_text = collab_xml("");
     assert_eq!(count_exact(&dev_texts, &collab_text), 0);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn collaboration_instructions_precedence_mode_overrides_model_template() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let req = mount_sse_once(&server, sse_completed("resp-1")).await;
+
+    let mut builder = test_codex().with_model(TEST_COLLAB_MODEL);
+    let test = builder.build(&server).await?;
+
+    let mode_text = "mode instructions";
+    let collaboration_mode = collab_mode_with_model(TEST_COLLAB_MODEL, Some(mode_text));
+    test.codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            collaboration_mode: Some(collaboration_mode),
+            personality: None,
+        })
+        .await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let input = req.single_request().input();
+    let dev_texts = developer_texts(&input);
+    let mode_text = collab_xml(mode_text);
+    assert_eq!(count_exact(&dev_texts, &mode_text), 1);
+    let last_collab = dev_texts
+        .iter()
+        .rev()
+        .find(|text| text.starts_with(COLLABORATION_MODE_OPEN_TAG))
+        .cloned();
+    assert_eq!(last_collab, Some(mode_text));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn collaboration_instructions_fall_back_to_model_template_when_mode_empty() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let req = mount_sse_once(&server, sse_completed("resp-1")).await;
+
+    let mut builder = test_codex().with_model(TEST_COLLAB_MODEL);
+    let test = builder.build(&server).await?;
+
+    let collaboration_mode = collab_mode_with_model(TEST_COLLAB_MODEL, None);
+    test.codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            collaboration_mode: Some(collaboration_mode),
+            personality: None,
+        })
+        .await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = req.single_request();
+    let model = request
+        .body_json()
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    assert_eq!(model, TEST_COLLAB_MODEL.to_string());
+    let input = request.input();
+    let dev_texts = developer_texts(&input);
+    let model_text = collab_xml(MODEL_FALLBACK_TEXT);
+    assert_eq!(count_exact(&dev_texts, &model_text), 1);
 
     Ok(())
 }
