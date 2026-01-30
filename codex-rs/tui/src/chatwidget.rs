@@ -791,10 +791,10 @@ impl ChatWidget {
         self.bottom_pane.set_connectors_snapshot(None);
         self.thread_id = Some(event.session_id);
         self.thread_name = event.thread_name.clone();
-        self.forked_from = event.forked_from_id.clone();
+        self.forked_from = event.forked_from_id;
         self.current_rollout_path = event.rollout_path.clone();
         let initial_messages = event.initial_messages.clone();
-        let forked_from_id = event.forked_from_id.clone();
+        let forked_from_id = event.forked_from_id;
         let model_for_header = event.model.clone();
         self.session_header.set_model(&model_for_header);
         self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
