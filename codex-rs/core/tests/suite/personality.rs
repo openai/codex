@@ -8,12 +8,11 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
-use codex_protocol::openai_models::InstructionsVariables;
 use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::openai_models::ModelInstructionsTemplate;
+use codex_protocol::openai_models::ModelInstructionsSpec;
+use codex_protocol::openai_models::ModelInstructionsVariables;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
-use codex_protocol::openai_models::PersonalityVariable;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationPolicyConfig;
@@ -394,14 +393,12 @@ async fn config_personality_remote_model_legacy_placeholder_instructions() -> an
         priority: 1,
         upgrade: None,
         base_instructions: "base instructions".to_string(),
-        model_instructions_template: Some(ModelInstructionsTemplate {
+        model_instructions_spec: Some(ModelInstructionsSpec {
             template: Some("Base instructions\n{{ personality_message }}\n".to_string()),
-            variables: Some(InstructionsVariables {
-                personality: Some(PersonalityVariable {
-                    default: None,
-                    friendly: Some(remote_personality_message.to_string()),
-                    pragmatic: None,
-                }),
+            variables: Some(ModelInstructionsVariables {
+                personality_default: None,
+                personality_friendly: Some(remote_personality_message.to_string()),
+                personality_pragmatic: None,
             }),
         }),
         supports_reasoning_summaries: false,
@@ -503,14 +500,12 @@ async fn remote_model_default_personality_instructions() -> anyhow::Result<()> {
         priority: 1,
         upgrade: None,
         base_instructions: "base instructions".to_string(),
-        model_instructions_template: Some(ModelInstructionsTemplate {
+        model_instructions_spec: Some(ModelInstructionsSpec {
             template: Some("Base instructions\n{{ personality }}\n".to_string()),
-            variables: Some(InstructionsVariables {
-                personality: Some(PersonalityVariable {
-                    default: Some(default_personality_message.to_string()),
-                    friendly: Some("Friendly variant".to_string()),
-                    pragmatic: Some("Pragmatic variant".to_string()),
-                }),
+            variables: Some(ModelInstructionsVariables {
+                personality_default: Some(default_personality_message.to_string()),
+                personality_friendly: Some("Friendly variant".to_string()),
+                personality_pragmatic: Some("Pragmatic variant".to_string()),
             }),
         }),
         supports_reasoning_summaries: false,
@@ -608,14 +603,12 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
         priority: 1,
         upgrade: None,
         base_instructions: "base instructions".to_string(),
-        model_instructions_template: Some(ModelInstructionsTemplate {
+        model_instructions_spec: Some(ModelInstructionsSpec {
             template: Some("Base instructions\n{{ personality_message }}\n".to_string()),
-            variables: Some(InstructionsVariables {
-                personality: Some(PersonalityVariable {
-                    default: None,
-                    friendly: Some(remote_personality_message.to_string()),
-                    pragmatic: None,
-                }),
+            variables: Some(ModelInstructionsVariables {
+                personality_default: None,
+                personality_friendly: Some(remote_personality_message.to_string()),
+                personality_pragmatic: None,
             }),
         }),
         supports_reasoning_summaries: false,
