@@ -1216,6 +1216,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         status: Some("completed".into()),
         action: Some(WebSearchAction::Search {
             query: Some("weather".into()),
+            queries: None,
         }),
     });
     prompt.input.push(ResponseItem::FunctionCall {

@@ -131,6 +131,7 @@ fn web_search_end_emits_item_completed() {
     let query = "rust async await".to_string();
     let action = WebSearchAction::Search {
         query: Some(query.clone()),
+        queries: None,
     };
     let out = ep.collect_thread_events(&event(
         "w1",
@@ -195,6 +196,7 @@ fn web_search_begin_then_end_reuses_item_id() {
     };
     let action = WebSearchAction::Search {
         query: Some("rust async await".to_string()),
+        queries: None,
     };
     let end = ep.collect_thread_events(&event(
         "w1",

@@ -15,6 +15,7 @@ use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::WebSearchAction;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
@@ -2113,7 +2114,13 @@ pub enum ThreadItem {
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    WebSearch { id: String, query: String },
+    WebSearch {
+        id: String,
+        query: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        action: Option<WebSearchAction>,
+    },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     ImageView { id: String, path: String },
@@ -2157,6 +2164,7 @@ impl From<CoreTurnItem> for ThreadItem {
             CoreTurnItem::WebSearch(search) => ThreadItem::WebSearch {
                 id: search.id,
                 query: search.query,
+                action: Some(search.action),
             },
             CoreTurnItem::ContextCompaction(compaction) => {
                 ThreadItem::ContextCompaction { id: compaction.id }
@@ -2928,6 +2936,7 @@ mod tests {
             query: "docs".to_string(),
             action: WebSearchAction::Search {
                 query: Some("docs".to_string()),
+                queries: None,
             },
         });
 
@@ -2936,6 +2945,10 @@ mod tests {
             ThreadItem::WebSearch {
                 id: "search-1".to_string(),
                 query: "docs".to_string(),
+                action: Some(WebSearchAction::Search {
+                    query: Some("docs".to_string()),
+                    queries: None,
+                }),
             }
         );
     }

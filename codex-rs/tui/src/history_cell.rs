@@ -2294,7 +2294,10 @@ mod tests {
         let cell = new_web_search_call(
             "call-1".to_string(),
             query.clone(),
-            WebSearchAction::Search { query: Some(query) },
+            WebSearchAction::Search {
+                query: Some(query),
+                queries: None,
+            },
         );
         let rendered = render_lines(&cell.display_lines(64)).join("\n");
 
@@ -2308,7 +2311,10 @@ mod tests {
         let cell = new_web_search_call(
             "call-1".to_string(),
             query.clone(),
-            WebSearchAction::Search { query: Some(query) },
+            WebSearchAction::Search {
+                query: Some(query),
+                queries: None,
+            },
         );
         let rendered = render_lines(&cell.display_lines(64));
 
@@ -2327,7 +2333,10 @@ mod tests {
         let cell = new_web_search_call(
             "call-1".to_string(),
             query.clone(),
-            WebSearchAction::Search { query: Some(query) },
+            WebSearchAction::Search {
+                query: Some(query),
+                queries: None,
+            },
         );
         let rendered = render_lines(&cell.display_lines(64));
 
@@ -2341,7 +2350,10 @@ mod tests {
         let cell = new_web_search_call(
             "call-1".to_string(),
             query.clone(),
-            WebSearchAction::Search { query: Some(query) },
+            WebSearchAction::Search {
+                query: Some(query),
+                queries: None,
+            },
         );
         let rendered = render_lines(&cell.transcript_lines(64)).join("\n");
 

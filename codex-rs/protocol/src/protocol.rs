@@ -2469,6 +2469,7 @@ mod tests {
                 query: "find docs".into(),
                 action: WebSearchAction::Search {
                     query: Some("find docs".into()),
+                    queries: None,
                 },
             }),
         };
