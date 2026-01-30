@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
@@ -27,7 +28,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
-use core_test_support::wait_for_event_match;
+use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -146,11 +147,15 @@ async fn request_user_input_round_trip_resolves_pending() -> anyhow::Result<()> 
         })
         .await?;
 
-    let request = wait_for_event_match(&codex, |event| match event {
-        EventMsg::RequestUserInput(request) => Some(request.clone()),
-        _ => None,
-    })
+    let request_event = wait_for_event_with_timeout(
+        &codex,
+        |event| matches!(event, EventMsg::RequestUserInput(_)),
+        Duration::from_secs(20),
+    )
     .await;
+    let EventMsg::RequestUserInput(request) = request_event else {
+        panic!("expected RequestUserInput event");
+    };
     assert_eq!(request.call_id, call_id);
     assert_eq!(request.questions.len(), 1);
     assert_eq!(request.questions[0].is_other, true);
@@ -225,7 +230,14 @@ async fn request_user_input_partial_answers_replayed_after_interrupt() -> anyhow
             "id": "details",
             "header": "Details",
             "question": "Any extra notes?",
-            "isOther": false
+            "isOther": false,
+            "options": [{
+                "label": "No extra notes (Recommended)",
+                "description": "Continue without additional detail."
+            }, {
+                "label": "Add notes",
+                "description": "Provide more context."
+            }]
         }]
     })
     .to_string();
@@ -271,11 +283,15 @@ async fn request_user_input_partial_answers_replayed_after_interrupt() -> anyhow
         })
         .await?;
 
-    let request = wait_for_event_match(&codex, |event| match event {
-        EventMsg::RequestUserInput(request) => Some(request.clone()),
-        _ => None,
-    })
+    let request_event = wait_for_event_with_timeout(
+        &codex,
+        |event| matches!(event, EventMsg::RequestUserInput(_)),
+        Duration::from_secs(20),
+    )
     .await;
+    let EventMsg::RequestUserInput(request) = request_event else {
+        panic!("expected RequestUserInput event");
+    };
     assert_eq!(request.call_id, call_id);
 
     codex.submit(Op::Interrupt).await?;
