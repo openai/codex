@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::app_event::AppEvent;
+use crate::app_event::AppServerAction;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPaneView;
 use crate::bottom_pane::CancellationEvent;
@@ -21,7 +22,6 @@ use codex_core::features::Features;
 use codex_core::protocol::ElicitationAction;
 use codex_core::protocol::ExecPolicyAmendment;
 use codex_core::protocol::FileChange;
-use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -194,17 +194,19 @@ impl ApprovalOverlay {
     fn handle_exec_decision(&self, id: &str, command: &[String], decision: ReviewDecision) {
         let cell = history_cell::new_approval_decision_cell(command.to_vec(), decision.clone());
         self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
-        self.app_event_tx.send(AppEvent::CodexOp(Op::ExecApproval {
-            id: id.to_string(),
-            decision,
-        }));
+        self.app_event_tx
+            .send(AppEvent::AppServerAction(AppServerAction::ExecApproval {
+                call_id: id.to_string(),
+                decision,
+            }));
     }
 
     fn handle_patch_decision(&self, id: &str, decision: ReviewDecision) {
-        self.app_event_tx.send(AppEvent::CodexOp(Op::PatchApproval {
-            id: id.to_string(),
-            decision,
-        }));
+        self.app_event_tx
+            .send(AppEvent::AppServerAction(AppServerAction::PatchApproval {
+                call_id: id.to_string(),
+                decision,
+            }));
     }
 
     fn handle_elicitation_decision(
@@ -213,12 +215,13 @@ impl ApprovalOverlay {
         request_id: &RequestId,
         decision: ElicitationAction,
     ) {
-        self.app_event_tx
-            .send(AppEvent::CodexOp(Op::ResolveElicitation {
+        self.app_event_tx.send(AppEvent::AppServerAction(
+            AppServerAction::ResolveElicitation {
                 server_name: server_name.to_string(),
                 request_id: request_id.clone(),
                 decision,
-            }));
+            },
+        ));
     }
 
     fn advance_queue(&mut self) {
@@ -540,6 +543,7 @@ fn elicitation_options() -> Vec<ApprovalOption> {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
+    use crate::app_event::AppServerAction;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
 
@@ -570,15 +574,15 @@ mod tests {
         let mut view = ApprovalOverlay::new(make_exec_request(), tx, Features::with_defaults());
         assert!(!view.is_complete());
         view.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
-        // We expect at least one CodexOp message in the queue.
-        let mut saw_op = false;
+        // We expect at least one app-server action message in the queue.
+        let mut saw_action = false;
         while let Ok(ev) = rx.try_recv() {
-            if matches!(ev, AppEvent::CodexOp(_)) {
-                saw_op = true;
+            if matches!(ev, AppEvent::AppServerAction(_)) {
+                saw_action = true;
                 break;
             }
         }
-        assert!(saw_op, "expected approval decision to emit an op");
+        assert!(saw_action, "expected approval decision to emit an action");
     }
 
     #[test]
@@ -598,9 +602,9 @@ mod tests {
             Features::with_defaults(),
         );
         view.handle_key_event(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
-        let mut saw_op = false;
+        let mut saw_action = false;
         while let Ok(ev) = rx.try_recv() {
-            if let AppEvent::CodexOp(Op::ExecApproval { decision, .. }) = ev {
+            if let AppEvent::AppServerAction(AppServerAction::ExecApproval { decision, .. }) = ev {
                 assert_eq!(
                     decision,
                     ReviewDecision::ApprovedExecpolicyAmendment {
@@ -609,13 +613,13 @@ mod tests {
                         ])
                     }
                 );
-                saw_op = true;
+                saw_action = true;
                 break;
             }
         }
         assert!(
-            saw_op,
-            "expected approval decision to emit an op with command prefix"
+            saw_action,
+            "expected approval decision to emit an action with command prefix"
         );
     }
 
@@ -717,7 +721,10 @@ mod tests {
 
         let mut decision = None;
         while let Ok(ev) = rx.try_recv() {
-            if let AppEvent::CodexOp(Op::ExecApproval { decision: d, .. }) = ev {
+            if let AppEvent::AppServerAction(AppServerAction::ExecApproval {
+                decision: d, ..
+            }) = ev
+            {
                 decision = Some(d);
                 break;
             }

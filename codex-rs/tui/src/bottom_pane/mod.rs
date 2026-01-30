@@ -325,7 +325,7 @@ impl BottomPane {
                 && !self.composer.popup_active()
                 && let Some(status) = &self.status
             {
-                // Send Op::Interrupt
+                // Send interrupt request
                 status.interrupt();
                 self.request_redraw();
                 return InputResult::None;
@@ -831,7 +831,7 @@ impl Renderable for BottomPane {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
-    use codex_core::protocol::Op;
+    use crate::app_event::AppServerAction;
     use codex_protocol::protocol::SkillScope;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
@@ -1197,8 +1197,8 @@ mod tests {
 
         while let Ok(ev) = rx.try_recv() {
             assert!(
-                !matches!(ev, AppEvent::CodexOp(Op::Interrupt)),
-                "expected Esc to not send Op::Interrupt when dismissing skill popup"
+                !matches!(ev, AppEvent::AppServerAction(AppServerAction::Interrupt)),
+                "expected Esc to not send interrupt when dismissing skill popup"
             );
         }
         assert!(
@@ -1235,8 +1235,8 @@ mod tests {
 
         while let Ok(ev) = rx.try_recv() {
             assert!(
-                !matches!(ev, AppEvent::CodexOp(Op::Interrupt)),
-                "expected Esc to not send Op::Interrupt while command popup is active"
+                !matches!(ev, AppEvent::AppServerAction(AppServerAction::Interrupt)),
+                "expected Esc to not send interrupt while command popup is active"
             );
         }
         assert_eq!(pane.composer_text(), "/");
@@ -1262,8 +1262,11 @@ mod tests {
         pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
         assert!(
-            matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt))),
-            "expected Esc to send Op::Interrupt while a task is running"
+            matches!(
+                rx.try_recv(),
+                Ok(AppEvent::AppServerAction(AppServerAction::Interrupt))
+            ),
+            "expected Esc to send interrupt while a task is running"
         );
     }
 
