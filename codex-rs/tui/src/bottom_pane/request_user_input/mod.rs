@@ -759,6 +759,7 @@ impl RequestUserInputOverlay {
         let history_answers = answers.clone();
         self.app_event_tx
             .send(AppEvent::QueueRequestUserInputAnswers {
+                turn_id: self.request.turn_id.clone(),
                 call_id: self.request.call_id.clone(),
                 answers,
             });

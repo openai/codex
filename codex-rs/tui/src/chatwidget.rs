@@ -430,6 +430,7 @@ pub(crate) struct ChatWidgetInit {
 }
 
 struct PendingRequestUserInputAnswers {
+    turn_id: String,
     call_id: String,
     answers: HashMap<String, RequestUserInputAnswer>,
 }
@@ -3341,6 +3342,7 @@ impl ChatWidget {
 
     pub(crate) fn queue_request_user_input_answers(
         &mut self,
+        turn_id: String,
         call_id: String,
         answers: HashMap<String, RequestUserInputAnswer>,
     ) {
@@ -3352,11 +3354,16 @@ impl ChatWidget {
             .iter_mut()
             .find(|pending| pending.call_id == call_id)
         {
+            existing.turn_id = turn_id;
             existing.answers = answers;
             return;
         }
         self.pending_request_user_input_answers
-            .push_back(PendingRequestUserInputAnswers { call_id, answers });
+            .push_back(PendingRequestUserInputAnswers {
+                turn_id,
+                call_id,
+                answers,
+            });
     }
 
     fn flush_pending_request_user_input_answers(&mut self) {
@@ -3364,7 +3371,7 @@ impl ChatWidget {
         for pending in pending {
             let call_id = pending.call_id;
             self.submit_op(Op::UserInputAnswer {
-                id: call_id.clone(),
+                id: pending.turn_id,
                 call_id: Some(call_id),
                 response: RequestUserInputResponse {
                     answers: pending.answers,

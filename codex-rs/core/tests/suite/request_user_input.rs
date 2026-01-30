@@ -278,11 +278,25 @@ async fn request_user_input_partial_answers_replayed_after_interrupt() -> anyhow
     .await;
     assert_eq!(request.call_id, call_id);
 
+    codex.submit(Op::Interrupt).await?;
+
+    wait_for_event(&codex, |event| match event {
+        EventMsg::TurnAborted(ev) => ev.reason == TurnAbortReason::Interrupted,
+        _ => false,
+    })
+    .await;
+
     let mut answers = HashMap::new();
     answers.insert(
         "confirm_path".to_string(),
         RequestUserInputAnswer {
             answers: vec!["yes".to_string()],
+        },
+    );
+    answers.insert(
+        codex_protocol::request_user_input::INTERRUPTED_ANSWER_ID_BASE.to_string(),
+        RequestUserInputAnswer {
+            answers: vec![codex_protocol::request_user_input::INTERRUPTED_ANSWER_TEXT.to_string()],
         },
     );
     codex
@@ -292,14 +306,6 @@ async fn request_user_input_partial_answers_replayed_after_interrupt() -> anyhow
             response: RequestUserInputResponse { answers },
         })
         .await?;
-
-    codex.submit(Op::Interrupt).await?;
-
-    wait_for_event(&codex, |event| match event {
-        EventMsg::TurnAborted(ev) => ev.reason == TurnAbortReason::Interrupted,
-        _ => false,
-    })
-    .await;
 
     codex
         .submit(Op::UserTurn {
@@ -353,7 +359,10 @@ async fn request_user_input_partial_answers_replayed_after_interrupt() -> anyhow
         output_json,
         json!({
             "answers": {
-                "confirm_path": { "answers": ["yes"] }
+                "confirm_path": { "answers": ["yes"] },
+                "__codex_request_user_input_interrupted__": {
+                    "answers": ["interrupted_with_unanswered_questions"]
+                }
             }
         })
     );

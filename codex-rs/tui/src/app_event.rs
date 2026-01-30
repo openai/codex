@@ -116,6 +116,7 @@ pub(crate) enum AppEvent {
 
     /// Buffer request_user_input answers to be sent with the next user turn.
     QueueRequestUserInputAnswers {
+        turn_id: String,
         call_id: String,
         answers: HashMap<String, RequestUserInputAnswer>,
     },
