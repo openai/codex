@@ -43,6 +43,7 @@ const TEST_COLLAB_MODEL: &str = "test-collab-template";
 const MODEL_FALLBACK_TEXT: &str = "model fallback";
 const CACHE_FILE: &str = "models_cache.json";
 
+#[allow(clippy::expect_used)]
 fn cached_collab_builder() -> TestCodexBuilder {
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
