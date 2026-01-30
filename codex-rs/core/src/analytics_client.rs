@@ -11,6 +11,10 @@ use sha1::Digest;
 use sha1::Sha1;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::OnceLock;
+use std::time::Duration;
+use tokio::sync::mpsc;
 
 #[derive(Clone)]
 pub(crate) struct TrackEventsContext {
@@ -43,6 +47,17 @@ pub(crate) struct SkillInvocation {
     pub(crate) skill_path: PathBuf,
 }
 
+struct TrackEventsJob {
+    config: Arc<Config>,
+    tracking: TrackEventsContext,
+    invocations: Vec<SkillInvocation>,
+}
+
+const ANALYTICS_EVENTS_QUEUE_SIZE: usize = 256;
+const ANALYTICS_EVENTS_TIMEOUT: Duration = Duration::from_secs(10);
+
+static ANALYTICS_EVENTS_SENDER: OnceLock<mpsc::Sender<TrackEventsJob>> = OnceLock::new();
+
 #[derive(Serialize)]
 struct TrackEventsRequest {
     events: Vec<TrackEvent>,
@@ -51,25 +66,26 @@ struct TrackEventsRequest {
 #[derive(Serialize)]
 struct TrackEvent {
     event_type: &'static str,
+    skill_id: String,
+    skill_name: String,
     event_params: TrackEventParams,
 }
 
 #[derive(Serialize)]
 struct TrackEventParams {
-    skill_id: String,
-    skill_scope: String,
-    product_surface: String,
-    product_client_id: String,
-    model_slug: String,
-    conversation_id: String,
-    gizmo_id: Option<String>,
-    gizmo_type: Option<String>,
-    message_id: Option<String>,
+    product_surface: Option<String>,
+    product_client_id: Option<String>,
+    skill_scope: Option<String>,
+    skill_path: Option<String>,
+    repo_url: Option<String>,
+    conversation_id: Option<String>,
+    method: Option<String>,
+    model_slug: Option<String>,
 }
 
 pub(crate) async fn track_skill_invocations(
-    config: &Config,
-    tracking: Option<&TrackEventsContext>,
+    config: Arc<Config>,
+    tracking: Option<TrackEventsContext>,
     invocations: Vec<SkillInvocation>,
 ) {
     if config.analytics_enabled == Some(false) {
@@ -81,6 +97,44 @@ pub(crate) async fn track_skill_invocations(
     if invocations.is_empty() {
         return;
     }
+    let Some(auth) = tracking.auth.as_ref() else {
+        return;
+    };
+    if auth.mode != AuthMode::ChatGPT {
+        return;
+    }
+    let sender = analytics_events_sender();
+    let job = TrackEventsJob {
+        config,
+        tracking,
+        invocations,
+    };
+    if sender.try_send(job).is_err() {
+        //TODO: add a metric for this
+        tracing::warn!("dropping skill analytics events: queue is full");
+    }
+}
+
+fn analytics_events_sender() -> mpsc::Sender<TrackEventsJob> {
+    ANALYTICS_EVENTS_SENDER
+        .get_or_init(|| {
+            let (sender, mut receiver) = mpsc::channel(ANALYTICS_EVENTS_QUEUE_SIZE);
+            tokio::spawn(async move {
+                while let Some(job) = receiver.recv().await {
+                    send_track_skill_invocations(job).await;
+                }
+            });
+            sender
+        })
+        .clone()
+}
+
+async fn send_track_skill_invocations(job: TrackEventsJob) {
+    let TrackEventsJob {
+        config,
+        tracking,
+        invocations,
+    } = job;
     let Some(auth) = tracking.auth.as_ref() else {
         return;
     };
@@ -111,6 +165,11 @@ pub(crate) async fn track_skill_invocations(
         } else {
             None
         };
+        let skill_path = normalize_path_for_skill_id(
+            repo_url.as_deref(),
+            repo_root.as_deref(),
+            invocation.skill_path.as_path(),
+        );
         let skill_id = skill_id_for_local_skill(
             repo_url.as_deref(),
             repo_root.as_deref(),
@@ -119,27 +178,28 @@ pub(crate) async fn track_skill_invocations(
         );
         events.push(TrackEvent {
             event_type: "skill_invocation",
-            //TODO: add skill_name, repo_url, skill_path
+            skill_id,
+            skill_name: invocation.skill_name.clone(),
             event_params: TrackEventParams {
-                skill_id,
-                skill_scope: skill_scope.to_string(),
-                product_surface: "codex",
-                product_client_id: tracking.product_client_id.clone(),
-                model_slug: tracking.model_slug.clone(),
-                conversation_id: tracking.conversation_id.clone(),
-                gizmo_id: None,
-                gizmo_type: None,
-                message_id: None,
+                conversation_id: Some(tracking.conversation_id.clone()),
+                method: None,
+                model_slug: Some(tracking.model_slug.clone()),
+                product_surface: Some("codex".to_string()),
+                product_client_id: Some(tracking.product_client_id.clone()),
+                repo_url,
+                skill_scope: Some(skill_scope.to_string()),
+                skill_path: Some(skill_path),
             },
         });
     }
 
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
-    let url = format!("{base_url}/codex/analytics-events/track-events");
+    let url = format!("{base_url}/api/codex/analytics-events/events");
     let payload = TrackEventsRequest { events };
 
     let response = create_client()
         .post(&url)
+        .timeout(ANALYTICS_EVENTS_TIMEOUT)
         .bearer_auth(&access_token)
         .header("chatgpt-account-id", &account_id)
         .header("Content-Type", "application/json")

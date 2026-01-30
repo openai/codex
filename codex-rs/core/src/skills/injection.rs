@@ -63,10 +63,7 @@ pub(crate) async fn build_skill_injections(
     }
 
     let tracking = tracking.cloned();
-    let config = Arc::clone(&config);
-    tokio::spawn(async move {
-        track_skill_invocations(config.as_ref(), tracking.as_ref(), invocations).await;
-    });
+    track_skill_invocations(Arc::clone(&config), tracking, invocations).await;
 
     result
 }
