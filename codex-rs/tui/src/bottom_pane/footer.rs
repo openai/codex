@@ -1008,7 +1008,7 @@ mod tests {
         props: &FooterProps,
         collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     ) {
-        let height = footer_height(&props).max(1);
+        let height = footer_height(props).max(1);
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal
             .draw(|f| {
@@ -1080,22 +1080,19 @@ mod tests {
                     .as_ref()
                     .map(|line| line.width() as u16)
                     .unwrap_or(0);
-                if props.status_line_enabled {
-                    if let Some(max_left) = max_left_width_for_right(area, right_width) {
-                        if left_width > max_left {
-                            if let Some(line) = props
-                                .status_line_value
-                                .as_ref()
-                                .map(StatusLineValue::as_line)
-                                .map(|line| {
-                                    truncate_line_with_ellipsis_if_overflow(line, max_left as usize)
-                                })
-                            {
-                                left_width = line.width() as u16;
-                                truncated_status_line = Some(line);
-                            }
-                        }
-                    }
+                if props.status_line_enabled
+                    && let Some(max_left) = max_left_width_for_right(area, right_width)
+                    && left_width > max_left
+                    && let Some(line) = props
+                        .status_line_value
+                        .as_ref()
+                        .map(StatusLineValue::as_line)
+                        .map(|line| {
+                            truncate_line_with_ellipsis_if_overflow(line, max_left as usize)
+                        })
+                {
+                    left_width = line.width() as u16;
+                    truncated_status_line = Some(line);
                 }
                 let can_show_left_and_context =
                     can_show_left_with_context(area, left_width, right_width);
@@ -1134,10 +1131,10 @@ mod tests {
                         }
                         SummaryLeft::None => {}
                     }
-                    if show_context {
-                        if let Some(line) = &right_line {
-                            render_context_right(area, f.buffer_mut(), line);
-                        }
+                    if show_context
+                        && let Some(line) = &right_line
+                    {
+                        render_context_right(area, f.buffer_mut(), line);
                     }
                 } else {
                     render_footer_from_props(
@@ -1156,10 +1153,10 @@ mod tests {
                                 | FooterMode::QuitShortcutReminder
                                 | FooterMode::ShortcutOverlay
                         );
-                    if show_context {
-                        if let Some(line) = &right_line {
-                            render_context_right(area, f.buffer_mut(), line);
-                        }
+                    if show_context
+                        && let Some(line) = &right_line
+                    {
+                        render_context_right(area, f.buffer_mut(), line);
                     }
                 }
             })
@@ -1172,7 +1169,7 @@ mod tests {
         props: &FooterProps,
         collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     ) -> String {
-        let height = footer_height(&props).max(1);
+        let height = footer_height(props).max(1);
         let mut terminal = Terminal::new(VT100Backend::new(width, height)).expect("terminal");
         terminal
             .draw(|f| {
@@ -1281,10 +1278,10 @@ mod tests {
                         }
                         SummaryLeft::None => {}
                     }
-                    if show_context {
-                        if let Some(line) = &right_line {
-                            render_context_right(area, f.buffer_mut(), line);
-                        }
+                    if show_context
+                        && let Some(line) = &right_line
+                    {
+                        render_context_right(area, f.buffer_mut(), line);
                     }
                 } else {
                     render_footer_from_props(
@@ -1303,15 +1300,15 @@ mod tests {
                                 | FooterMode::QuitShortcutReminder
                                 | FooterMode::ShortcutOverlay
                         );
-                    if show_context {
-                        if let Some(line) = &right_line {
-                            render_context_right(area, f.buffer_mut(), line);
-                        }
+                    if show_context
+                        && let Some(line) = &right_line
+                    {
+                        render_context_right(area, f.buffer_mut(), line);
                     }
                 }
             })
             .expect("render footer");
-        terminal.backend().vt100().screen().contents().to_string()
+        terminal.backend().vt100().screen().contents()
     }
 
     #[test]
