@@ -1,4 +1,8 @@
 use crate::bash::parse_shell_lc_plain_commands;
+// Find the first matching git subcommand, skipping known global options that
+// may appear before it (e.g., `-C`, `-c`, `--git-dir`).
+// Implemented in `is_dangerous_command` and shared here.
+use crate::command_safety::is_dangerous_command::find_git_subcommand;
 use crate::command_safety::windows_safe_commands::is_safe_command_windows;
 
 pub fn is_known_safe_command(command: &[String]) -> bool {
@@ -36,72 +40,6 @@ pub fn is_known_safe_command(command: &[String]) -> bool {
         return true;
     }
     false
-}
-
-fn is_git_global_option_with_value(arg: &str) -> bool {
-    matches!(
-        arg,
-        "-C" | "-c"
-            | "--config-env"
-            | "--exec-path"
-            | "--git-dir"
-            | "--namespace"
-            | "--super-prefix"
-            | "--work-tree"
-    )
-}
-
-fn is_git_global_option_with_inline_value(arg: &str) -> bool {
-    matches!(
-        arg,
-        s if s.starts_with("--config-env=")
-            || s.starts_with("--exec-path=")
-            || s.starts_with("--git-dir=")
-            || s.starts_with("--namespace=")
-            || s.starts_with("--super-prefix=")
-            || s.starts_with("--work-tree=")
-    ) || ((arg.starts_with("-C") || arg.starts_with("-c")) && arg.len() > 2)
-}
-
-/// Find the first matching git subcommand, skipping known global options that
-/// may appear before it (e.g., `-C`, `-c`, `--git-dir`).
-fn find_git_subcommand<'a>(
-    command: &'a [String],
-    subcommands: &[&str],
-) -> Option<(usize, &'a str)> {
-    let cmd0 = command.first().map(String::as_str)?;
-    if !(cmd0.ends_with("git") || cmd0.ends_with("/git")) {
-        return None;
-    }
-
-    let mut skip_next = false;
-    for (idx, arg) in command.iter().enumerate().skip(1) {
-        if skip_next {
-            skip_next = false;
-            continue;
-        }
-
-        let arg = arg.as_str();
-
-        if is_git_global_option_with_inline_value(arg) {
-            continue;
-        }
-
-        if is_git_global_option_with_value(arg) {
-            skip_next = true;
-            continue;
-        }
-
-        if arg == "--" || arg.starts_with('-') {
-            continue;
-        }
-
-        if subcommands.contains(&arg) {
-            return Some((idx, arg));
-        }
-    }
-
-    None
 }
 
 fn is_safe_to_call_with_exec(command: &[String]) -> bool {

@@ -54,7 +54,9 @@ fn is_git_global_option_with_inline_value(arg: &str) -> bool {
 
 /// Find the first matching git subcommand, skipping known global options that
 /// may appear before it (e.g., `-C`, `-c`, `--git-dir`).
-fn find_git_subcommand<'a>(
+///
+/// Shared with `is_safe_command` to avoid git-global-option bypasses.
+pub(crate) fn find_git_subcommand<'a>(
     command: &'a [String],
     subcommands: &[&str],
 ) -> Option<(usize, &'a str)> {
