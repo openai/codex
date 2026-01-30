@@ -188,7 +188,7 @@ pub struct ModelInfo {
     pub upgrade: Option<ModelInfoUpgrade>,
     pub base_instructions: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_instructions_spec: Option<ModelMessages>,
+    pub model_messages: Option<ModelMessages>,
     pub supports_reasoning_summaries: bool,
     pub support_verbosity: bool,
     pub default_verbosity: Option<Verbosity>,
@@ -217,13 +217,13 @@ impl ModelInfo {
     }
 
     pub fn supports_personality(&self) -> bool {
-        self.model_instructions_spec
+        self.model_messages
             .as_ref()
             .is_some_and(ModelMessages::supports_personality)
     }
 
     pub fn get_model_instructions(&self, personality: Option<Personality>) -> String {
-        if let Some(model_instructions_spec) = &self.model_instructions_spec
+        if let Some(model_instructions_spec) = &self.model_messages
             && let Some(template) = &model_instructions_spec.instructions_template
         {
             // if we have a template, always use it
@@ -449,7 +449,7 @@ mod tests {
             priority: 1,
             upgrade: None,
             base_instructions: "base".to_string(),
-            model_instructions_spec: spec,
+            model_messages: spec,
             supports_reasoning_summaries: false,
             support_verbosity: false,
             default_verbosity: None,

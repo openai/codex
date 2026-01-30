@@ -101,9 +101,9 @@ pub(crate) fn with_config_overrides(mut model: ModelInfo, config: &Config) -> Mo
 
     if let Some(base_instructions) = &config.base_instructions {
         model.base_instructions = base_instructions.clone();
-        model.model_instructions_spec = None;
+        model.model_messages = None;
     } else if !config.features.enabled(Feature::Personality) {
-        model.model_instructions_spec = None;
+        model.model_messages = None;
     }
 
     model
@@ -173,7 +173,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
         model_info!(
             slug,
             base_instructions: GPT_5_2_CODEX_INSTRUCTIONS.to_string(),
-            model_instructions_spec: Some(ModelMessages {
+            model_messages: Some(ModelMessages {
                 instructions_template: Some(GPT_5_2_CODEX_INSTRUCTIONS_TEMPLATE.to_string()),
                 instructions_variables: Some(ModelInstructionsVariables {
                     personality_default: Some("".to_string()),
@@ -216,7 +216,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             context_window: Some(CONTEXT_WINDOW_272K),
             supported_reasoning_levels: supported_reasoning_level_low_medium_high_xhigh(),
             base_instructions: GPT_5_2_CODEX_INSTRUCTIONS.to_string(),
-            model_instructions_spec: Some(ModelMessages {
+            model_messages: Some(ModelMessages {
                 instructions_template: Some(GPT_5_2_CODEX_INSTRUCTIONS_TEMPLATE.to_string()),
                 instructions_variables: Some(ModelInstructionsVariables {
                     personality_default: Some("".to_string()),

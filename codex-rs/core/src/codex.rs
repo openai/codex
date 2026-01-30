@@ -1286,7 +1286,7 @@ impl Session {
 
     fn personality_message_for(model_info: &ModelInfo, personality: Personality) -> Option<String> {
         model_info
-            .model_instructions_spec
+            .model_messages
             .as_ref()
             .and_then(|spec| spec.get_personality_message(Some(personality)))
             .filter(|message| !message.is_empty())
