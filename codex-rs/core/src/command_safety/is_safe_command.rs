@@ -131,10 +131,11 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
         }
 
         // Git
-        Some("git") => matches!(
-            command.get(1).map(String::as_str),
-            Some("branch" | "status" | "log" | "diff" | "show")
-        ),
+        Some("git") => match command.get(1).map(String::as_str) {
+            Some("status" | "log" | "diff" | "show") => true,
+            Some("branch") => git_branch_is_read_only(command),
+            _ => false,
+        },
 
         // Rust
         Some("cargo") if command.get(1).map(String::as_str) == Some("check") => true,
@@ -153,6 +154,34 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
         // ── anything else ─────────────────────────────────────────────────
         _ => false,
     }
+}
+
+// Treat `git branch` as safe only when the arguments clearly indicate
+// a read-only query, not a branch mutation (create/rename/delete).
+fn git_branch_is_read_only(command: &[String]) -> bool {
+    if command.len() <= 2 {
+        // `git branch` with no additional args lists branches.
+        return true;
+    }
+
+    let mut saw_read_only_flag = false;
+    for arg in command.iter().skip(2).map(String::as_str) {
+        match arg {
+            "--list" | "-l" | "--show-current" | "-a" | "--all" | "-r" | "--remotes" | "-v"
+            | "-vv" | "--verbose" => {
+                saw_read_only_flag = true;
+            }
+            _ if arg.starts_with("--format=") => {
+                saw_read_only_flag = true;
+            }
+            _ => {
+                // Any other flag or positional argument may create, rename, or delete branches.
+                return false;
+            }
+        }
+    }
+
+    saw_read_only_flag
 }
 
 // (bash parsing helpers implemented in crate::bash)
@@ -207,6 +236,12 @@ mod tests {
     fn known_safe_examples() {
         assert!(is_safe_to_call_with_exec(&vec_str(&["ls"])));
         assert!(is_safe_to_call_with_exec(&vec_str(&["git", "status"])));
+        assert!(is_safe_to_call_with_exec(&vec_str(&["git", "branch"])));
+        assert!(is_safe_to_call_with_exec(&vec_str(&[
+            "git",
+            "branch",
+            "--show-current"
+        ])));
         assert!(is_safe_to_call_with_exec(&vec_str(&["base64"])));
         assert!(is_safe_to_call_with_exec(&vec_str(&[
             "sed", "-n", "1,5p", "file.txt"
@@ -229,6 +264,18 @@ mod tests {
             assert!(!is_safe_to_call_with_exec(&vec_str(&["numfmt", "1000"])));
             assert!(!is_safe_to_call_with_exec(&vec_str(&["tac", "Cargo.toml"])));
         }
+    }
+
+    #[test]
+    fn git_branch_mutating_flags_are_not_safe() {
+        assert!(!is_known_safe_command(&vec_str(&[
+            "git", "branch", "-d", "feature"
+        ])));
+        assert!(!is_known_safe_command(&vec_str(&[
+            "git",
+            "branch",
+            "new-branch"
+        ])));
     }
 
     #[test]

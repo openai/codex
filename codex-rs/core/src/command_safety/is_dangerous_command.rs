@@ -32,7 +32,11 @@ fn is_dangerous_to_call_with_exec(command: &[String]) -> bool {
 
     match cmd0 {
         Some(cmd) if cmd.ends_with("git") || cmd.ends_with("/git") => {
-            matches!(command.get(1).map(String::as_str), Some("reset" | "rm"))
+            match command.get(1).map(String::as_str) {
+                Some("reset" | "rm") => true,
+                Some("branch") => git_branch_is_delete(command),
+                _ => false,
+            }
         }
 
         Some("rm") => matches!(command.get(1).map(String::as_str), Some("-f" | "-rf")),
@@ -45,9 +49,19 @@ fn is_dangerous_to_call_with_exec(command: &[String]) -> bool {
     }
 }
 
+fn git_branch_is_delete(command: &[String]) -> bool {
+    command.iter().skip(2).any(|arg| {
+        matches!(arg.as_str(), "-d" | "-D" | "--delete")
+            || arg.starts_with("--delete=")
+            || (arg.starts_with("-d") && arg != "-d")
+            || (arg.starts_with("-D") && arg != "-D")
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
 
     fn vec_str(items: &[&str]) -> Vec<String> {
         items.iter().map(std::string::ToString::to_string).collect()
@@ -55,64 +69,89 @@ mod tests {
 
     #[test]
     fn git_reset_is_dangerous() {
-        assert!(command_might_be_dangerous(&vec_str(&["git", "reset"])));
+        assert_eq!(
+            command_might_be_dangerous(&vec_str(&["git", "reset"])),
+            true
+        );
     }
 
     #[test]
     fn bash_git_reset_is_dangerous() {
-        assert!(command_might_be_dangerous(&vec_str(&[
-            "bash",
-            "-lc",
-            "git reset --hard"
-        ])));
+        assert_eq!(
+            command_might_be_dangerous(&vec_str(&["bash", "-lc", "git reset --hard"])),
+            true
+        );
     }
 
     #[test]
     fn zsh_git_reset_is_dangerous() {
-        assert!(command_might_be_dangerous(&vec_str(&[
-            "zsh",
-            "-lc",
-            "git reset --hard"
-        ])));
+        assert_eq!(
+            command_might_be_dangerous(&vec_str(&["zsh", "-lc", "git reset --hard"])),
+            true
+        );
     }
 
     #[test]
     fn git_status_is_not_dangerous() {
-        assert!(!command_might_be_dangerous(&vec_str(&["git", "status"])));
+        assert_eq!(
+            command_might_be_dangerous(&vec_str(&["git", "status"])),
+            false
+        );
     }
 
     #[test]
     fn bash_git_status_is_not_dangerous() {
-        assert!(!command_might_be_dangerous(&vec_str(&[
-            "bash",
-            "-lc",
-            "git status"
-        ])));
+        assert_eq!(
+            command_might_be_dangerous(&vec_str(&["bash", "-lc", "git status"])),
+            false
+        );
     }
 
     #[test]
     fn sudo_git_reset_is_dangerous() {
-        assert!(command_might_be_dangerous(&vec_str(&[
-            "sudo", "git", "reset", "--hard"
-        ])));
+        assert_eq!(
+            command_might_be_dangerous(&vec_str(&["sudo", "git", "reset", "--hard"])),
+            true
+        );
     }
 
     #[test]
     fn usr_bin_git_is_dangerous() {
-        assert!(command_might_be_dangerous(&vec_str(&[
-            "/usr/bin/git",
-            "reset",
-            "--hard"
-        ])));
+        assert_eq!(
+            command_might_be_dangerous(&vec_str(&["/usr/bin/git", "reset", "--hard"])),
+            true
+        );
+    }
+
+    #[test]
+    fn git_branch_delete_is_dangerous() {
+        assert_eq!(
+            command_might_be_dangerous(&vec_str(&["git", "branch", "-d", "feature"])),
+            true
+        );
+        assert_eq!(
+            command_might_be_dangerous(&vec_str(&["git", "branch", "-D", "feature"])),
+            true
+        );
+        assert_eq!(
+            command_might_be_dangerous(&vec_str(&["bash", "-lc", "git branch --delete feature"])),
+            true
+        );
     }
 
     #[test]
     fn rm_rf_is_dangerous() {
-        assert!(command_might_be_dangerous(&vec_str(&["rm", "-rf", "/"])));
+        assert_eq!(
+            command_might_be_dangerous(&vec_str(&["rm", "-rf", "/"])),
+            true
+        );
     }
 
     #[test]
     fn rm_f_is_dangerous() {
-        assert!(command_might_be_dangerous(&vec_str(&["rm", "-f", "/"])));
+        assert_eq!(
+            command_might_be_dangerous(&vec_str(&["rm", "-f", "/"])),
+            true
+        );
     }
 }
