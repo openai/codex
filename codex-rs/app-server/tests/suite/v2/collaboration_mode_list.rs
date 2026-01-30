@@ -1,7 +1,7 @@
 //! Validates that the collaboration mode list endpoint returns the expected default presets.
 //!
 //! The test drives the app server through the MCP harness and asserts that the list response
-//! includes the plan, coding, pair programming, and execute modes with their default model and reasoning
+//! includes the plan, default, pair programming, and execute modes with their default model and reasoning
 //! effort settings, which keeps the API contract visible in one place.
 
 #![allow(clippy::unwrap_used)]
@@ -47,7 +47,7 @@ async fn list_collaboration_modes_returns_presets() -> Result<()> {
 
     let expected = [
         plan_preset(),
-        code_preset(),
+        default_preset(),
         pair_programming_preset(),
         execute_preset(),
     ];
@@ -89,12 +89,12 @@ fn pair_programming_preset() -> CollaborationModeMask {
         .unwrap()
 }
 
-/// Builds the code preset that the list response is expected to return.
-fn code_preset() -> CollaborationModeMask {
+/// Builds the default preset that the list response is expected to return.
+fn default_preset() -> CollaborationModeMask {
     let presets = test_builtin_collaboration_mode_presets();
     presets
         .into_iter()
-        .find(|p| p.mode == Some(ModeKind::Code))
+        .find(|p| p.mode == Some(ModeKind::Default))
         .unwrap()
 }
 

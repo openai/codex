@@ -2395,7 +2395,8 @@ impl ChatComposer {
             is_task_running: self.is_task_running,
             quit_shortcut_key: self.quit_shortcut_key,
             steer_enabled: self.steer_enabled,
-            collaboration_modes_enabled: self.collaboration_modes_enabled,
+            show_mode_cycle_hint: self.collaboration_modes_enabled
+                && self.collaboration_mode_indicator.is_some(),
             is_wsl,
             context_window_percent: self.context_window_percent,
             context_window_used_tokens: self.context_window_used_tokens,
@@ -2873,7 +2874,8 @@ impl ChatComposer {
             }
             ActivePopup::None => {
                 let footer_props = self.footer_props();
-                let show_cycle_hint = !footer_props.is_task_running;
+                let show_cycle_hint =
+                    !footer_props.is_task_running && footer_props.show_mode_cycle_hint;
                 let show_shortcuts_hint = match footer_props.mode {
                     FooterMode::ComposerEmpty => !self.is_in_paste_burst(),
                     FooterMode::QuitShortcutReminder
@@ -3362,14 +3364,14 @@ mod tests {
 
         // Empty textarea, agent idle: shortcuts hint can show, and cycle hint is available.
         snapshot_composer_state_with_width("footer_collapse_empty_full", 120, true, |composer| {
-            setup_collab_footer(composer, 100, CollaborationModeIndicator::Code);
+            setup_collab_footer(composer, 100, CollaborationModeIndicator::Plan);
         });
         snapshot_composer_state_with_width(
             "footer_collapse_empty_mode_cycle_with_context",
             60,
             true,
             |composer| {
-                setup_collab_footer(composer, 100, CollaborationModeIndicator::Code);
+                setup_collab_footer(composer, 100, CollaborationModeIndicator::Plan);
             },
         );
         snapshot_composer_state_with_width(
@@ -3377,7 +3379,7 @@ mod tests {
             44,
             true,
             |composer| {
-                setup_collab_footer(composer, 100, CollaborationModeIndicator::Code);
+                setup_collab_footer(composer, 100, CollaborationModeIndicator::Plan);
             },
         );
         snapshot_composer_state_with_width(
@@ -3385,13 +3387,13 @@ mod tests {
             26,
             true,
             |composer| {
-                setup_collab_footer(composer, 100, CollaborationModeIndicator::Code);
+                setup_collab_footer(composer, 100, CollaborationModeIndicator::Plan);
             },
         );
 
         // Textarea has content, agent running, steer enabled: queue hint is shown.
         snapshot_composer_state_with_width("footer_collapse_queue_full", 120, true, |composer| {
-            setup_collab_footer(composer, 98, CollaborationModeIndicator::Code);
+            setup_collab_footer(composer, 98, CollaborationModeIndicator::Plan);
             composer.set_steer_enabled(true);
             composer.set_task_running(true);
             composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
@@ -3401,7 +3403,7 @@ mod tests {
             50,
             true,
             |composer| {
-                setup_collab_footer(composer, 98, CollaborationModeIndicator::Code);
+                setup_collab_footer(composer, 98, CollaborationModeIndicator::Plan);
                 composer.set_steer_enabled(true);
                 composer.set_task_running(true);
                 composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
@@ -3412,7 +3414,7 @@ mod tests {
             40,
             true,
             |composer| {
-                setup_collab_footer(composer, 98, CollaborationModeIndicator::Code);
+                setup_collab_footer(composer, 98, CollaborationModeIndicator::Plan);
                 composer.set_steer_enabled(true);
                 composer.set_task_running(true);
                 composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
@@ -3423,7 +3425,7 @@ mod tests {
             30,
             true,
             |composer| {
-                setup_collab_footer(composer, 98, CollaborationModeIndicator::Code);
+                setup_collab_footer(composer, 98, CollaborationModeIndicator::Plan);
                 composer.set_steer_enabled(true);
                 composer.set_task_running(true);
                 composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
@@ -3434,7 +3436,7 @@ mod tests {
             20,
             true,
             |composer| {
-                setup_collab_footer(composer, 98, CollaborationModeIndicator::Code);
+                setup_collab_footer(composer, 98, CollaborationModeIndicator::Plan);
                 composer.set_steer_enabled(true);
                 composer.set_task_running(true);
                 composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());

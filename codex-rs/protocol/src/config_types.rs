@@ -170,7 +170,7 @@ pub enum AltScreenMode {
 #[serde(rename_all = "snake_case")]
 pub enum ModeKind {
     Plan,
-    Code,
+    Default,
     PairProgramming,
     Execute,
     Custom,
@@ -273,7 +273,7 @@ mod tests {
     #[test]
     fn apply_mask_can_clear_optional_fields() {
         let mode = CollaborationMode {
-            mode: ModeKind::Code,
+            mode: ModeKind::Default,
             settings: Settings {
                 model: "gpt-5.2-codex".to_string(),
                 reasoning_effort: Some(ReasoningEffort::High),
@@ -289,7 +289,7 @@ mod tests {
         };
 
         let expected = CollaborationMode {
-            mode: ModeKind::Code,
+            mode: ModeKind::Default,
             settings: Settings {
                 model: "gpt-5.2-codex".to_string(),
                 reasoning_effort: None,

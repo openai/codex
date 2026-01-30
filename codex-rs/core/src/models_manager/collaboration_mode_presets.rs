@@ -3,7 +3,8 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::openai_models::ReasoningEffort;
 
 const COLLABORATION_MODE_PLAN: &str = include_str!("../../templates/collaboration_mode/plan.md");
-const COLLABORATION_MODE_CODE: &str = include_str!("../../templates/collaboration_mode/code.md");
+const COLLABORATION_MODE_DEFAULT: &str =
+    include_str!("../../templates/collaboration_mode/default.md");
 const COLLABORATION_MODE_PAIR_PROGRAMMING: &str =
     include_str!("../../templates/collaboration_mode/pair_programming.md");
 const COLLABORATION_MODE_EXECUTE: &str =
@@ -12,7 +13,7 @@ const COLLABORATION_MODE_EXECUTE: &str =
 pub(super) fn builtin_collaboration_mode_presets() -> Vec<CollaborationModeMask> {
     vec![
         plan_preset(),
-        code_preset(),
+        default_preset(),
         pair_programming_preset(),
         execute_preset(),
     ]
@@ -33,13 +34,13 @@ fn plan_preset() -> CollaborationModeMask {
     }
 }
 
-fn code_preset() -> CollaborationModeMask {
+fn default_preset() -> CollaborationModeMask {
     CollaborationModeMask {
-        name: "Code".to_string(),
-        mode: Some(ModeKind::Code),
+        name: "Default".to_string(),
+        mode: Some(ModeKind::Default),
         model: None,
         reasoning_effort: None,
-        developer_instructions: Some(Some(COLLABORATION_MODE_CODE.to_string())),
+        developer_instructions: Some(Some(COLLABORATION_MODE_DEFAULT.to_string())),
     }
 }
 

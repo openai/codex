@@ -60,7 +60,7 @@ pub(crate) struct FooterProps {
     pub(crate) use_shift_enter_hint: bool,
     pub(crate) is_task_running: bool,
     pub(crate) steer_enabled: bool,
-    pub(crate) collaboration_modes_enabled: bool,
+    pub(crate) show_mode_cycle_hint: bool,
     pub(crate) is_wsl: bool,
     /// Which key the user must press again to quit.
     ///
@@ -73,7 +73,6 @@ pub(crate) struct FooterProps {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CollaborationModeIndicator {
     Plan,
-    Code,
     PairProgramming,
     Execute,
 }
@@ -89,7 +88,6 @@ impl CollaborationModeIndicator {
         };
         match self {
             CollaborationModeIndicator::Plan => format!("Plan mode{suffix}"),
-            CollaborationModeIndicator::Code => format!("Code mode{suffix}"),
             CollaborationModeIndicator::PairProgramming => {
                 format!("Pair Programming mode{suffix}")
             }
@@ -101,7 +99,6 @@ impl CollaborationModeIndicator {
         let label = self.label(show_cycle_hint);
         match self {
             CollaborationModeIndicator::Plan => Span::from(label).magenta(),
-            CollaborationModeIndicator::Code => Span::from(label).dim(),
             CollaborationModeIndicator::PairProgramming => Span::from(label).cyan(),
             CollaborationModeIndicator::Execute => Span::from(label).dim(),
         }
@@ -557,7 +554,7 @@ fn footer_from_props_lines(
                 use_shift_enter_hint: props.use_shift_enter_hint,
                 esc_backtrack_hint: props.esc_backtrack_hint,
                 is_wsl: props.is_wsl,
-                collaboration_modes_enabled: props.collaboration_modes_enabled,
+                show_mode_cycle_hint: props.show_mode_cycle_hint,
             };
             shortcut_overlay_lines(state)
         }
@@ -620,7 +617,7 @@ struct ShortcutsState {
     use_shift_enter_hint: bool,
     esc_backtrack_hint: bool,
     is_wsl: bool,
-    collaboration_modes_enabled: bool,
+    show_mode_cycle_hint: bool,
 }
 
 fn quit_shortcut_reminder_line(key: KeyBinding) -> Line<'static> {
@@ -787,7 +784,7 @@ enum DisplayCondition {
     WhenShiftEnterHint,
     WhenNotShiftEnterHint,
     WhenUnderWSL,
-    WhenCollaborationModesEnabled,
+    WhenModeCycleHintVisible,
 }
 
 impl DisplayCondition {
@@ -797,7 +794,7 @@ impl DisplayCondition {
             DisplayCondition::WhenShiftEnterHint => state.use_shift_enter_hint,
             DisplayCondition::WhenNotShiftEnterHint => !state.use_shift_enter_hint,
             DisplayCondition::WhenUnderWSL => state.is_wsl,
-            DisplayCondition::WhenCollaborationModesEnabled => state.collaboration_modes_enabled,
+            DisplayCondition::WhenModeCycleHintVisible => state.show_mode_cycle_hint,
         }
     }
 }
@@ -944,7 +941,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         id: ShortcutId::ChangeMode,
         bindings: &[ShortcutBinding {
             key: key_hint::shift(KeyCode::Tab),
-            condition: DisplayCondition::WhenCollaborationModesEnabled,
+            condition: DisplayCondition::WhenModeCycleHintVisible,
         }],
         prefix: "",
         label: " to change mode",
@@ -1071,7 +1068,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 steer_enabled: false,
-                collaboration_modes_enabled: false,
+                show_mode_cycle_hint: false,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
@@ -1087,7 +1084,7 @@ mod tests {
                 use_shift_enter_hint: true,
                 is_task_running: false,
                 steer_enabled: false,
-                collaboration_modes_enabled: false,
+                show_mode_cycle_hint: false,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
@@ -1096,14 +1093,14 @@ mod tests {
         );
 
         snapshot_footer(
-            "footer_shortcuts_collaboration_modes_enabled",
+            "footer_shortcuts_show_mode_cycle_hint",
             FooterProps {
                 mode: FooterMode::ShortcutOverlay,
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 steer_enabled: false,
-                collaboration_modes_enabled: true,
+                show_mode_cycle_hint: true,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
@@ -1119,7 +1116,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 steer_enabled: false,
-                collaboration_modes_enabled: false,
+                show_mode_cycle_hint: false,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
@@ -1135,7 +1132,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 steer_enabled: false,
-                collaboration_modes_enabled: false,
+                show_mode_cycle_hint: false,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
@@ -1151,7 +1148,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 steer_enabled: false,
-                collaboration_modes_enabled: false,
+                show_mode_cycle_hint: false,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
@@ -1167,7 +1164,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 steer_enabled: false,
-                collaboration_modes_enabled: false,
+                show_mode_cycle_hint: false,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
@@ -1183,7 +1180,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 steer_enabled: false,
-                collaboration_modes_enabled: false,
+                show_mode_cycle_hint: false,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: Some(72),
@@ -1199,7 +1196,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 steer_enabled: false,
-                collaboration_modes_enabled: false,
+                show_mode_cycle_hint: false,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
@@ -1215,7 +1212,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 steer_enabled: false,
-                collaboration_modes_enabled: false,
+                show_mode_cycle_hint: false,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
@@ -1231,7 +1228,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 steer_enabled: true,
-                collaboration_modes_enabled: false,
+                show_mode_cycle_hint: false,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
@@ -1245,7 +1242,7 @@ mod tests {
             use_shift_enter_hint: false,
             is_task_running: false,
             steer_enabled: false,
-            collaboration_modes_enabled: true,
+            show_mode_cycle_hint: true,
             is_wsl: false,
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: None,
@@ -1272,7 +1269,7 @@ mod tests {
             use_shift_enter_hint: false,
             is_task_running: true,
             steer_enabled: false,
-            collaboration_modes_enabled: true,
+            show_mode_cycle_hint: true,
             is_wsl: false,
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: None,
@@ -1316,7 +1313,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 esc_backtrack_hint: false,
                 is_wsl,
-                collaboration_modes_enabled: false,
+                show_mode_cycle_hint: false,
             })
             .expect("shortcut binding")
             .key;
