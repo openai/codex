@@ -1319,6 +1319,7 @@ impl App {
                             &path,
                             CwdPromptAction::Resume,
                             true,
+                            false,
                         )
                         .await?
                         {
@@ -1509,7 +1510,16 @@ impl App {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
             AppEvent::CodexOp(op) => {
-                self.chat_widget.submit_op(op);
+                if let Op::UserInputAnswer { id, response } = op {
+                    if crate::chatwidget::ChatWidget::is_share_request_id(&id) {
+                        self.chat_widget.handle_share_response(response);
+                        return Ok(AppRunControl::Continue);
+                    }
+                    self.chat_widget
+                        .submit_op(Op::UserInputAnswer { id, response });
+                } else {
+                    self.chat_widget.submit_op(op);
+                }
             }
             AppEvent::DiffResult(text) => {
                 // Clear the in-progress state in the bottom pane

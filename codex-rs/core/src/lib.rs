@@ -51,6 +51,7 @@ pub mod path_utils;
 pub mod powershell;
 pub mod sandboxing;
 mod session_prefix;
+pub mod session_share;
 mod stream_events_utils;
 mod text_encoding;
 pub mod token_data;

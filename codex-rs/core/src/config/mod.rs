@@ -299,6 +299,9 @@ pub struct Config {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
 
+    /// Optional base URL for storing shared session rollouts in an object store.
+    pub session_object_storage_url: Option<String>,
+
     /// When set, restricts ChatGPT login to a specific workspace identifier.
     pub forced_chatgpt_workspace_id: Option<String>,
 
@@ -840,6 +843,9 @@ pub struct ConfigToml {
     /// Optional fixed port for the local HTTP callback server used during MCP OAuth login.
     /// When unset, Codex will bind to an ephemeral port chosen by the OS.
     pub mcp_oauth_callback_port: Option<u16>,
+
+    /// Base URL for the object store used by /share (enterprise/self-hosted).
+    pub session_object_storage_url: Option<String>,
 
     /// User-defined provider entries that extend/override the built-in list.
     #[serde(default)]
@@ -1445,6 +1451,16 @@ impl Config {
                 }
             });
 
+        let session_object_storage_url =
+            cfg.session_object_storage_url.as_ref().and_then(|value| {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            });
+
         let forced_login_method = cfg.forced_login_method;
 
         let model = model.or(config_profile.model).or(cfg.model);
@@ -1574,6 +1590,7 @@ impl Config {
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
+            session_object_storage_url,
             forced_chatgpt_workspace_id,
             forced_login_method,
             include_apply_patch_tool: include_apply_patch_tool_flag,
@@ -3777,6 +3794,7 @@ model_verbosity = "high"
                 model_verbosity: None,
                 model_personality: None,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+                session_object_storage_url: None,
                 base_instructions: None,
                 developer_instructions: None,
                 compact_prompt: None,
@@ -3861,6 +3879,7 @@ model_verbosity = "high"
             model_verbosity: None,
             model_personality: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            session_object_storage_url: None,
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
@@ -3960,6 +3979,7 @@ model_verbosity = "high"
             model_verbosity: None,
             model_personality: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            session_object_storage_url: None,
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
@@ -4045,6 +4065,7 @@ model_verbosity = "high"
             model_verbosity: Some(Verbosity::High),
             model_personality: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            session_object_storage_url: None,
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,

@@ -21,6 +21,8 @@ anyhow = { workspace = true }
 arc-swap = "1.8.0"
 async-channel = { workspace = true }
 async-trait = { workspace = true }
+azure_core = { workspace = true }
+azure_identity = { workspace = true }
 base64 = { workspace = true }
 chardetng = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
