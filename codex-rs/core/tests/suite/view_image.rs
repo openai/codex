@@ -93,7 +93,13 @@ async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_event_with_timeout(
+        &codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        // Empirically, image attachment can be slow under Bazel/RBE.
+        Duration::from_secs(10),
+    )
+    .await;
 
     let body = mock.single_request().body_json();
     let image_message =
