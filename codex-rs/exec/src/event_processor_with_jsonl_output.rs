@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 
@@ -846,10 +847,17 @@ impl EventProcessor for EventProcessorWithJsonOutput {
     #[allow(clippy::print_stdout)]
     fn process_event(&mut self, event: protocol::Event) -> CodexStatus {
         let aggregated = self.collect_thread_events(&event);
+        let mut stdout = std::io::stdout().lock();
         for conv_event in aggregated {
             match serde_json::to_string(&conv_event) {
                 Ok(line) => {
-                    println!("{line}");
+                    if let Err(err) = writeln!(stdout, "{line}") {
+                        if err.kind() == std::io::ErrorKind::BrokenPipe {
+                            return CodexStatus::InitiateShutdown;
+                        }
+                        error!("Failed to write event to stdout: {err:?}");
+                        break;
+                    }
                 }
                 Err(e) => {
                     error!("Failed to serialize event: {e:?}");

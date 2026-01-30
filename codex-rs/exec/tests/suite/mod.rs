@@ -2,6 +2,7 @@
 mod add_dir;
 mod apply_patch;
 mod auth_env;
+mod broken_pipe;
 mod originator;
 mod output_schema;
 mod resume;
