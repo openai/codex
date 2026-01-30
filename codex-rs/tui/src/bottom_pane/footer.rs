@@ -1675,7 +1675,7 @@ mod tests {
             "footer_status_line_truncated_with_gap",
             40,
             &props,
-            Some(CollaborationModeIndicator::Code),
+            Some(CollaborationModeIndicator::Plan),
         );
     }
 
@@ -1701,10 +1701,10 @@ mod tests {
         };
 
         let screen =
-            render_footer_with_mode_indicator(80, &props, Some(CollaborationModeIndicator::Code));
+            render_footer_with_mode_indicator(80, &props, Some(CollaborationModeIndicator::Plan));
         let collapsed = screen.split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(
-            collapsed.contains("Code mode"),
+            collapsed.contains("Plan mode"),
             "mode indicator should remain visible"
         );
         assert!(
