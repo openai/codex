@@ -1,12 +1,10 @@
 use std::num::NonZero;
-use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use codex_app_server_protocol::FuzzyFileSearchResult;
 use codex_file_search as file_search;
-use tokio::task::JoinSet;
 use tracing::warn;
 
 const LIMIT_PER_ROOT: usize = 50;
@@ -30,57 +28,47 @@ pub(crate) async fn run_fuzzy_file_search(
         .map(std::num::NonZero::get)
         .unwrap_or(1);
     let threads = cores.min(MAX_THREADS);
-    let threads_per_root = (threads / roots.len()).max(1);
-    let threads = NonZero::new(threads_per_root).unwrap_or(NonZeroUsize::MIN);
+    #[expect(clippy::expect_used)]
+    let threads = NonZero::new(threads.max(1)).expect("threads should be non-zero");
+    let search_dirs: Vec<PathBuf> = roots.iter().map(PathBuf::from).collect();
 
-    let mut files: Vec<FuzzyFileSearchResult> = Vec::new();
-    let mut join_set = JoinSet::new();
-
-    for root in roots {
-        let search_dir = PathBuf::from(&root);
-        let query = query.clone();
-        let cancel_flag = cancellation_flag.clone();
-        join_set.spawn_blocking(move || {
-            match file_search::run(
-                query.as_str(),
-                limit_per_root,
-                &search_dir,
-                Vec::new(),
-                threads,
-                cancel_flag,
-                COMPUTE_INDICES,
-                true,
-            ) {
-                Ok(res) => Ok((root, res)),
-                Err(err) => Err((root, err)),
-            }
-        });
-    }
-
-    while let Some(res) = join_set.join_next().await {
-        match res {
-            Ok(Ok((root, res))) => {
-                for m in res.matches {
-                    let path = m.path;
-                    let file_name = file_search::file_name_from_path(&path);
-                    let result = FuzzyFileSearchResult {
-                        root: root.clone(),
-                        path,
-                        file_name,
-                        score: m.score,
-                        indices: m.indices,
-                    };
-                    files.push(result);
+    let mut files = match tokio::task::spawn_blocking(move || {
+        file_search::run(
+            query.as_str(),
+            limit_per_root,
+            search_dirs,
+            Vec::new(),
+            threads,
+            cancellation_flag,
+            COMPUTE_INDICES,
+            true,
+        )
+    })
+    .await
+    {
+        Ok(Ok(res)) => res
+            .matches
+            .into_iter()
+            .map(|m| {
+                let file_name = m.path.file_name().unwrap_or_default();
+                FuzzyFileSearchResult {
+                    root: m.root.to_string_lossy().to_string(),
+                    path: m.path.to_string_lossy().to_string(),
+                    file_name: file_name.to_string_lossy().to_string(),
+                    score: m.score,
+                    indices: m.indices,
                 }
-            }
-            Ok(Err((root, err))) => {
-                warn!("fuzzy-file-search in dir '{root}' failed: {err}");
-            }
-            Err(err) => {
-                warn!("fuzzy-file-search join_next failed: {err}");
-            }
+            })
+            .collect::<Vec<_>>(),
+        Ok(Err(err)) => {
+            warn!("fuzzy-file-search failed: {err}");
+            Vec::new()
         }
-    }
+        Err(err) => {
+            warn!("fuzzy-file-search join failed: {err}");
+            Vec::new()
+        }
+    };
 
     files.sort_by(file_search::cmp_by_score_desc_then_path_asc::<
         FuzzyFileSearchResult,

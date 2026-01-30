@@ -1085,7 +1085,7 @@ async fn find_thread_path_by_id_str_in_subdir(
     let results = file_search::run(
         id_str,
         limit,
-        &root,
+        vec![root],
         exclude,
         threads,
         cancel,
@@ -1094,11 +1094,7 @@ async fn find_thread_path_by_id_str_in_subdir(
     )
     .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
 
-    let found = results
-        .matches
-        .into_iter()
-        .next()
-        .map(|m| root.join(m.path));
+    let found = results.matches.into_iter().next().map(|m| m.full_path());
 
     // Checking if DB is at parity.
     // TODO(jif): sqlite migration phase 1
