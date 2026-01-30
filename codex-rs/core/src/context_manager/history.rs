@@ -59,7 +59,9 @@ impl ContextManager {
         for item in items {
             let item_ref = item.deref();
             let is_ghost_snapshot = matches!(item_ref, ResponseItem::GhostSnapshot { .. });
-            if !is_api_message(item_ref) && !is_ghost_snapshot {
+            let is_collaboration_mode_update =
+                matches!(item_ref, ResponseItem::CollaborationModeUpdate { .. });
+            if !is_api_message(item_ref) && !is_ghost_snapshot && !is_collaboration_mode_update {
                 continue;
             }
 
@@ -72,8 +74,12 @@ impl ContextManager {
     /// normalization and drop un-suited items.
     pub(crate) fn for_prompt(mut self) -> Vec<ResponseItem> {
         self.normalize_history();
-        self.items
-            .retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
+        self.items.retain(|item| {
+            !matches!(
+                item,
+                ResponseItem::GhostSnapshot { .. } | ResponseItem::CollaborationModeUpdate { .. }
+            )
+        });
         self.items
     }
 
@@ -302,6 +308,7 @@ impl ContextManager {
             | ResponseItem::CustomToolCall { .. }
             | ResponseItem::Compaction { .. }
             | ResponseItem::GhostSnapshot { .. }
+            | ResponseItem::CollaborationModeUpdate { .. }
             | ResponseItem::Other => item.clone(),
         }
     }
@@ -321,6 +328,7 @@ fn is_api_message(message: &ResponseItem) -> bool {
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::Compaction { .. } => true,
         ResponseItem::GhostSnapshot { .. } => false,
+        ResponseItem::CollaborationModeUpdate { .. } => false,
         ResponseItem::Other => false,
     }
 }
@@ -335,7 +343,7 @@ fn estimate_reasoning_length(encoded_len: usize) -> usize {
 
 fn estimate_item_token_count(item: &ResponseItem) -> i64 {
     match item {
-        ResponseItem::GhostSnapshot { .. } => 0,
+        ResponseItem::GhostSnapshot { .. } | ResponseItem::CollaborationModeUpdate { .. } => 0,
         ResponseItem::Reasoning {
             encrypted_content: Some(content),
             ..

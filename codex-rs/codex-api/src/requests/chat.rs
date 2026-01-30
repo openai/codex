@@ -69,7 +69,9 @@ impl<'a> ChatRequestBuilder<'a> {
                     last_emitted_role = Some("assistant")
                 }
                 ResponseItem::FunctionCallOutput { .. } => last_emitted_role = Some("tool"),
-                ResponseItem::Reasoning { .. } | ResponseItem::Other => {}
+                ResponseItem::Reasoning { .. }
+                | ResponseItem::CollaborationModeUpdate { .. }
+                | ResponseItem::Other => {}
                 ResponseItem::CustomToolCall { .. } => {}
                 ResponseItem::CustomToolCallOutput { .. } => {}
                 ResponseItem::WebSearchCall { .. } => {}
@@ -284,6 +286,7 @@ impl<'a> ChatRequestBuilder<'a> {
                 }
                 ResponseItem::Reasoning { .. }
                 | ResponseItem::WebSearchCall { .. }
+                | ResponseItem::CollaborationModeUpdate { .. }
                 | ResponseItem::Other
                 | ResponseItem::Compaction { .. } => {
                     continue;
