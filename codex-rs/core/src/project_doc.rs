@@ -14,6 +14,8 @@
 //! 3.  We do **not** walk past the Git root.
 
 use crate::config::Config;
+use crate::connectors::AppInfo;
+use crate::connectors::render_apps_section;
 use crate::features::Feature;
 use crate::skills::SkillMetadata;
 use crate::skills::render_skills_section;
@@ -39,6 +41,7 @@ const PROJECT_DOC_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
 pub(crate) async fn get_user_instructions(
     config: &Config,
     skills: Option<&[SkillMetadata]>,
+    apps: Option<&[AppInfo]>,
 ) -> Option<String> {
     let project_docs = read_project_docs(config).await;
 
@@ -67,6 +70,13 @@ pub(crate) async fn get_user_instructions(
             output.push_str("\n\n");
         }
         output.push_str(&skills_section);
+    }
+
+    if config.features.enabled(Feature::Apps) {
+        if !output.is_empty() {
+            output.push_str("\n\n");
+        }
+        output.push_str(&render_apps_section(apps.unwrap_or(&[])));
     }
 
     if config.features.enabled(Feature::ChildAgentsMd) {
@@ -280,7 +290,7 @@ mod tests {
     async fn no_doc_file_returns_none() {
         let tmp = tempfile::tempdir().expect("tempdir");
 
-        let res = get_user_instructions(&make_config(&tmp, 4096, None).await, None).await;
+        let res = get_user_instructions(&make_config(&tmp, 4096, None).await, None, None).await;
         assert!(
             res.is_none(),
             "Expected None when AGENTS.md is absent and no system instructions provided"
@@ -294,7 +304,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         fs::write(tmp.path().join("AGENTS.md"), "hello world").unwrap();
 
-        let res = get_user_instructions(&make_config(&tmp, 4096, None).await, None)
+        let res = get_user_instructions(&make_config(&tmp, 4096, None).await, None, None)
             .await
             .expect("doc expected");
 
@@ -313,7 +323,7 @@ mod tests {
         let huge = "A".repeat(LIMIT * 2); // 2 KiB
         fs::write(tmp.path().join("AGENTS.md"), &huge).unwrap();
 
-        let res = get_user_instructions(&make_config(&tmp, LIMIT, None).await, None)
+        let res = get_user_instructions(&make_config(&tmp, LIMIT, None).await, None, None)
             .await
             .expect("doc expected");
 
@@ -345,7 +355,7 @@ mod tests {
         let mut cfg = make_config(&repo, 4096, None).await;
         cfg.cwd = nested;
 
-        let res = get_user_instructions(&cfg, None)
+        let res = get_user_instructions(&cfg, None, None)
             .await
             .expect("doc expected");
         assert_eq!(res, "root level doc");
@@ -357,7 +367,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         fs::write(tmp.path().join("AGENTS.md"), "something").unwrap();
 
-        let res = get_user_instructions(&make_config(&tmp, 0, None).await, None).await;
+        let res = get_user_instructions(&make_config(&tmp, 0, None).await, None, None).await;
         assert!(
             res.is_none(),
             "With limit 0 the function should return None"
@@ -373,9 +383,13 @@ mod tests {
 
         const INSTRUCTIONS: &str = "base instructions";
 
-        let res = get_user_instructions(&make_config(&tmp, 4096, Some(INSTRUCTIONS)).await, None)
-            .await
-            .expect("should produce a combined instruction string");
+        let res = get_user_instructions(
+            &make_config(&tmp, 4096, Some(INSTRUCTIONS)).await,
+            None,
+            None,
+        )
+        .await
+        .expect("should produce a combined instruction string");
 
         let expected = format!("{INSTRUCTIONS}{PROJECT_DOC_SEPARATOR}{}", "proj doc");
 
@@ -390,8 +404,12 @@ mod tests {
 
         const INSTRUCTIONS: &str = "some instructions";
 
-        let res =
-            get_user_instructions(&make_config(&tmp, 4096, Some(INSTRUCTIONS)).await, None).await;
+        let res = get_user_instructions(
+            &make_config(&tmp, 4096, Some(INSTRUCTIONS)).await,
+            None,
+            None,
+        )
+        .await;
 
         assert_eq!(res, Some(INSTRUCTIONS.to_string()));
     }
@@ -420,7 +438,7 @@ mod tests {
         let mut cfg = make_config(&repo, 4096, None).await;
         cfg.cwd = nested;
 
-        let res = get_user_instructions(&cfg, None)
+        let res = get_user_instructions(&cfg, None, None)
             .await
             .expect("doc expected");
         assert_eq!(res, "root doc\n\ncrate doc");
@@ -435,7 +453,7 @@ mod tests {
 
         let cfg = make_config(&tmp, 4096, None).await;
 
-        let res = get_user_instructions(&cfg, None)
+        let res = get_user_instructions(&cfg, None, None)
             .await
             .expect("local doc expected");
 
@@ -457,7 +475,7 @@ mod tests {
 
         let cfg = make_config_with_fallback(&tmp, 4096, None, &["EXAMPLE.md"]).await;
 
-        let res = get_user_instructions(&cfg, None)
+        let res = get_user_instructions(&cfg, None, None)
             .await
             .expect("fallback doc expected");
 
@@ -473,7 +491,7 @@ mod tests {
 
         let cfg = make_config_with_fallback(&tmp, 4096, None, &["EXAMPLE.md", ".example.md"]).await;
 
-        let res = get_user_instructions(&cfg, None)
+        let res = get_user_instructions(&cfg, None, None)
             .await
             .expect("AGENTS.md should win");
 
@@ -506,6 +524,7 @@ mod tests {
         let res = get_user_instructions(
             &cfg,
             skills.errors.is_empty().then_some(skills.skills.as_slice()),
+            None,
         )
         .await
         .expect("instructions expected");
@@ -524,6 +543,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn apps_are_appended_to_project_doc() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(tmp.path().join("AGENTS.md"), "base doc").unwrap();
+
+        let mut cfg = make_config(&tmp, 4096, None).await;
+        cfg.features.enable(Feature::Apps);
+
+        let apps = vec![AppInfo {
+            id: "app_123".to_string(),
+            name: "Calendar".to_string(),
+            description: None,
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            install_url: None,
+            is_accessible: true,
+        }];
+
+        let res = get_user_instructions(&cfg, None, Some(&apps))
+            .await
+            .expect("instructions expected");
+        let expected = format!("base doc\n\n{}", render_apps_section(&apps));
+        assert_eq!(res, expected);
+    }
+
+    #[tokio::test]
     async fn skills_render_without_project_doc() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let cfg = make_config(&tmp, 4096, None).await;
@@ -533,6 +578,7 @@ mod tests {
         let res = get_user_instructions(
             &cfg,
             skills.errors.is_empty().then_some(skills.skills.as_slice()),
+            None,
         )
         .await
         .expect("instructions expected");

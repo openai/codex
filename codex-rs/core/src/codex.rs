@@ -300,7 +300,19 @@ impl Codex {
         }
 
         let enabled_skills = loaded_skills.enabled_skills();
-        let user_instructions = get_user_instructions(&config, Some(&enabled_skills)).await;
+        let apps = if config.features.enabled(Feature::Apps) {
+            match connectors::list_accessible_connectors_from_mcp_tools(&config).await {
+                Ok(connectors) => connectors,
+                Err(err) => {
+                    warn!("failed to load apps for prompt: {err:#}");
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        };
+        let user_instructions =
+            get_user_instructions(&config, Some(&enabled_skills), Some(&apps)).await;
 
         let exec_policy = ExecPolicyManager::load(&config.features, &config.config_layer_stack)
             .await
@@ -4517,6 +4529,8 @@ mod tests {
     use codex_app_server_protocol::AuthMode;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::SkillScope;
+    use codex_protocol::user_input::UserInput;
     use std::path::Path;
     use std::time::Duration;
     use tokio::time::sleep;
@@ -4529,6 +4543,11 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration as StdDuration;
+
+    use crate::mentions::build_connector_slug_counts;
+    use crate::mentions::build_skill_name_counts;
+    use crate::skills::SkillMetadata;
+    use crate::skills::collect_explicit_skill_mentions;
 
     struct InstructionsTestCase {
         slug: &'static str,
@@ -4556,6 +4575,25 @@ mod tests {
             distribution_channel: None,
             install_url: None,
             is_accessible: true,
+        }
+    }
+
+    fn make_skill(name: &str, path: &str) -> SkillMetadata {
+        SkillMetadata {
+            name: name.to_string(),
+            description: "test skill".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            path: PathBuf::from(path),
+            scope: SkillScope::User,
+        }
+    }
+
+    fn user_input(text: &str) -> UserInput {
+        UserInput::Text {
+            text: text.to_string(),
+            text_elements: Vec::new(),
         }
     }
 
@@ -4660,6 +4698,130 @@ mod tests {
         );
 
         assert_eq!(selected, Vec::new());
+    }
+
+    #[test]
+    fn prompt_behavior_harness_routes_mentions_with_ambiguity() {
+        struct Case {
+            name: &'static str,
+            prompt: &'static str,
+            skills: Vec<SkillMetadata>,
+            connectors: Vec<AppInfo>,
+            explicit_app_paths: Vec<String>,
+            expected_skill_names: Vec<&'static str>,
+            expected_app_ids: Vec<&'static str>,
+        }
+
+        let cases = vec![
+            Case {
+                name: "unique_app_slug",
+                prompt: "use $todoist to list tasks",
+                skills: Vec::new(),
+                connectors: vec![make_connector("app_todo", "Todoist")],
+                explicit_app_paths: Vec::new(),
+                expected_skill_names: Vec::new(),
+                expected_app_ids: vec!["app_todo"],
+            },
+            Case {
+                name: "duplicate_app_slug",
+                prompt: "use $foo-bar",
+                skills: Vec::new(),
+                connectors: vec![
+                    make_connector("one", "Foo Bar"),
+                    make_connector("two", "Foo-Bar"),
+                ],
+                explicit_app_paths: Vec::new(),
+                expected_skill_names: Vec::new(),
+                expected_app_ids: Vec::new(),
+            },
+            Case {
+                name: "skill_conflict_blocks_app_and_skill",
+                prompt: "use $calendar",
+                skills: vec![make_skill("calendar", "/tmp/skills/calendar/SKILL.md")],
+                connectors: vec![make_connector("app_cal", "Calendar")],
+                explicit_app_paths: Vec::new(),
+                expected_skill_names: Vec::new(),
+                expected_app_ids: Vec::new(),
+            },
+            Case {
+                name: "explicit_app_path_wins",
+                prompt: "use [$calendar](app://app_cal)",
+                skills: vec![make_skill("calendar", "/tmp/skills/calendar/SKILL.md")],
+                connectors: vec![make_connector("app_cal", "Calendar")],
+                explicit_app_paths: Vec::new(),
+                expected_skill_names: Vec::new(),
+                expected_app_ids: vec!["app_cal"],
+            },
+            Case {
+                name: "explicit_skill_path_wins",
+                prompt: "use [$calendar](skill:///tmp/skills/calendar/SKILL.md)",
+                skills: vec![make_skill("calendar", "/tmp/skills/calendar/SKILL.md")],
+                connectors: vec![make_connector("app_cal", "Calendar")],
+                explicit_app_paths: Vec::new(),
+                expected_skill_names: vec!["calendar"],
+                expected_app_ids: Vec::new(),
+            },
+            Case {
+                name: "mcp_path_does_not_select_skill_or_app",
+                prompt: "use [$foo](mcp://server/foo)",
+                skills: vec![make_skill("foo", "/tmp/skills/foo/SKILL.md")],
+                connectors: vec![make_connector("app_foo", "Foo")],
+                explicit_app_paths: Vec::new(),
+                expected_skill_names: Vec::new(),
+                expected_app_ids: Vec::new(),
+            },
+            Case {
+                name: "plain_skill_mention_selects_skill",
+                prompt: "run $linting now",
+                skills: vec![make_skill("linting", "/tmp/skills/linting/SKILL.md")],
+                connectors: Vec::new(),
+                explicit_app_paths: Vec::new(),
+                expected_skill_names: vec!["linting"],
+                expected_app_ids: Vec::new(),
+            },
+        ];
+
+        for case in cases {
+            let disabled_paths = HashSet::new();
+            let inputs = vec![user_input(case.prompt)];
+            let (skill_name_counts, skill_name_counts_lower) =
+                build_skill_name_counts(&case.skills, &disabled_paths);
+            let connector_slug_counts = build_connector_slug_counts(&case.connectors);
+            let selected_skills = collect_explicit_skill_mentions(
+                &inputs,
+                &case.skills,
+                &disabled_paths,
+                &skill_name_counts,
+                &connector_slug_counts,
+            );
+            let selected_skill_names = selected_skills
+                .iter()
+                .map(|skill| skill.name.as_str())
+                .collect::<Vec<_>>();
+
+            let response_items = vec![user_message(case.prompt)];
+            let selected_connectors = filter_connectors_for_input(
+                case.connectors,
+                &response_items,
+                &case.explicit_app_paths,
+                &skill_name_counts_lower,
+            );
+            let selected_app_ids = selected_connectors
+                .iter()
+                .map(|connector| connector.id.as_str())
+                .collect::<Vec<_>>();
+
+            assert_eq!(
+                selected_skill_names, case.expected_skill_names,
+                "case {} selected unexpected skills",
+                case.name
+            );
+            assert_eq!(
+                selected_app_ids, case.expected_app_ids,
+                "case {} selected unexpected apps",
+                case.name
+            );
+        }
     }
 
     #[tokio::test]
