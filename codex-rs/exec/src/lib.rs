@@ -231,7 +231,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         tools_web_search_request: None,
         ephemeral: None,
         additional_writable_roots: add_dir,
-        experimental_path_to_linux_sandbox_bwrap: None,
     };
 
     let config =

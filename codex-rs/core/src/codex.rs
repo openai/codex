@@ -455,7 +455,6 @@ pub(crate) struct TurnContext {
     pub(crate) ghost_snapshot: GhostSnapshotConfig,
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
-    pub(crate) bwrap_path: Option<PathBuf>,
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
     pub(crate) truncation_policy: TruncationPolicy,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
@@ -638,9 +637,6 @@ impl Session {
             ghost_snapshot: per_turn_config.ghost_snapshot.clone(),
             final_output_json_schema: None,
             codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
-            bwrap_path: per_turn_config
-                .experimental_path_to_linux_sandbox_bwrap
-                .clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
             truncation_policy: model_info.truncation_policy.into(),
             dynamic_tools: session_configuration.dynamic_tools.clone(),
@@ -879,12 +875,10 @@ impl Session {
 
         // Construct sandbox_state before initialize() so it can be sent to each
         // MCP server immediately after it becomes ready (avoiding blocking).
-        let bwrap_path = config.experimental_path_to_linux_sandbox_bwrap.clone();
         let sandbox_state = SandboxState {
             sandbox_policy: session_configuration.sandbox_policy.get().clone(),
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             sandbox_cwd: session_configuration.cwd.clone(),
-            bwrap_path,
         };
         let cancel_token = sess.mcp_startup_cancellation_token().await;
 
@@ -1121,14 +1115,10 @@ impl Session {
         let per_turn_config = Self::build_per_turn_config(&session_configuration);
 
         if sandbox_policy_changed {
-            let bwrap_path = per_turn_config
-                .experimental_path_to_linux_sandbox_bwrap
-                .clone();
             let sandbox_state = SandboxState {
                 sandbox_policy: per_turn_config.sandbox_policy.get().clone(),
                 codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
                 sandbox_cwd: per_turn_config.cwd.clone(),
-                bwrap_path,
             };
             if let Err(e) = self
                 .services
@@ -2146,12 +2136,10 @@ impl Session {
             config.as_ref(),
         );
         let auth_statuses = compute_auth_statuses(mcp_servers.iter(), store_mode).await;
-        let bwrap_path = turn_context.bwrap_path.clone();
         let sandbox_state = SandboxState {
             sandbox_policy: turn_context.sandbox_policy.clone(),
             codex_linux_sandbox_exe: turn_context.codex_linux_sandbox_exe.clone(),
             sandbox_cwd: turn_context.cwd.clone(),
-            bwrap_path,
         };
         let cancel_token = self.reset_mcp_startup_cancellation_token().await;
 
@@ -2951,7 +2939,6 @@ async fn spawn_review_thread(
         cwd: parent_turn_context.cwd.clone(),
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
-        bwrap_path: parent_turn_context.bwrap_path.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         truncation_policy: model_info.truncation_policy.into(),

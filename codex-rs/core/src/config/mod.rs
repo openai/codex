@@ -278,13 +278,6 @@ pub struct Config {
     /// When this program is invoked, arg0 will be set to `codex-linux-sandbox`.
     pub codex_linux_sandbox_exe: Option<PathBuf>,
 
-    /// Experimental: opt into the bubblewrap-based Linux sandbox by providing
-    /// the path to the `bwrap` binary on the host.
-    ///
-    /// This path is threaded through the Linux sandbox helper and implies
-    /// bubblewrap opt-in for Linux sandboxing.
-    pub experimental_path_to_linux_sandbox_bwrap: Option<PathBuf>,
-
     /// Value to use for `reasoning.effort` when making a request using the
     /// Responses API.
     pub model_reasoning_effort: Option<ReasoningEffort>,
@@ -791,14 +784,6 @@ pub struct ConfigToml {
     /// Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`.
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
 
-    /// Experimental: opt into the bubblewrap-based Linux sandbox by providing
-    /// the path to the `bwrap` binary on the host.
-    ///
-    /// When set, Codex will invoke `bwrap` at this path instead of relying on
-    /// PATH lookup, and will enable the bubblewrap pipeline automatically.
-    #[serde(default)]
-    pub experimental_path_to_linux_sandbox_bwrap: Option<PathBuf>,
-
     /// Optional external command to spawn for end-user notifications.
     #[serde(default)]
     pub notify: Option<Vec<String>>,
@@ -1178,7 +1163,6 @@ pub struct ConfigOverrides {
     pub model_provider: Option<String>,
     pub config_profile: Option<String>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
-    pub experimental_path_to_linux_sandbox_bwrap: Option<PathBuf>,
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
     pub model_personality: Option<Personality>,
@@ -1268,7 +1252,6 @@ impl Config {
             model_provider,
             config_profile: config_profile_key,
             codex_linux_sandbox_exe,
-            experimental_path_to_linux_sandbox_bwrap,
             base_instructions,
             developer_instructions,
             model_personality,
@@ -1297,9 +1280,6 @@ impl Config {
                 .clone(),
             None => ConfigProfile::default(),
         };
-
-        let experimental_path_to_linux_sandbox_bwrap = experimental_path_to_linux_sandbox_bwrap
-            .or(cfg.experimental_path_to_linux_sandbox_bwrap.clone());
 
         let feature_overrides = FeatureOverrides {
             include_apply_patch_tool: include_apply_patch_tool_override,
@@ -1563,7 +1543,6 @@ impl Config {
             ephemeral: ephemeral.unwrap_or_default(),
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             codex_linux_sandbox_exe,
-            experimental_path_to_linux_sandbox_bwrap,
 
             hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
             show_raw_agent_reasoning: cfg
@@ -3748,7 +3727,6 @@ model_verbosity = "high"
                 ephemeral: false,
                 file_opener: UriBasedFileOpener::VsCode,
                 codex_linux_sandbox_exe: None,
-                experimental_path_to_linux_sandbox_bwrap: None,
                 hide_agent_reasoning: false,
                 show_raw_agent_reasoning: false,
                 model_reasoning_effort: Some(ReasoningEffort::High),
@@ -3832,7 +3810,6 @@ model_verbosity = "high"
             ephemeral: false,
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
-            experimental_path_to_linux_sandbox_bwrap: None,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
             model_reasoning_effort: None,
@@ -3931,7 +3908,6 @@ model_verbosity = "high"
             ephemeral: false,
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
-            experimental_path_to_linux_sandbox_bwrap: None,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
             model_reasoning_effort: None,
@@ -4016,7 +3992,6 @@ model_verbosity = "high"
             ephemeral: false,
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
-            experimental_path_to_linux_sandbox_bwrap: None,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
             model_reasoning_effort: Some(ReasoningEffort::High),

@@ -604,7 +604,6 @@ fn build_agent_spawn_config(
     config.compact_prompt = turn.compact_prompt.clone();
     config.shell_environment_policy = turn.shell_environment_policy.clone();
     config.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
-    config.experimental_path_to_linux_sandbox_bwrap = turn.bwrap_path.clone();
     config.cwd = turn.cwd.clone();
     config
         .approval_policy
@@ -1189,7 +1188,6 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         turn.cwd = temp_dir.path().to_path_buf();
         turn.codex_linux_sandbox_exe = Some(PathBuf::from("/bin/echo"));
-        turn.bwrap_path = Some(PathBuf::from("/usr/bin/bwrap"));
         turn.approval_policy = AskForApproval::Never;
         turn.sandbox_policy = SandboxPolicy::DangerFullAccess;
 
@@ -1204,7 +1202,6 @@ mod tests {
         expected.compact_prompt = turn.compact_prompt.clone();
         expected.shell_environment_policy = turn.shell_environment_policy.clone();
         expected.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
-        expected.experimental_path_to_linux_sandbox_bwrap = turn.bwrap_path.clone();
         expected.cwd = turn.cwd.clone();
         expected
             .approval_policy

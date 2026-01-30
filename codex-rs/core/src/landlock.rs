@@ -26,7 +26,7 @@ pub async fn spawn_command_under_linux_sandbox<P>(
 where
     P: AsRef<Path>,
 {
-    let args = create_linux_sandbox_command_args(command, sandbox_policy, sandbox_policy_cwd, None);
+    let args = create_linux_sandbox_command_args(command, sandbox_policy, sandbox_policy_cwd);
     let arg0 = Some("codex-linux-sandbox");
     spawn_child_async(
         codex_linux_sandbox_exe.as_ref().to_path_buf(),
@@ -48,7 +48,6 @@ pub(crate) fn create_linux_sandbox_command_args(
     command: Vec<String>,
     sandbox_policy: &SandboxPolicy,
     sandbox_policy_cwd: &Path,
-    bwrap_path: Option<&Path>,
 ) -> Vec<String> {
     #[expect(clippy::expect_used)]
     let sandbox_policy_cwd = sandbox_policy_cwd
@@ -65,20 +64,9 @@ pub(crate) fn create_linux_sandbox_command_args(
         sandbox_policy_cwd,
         "--sandbox-policy".to_string(),
         sandbox_policy_json,
+        "--use-bwrap-sandbox".to_string(),
+        "--use-vendored-bwrap".to_string(),
     ];
-
-    if bwrap_path.is_some() {
-        linux_cmd.push("--use-bwrap-sandbox".to_string());
-    }
-    if let Some(bwrap_path) = bwrap_path {
-        #[expect(clippy::expect_used)]
-        let bwrap_path = bwrap_path
-            .to_str()
-            .expect("bwrap path must be valid UTF-8")
-            .to_string();
-        linux_cmd.push("--bwrap-path".to_string());
-        linux_cmd.push(bwrap_path);
-    }
 
     // Separator so that command arguments starting with `-` are not parsed as
     // options of the helper itself.

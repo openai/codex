@@ -29,12 +29,6 @@ pub struct LandlockCommand {
     #[arg(long = "use-bwrap-sandbox", hide = true, default_value_t = false)]
     pub use_bwrap_sandbox: bool,
 
-    /// Optional explicit path to the `bwrap` binary to use.
-    ///
-    /// When provided, this implies bubblewrap opt-in and avoids PATH lookups.
-    #[arg(long = "bwrap-path", hide = true)]
-    pub bwrap_path: Option<PathBuf>,
-
     /// Experimental: call a build-time bubblewrap `main()` via FFI.
     ///
     /// This is opt-in and only works when the build script compiles bwrap.
@@ -72,13 +66,12 @@ pub fn run_main() -> ! {
         sandbox_policy_cwd,
         sandbox_policy,
         use_bwrap_sandbox,
-        bwrap_path,
         use_vendored_bwrap,
         apply_seccomp_then_exec,
         no_proc,
         command,
     } = LandlockCommand::parse();
-    let use_bwrap_sandbox = use_bwrap_sandbox || bwrap_path.is_some() || use_vendored_bwrap;
+    let use_bwrap_sandbox = use_bwrap_sandbox || use_vendored_bwrap;
 
     if command.is_empty() {
         panic!("No command specified to execute.");
@@ -109,22 +102,14 @@ pub fn run_main() -> ! {
             &sandbox_policy_cwd,
             &sandbox_policy,
             use_bwrap_sandbox,
-            bwrap_path.as_deref(),
             command,
         );
         let options = BwrapOptions {
             mount_proc: !no_proc,
         };
-        if use_vendored_bwrap {
-            let mut argv0 = bwrap_path
-                .as_deref()
-                .map(|path| path.to_string_lossy().to_string())
-                .unwrap_or_else(|| "bwrap".to_string());
-            if argv0.is_empty() {
-                argv0 = "bwrap".to_string();
-            }
-
-            let mut argv = vec![argv0];
+        let vendored_available = cfg!(vendored_bwrap_available);
+        if use_vendored_bwrap && vendored_available {
+            let mut argv = vec!["bwrap".to_string()];
             argv.extend(
                 create_bwrap_command_args_vendored(
                     inner,
@@ -138,15 +123,9 @@ pub fn run_main() -> ! {
             );
             exec_vendored_bwrap(argv);
         }
-        ensure_bwrap_available(bwrap_path.as_deref());
-        create_bwrap_command_args(
-            inner,
-            &sandbox_policy,
-            &sandbox_policy_cwd,
-            options,
-            bwrap_path.as_deref(),
-        )
-        .unwrap_or_else(|err| panic!("error building bubblewrap command: {err:?}"))
+        ensure_bwrap_available();
+        create_bwrap_command_args(inner, &sandbox_policy, &sandbox_policy_cwd, options)
+            .unwrap_or_else(|err| panic!("error building bubblewrap command: {err:?}"))
     } else {
         // Legacy path: Landlock enforcement only.
         if let Err(e) =
@@ -165,7 +144,6 @@ fn build_inner_seccomp_command(
     sandbox_policy_cwd: &Path,
     sandbox_policy: &codex_core::protocol::SandboxPolicy,
     use_bwrap_sandbox: bool,
-    bwrap_path: Option<&Path>,
     command: Vec<String>,
 ) -> Vec<String> {
     let current_exe = match std::env::current_exe() {
@@ -187,10 +165,6 @@ fn build_inner_seccomp_command(
     if use_bwrap_sandbox {
         inner.push("--use-bwrap-sandbox".to_string());
         inner.push("--apply-seccomp-then-exec".to_string());
-    }
-    if let Some(bwrap_path) = bwrap_path {
-        inner.push("--bwrap-path".to_string());
-        inner.push(bwrap_path.to_string_lossy().to_string());
     }
     inner.push("--".to_string());
     inner.extend(command);
@@ -221,21 +195,7 @@ fn exec_or_panic(command: Vec<String>) -> ! {
 }
 
 /// Ensure the `bwrap` binary is available when the sandbox needs it.
-fn ensure_bwrap_available(bwrap_path: Option<&Path>) {
-    if let Some(path) = bwrap_path {
-        if path.exists() {
-            return;
-        }
-        panic!(
-            "bubblewrap (bwrap) is required for Linux filesystem sandboxing but was not found at the configured path: {}\n\
-Install it and retry. Examples:\n\
-- Debian/Ubuntu: apt-get install bubblewrap\n\
-- Fedora/RHEL: dnf install bubblewrap\n\
-- Arch: pacman -S bubblewrap\n\
-If you are running the Codex Node package, ensure bwrap is installed on the host system.",
-            path.display()
-        );
-    }
+fn ensure_bwrap_available() {
     if which::which("bwrap").is_ok() {
         return;
     }
@@ -246,6 +206,6 @@ Install it and retry. Examples:\n\
 - Debian/Ubuntu: apt-get install bubblewrap\n\
 - Fedora/RHEL: dnf install bubblewrap\n\
 - Arch: pacman -S bubblewrap\n\
-If you are running the Codex Node package, ensure bwrap is installed on the host system."
+Alternatively, rebuild codex-linux-sandbox with CODEX_BWRAP_ENABLE_FFI=1 to use the vendored bubblewrap path."
     );
 }

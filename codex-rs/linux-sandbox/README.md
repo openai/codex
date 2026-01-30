@@ -7,18 +7,26 @@ This crate is responsible for producing:
   - the `codex-exec` CLI can check if its arg0 is `codex-linux-sandbox` and, if so, execute as if it were `codex-linux-sandbox`
   - this should also be true of the `codex` multitool CLI
 
-On Linux, the bubblewrap pipeline expects `bwrap` (bubblewrap) to be available on `PATH`.
+On Linux, the bubblewrap pipeline prefers the vendored bubblewrap path when it
+is compiled into the binary. If that path is not available at runtime, it
+falls back to an external `bwrap` (bubblewrap) on `PATH`.
 
 **Current Behavior**
-- Legacy Landlock + mount protections remain the default filesystem pipeline.
-- The bubblewrap pipeline is opt-in via `experimental_path_to_linux_sandbox_bwrap = "/path/to/bwrap"`.
-- When enabled, the bubblewrap pipeline applies `PR_SET_NO_NEW_PRIVS` and a seccomp network filter in-process.
+- Legacy Landlock + mount protections remain available as the legacy pipeline.
+- The bubblewrap pipeline is now standardized on the vendored path when
+  available.
+- When enabled, the bubblewrap pipeline applies `PR_SET_NO_NEW_PRIVS` and a
+  seccomp network filter in-process.
 - When enabled, the filesystem is read-only by default via `--ro-bind / /`.
 - When enabled, writable roots are layered with `--bind <root> <root>`.
-- When enabled, protected subpaths under writable roots (for example `.git`, resolved `gitdir:`, and `.codex`) are re-applied as read-only via `--ro-bind`.
-- When enabled, symlink-in-path and non-existent protected paths inside writable roots are blocked by mounting `/dev/null` on the symlink or first missing component.
+- When enabled, protected subpaths under writable roots (for example `.git`,
+  resolved `gitdir:`, and `.codex`) are re-applied as read-only via `--ro-bind`.
+- When enabled, symlink-in-path and non-existent protected paths inside
+  writable roots are blocked by mounting `/dev/null` on the symlink or first
+  missing component.
 - When enabled, the helper isolates the PID namespace via `--unshare-pid`.
-- When enabled, it mounts a fresh `/proc` via `--proc /proc` by default, but you can skip this in restrictive container environments with `--no-proc`.
+- When enabled, it mounts a fresh `/proc` via `--proc /proc` by default, but
+  you can skip this in restrictive container environments with `--no-proc`.
 
 **Notes**
 - The CLI surface still uses legacy names like `codex debug landlock`.

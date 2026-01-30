@@ -156,12 +156,10 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
     let cancel_token = CancellationToken::new();
 
     // Use ReadOnly sandbox policy for MCP snapshot collection (safest default)
-    let bwrap_path = config.experimental_path_to_linux_sandbox_bwrap.clone();
     let sandbox_state = SandboxState {
         sandbox_policy: SandboxPolicy::ReadOnly,
         codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
         sandbox_cwd: env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
-        bwrap_path,
     };
 
     mcp_connection_manager

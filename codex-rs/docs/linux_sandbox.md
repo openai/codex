@@ -1,22 +1,16 @@
-# Linux Sandbox (Landlock by Default, bubblewrap Opt-in)
+# Linux Sandbox (Vendored bubblewrap, Landlock legacy)
 
 The Linux sandbox helper (`codex-linux-sandbox`) supports two filesystem
 pipelines:
-- Legacy (default): mount-based protections plus Landlock enforcement.
-- Opt-in: bubblewrap (`bwrap`) for filesystem isolation plus seccomp.
-
-The bubblewrap pipeline can be enabled by setting
-`experimental_path_to_linux_sandbox_bwrap` to the path of the `bwrap` binary,
-for example:
-
-```toml
-experimental_path_to_linux_sandbox_bwrap = "/usr/bin/bwrap"
-```
+- Vendored bubblewrap (default when available): bubblewrap (`bwrap`) for
+  filesystem isolation plus seccomp.
+- Legacy: mount-based protections plus Landlock enforcement.
 
 ## Requirements
 
-- For the bubblewrap pipeline, `bwrap` must be installed at the configured
-  path.
+- Vendored bubblewrap requires a Linux build that enables the FFI path.
+- When the vendored bubblewrap path is not available at runtime, the helper
+  falls back to an external `bwrap` on `PATH`.
 
 ## Filesystem Semantics (bubblewrap pipeline)
 

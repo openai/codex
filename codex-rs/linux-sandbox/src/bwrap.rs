@@ -44,27 +44,14 @@ pub(crate) fn create_bwrap_command_args(
     sandbox_policy: &SandboxPolicy,
     cwd: &Path,
     options: BwrapOptions,
-    bwrap_path: Option<&Path>,
 ) -> Result<Vec<String>> {
     if sandbox_policy.has_full_disk_write_access() {
         return Ok(command);
     }
 
-    let bwrap_path = match bwrap_path {
-        Some(path) => {
-            if path.exists() {
-                path.to_path_buf()
-            } else {
-                return Err(CodexErr::UnsupportedOperation(format!(
-                    "bubblewrap (bwrap) not found at configured path: {}",
-                    path.display()
-                )));
-            }
-        }
-        None => which::which("bwrap").map_err(|err| {
-            CodexErr::UnsupportedOperation(format!("bubblewrap (bwrap) not found on PATH: {err}"))
-        })?,
-    };
+    let bwrap_path = which::which("bwrap").map_err(|err| {
+        CodexErr::UnsupportedOperation(format!("bubblewrap (bwrap) not found on PATH: {err}"))
+    })?;
 
     let mut args = Vec::new();
     args.push(path_to_string(&bwrap_path));

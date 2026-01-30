@@ -103,7 +103,6 @@ impl ToolOrchestrator {
             manager: &self.sandbox,
             sandbox_cwd: &turn_ctx.cwd,
             codex_linux_sandbox_exe: turn_ctx.codex_linux_sandbox_exe.as_ref(),
-            bwrap_path: turn_ctx.bwrap_path.as_ref(),
             windows_sandbox_level: turn_ctx.windows_sandbox_level,
         };
 
@@ -155,7 +154,6 @@ impl ToolOrchestrator {
                     manager: &self.sandbox,
                     sandbox_cwd: &turn_ctx.cwd,
                     codex_linux_sandbox_exe: None,
-                    bwrap_path: None,
                     windows_sandbox_level: turn_ctx.windows_sandbox_level,
                 };
 

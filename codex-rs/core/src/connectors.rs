@@ -55,12 +55,10 @@ pub async fn list_accessible_connectors_from_mcp_tools(
     drop(rx_event);
     let cancel_token = CancellationToken::new();
 
-    let bwrap_path = config.experimental_path_to_linux_sandbox_bwrap.clone();
     let sandbox_state = SandboxState {
         sandbox_policy: SandboxPolicy::ReadOnly,
         codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
         sandbox_cwd: env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
-        bwrap_path,
     };
 
     mcp_connection_manager

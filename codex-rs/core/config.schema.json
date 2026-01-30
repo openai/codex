@@ -1123,11 +1123,6 @@
     "experimental_compact_prompt_file": {
       "$ref": "#/definitions/AbsolutePathBuf"
     },
-    "experimental_path_to_linux_sandbox_bwrap": {
-      "default": null,
-      "description": "Experimental: opt into the bubblewrap-based Linux sandbox by providing the path to the `bwrap` binary on the host.\n\nWhen set, Codex will invoke `bwrap` at this path instead of relying on PATH lookup, and will enable the bubblewrap pipeline automatically.",
-      "type": "string"
-    },
     "experimental_use_freeform_apply_patch": {
       "type": "boolean"
     },

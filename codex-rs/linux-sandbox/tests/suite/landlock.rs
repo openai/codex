@@ -99,9 +99,22 @@ async fn run_cmd_result(
         sandbox_cwd.as_path(),
         &codex_linux_sandbox_exe,
         None,
-        None,
     )
     .await
+}
+
+fn expect_denied(
+    result: Result<codex_core::exec::ExecToolCallOutput>,
+    context: &str,
+) -> codex_core::exec::ExecToolCallOutput {
+    match result {
+        Ok(output) => {
+            assert_ne!(output.exit_code, 0, "{context}: expected nonzero exit code");
+            output
+        }
+        Err(CodexErr::Sandbox(SandboxErr::Denied { output })) => *output,
+        Err(err) => panic!("{context}: {err:?}"),
+    }
 }
 
 #[tokio::test]
@@ -205,7 +218,6 @@ async fn assert_network_blocked(cmd: &[&str]) {
         sandbox_cwd.as_path(),
         &codex_linux_sandbox_exe,
         None,
-        None,
     )
     .await;
 
@@ -266,31 +278,35 @@ async fn sandbox_blocks_git_and_codex_writes_inside_writable_root() {
     let git_target = dot_git.join("config");
     let codex_target = dot_codex.join("config.toml");
 
-    let git_ok = run_cmd_result(
-        &[
-            "bash",
-            "-lc",
-            &format!("echo allowed > {}", git_target.to_string_lossy()),
-        ],
-        &[tmpdir.path().to_path_buf()],
-        LONG_TIMEOUT_MS,
-    )
-    .await
-    .expect("legacy path should allow .git write");
+    let git_output = expect_denied(
+        run_cmd_result(
+            &[
+                "bash",
+                "-lc",
+                &format!("echo denied > {}", git_target.to_string_lossy()),
+            ],
+            &[tmpdir.path().to_path_buf()],
+            LONG_TIMEOUT_MS,
+        )
+        .await,
+        ".git write should be denied under bubblewrap",
+    );
 
-    let codex_ok = run_cmd_result(
-        &[
-            "bash",
-            "-lc",
-            &format!("echo allowed > {}", codex_target.to_string_lossy()),
-        ],
-        &[tmpdir.path().to_path_buf()],
-        LONG_TIMEOUT_MS,
-    )
-    .await
-    .expect("legacy path should allow .codex write");
-    assert_eq!(git_ok.exit_code, 0);
-    assert_eq!(codex_ok.exit_code, 0);
+    let codex_output = expect_denied(
+        run_cmd_result(
+            &[
+                "bash",
+                "-lc",
+                &format!("echo denied > {}", codex_target.to_string_lossy()),
+            ],
+            &[tmpdir.path().to_path_buf()],
+            LONG_TIMEOUT_MS,
+        )
+        .await,
+        ".codex write should be denied under bubblewrap",
+    );
+    assert_ne!(git_output.exit_code, 0);
+    assert_ne!(codex_output.exit_code, 0);
 }
 
 #[tokio::test]
@@ -306,18 +322,20 @@ async fn sandbox_blocks_codex_symlink_replacement_attack() {
 
     let codex_target = dot_codex.join("config.toml");
 
-    let codex_ok = run_cmd_result(
-        &[
-            "bash",
-            "-lc",
-            &format!("echo allowed > {}", codex_target.to_string_lossy()),
-        ],
-        &[tmpdir.path().to_path_buf()],
-        LONG_TIMEOUT_MS,
-    )
-    .await
-    .expect("legacy path should allow .codex symlink write");
-    assert_eq!(codex_ok.exit_code, 0);
+    let codex_output = expect_denied(
+        run_cmd_result(
+            &[
+                "bash",
+                "-lc",
+                &format!("echo denied > {}", codex_target.to_string_lossy()),
+            ],
+            &[tmpdir.path().to_path_buf()],
+            LONG_TIMEOUT_MS,
+        )
+        .await,
+        ".codex symlink replacement should be denied",
+    );
+    assert_ne!(codex_output.exit_code, 0);
 }
 
 #[tokio::test]
