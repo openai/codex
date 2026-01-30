@@ -4838,7 +4838,7 @@ mod tests {
             model_info.slug.as_str(),
             None,
             Some("test@test.com".to_string()),
-            Some(AuthMode::ChatGPT),
+            Some(AuthMode::Chatgpt),
             false,
             "test".to_string(),
             session_source,
