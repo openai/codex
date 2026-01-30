@@ -464,7 +464,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RequestRule,
         key: "request_rule",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Smart approvals",
+            menu_description: "Get smarter \"Don't ask again\" rule requests.",
+            announcement: "NEW: Try Smart approvals to get smarter \"Don't ask again\" requests. Enable in /experimental!",
+        },
         default_enabled: false,
     },
     FeatureSpec {
@@ -560,7 +564,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Personality,
         key: "personality",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Personality",
+            menu_description: "Choose a communication style for Codex.",
+            announcement: "NEW: Pick a personality for Codex. Enable in /experimental!",
+        },
         default_enabled: false,
     },
     FeatureSpec {

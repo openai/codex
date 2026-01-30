@@ -428,13 +428,13 @@ impl RolloutRecorder {
                     }
                 },
                 Err(e) => {
-                    warn!("failed to parse rollout line: {v:?}, error: {e}");
+                    warn!("failed to parse rollout line: {e}");
                     parse_errors = parse_errors.saturating_add(1);
                 }
             }
         }
 
-        info!(
+        tracing::debug!(
             "Resumed rollout with {} items, thread ID: {:?}, parse errors: {}",
             items.len(),
             thread_id,

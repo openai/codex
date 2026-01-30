@@ -984,7 +984,7 @@ impl App {
             model.as_str(),
             auth_ref.and_then(CodexAuth::get_account_id),
             auth_ref.and_then(CodexAuth::get_account_email),
-            auth_ref.map(|auth| auth.mode),
+            auth_ref.map(CodexAuth::api_auth_mode),
             config.otel.log_user_prompt,
             codex_core::terminal::user_agent(),
             SessionSource::Cli,

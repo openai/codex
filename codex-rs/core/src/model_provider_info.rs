@@ -5,10 +5,11 @@
 //!   2. User-defined entries inside `~/.codex/config.toml` under the `model_providers`
 //!      key. These override or extend the defaults at runtime.
 
+use crate::auth::AuthMode;
+use crate::error::EnvVarError;
 use codex_api::Provider as ApiProvider;
 use codex_api::WireApi as ApiWireApi;
 use codex_api::provider::RetryConfig as ApiRetryConfig;
-use codex_app_server_protocol::AuthMode;
 use http::HeaderMap;
 use http::header::HeaderName;
 use http::header::HeaderValue;
@@ -19,7 +20,6 @@ use std::collections::HashMap;
 use std::env::VarError;
 use std::time::Duration;
 
-use crate::error::EnvVarError;
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS: u64 = 300_000;
 const DEFAULT_STREAM_MAX_RETRIES: u64 = 5;
 const DEFAULT_REQUEST_MAX_RETRIES: u64 = 4;
@@ -137,10 +137,7 @@ impl ModelProviderInfo {
         &self,
         auth_mode: Option<AuthMode>,
     ) -> crate::error::Result<ApiProvider> {
-        let default_base_url = if matches!(
-            auth_mode,
-            Some(AuthMode::ChatGPT | AuthMode::ChatgptAuthTokens)
-        ) {
+        let default_base_url = if matches!(auth_mode, Some(AuthMode::ChatGPT)) {
             "https://chatgpt.com/backend-api/codex"
         } else {
             "https://api.openai.com/v1"
