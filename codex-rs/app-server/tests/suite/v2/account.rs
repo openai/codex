@@ -197,7 +197,7 @@ async fn set_auth_token_updates_account_and_notifies() -> Result<()> {
     let ServerNotification::AccountUpdated(payload) = parsed else {
         bail!("unexpected notification: {parsed:?}");
     };
-    assert_eq!(payload.auth_mode, Some(AuthMode::ChatgptAuthTokens));
+    assert_eq!(payload.auth_mode, Some(AuthMode::ChatGptAuthTokens));
 
     let get_id = mcp
         .send_get_account_request(GetAccountParams {
@@ -213,7 +213,7 @@ async fn set_auth_token_updates_account_and_notifies() -> Result<()> {
     assert_eq!(
         account,
         GetAccountResponse {
-            account: Some(Account::Chatgpt {
+            account: Some(Account::ChatGpt {
                 email: "embedded@example.com".to_string(),
                 plan_type: AccountPlanType::Pro,
             }),
@@ -276,7 +276,7 @@ async fn account_read_refresh_token_is_noop_in_external_mode() -> Result<()> {
     assert_eq!(
         account,
         GetAccountResponse {
-            account: Some(Account::Chatgpt {
+            account: Some(Account::ChatGpt {
                 email: "embedded@example.com".to_string(),
                 plan_type: AccountPlanType::Pro,
             }),
@@ -307,7 +307,7 @@ async fn respond_to_refresh_request(
         mcp.read_stream_until_request_message(),
     )
     .await??;
-    let ServerRequest::ChatgptAuthTokensRefresh { request_id, params } = refresh_req else {
+    let ServerRequest::ChatGptAuthTokensRefresh { request_id, params } = refresh_req else {
         bail!("expected account/chatgptAuthTokens/refresh request, got {refresh_req:?}");
     };
     assert_eq!(params.reason, ChatgptAuthTokensRefreshReason::Unauthorized);
@@ -511,7 +511,7 @@ async fn external_auth_refresh_error_fails_turn() -> Result<()> {
         mcp.read_stream_until_request_message(),
     )
     .await??;
-    let ServerRequest::ChatgptAuthTokensRefresh { request_id, .. } = refresh_req else {
+    let ServerRequest::ChatGptAuthTokensRefresh { request_id, .. } = refresh_req else {
         bail!("expected account/chatgptAuthTokens/refresh request, got {refresh_req:?}");
     };
 
@@ -629,7 +629,7 @@ async fn external_auth_refresh_mismatched_workspace_fails_turn() -> Result<()> {
         mcp.read_stream_until_request_message(),
     )
     .await??;
-    let ServerRequest::ChatgptAuthTokensRefresh { request_id, .. } = refresh_req else {
+    let ServerRequest::ChatGptAuthTokensRefresh { request_id, .. } = refresh_req else {
         bail!("expected account/chatgptAuthTokens/refresh request, got {refresh_req:?}");
     };
 
@@ -739,7 +739,7 @@ async fn external_auth_refresh_invalid_id_token_fails_turn() -> Result<()> {
         mcp.read_stream_until_request_message(),
     )
     .await??;
-    let ServerRequest::ChatgptAuthTokensRefresh { request_id, .. } = refresh_req else {
+    let ServerRequest::ChatGptAuthTokensRefresh { request_id, .. } = refresh_req else {
         bail!("expected account/chatgptAuthTokens/refresh request, got {refresh_req:?}");
     };
 
@@ -1186,7 +1186,7 @@ async fn get_account_with_chatgpt() -> Result<()> {
     let received: GetAccountResponse = to_response(resp)?;
 
     let expected = GetAccountResponse {
-        account: Some(Account::Chatgpt {
+        account: Some(Account::ChatGpt {
             email: "user@example.com".to_string(),
             plan_type: AccountPlanType::Pro,
         }),

@@ -92,7 +92,7 @@ async fn get_config_toml_parses_all_fields() -> Result<()> {
                 exclude_slash_tmp: Some(true),
             }),
             forced_chatgpt_workspace_id: Some("12345678-0000-0000-0000-000000000000".into()),
-            forced_login_method: Some(ForcedLoginMethod::Chatgpt),
+            forced_login_method: Some(ForcedLoginMethod::ChatGpt),
             model: Some("gpt-5.1-codex-max".into()),
             model_reasoning_effort: Some(ReasoningEffort::High),
             model_reasoning_summary: Some(ReasoningSummary::Detailed),

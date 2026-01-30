@@ -174,7 +174,7 @@ pub(crate) struct AuthModeWidget {
 
 impl AuthModeWidget {
     fn is_api_login_allowed(&self) -> bool {
-        !matches!(self.forced_login_method, Some(ForcedLoginMethod::Chatgpt))
+        !matches!(self.forced_login_method, Some(ForcedLoginMethod::ChatGpt))
     }
 
     fn is_chatgpt_login_allowed(&self) -> bool {
@@ -663,7 +663,7 @@ impl AuthModeWidget {
     fn handle_existing_chatgpt_login(&mut self) -> bool {
         if matches!(
             self.login_status,
-            LoginStatus::AuthMode(AuthMode::ChatGPT | AuthMode::ChatgptAuthTokens)
+            LoginStatus::AuthMode(AuthMode::ChatGpt | AuthMode::ChatGptAuthTokens)
         ) {
             *self.sign_in_state.write().unwrap() = SignInState::ChatGptSuccess;
             self.request_frame.schedule_frame();
@@ -813,7 +813,7 @@ mod tests {
                 AuthCredentialsStoreMode::File,
             ),
             forced_chatgpt_workspace_id: None,
-            forced_login_method: Some(ForcedLoginMethod::Chatgpt),
+            forced_login_method: Some(ForcedLoginMethod::ChatGpt),
             animations_enabled: true,
         };
         (widget, codex_home)
