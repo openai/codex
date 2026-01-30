@@ -1812,7 +1812,7 @@ impl HistoryCell for RequestUserInputResultCell {
                 Some(answer) => answer.answers.is_empty(),
                 None => true,
             };
-            let mut question_text = format!("{}: {}", question.header, question.question);
+            let mut question_text = question.question.clone();
             if answer_missing {
                 question_text.push_str(" (unanswered)");
             }
@@ -1821,7 +1821,7 @@ impl HistoryCell for RequestUserInputResultCell {
                 width,
                 "  • ".into(),
                 "    ".into(),
-                Style::default().add_modifier(Modifier::DIM),
+                Style::default(),
             ));
 
             let Some(answer) = answer.filter(|answer| !answer.answers.is_empty()) else {
@@ -1835,7 +1835,7 @@ impl HistoryCell for RequestUserInputResultCell {
                     width,
                     "    answer: ".dim(),
                     "            ".dim(),
-                    Style::default(),
+                    Style::default().fg(Color::Cyan),
                 ));
             }
             if let Some(note) = note {
@@ -1843,10 +1843,14 @@ impl HistoryCell for RequestUserInputResultCell {
                     (
                         "    note: ".dim(),
                         "          ".dim(),
-                        Style::default().add_modifier(Modifier::DIM),
+                        Style::default().fg(Color::Cyan),
                     )
                 } else {
-                    ("    answer: ".dim(), "            ".dim(), Style::default())
+                    (
+                        "    answer: ".dim(),
+                        "            ".dim(),
+                        Style::default().fg(Color::Cyan),
+                    )
                 };
                 lines.extend(wrap_with_prefix(&note, width, label, continuation, style));
             }
