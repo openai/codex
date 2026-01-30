@@ -2846,7 +2846,7 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
             }
             SlashCommand::Approvals => {
-                self.open_approvals_popup();
+                self.open_permissions_popup();
             }
             SlashCommand::Permissions => {
                 self.open_permissions_popup();
@@ -4346,9 +4346,9 @@ impl ChatWidget {
         );
     }
 
-    /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).
+    /// Open the permissions popup (alias for /permissions).
     pub(crate) fn open_approvals_popup(&mut self) {
-        self.open_approval_mode_popup(true);
+        self.open_permissions_popup();
     }
 
     /// Open a popup to choose the permissions mode (approval policy + sandbox policy).
@@ -4704,8 +4704,8 @@ impl ChatWidget {
         // Build actions ensuring acknowledgement happens before applying the new sandbox policy,
         // so downstream policy-change hooks don't re-trigger the warning.
         let mut accept_actions: Vec<SelectionAction> = Vec::new();
-        // Suppress the immediate re-scan only when a preset will be applied (i.e., via /approvals),
-        // to avoid duplicate warnings from the ensuing policy change.
+        // Suppress the immediate re-scan only when a preset will be applied (i.e., via /approvals or
+        // /permissions), to avoid duplicate warnings from the ensuing policy change.
         if preset.is_some() {
             accept_actions.push(Box::new(|tx| {
                 tx.send(AppEvent::SkipNextWorldWritableScan);
