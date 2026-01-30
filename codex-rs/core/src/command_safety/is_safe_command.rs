@@ -312,6 +312,15 @@ mod tests {
     }
 
     #[test]
+    fn git_first_positional_is_the_subcommand() {
+        // In git, the first non-option token is the subcommand. Later positional
+        // args (like branch names) must not be treated as subcommands.
+        assert!(!is_known_safe_command(&vec_str(&[
+            "git", "checkout", "status",
+        ])));
+    }
+
+    #[test]
     fn zsh_lc_safe_command_sequence() {
         assert!(is_known_safe_command(&vec_str(&["zsh", "-lc", "ls"])));
     }

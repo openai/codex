@@ -90,6 +90,11 @@ pub(crate) fn find_git_subcommand<'a>(
         if subcommands.contains(&arg) {
             return Some((idx, arg));
         }
+
+        // In git, the first non-option token is the subcommand. If it isn't
+        // one of the subcommands we're looking for, we must stop scanning to
+        // avoid misclassifying later positional args (e.g., branch names).
+        return None;
     }
 
     None
@@ -228,6 +233,15 @@ mod tests {
             "bash",
             "-lc",
             "git -C . branch -d feature",
+        ])));
+    }
+
+    #[test]
+    fn git_checkout_reset_is_not_dangerous() {
+        // The first non-option token is "checkout", so later positional args
+        // like branch names must not be treated as subcommands.
+        assert!(!command_might_be_dangerous(&vec_str(&[
+            "git", "checkout", "reset",
         ])));
     }
 
