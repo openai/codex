@@ -1370,10 +1370,7 @@ impl App {
                                 self.shutdown_current_thread().await;
                                 self.config = resume_config;
                                 tui.set_notification_method(self.config.tui_notification_method);
-                                self.file_search = FileSearchManager::new(
-                                    self.config.cwd.clone(),
-                                    self.app_event_tx.clone(),
-                                );
+                                self.file_search.update_search_dir(self.config.cwd.clone());
                                 let init = self.chatwidget_init_for_forked_or_resumed_thread(
                                     tui,
                                     self.config.clone(),

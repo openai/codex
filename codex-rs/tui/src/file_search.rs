@@ -38,6 +38,17 @@ impl FileSearchManager {
         }
     }
 
+    /// Updates the directory used for file searches.
+    /// This should be called when the session's CWD changes on resume.
+    /// Drops the current session so it will be recreated with the new directory on next query.
+    pub fn update_search_dir(&mut self, new_dir: PathBuf) {
+        self.search_dir = new_dir;
+        #[expect(clippy::unwrap_used)]
+        let mut st = self.state.lock().unwrap();
+        st.session.take();
+        st.latest_query.clear();
+    }
+
     /// Call whenever the user edits the `@` token.
     pub fn on_user_query(&self, query: String) {
         #[expect(clippy::unwrap_used)]
