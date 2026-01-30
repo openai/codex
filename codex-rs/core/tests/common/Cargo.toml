@@ -25,6 +25,7 @@ tokio-tungstenite = { workspace = true }
 walkdir = { workspace = true }
 wiremock = { workspace = true }
 shlex = { workspace = true }
+zstd = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

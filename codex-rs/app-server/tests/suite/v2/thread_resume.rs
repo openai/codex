@@ -31,7 +31,7 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-const DEFAULT_BASE_INSTRUCTIONS: &str = "You are Codex, based on GPT-5. You are running as a coding agent in the Codex CLI on a user's computer.";
+const CODEX_5_2_INSTRUCTIONS_TEMPLATE_DEFAULT: &str = "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
 
 #[tokio::test]
 async fn thread_resume_returns_original_thread() -> Result<()> {
@@ -368,7 +368,7 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_resume_accepts_personality_override_v2() -> Result<()> {
+async fn thread_resume_accepts_personality_override() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -438,14 +438,14 @@ async fn thread_resume_accepts_personality_override_v2() -> Result<()> {
     let request = response_mock.single_request();
     let developer_texts = request.message_input_texts("developer");
     assert!(
-        !developer_texts
+        developer_texts
             .iter()
             .any(|text| text.contains("<personality_spec>")),
-        "did not expect a personality update message in developer input, got {developer_texts:?}"
+        "expected a personality update message in developer input, got {developer_texts:?}"
     );
     let instructions_text = request.instructions_text();
     assert!(
-        instructions_text.contains(DEFAULT_BASE_INSTRUCTIONS),
+        instructions_text.contains(CODEX_5_2_INSTRUCTIONS_TEMPLATE_DEFAULT),
         "expected default base instructions from history, got {instructions_text:?}"
     );
 
@@ -459,7 +459,7 @@ fn create_config_toml(codex_home: &std::path::Path, server_uri: &str) -> std::io
         config_toml,
         format!(
             r#"
-model = "mock-model"
+model = "gpt-5.2-codex"
 approval_policy = "never"
 sandbox_mode = "read-only"
 
@@ -467,6 +467,7 @@ model_provider = "mock_provider"
 
 [features]
 remote_models = false
+personality = true
 
 [model_providers.mock_provider]
 name = "Mock provider for test"

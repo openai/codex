@@ -17,6 +17,6 @@ pub(crate) fn install_global(metrics: MetricsClient) {
     let _ = GLOBAL_METRICS.set(metrics);
 }
 
-pub(crate) fn global() -> Option<MetricsClient> {
+pub fn global() -> Option<MetricsClient> {
     GLOBAL_METRICS.get().cloned()
 }

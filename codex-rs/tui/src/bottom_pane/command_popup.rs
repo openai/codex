@@ -14,6 +14,11 @@ use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 use std::collections::HashSet;
 
+// Hide alias commands in the default popup list so each unique action appears once.
+// `quit` is an alias of `exit`, so we skip `quit` here.
+// `approvals` is an alias of `permissions`.
+const ALIAS_COMMANDS: &[SlashCommand] = &[SlashCommand::Quit, SlashCommand::Approvals];
+
 /// A selectable item in the popup: either a built-in command or a user prompt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CommandItem {
@@ -32,6 +37,7 @@ pub(crate) struct CommandPopup {
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct CommandPopupFlags {
     pub(crate) collaboration_modes_enabled: bool,
+    pub(crate) connectors_enabled: bool,
     pub(crate) personality_command_enabled: bool,
     pub(crate) windows_degraded_sandbox_active: bool,
 }
@@ -41,6 +47,7 @@ impl CommandPopup {
         // Keep built-in availability in sync with the composer.
         let builtins = slash_commands::builtins_for_input(
             flags.collaboration_modes_enabled,
+            flags.connectors_enabled,
             flags.personality_command_enabled,
             flags.windows_degraded_sandbox_active,
         );
@@ -120,6 +127,9 @@ impl CommandPopup {
         if filter.is_empty() {
             // Built-ins first, in presentation order.
             for (_, cmd) in self.builtins.iter() {
+                if ALIAS_COMMANDS.contains(cmd) {
+                    continue;
+                }
                 out.push((CommandItem::Builtin(*cmd), None));
             }
             // Then prompts, already sorted by name.
@@ -438,9 +448,21 @@ mod tests {
     }
 
     #[test]
+    fn quit_hidden_in_empty_filter_but_shown_for_prefix() {
+        let mut popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
+        popup.on_composer_text_change("/".to_string());
+        let items = popup.filtered_items();
+        assert!(!items.contains(&CommandItem::Builtin(SlashCommand::Quit)));
+
+        popup.on_composer_text_change("/qu".to_string());
+        let items = popup.filtered_items();
+        assert!(items.contains(&CommandItem::Builtin(SlashCommand::Quit)));
+    }
+
+    #[test]
     fn collab_command_hidden_when_collaboration_modes_disabled() {
         let mut popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
-        popup.on_composer_text_change("/coll".to_string());
+        popup.on_composer_text_change("/".to_string());
 
         let cmds: Vec<&str> = popup
             .filtered_items()
@@ -454,6 +476,10 @@ mod tests {
             !cmds.contains(&"collab"),
             "expected '/collab' to be hidden when collaboration modes are disabled, got {cmds:?}"
         );
+        assert!(
+            !cmds.contains(&"plan"),
+            "expected '/plan' to be hidden when collaboration modes are disabled, got {cmds:?}"
+        );
     }
 
     #[test]
@@ -462,6 +488,7 @@ mod tests {
             Vec::new(),
             CommandPopupFlags {
                 collaboration_modes_enabled: true,
+                connectors_enabled: false,
                 personality_command_enabled: true,
                 windows_degraded_sandbox_active: false,
             },
@@ -475,11 +502,31 @@ mod tests {
     }
 
     #[test]
+    fn plan_command_visible_when_collaboration_modes_enabled() {
+        let mut popup = CommandPopup::new(
+            Vec::new(),
+            CommandPopupFlags {
+                collaboration_modes_enabled: true,
+                connectors_enabled: false,
+                personality_command_enabled: true,
+                windows_degraded_sandbox_active: false,
+            },
+        );
+        popup.on_composer_text_change("/plan".to_string());
+
+        match popup.selected_item() {
+            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "plan"),
+            other => panic!("expected plan to be selected for exact match, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn personality_command_hidden_when_disabled() {
         let mut popup = CommandPopup::new(
             Vec::new(),
             CommandPopupFlags {
                 collaboration_modes_enabled: true,
+                connectors_enabled: false,
                 personality_command_enabled: false,
                 windows_degraded_sandbox_active: false,
             },
@@ -506,6 +553,7 @@ mod tests {
             Vec::new(),
             CommandPopupFlags {
                 collaboration_modes_enabled: true,
+                connectors_enabled: false,
                 personality_command_enabled: true,
                 windows_degraded_sandbox_active: false,
             },

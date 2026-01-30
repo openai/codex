@@ -136,6 +136,7 @@ mod tests {
                 CoreSandboxModeRequirement::ExternalSandbox,
             ]),
             mcp_servers: None,
+            rules: None,
         };
 
         let mapped = map_requirements_toml_to_api(requirements);

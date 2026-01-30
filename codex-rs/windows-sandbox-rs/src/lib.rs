@@ -17,6 +17,9 @@ mod setup;
 mod elevated_impl;
 
 #[cfg(target_os = "windows")]
+mod setup_error;
+
+#[cfg(target_os = "windows")]
 pub use acl::allow_null_device;
 #[cfg(target_os = "windows")]
 pub use acl::ensure_allow_mask_aces;
@@ -66,6 +69,20 @@ pub use setup::sandbox_dir;
 pub use setup::sandbox_secrets_dir;
 #[cfg(target_os = "windows")]
 pub use setup::SETUP_VERSION;
+#[cfg(target_os = "windows")]
+pub use setup_error::extract_failure as extract_setup_failure;
+#[cfg(target_os = "windows")]
+pub use setup_error::sanitize_tag_value as sanitize_setup_metric_tag_value;
+#[cfg(target_os = "windows")]
+pub use setup_error::setup_error_path;
+#[cfg(target_os = "windows")]
+pub use setup_error::write_setup_error_report;
+#[cfg(target_os = "windows")]
+pub use setup_error::SetupErrorCode;
+#[cfg(target_os = "windows")]
+pub use setup_error::SetupErrorReport;
+#[cfg(target_os = "windows")]
+pub use setup_error::SetupFailure;
 #[cfg(target_os = "windows")]
 pub use token::convert_string_sid_to_sid;
 #[cfg(target_os = "windows")]

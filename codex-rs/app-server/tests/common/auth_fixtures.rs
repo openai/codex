@@ -6,6 +6,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::DateTime;
 use chrono::Utc;
+use codex_app_server_protocol::AuthMode;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::AuthDotJson;
 use codex_core::auth::save_auth;
@@ -158,6 +159,7 @@ pub fn write_chatgpt_auth(
     let last_refresh = fixture.last_refresh.unwrap_or_else(|| Some(Utc::now()));
 
     let auth = AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
         openai_api_key: None,
         tokens: Some(tokens),
         last_refresh,

@@ -12,6 +12,8 @@ use codex_protocol::protocol::SessionSource;
 use std::path::PathBuf;
 use tokio::sync::watch;
 
+use crate::state_db::StateDbHandle;
+
 #[derive(Clone, Debug)]
 pub struct ThreadConfigSnapshot {
     pub model: String,
@@ -62,6 +64,10 @@ impl CodexThread {
 
     pub fn rollout_path(&self) -> Option<PathBuf> {
         self.rollout_path.clone()
+    }
+
+    pub fn state_db(&self) -> Option<StateDbHandle> {
+        self.codex.state_db()
     }
 
     pub async fn config_snapshot(&self) -> ThreadConfigSnapshot {

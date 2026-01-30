@@ -88,6 +88,7 @@ impl SkillsManager {
             Some(cwd_abs),
             &cli_overrides,
             LoaderOverrides::default(),
+            None,
         )
         .await
         {
