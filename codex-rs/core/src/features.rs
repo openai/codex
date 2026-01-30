@@ -560,7 +560,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Personality,
         key: "personality",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Personality",
+            menu_description: "Choose a communication style for Codex.",
+            announcement: "NEW: Pick a personality for Codex. Enable in /experimental!",
+        },
         default_enabled: false,
     },
     FeatureSpec {
