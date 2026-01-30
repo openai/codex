@@ -114,7 +114,7 @@ pub enum Command {
 struct ResumeArgsRaw {
     // Note: This is the direct clap shape. We reinterpret the positional when --last is set
     // so "codex resume --last <prompt>" treats the positional as a prompt, not a session id.
-    /// Conversation/session id (UUID). When provided, resumes this session.
+    /// Conversation/session id (UUID) or thread name. UUIDs take precedence if it parses.
     /// If omitted, use --last to pick the most recent recorded session.
     #[arg(value_name = "SESSION_ID")]
     session_id: Option<String>,
@@ -144,7 +144,7 @@ struct ResumeArgsRaw {
 
 #[derive(Debug)]
 pub struct ResumeArgs {
-    /// Conversation/session id (UUID). When provided, resumes this session.
+    /// Conversation/session id (UUID) or thread name. UUIDs take precedence if it parses.
     /// If omitted, use --last to pick the most recent recorded session.
     pub session_id: Option<String>,
 
@@ -243,4 +243,38 @@ pub enum Color {
     Never,
     #[default]
     Auto,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn resume_parses_prompt_after_global_flags() {
+        const PROMPT: &str = "echo resume-with-global-flags-after-subcommand";
+        let cli = Cli::parse_from([
+            "codex-exec",
+            "resume",
+            "--last",
+            "--json",
+            "--model",
+            "gpt-5.2-codex",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--skip-git-repo-check",
+            PROMPT,
+        ]);
+
+        let Some(Command::Resume(args)) = cli.command else {
+            panic!("expected resume command");
+        };
+        let effective_prompt = args.prompt.clone().or_else(|| {
+            if args.last {
+                args.session_id.clone()
+            } else {
+                None
+            }
+        });
+        assert_eq!(effective_prompt.as_deref(), Some(PROMPT));
+    }
 }

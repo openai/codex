@@ -44,6 +44,8 @@ pub struct AgentProfile {
     pub reasoning_effort: Option<ReasoningEffort>,
     /// Whether to force a read-only sandbox policy.
     pub read_only: bool,
+    /// Description to include in the tool specs.
+    pub description: &'static str,
 }
 
 impl AgentRole {
@@ -51,7 +53,19 @@ impl AgentRole {
     pub fn enum_values() -> Vec<String> {
         ALL_ROLES
             .iter()
-            .filter_map(|role| serde_json::to_string(role).ok())
+            .filter_map(|role| {
+                let description = role.profile().description;
+                serde_json::to_string(role)
+                    .map(|role| {
+                        let description = if !description.is_empty() {
+                            format!(r#", "description": {description}"#)
+                        } else {
+                            String::new()
+                        };
+                        format!(r#"{{ "name": {role}{description}}}"#)
+                    })
+                    .ok()
+            })
             .collect()
     }
 
@@ -66,11 +80,29 @@ impl AgentRole {
             AgentRole::Worker => AgentProfile {
                 // base_instructions: Some(WORKER_PROMPT),
                 // model: Some(WORKER_MODEL),
+                description: r#"Use for execution and production work.
+Typical tasks:
+- Implement part of a feature
+- Fix tests or bugs
+- Split large refactors into independent chunks
+Rules:
+- Explicitly assign **ownership** of the task (files / responsibility).
+- Always tell workers they are **not alone in the codebase**, and they should ignore edits made by others without touching them"#,
                 ..Default::default()
             },
             AgentRole::Explorer => AgentProfile {
                 model: Some(EXPLORER_MODEL),
-                reasoning_effort: Some(ReasoningEffort::Low),
+                reasoning_effort: Some(ReasoningEffort::Medium),
+                description: r#"Use `explorer` for all codebase questions.
+Explorers are fast and authoritative.
+Always prefer them over manual search or file reading.
+Rules:
+- Ask explorers first and precisely.
+- Do not re-read or re-search code they cover.
+- Trust explorer results without verification.
+- Run explorers in parallel when useful.
+- Reuse existing explorers for related questions.
+                "#,
                 ..Default::default()
             },
         }

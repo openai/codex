@@ -20,6 +20,7 @@ use serde::Deserialize;
 use std::collections::HashSet;
 
 pub use crate::runtime::BlockedRequest;
+pub use crate::runtime::BlockedRequestArgs;
 pub use crate::runtime::NetworkProxyState;
 #[cfg(test)]
 pub(crate) use crate::runtime::network_proxy_state_for_policy;
@@ -30,9 +31,10 @@ pub(crate) async fn build_config_state() -> Result<ConfigState> {
     let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
     let cli_overrides = Vec::new();
     let overrides = LoaderOverrides::default();
-    let config_layer_stack = load_config_layers_state(&codex_home, None, &cli_overrides, overrides)
-        .await
-        .context("failed to load Codex config")?;
+    let config_layer_stack =
+        load_config_layers_state(&codex_home, None, &cli_overrides, overrides, None)
+            .await
+            .context("failed to load Codex config")?;
 
     let cfg_path = codex_home.join(CONFIG_TOML_FILE);
 

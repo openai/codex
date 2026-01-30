@@ -8,6 +8,7 @@ use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
 use crate::app_event_sender::AppEventSender;
+use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::history_cell::UserHistoryCell;
 use crate::test_backend::VT100Backend;
@@ -92,16 +93,6 @@ use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::unbounded_channel;
 use toml::Value as TomlValue;
 
-#[cfg(target_os = "windows")]
-fn set_windows_sandbox_enabled(enabled: bool) {
-    codex_core::set_windows_sandbox_enabled(enabled);
-}
-
-#[cfg(target_os = "windows")]
-fn set_windows_elevated_sandbox_enabled(enabled: bool) {
-    codex_core::set_windows_elevated_sandbox_enabled(enabled);
-}
-
 async fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
     let codex_home = std::env::temp_dir();
@@ -143,6 +134,7 @@ async fn resumed_initial_messages_render_history() {
     let configured = codex_core::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
         approval_policy: AskForApproval::Never,
@@ -209,6 +201,7 @@ async fn replayed_user_message_preserves_text_elements_and_local_images() {
     let configured = codex_core::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
         approval_policy: AskForApproval::Never,
@@ -261,6 +254,7 @@ async fn submission_preserves_text_elements_and_local_images() {
     let configured = codex_core::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
         approval_policy: AskForApproval::Never,
@@ -365,6 +359,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
             path: first_images[0].clone(),
         }],
         text_elements: first_elements,
+        mention_paths: HashMap::new(),
     });
     chat.queued_user_messages.push_back(UserMessage {
         text: second_text,
@@ -373,6 +368,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
             path: second_images[0].clone(),
         }],
         text_elements: second_elements,
+        mention_paths: HashMap::new(),
     });
     chat.refresh_queued_user_messages();
 
@@ -452,6 +448,7 @@ async fn remap_placeholders_uses_attachment_labels() {
         text,
         text_elements: elements,
         local_images: attachments,
+        mention_paths: HashMap::new(),
     };
     let mut next_label = 3usize;
     let remapped = remap_placeholders_for_message(message, &mut next_label);
@@ -512,6 +509,7 @@ async fn remap_placeholders_uses_byte_ranges_when_placeholder_missing() {
         text,
         text_elements: elements,
         local_images: attachments,
+        mention_paths: HashMap::new(),
     };
     let mut next_label = 3usize;
     let remapped = remap_placeholders_for_message(message, &mut next_label);
@@ -722,6 +720,7 @@ async fn helpers_are_available_and_do_not_panic() {
         models_manager: thread_manager.get_models_manager(),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
+        feedback_audience: FeedbackAudience::External,
         model: Some(resolved_model),
         otel_manager,
     };
@@ -810,6 +809,7 @@ async fn make_chatwidget_manual(
         rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
         rate_limit_poller: None,
         stream_controller: None,
+        plan_stream_controller: None,
         running_commands: HashMap::new(),
         suppressed_exec_calls: HashSet::new(),
         skills_all: Vec::new(),
@@ -820,12 +820,14 @@ async fn make_chatwidget_manual(
         unified_exec_processes: Vec::new(),
         agent_turn_running: false,
         mcp_startup_status: None,
+        connectors_cache: ConnectorsCacheState::default(),
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
         current_status_header: String::from("Working"),
         retry_status_header: None,
         thread_id: None,
+        thread_name: None,
         forked_from: None,
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
@@ -839,9 +841,13 @@ async fn make_chatwidget_manual(
         needs_final_message_separator: false,
         had_work_activity: false,
         saw_plan_update_this_turn: false,
+        saw_plan_item_this_turn: false,
+        plan_delta_buffer: String::new(),
+        plan_item_active: false,
         last_separator_elapsed_secs: None,
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
+        feedback_audience: FeedbackAudience::External,
         current_rollout_path: None,
         external_editor_state: ExternalEditorState::Closed,
     };
@@ -1275,7 +1281,7 @@ async fn plan_implementation_popup_skips_when_messages_queued() {
 }
 
 #[tokio::test]
-async fn plan_implementation_popup_shows_on_plan_update_without_message() {
+async fn plan_implementation_popup_skips_without_proposed_plan() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, true);
     let plan_mask =
@@ -1295,8 +1301,29 @@ async fn plan_implementation_popup_shows_on_plan_update_without_message() {
 
     let popup = render_bottom_popup(&chat, 80);
     assert!(
+        !popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected no plan popup without proposed plan output, got {popup:?}"
+    );
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_shows_after_proposed_plan_output() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+
+    chat.on_task_started();
+    chat.on_plan_delta("- Step 1\n- Step 2\n".to_string());
+    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
+    chat.on_task_complete(None, false);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
         popup.contains(PLAN_IMPLEMENTATION_TITLE),
-        "expected plan popup after plan update, got {popup:?}"
+        "expected plan popup after proposed plan output, got {popup:?}"
     );
 }
 
@@ -1759,10 +1786,7 @@ async fn ctrl_c_cleared_prompt_is_recoverable_via_history() {
     assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
 
     let images = chat.bottom_pane.take_recent_submission_images();
-    assert!(
-        images.is_empty(),
-        "attachments are not preserved in history recall"
-    );
+    assert_eq!(vec![PathBuf::from("/tmp/preview.png")], images);
 }
 
 #[tokio::test]
@@ -1958,6 +1982,7 @@ async fn unified_exec_wait_after_final_agent_message_snapshot() {
         id: "turn-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: ModeKind::Custom,
         }),
     });
 
@@ -1992,6 +2017,7 @@ async fn unified_exec_wait_before_streamed_agent_message_snapshot() {
         id: "turn-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: ModeKind::Custom,
         }),
     });
 
@@ -2030,7 +2056,9 @@ async fn unified_exec_wait_status_header_updates_on_late_command_display() {
     chat.on_task_started();
     chat.unified_exec_processes.push(UnifiedExecProcessSummary {
         key: "proc-1".to_string(),
+        call_id: "call-1".to_string(),
         command_display: "sleep 5".to_string(),
+        recent_chunks: Vec::new(),
     });
 
     chat.on_terminal_interaction(TerminalInteractionEvent {
@@ -2276,6 +2304,19 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
 }
 
 #[tokio::test]
+async fn plan_slash_command_switches_to_plan_mode() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let initial = chat.current_collaboration_mode().clone();
+
+    chat.dispatch_command(SlashCommand::Plan);
+
+    assert!(rx.try_recv().is_err(), "plan should not emit an app event");
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    assert_eq!(chat.current_collaboration_mode(), &initial);
+}
+
+#[tokio::test]
 async fn collaboration_modes_defaults_to_code_on_startup() {
     let codex_home = tempdir().expect("tempdir");
     let cfg = ConfigBuilder::default()
@@ -2304,6 +2345,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         models_manager: thread_manager.get_models_manager(),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
+        feedback_audience: FeedbackAudience::External,
         model: Some(resolved_model.clone()),
         otel_manager,
     };
@@ -2348,6 +2390,7 @@ async fn experimental_mode_plan_applies_on_startup() {
         models_manager: thread_manager.get_models_manager(),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
+        feedback_audience: FeedbackAudience::External,
         model: Some(resolved_model.clone()),
         otel_manager,
     };
@@ -2421,6 +2464,7 @@ async fn collab_mode_enabling_keeps_custom_until_selected() {
 #[tokio::test]
 async fn user_turn_includes_personality_from_config() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("bengalfox")).await;
+    chat.set_feature_enabled(Feature::Personality, true);
     chat.thread_id = Some(ThreadId::new());
     chat.set_model("bengalfox");
     chat.set_personality(Personality::Friendly);
@@ -2762,6 +2806,7 @@ async fn interrupted_turn_error_message_snapshot() {
         id: "task-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: ModeKind::Custom,
         }),
     });
 
@@ -3029,6 +3074,43 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
 }
 
 #[tokio::test]
+async fn model_cap_error_does_not_switch_models() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("boomslang")).await;
+    chat.set_model("boomslang");
+    while rx.try_recv().is_ok() {}
+    while op_rx.try_recv().is_ok() {}
+
+    chat.handle_codex_event(Event {
+        id: "err-1".to_string(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "model cap".to_string(),
+            codex_error_info: Some(CodexErrorInfo::ModelCap {
+                model: "boomslang".to_string(),
+                reset_after_seconds: Some(120),
+            }),
+        }),
+    });
+
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::UpdateModel(model) = event {
+            assert_eq!(
+                model, "boomslang",
+                "did not expect model switch on model-cap error"
+            );
+        }
+    }
+
+    while let Ok(event) = op_rx.try_recv() {
+        if let Op::OverrideTurnContext { model, .. } = event {
+            assert!(
+                model.is_none(),
+                "did not expect OverrideTurnContext model update on model-cap error"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn approvals_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
@@ -3050,16 +3132,9 @@ async fn approvals_selection_popup_snapshot() {
 async fn approvals_selection_popup_snapshot_windows_degraded_sandbox() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
-    let was_sandbox_enabled = codex_core::get_platform_sandbox().is_some();
-    let was_elevated_enabled = codex_core::is_windows_elevated_sandbox_enabled();
-
     chat.config.notices.hide_full_access_warning = None;
-    chat.config.features.enable(Feature::WindowsSandbox);
-    chat.config
-        .features
-        .disable(Feature::WindowsSandboxElevated);
-    set_windows_sandbox_enabled(true);
-    set_windows_elevated_sandbox_enabled(false);
+    chat.set_feature_enabled(Feature::WindowsSandbox, true);
+    chat.set_feature_enabled(Feature::WindowsSandboxElevated, false);
 
     chat.open_approvals_popup();
 
@@ -3067,10 +3142,6 @@ async fn approvals_selection_popup_snapshot_windows_degraded_sandbox() {
     insta::with_settings!({ snapshot_suffix => "windows_degraded" }, {
         assert_snapshot!("approvals_selection_popup", popup);
     });
-
-    // Avoid leaking sandbox global state into other tests.
-    set_windows_sandbox_enabled(was_sandbox_enabled);
-    set_windows_elevated_sandbox_enabled(was_elevated_enabled);
 }
 
 #[tokio::test]
@@ -3133,7 +3204,8 @@ async fn windows_auto_mode_prompt_requests_enabling_sandbox_feature() {
 async fn startup_prompts_for_windows_sandbox_when_agent_requested() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
-    set_windows_sandbox_enabled(false);
+    chat.set_feature_enabled(Feature::WindowsSandbox, false);
+    chat.set_feature_enabled(Feature::WindowsSandboxElevated, false);
     chat.config.forced_auto_mode_downgraded_on_windows = true;
 
     chat.maybe_prompt_windows_sandbox_enable();
@@ -3151,8 +3223,6 @@ async fn startup_prompts_for_windows_sandbox_when_agent_requested() {
         popup.contains("Stay in"),
         "expected startup prompt to offer staying in current mode: {popup}"
     );
-
-    set_windows_sandbox_enabled(true);
 }
 
 #[tokio::test]
@@ -3751,6 +3821,7 @@ async fn interrupt_clears_unified_exec_wait_streak_snapshot() {
         id: "turn-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: ModeKind::Custom,
         }),
     });
 
@@ -3824,6 +3895,7 @@ async fn ui_snapshots_small_heights_task_running() {
         id: "task-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: ModeKind::Custom,
         }),
     });
     chat.handle_codex_event(Event {
@@ -3855,6 +3927,7 @@ async fn status_widget_and_approval_modal_snapshot() {
         id: "task-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: ModeKind::Custom,
         }),
     });
     // Provide a deterministic header for the status line.
@@ -3907,6 +3980,7 @@ async fn status_widget_active_snapshot() {
         id: "task-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: ModeKind::Custom,
         }),
     });
     // Provide a deterministic header via a bold reasoning chunk.
@@ -3956,6 +4030,7 @@ async fn mcp_startup_complete_does_not_clear_running_task() {
         id: "task-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: ModeKind::Custom,
         }),
     });
 
@@ -4512,6 +4587,7 @@ async fn stream_recovery_restores_previous_status_header() {
         id: "task".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: ModeKind::Custom,
         }),
     });
     drain_insert_history(&mut rx);
@@ -4549,6 +4625,7 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
         id: "s1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: ModeKind::Custom,
         }),
     });
 
@@ -4743,6 +4820,7 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
         id: "t1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: ModeKind::Custom,
         }),
     });
     chat.handle_codex_event(Event {
@@ -4790,6 +4868,7 @@ async fn chatwidget_markdown_code_blocks_vt100_snapshot() {
         id: "t1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: ModeKind::Custom,
         }),
     });
     // Build a vt100 visual from the history insertions only (no UI overlay)
@@ -4879,6 +4958,7 @@ async fn chatwidget_tall() {
         id: "t1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: ModeKind::Custom,
         }),
     });
     for i in 0..30 {

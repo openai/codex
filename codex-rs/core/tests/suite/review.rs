@@ -819,6 +819,7 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
             cwd: Some(repo_path.to_path_buf()),
             approval_policy: None,
             sandbox_policy: None,
+            windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,

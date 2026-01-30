@@ -146,6 +146,7 @@ mod tests {
     use crate::config::Config;
     use crate::config::ConfigBuilder;
     use assert_matches::assert_matches;
+    use codex_protocol::config_types::ModeKind;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::TurnAbortReason;
@@ -231,6 +232,7 @@ mod tests {
     async fn on_event_updates_status_from_task_started() {
         let status = agent_status_from_event(&EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: ModeKind::Custom,
         }));
         assert_eq!(status, Some(AgentStatus::Running));
     }

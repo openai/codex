@@ -1,3 +1,4 @@
+mod cloud_requirements;
 mod config_requirements;
 mod diagnostics;
 mod fingerprint;
@@ -6,6 +7,7 @@ mod layer_io;
 mod macos;
 mod merge;
 mod overrides;
+mod requirements_exec_policy;
 mod state;
 
 #[cfg(test)]
@@ -28,6 +30,7 @@ use std::io;
 use std::path::Path;
 use toml::Value as TomlValue;
 
+pub use cloud_requirements::CloudRequirementsLoader;
 pub use config_requirements::ConfigRequirements;
 pub use config_requirements::ConfigRequirementsToml;
 pub use config_requirements::McpServerIdentity;
@@ -67,6 +70,7 @@ const DEFAULT_PROJECT_ROOT_MARKERS: &[&str] = &[".git"];
 /// earlier layer cannot be overridden by a later layer:
 ///
 /// - admin:    managed preferences (*)
+/// - cloud:    managed cloud requirements
 /// - system    `/etc/codex/requirements.toml`
 ///
 /// For backwards compatibility, we also load from
@@ -96,6 +100,7 @@ pub async fn load_config_layers_state(
     cwd: Option<AbsolutePathBuf>,
     cli_overrides: &[(String, TomlValue)],
     overrides: LoaderOverrides,
+    cloud_requirements: Option<CloudRequirementsLoader>, // TODO(gt): Once exec and app-server are wired up, we can remove the option.
 ) -> io::Result<ConfigLayerStack> {
     let mut config_requirements_toml = ConfigRequirementsWithSources::default();
 
@@ -107,6 +112,13 @@ pub async fn load_config_layers_state(
             .as_deref(),
     )
     .await?;
+
+    if let Some(loader) = cloud_requirements
+        && let Some(requirements) = loader.get().await
+    {
+        config_requirements_toml
+            .merge_unset_fields(RequirementSource::CloudRequirements, requirements);
+    }
 
     // Honor /etc/codex/requirements.toml.
     if cfg!(unix) {

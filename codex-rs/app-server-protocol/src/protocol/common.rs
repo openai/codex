@@ -23,11 +23,22 @@ impl GitSha {
     }
 }
 
+/// Authentication mode for OpenAI-backed providers.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 pub enum AuthMode {
+    /// OpenAI API key provided by the caller and stored by Codex.
     ApiKey,
-    ChatGPT,
+    /// ChatGPT OAuth managed by Codex (tokens persisted and refreshed by Codex).
+    Chatgpt,
+    /// [UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.
+    ///
+    /// ChatGPT auth tokens are supplied by an external host app and are only
+    /// stored in memory. Token refresh must be handled by the external host app.
+    #[serde(rename = "chatgptAuthTokens")]
+    #[ts(rename = "chatgptAuthTokens")]
+    #[strum(serialize = "chatgptAuthTokens")]
+    ChatgptAuthTokens,
 }
 
 /// Generates an `enum ClientRequest` where each variant is a request that the
@@ -116,6 +127,10 @@ client_request_definitions! {
     ThreadArchive => "thread/archive" {
         params: v2::ThreadArchiveParams,
         response: v2::ThreadArchiveResponse,
+    },
+    ThreadSetName => "thread/name/set" {
+        params: v2::ThreadSetNameParams,
+        response: v2::ThreadSetNameResponse,
     },
     ThreadUnarchive => "thread/unarchive" {
         params: v2::ThreadUnarchiveParams,
@@ -534,6 +549,11 @@ server_request_definitions! {
         response: v2::DynamicToolCallResponse,
     },
 
+    ChatgptAuthTokensRefresh => "account/chatgptAuthTokens/refresh" {
+        params: v2::ChatgptAuthTokensRefreshParams,
+        response: v2::ChatgptAuthTokensRefreshResponse,
+    },
+
     /// DEPRECATED APIs below
     /// Request to approve a patch.
     /// This request is used for Turns started via the legacy APIs (i.e. SendUserTurn, SendUserMessage).
@@ -578,6 +598,7 @@ server_notification_definitions! {
     /// NEW NOTIFICATIONS
     Error => "error" (v2::ErrorNotification),
     ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
+    ThreadNameUpdated => "thread/name/updated" (v2::ThreadNameUpdatedNotification),
     ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
     TurnCompleted => "turn/completed" (v2::TurnCompletedNotification),
@@ -588,6 +609,8 @@ server_notification_definitions! {
     /// This event is internal-only. Used by Codex Cloud.
     RawResponseItemCompleted => "rawResponseItem/completed" (v2::RawResponseItemCompletedNotification),
     AgentMessageDelta => "item/agentMessage/delta" (v2::AgentMessageDeltaNotification),
+    /// EXPERIMENTAL - proposed plan streaming deltas for plan items.
+    PlanDelta => "item/plan/delta" (v2::PlanDeltaNotification),
     CommandExecutionOutputDelta => "item/commandExecution/outputDelta" (v2::CommandExecutionOutputDeltaNotification),
     TerminalInteraction => "item/commandExecution/terminalInteraction" (v2::TerminalInteractionNotification),
     FileChangeOutputDelta => "item/fileChange/outputDelta" (v2::FileChangeOutputDeltaNotification),
@@ -598,6 +621,7 @@ server_notification_definitions! {
     ReasoningSummaryTextDelta => "item/reasoning/summaryTextDelta" (v2::ReasoningSummaryTextDeltaNotification),
     ReasoningSummaryPartAdded => "item/reasoning/summaryPartAdded" (v2::ReasoningSummaryPartAddedNotification),
     ReasoningTextDelta => "item/reasoning/textDelta" (v2::ReasoningTextDeltaNotification),
+    /// Deprecated: Use `ContextCompaction` item type instead.
     ContextCompacted => "thread/compacted" (v2::ContextCompactedNotification),
     DeprecationNotice => "deprecationNotice" (v2::DeprecationNoticeNotification),
     ConfigWarning => "configWarning" (v2::ConfigWarningNotification),
@@ -753,6 +777,29 @@ mod tests {
     }
 
     #[test]
+    fn serialize_chatgpt_auth_tokens_refresh_request() -> Result<()> {
+        let request = ServerRequest::ChatgptAuthTokensRefresh {
+            request_id: RequestId::Integer(8),
+            params: v2::ChatgptAuthTokensRefreshParams {
+                reason: v2::ChatgptAuthTokensRefreshReason::Unauthorized,
+                previous_account_id: Some("org-123".to_string()),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "account/chatgptAuthTokens/refresh",
+                "id": 8,
+                "params": {
+                    "reason": "unauthorized",
+                    "previousAccountId": "org-123"
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn serialize_get_account_rate_limits() -> Result<()> {
         let request = ClientRequest::GetAccountRateLimits {
             request_id: RequestId::Integer(1),
@@ -842,9 +889,33 @@ mod tests {
     }
 
     #[test]
+    fn serialize_account_login_chatgpt_auth_tokens() -> Result<()> {
+        let request = ClientRequest::LoginAccount {
+            request_id: RequestId::Integer(5),
+            params: v2::LoginAccountParams::ChatgptAuthTokens {
+                access_token: "access-token".to_string(),
+                id_token: "id-token".to_string(),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "account/login/start",
+                "id": 5,
+                "params": {
+                    "type": "chatgptAuthTokens",
+                    "accessToken": "access-token",
+                    "idToken": "id-token"
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn serialize_get_account() -> Result<()> {
         let request = ClientRequest::GetAccount {
-            request_id: RequestId::Integer(5),
+            request_id: RequestId::Integer(6),
             params: v2::GetAccountParams {
                 refresh_token: false,
             },
@@ -852,7 +923,7 @@ mod tests {
         assert_eq!(
             json!({
                 "method": "account/read",
-                "id": 5,
+                "id": 6,
                 "params": {
                     "refreshToken": false
                 }

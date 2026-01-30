@@ -67,6 +67,18 @@ pub enum SandboxMode {
 }
 
 #[derive(
+    Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Display, JsonSchema, TS,
+)]
+#[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
+pub enum WindowsSandboxLevel {
+    #[default]
+    Disabled,
+    RestrictedToken,
+    Elevated,
+}
+
+#[derive(
     Debug,
     Serialize,
     Deserialize,
@@ -154,10 +166,13 @@ pub enum AltScreenMode {
 }
 
 /// Initial collaboration mode to use when the TUI starts.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash, JsonSchema, TS)]
+#[derive(
+    Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash, JsonSchema, TS, Default,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ModeKind {
     Plan,
+    #[default]
     Code,
     PairProgramming,
     Execute,

@@ -49,7 +49,19 @@ impl ToolHandler for RequestUserInputHandler {
             )));
         }
 
-        let args: RequestUserInputArgs = parse_arguments(&arguments)?;
+        let mut args: RequestUserInputArgs = parse_arguments(&arguments)?;
+        let missing_options = args
+            .questions
+            .iter()
+            .any(|question| question.options.as_ref().is_none_or(Vec::is_empty));
+        if missing_options {
+            return Err(FunctionCallError::RespondToModel(
+                "request_user_input requires non-empty options for every question".to_string(),
+            ));
+        }
+        for question in &mut args.questions {
+            question.is_other = true;
+        }
         let response = session
             .request_user_input(turn.as_ref(), call_id, args)
             .await
