@@ -2317,6 +2317,38 @@ async fn plan_slash_command_switches_to_plan_mode() {
 }
 
 #[tokio::test]
+async fn plan_slash_command_with_args_submits_prompt() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+
+    chat.dispatch_command_with_args(SlashCommand::Plan, "outline the plan in steps".to_string());
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            items,
+            collaboration_mode:
+                Some(CollaborationMode {
+                    mode: ModeKind::Plan,
+                    ..
+                }),
+            ..
+        } => {
+            assert_eq!(
+                items,
+                vec![UserInput::Text {
+                    text: "outline the plan in steps".to_string(),
+                    text_elements: Vec::new(),
+                }]
+            );
+        }
+        other => {
+            panic!("expected Op::UserTurn with plan collab mode, got {other:?}");
+        }
+    }
+}
+
+#[tokio::test]
 async fn collaboration_modes_defaults_to_code_on_startup() {
     let codex_home = tempdir().expect("tempdir");
     let cfg = ConfigBuilder::default()

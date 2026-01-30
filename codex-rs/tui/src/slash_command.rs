@@ -66,7 +66,7 @@ impl SlashCommand {
             SlashCommand::Ps => "list background terminals",
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Personality => "choose a communication style for Codex",
-            SlashCommand::Plan => "switch to Plan mode",
+            SlashCommand::Plan => "switch to Plan mode or submit a plan prompt",
             SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Agent => "switch the active agent thread",
             SlashCommand::Approvals => "choose what Codex can do without approval",
@@ -78,6 +78,14 @@ impl SlashCommand {
             SlashCommand::Logout => "log out of Codex",
             SlashCommand::Rollout => "print the rollout file path",
             SlashCommand::TestApproval => "test approval request",
+        }
+    }
+
+    /// Optional argument hint shown in the popup (e.g. "[prompt]").
+    pub fn argument_hint(self) -> Option<&'static str> {
+        match self {
+            SlashCommand::Plan => Some("[prompt]"),
+            _ => None,
         }
     }
 
