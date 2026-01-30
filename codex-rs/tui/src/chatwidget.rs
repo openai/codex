@@ -38,6 +38,7 @@ use codex_core::config::ConstraintResult;
 use codex_core::config::types::Notifications;
 use codex_core::features::FEATURES;
 use codex_core::features::Feature;
+use codex_core::find_thread_name_by_id;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
 use codex_core::models_manager::manager::ModelsManager;
@@ -790,9 +791,10 @@ impl ChatWidget {
         self.bottom_pane.set_connectors_snapshot(None);
         self.thread_id = Some(event.session_id);
         self.thread_name = event.thread_name.clone();
-        self.forked_from = event.forked_from_id;
+        self.forked_from = event.forked_from_id.clone();
         self.current_rollout_path = event.rollout_path.clone();
         let initial_messages = event.initial_messages.clone();
+        let forked_from_id = event.forked_from_id.clone();
         let model_for_header = event.model.clone();
         self.session_header.set_model(&model_for_header);
         self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
@@ -825,9 +827,45 @@ impl ChatWidget {
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
         }
+        if let Some(forked_from_id) = forked_from_id {
+            self.emit_forked_session_event(forked_from_id);
+        }
         if !self.suppress_session_configured_redraw {
             self.request_redraw();
         }
+    }
+
+    fn emit_forked_session_event(&self, forked_from_id: ThreadId) {
+        let app_event_tx = self.app_event_tx.clone();
+        let codex_home = self.config.codex_home.clone();
+        tokio::spawn(async move {
+            let send_id = || {
+                let line: Line<'static> = vec![
+                    "• ".dim(),
+                    "Session forked from ".into(),
+                    forked_from_id.to_string().cyan(),
+                ]
+                .into();
+                app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    PlainHistoryCell::new(vec![line]),
+                )));
+            };
+
+            match find_thread_name_by_id(&codex_home, &forked_from_id).await {
+                Ok(Some(name)) if !name.trim().is_empty() => {
+                    let line: Line<'static> =
+                        vec!["• ".dim(), "Session forked from ".into(), name.cyan()].into();
+                    app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        PlainHistoryCell::new(vec![line]),
+                    )));
+                }
+                Ok(_) => send_id(),
+                Err(err) => {
+                    tracing::warn!("Failed to read forked session name: {err}");
+                    send_id();
+                }
+            }
+        });
     }
 
     fn on_thread_name_updated(&mut self, event: codex_core::protocol::ThreadNameUpdatedEvent) {

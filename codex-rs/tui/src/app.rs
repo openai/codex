@@ -1418,6 +1418,8 @@ impl App {
                     self.chat_widget.thread_id(),
                     self.chat_widget.thread_name(),
                 );
+                self.chat_widget
+                    .add_plain_history_lines(vec!["/fork".magenta().into()]);
                 if let Some(path) = self.chat_widget.rollout_path() {
                     match self
                         .server
