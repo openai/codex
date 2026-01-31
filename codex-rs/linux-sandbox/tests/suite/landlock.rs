@@ -13,6 +13,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::process::Command;
 use tempfile::NamedTempFile;
 
 // At least on GitHub CI, the arm64 tests appear to need longer timeouts.
@@ -161,6 +162,36 @@ async fn test_no_new_privs_is_enabled() {
 #[should_panic(expected = "Sandbox(Timeout")]
 async fn test_timeout() {
     run_cmd(&["sleep", "2"], &[], 50).await;
+}
+
+#[tokio::test]
+async fn sandbox_allows_sendto_self_pipe_wakeup() {
+    let python_available = Command::new("python3")
+        .arg("--version")
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+    if !python_available {
+        return;
+    }
+
+    let script = r#"
+import socket
+
+a, b = socket.socketpair()
+try:
+    a.send(b"x")
+finally:
+    a.close()
+    b.close()
+print("ok")
+"#;
+    run_cmd(
+        &["bash", "-lc", &format!("python3 - <<'PY'\n{script}\nPY")],
+        &[],
+        SHORT_TIMEOUT_MS,
+    )
+    .await;
 }
 
 /// Helper that runs `cmd` under the Linux sandbox and asserts that the command
