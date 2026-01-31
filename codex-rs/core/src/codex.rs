@@ -907,7 +907,10 @@ impl Session {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
-            analytics_events_queue: AnalyticsEventsQueue::new(),
+            analytics_events_client: AnalyticsEventsClient::new(
+                AnalyticsEventsQueue::new(),
+                Arc::clone(&config),
+            ),
             notifier: UserNotifier::new(config.notify.clone()),
             rollout: Mutex::new(rollout_recorder),
             user_shell: Arc::new(default_shell),
@@ -3393,7 +3396,6 @@ pub(crate) async fn run_turn(
         Some(auth_manager) => auth_manager.auth().await,
         None => None,
     };
-    let config = sess.get_config().await;
     let thread_id = sess.conversation_id.to_string();
     let tracking = build_track_events_context(
         auth,
@@ -3401,18 +3403,16 @@ pub(crate) async fn run_turn(
         thread_id,
         crate::default_client::originator().value,
     );
-    let analytics_client = AnalyticsEventsClient::new(
-        sess.services.analytics_events_queue.clone(),
-        Arc::clone(&config),
-        tracking.clone(),
-    );
+    sess.services
+        .analytics_events_client
+        .update_tracking(tracking.clone());
     let SkillInjections {
         items: skill_items,
         warnings: skill_warnings,
     } = build_skill_injections(
         &mentioned_skills,
         Some(&otel_manager),
-        Some(&analytics_client),
+        Some(&sess.services.analytics_events_client),
     )
     .await;
 

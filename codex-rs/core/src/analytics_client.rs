@@ -3,7 +3,6 @@ use crate::config::Config;
 use crate::default_client::create_client;
 use crate::git_info::collect_git_info;
 use crate::git_info::get_git_repo_root;
-use codex_app_server_protocol::AuthMode;
 use codex_protocol::protocol::SkillScope;
 use serde::Serialize;
 use sha1::Digest;
@@ -11,6 +10,7 @@ use sha1::Sha1;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -50,7 +50,7 @@ pub(crate) struct AnalyticsEventsQueue {
 pub(crate) struct AnalyticsEventsClient {
     queue: AnalyticsEventsQueue,
     config: Arc<Config>,
-    tracking: TrackEventsContext,
+    tracking: Mutex<Option<TrackEventsContext>>,
 }
 
 impl AnalyticsEventsQueue {
@@ -73,23 +73,29 @@ impl AnalyticsEventsQueue {
 }
 
 impl AnalyticsEventsClient {
-    pub(crate) fn new(
-        queue: AnalyticsEventsQueue,
-        config: Arc<Config>,
-        tracking: TrackEventsContext,
-    ) -> Self {
+    pub(crate) fn new(queue: AnalyticsEventsQueue, config: Arc<Config>) -> Self {
         Self {
             queue,
             config,
-            tracking,
+            tracking: Mutex::new(None),
+        }
+    }
+
+    pub(crate) fn update_tracking(&self, tracking: TrackEventsContext) {
+        if let Ok(mut guard) = self.tracking.lock() {
+            *guard = Some(tracking);
         }
     }
 
     pub(crate) fn track_skill_invocations(&self, invocations: Vec<SkillInvocation>) {
+        let tracking = self.tracking.lock().ok().and_then(|guard| guard.clone());
+        let Some(tracking) = tracking else {
+            return;
+        };
         track_skill_invocations(
             &self.queue,
             Arc::clone(&self.config),
-            Some(self.tracking.clone()),
+            Some(tracking),
             invocations,
         );
     }
@@ -206,7 +212,7 @@ async fn send_track_skill_invocations(job: TrackEventsJob) {
         );
         events.push(TrackEvent {
             event_type: "skill_invocation",
-            skill_id,
+            skill_id: "skill_id_alex_test".to_string(),
             skill_name: invocation.skill_name.clone(),
             event_params: TrackEventParams {
                 thread_id: Some(tracking.thread_id.clone()),
@@ -239,10 +245,10 @@ async fn send_track_skill_invocations(job: TrackEventsJob) {
         Ok(response) => {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            tracing::warn!("track-events failed with status {status}: {body}");
+            tracing::warn!("events failed with status {status}: {body}");
         }
         Err(err) => {
-            tracing::warn!("failed to send track-events request: {err}");
+            tracing::warn!("failed to send events request: {err}");
         }
     }
 }
