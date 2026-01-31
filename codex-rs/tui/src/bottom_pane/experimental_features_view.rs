@@ -175,6 +175,11 @@ impl BottomPaneView for ExperimentalFeaturesView {
                 ..
             } => self.move_down(),
             KeyEvent {
+                code: KeyCode::Char(' '),
+                modifiers: KeyModifiers::NONE,
+                ..
+            }
+            | KeyEvent {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
                 ..
@@ -287,8 +292,10 @@ impl Renderable for ExperimentalFeaturesView {
 fn experimental_popup_hint_line() -> Line<'static> {
     Line::from(vec![
         "Press ".into(),
+        key_hint::plain(KeyCode::Char(' ')).into(),
+        " or ".into(),
         key_hint::plain(KeyCode::Enter).into(),
-        " to toggle or ".into(),
+        " to toggle; ".into(),
         key_hint::plain(KeyCode::Esc).into(),
         " to save for next conversation".into(),
     ])
