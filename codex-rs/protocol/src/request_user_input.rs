@@ -43,6 +43,12 @@ pub struct RequestUserInputResponse {
     pub answers: HashMap<String, RequestUserInputAnswer>,
 }
 
+impl RequestUserInputResponse {
+    pub fn to_tool_output_content(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(self)
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct RequestUserInputEvent {
     /// Responses API call id for the associated tool call, if available.
