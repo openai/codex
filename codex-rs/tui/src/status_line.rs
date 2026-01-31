@@ -309,7 +309,7 @@ mod tests {
         config.tui_status_line = Some(vec![
             "/bin/sh".to_string(),
             "-c".to_string(),
-            "echo fail 1>&2; exit 2".to_string(),
+            "cat >/dev/null; echo fail 1>&2; exit 2".to_string(),
         ]);
 
         let (tx, mut rx) = unbounded_channel();
