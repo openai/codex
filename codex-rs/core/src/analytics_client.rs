@@ -206,7 +206,7 @@ async fn send_track_skill_invocations(auth_manager: &AuthManager, job: TrackEven
     }
 
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
-    let url = format!("{base_url}/api/codex/analytics-events/events");
+    let url = format!("{base_url}/codex/analytics-events/events");
     let payload = TrackEventsRequest { events };
 
     let response = create_client()
