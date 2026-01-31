@@ -13,6 +13,7 @@ const MAX_THREADS: usize = 12;
 pub(crate) async fn run_fuzzy_file_search(
     query: String,
     roots: Vec<String>,
+    include_dirs: bool,
     cancellation_flag: Arc<AtomicBool>,
 ) -> Vec<FuzzyFileSearchResult> {
     if roots.is_empty() {
@@ -38,6 +39,7 @@ pub(crate) async fn run_fuzzy_file_search(
                 limit,
                 threads,
                 compute_indices: true,
+                include_dirs,
                 ..Default::default()
             },
             Some(cancellation_flag),
@@ -54,6 +56,7 @@ pub(crate) async fn run_fuzzy_file_search(
                     root: m.root.to_string_lossy().to_string(),
                     path: m.path.to_string_lossy().to_string(),
                     file_name: file_name.to_string_lossy().to_string(),
+                    is_dir: m.is_dir,
                     score: m.score,
                     indices: m.indices,
                 }

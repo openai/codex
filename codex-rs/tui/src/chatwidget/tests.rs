@@ -369,6 +369,83 @@ async fn blocked_image_restore_preserves_mention_paths() {
 }
 
 #[tokio::test]
+async fn submission_expands_directory_mentions() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    let project_root = tempdir().unwrap();
+    std::fs::create_dir_all(project_root.path().join("docs")).unwrap();
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = codex_core::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::ReadOnly,
+        cwd: project_root.path().to_path_buf(),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+    drain_insert_history(&mut rx);
+    chat.config.cwd = project_root.path().to_path_buf();
+
+    let text = "docs/ review".to_string();
+    let text_elements = vec![TextElement::new(
+        (0.."docs/".len()).into(),
+        Some("docs/".into()),
+    )];
+    chat.bottom_pane
+        .set_composer_text(text.clone(), text_elements.clone(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let items = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => items,
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    };
+
+    let abs_docs = format!(
+        "{}/",
+        project_root
+            .path()
+            .join("docs")
+            .to_string_lossy()
+            .replace('\\', "/")
+    );
+    assert_eq!(
+        items,
+        vec![UserInput::Text {
+            text: format!("[docs/]({abs_docs}) review"),
+            text_elements: Vec::new(),
+        }],
+    );
+
+    let mut user_cell = None;
+    while let Ok(ev) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = ev
+            && let Some(cell) = cell.as_any().downcast_ref::<UserHistoryCell>()
+        {
+            user_cell = Some((cell.message.clone(), cell.text_elements.clone()));
+            break;
+        }
+    }
+
+    let (stored_message, stored_elements) =
+        user_cell.expect("expected submitted user history cell");
+    assert_eq!(stored_message, text);
+    assert_eq!(stored_elements, text_elements);
+}
+
+#[tokio::test]
 async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 

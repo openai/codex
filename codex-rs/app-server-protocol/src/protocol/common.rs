@@ -656,6 +656,10 @@ pub struct FuzzyFileSearchParams {
     pub roots: Vec<String>,
     // if provided, will cancel any previous request that used the same value
     pub cancellation_token: Option<String>,
+    /// When true, include matching directories in search results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub include_dirs: Option<bool>,
 }
 
 /// Superset of [`codex_file_search::FileMatch`]
@@ -664,6 +668,7 @@ pub struct FuzzyFileSearchResult {
     pub root: String,
     pub path: String,
     pub file_name: String,
+    pub is_dir: bool,
     pub score: u32,
     pub indices: Option<Vec<u32>>,
 }

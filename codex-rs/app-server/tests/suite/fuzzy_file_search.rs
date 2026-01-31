@@ -37,7 +37,7 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
     let root_path = root.path().to_string_lossy().to_string();
     // Send fuzzyFileSearch request.
     let request_id = mcp
-        .send_fuzzy_file_search_request("abe", vec![root_path.clone()], None)
+        .send_fuzzy_file_search_request("abe", vec![root_path.clone()], None, None)
         .await?;
 
     // Read response and verify shape and ordering.
@@ -58,6 +58,7 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
                     "root": root_path.clone(),
                     "path": "abexy",
                     "file_name": "abexy",
+                    "is_dir": false,
                     "score": 84,
                     "indices": [0, 1, 2],
                 },
@@ -65,6 +66,7 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
                     "root": root_path.clone(),
                     "path": sub_abce_rel,
                     "file_name": "abce",
+                    "is_dir": false,
                     "score": expected_score,
                     "indices": [4, 5, 7],
                 },
@@ -72,6 +74,7 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
                     "root": root_path.clone(),
                     "path": "abcde",
                     "file_name": "abcde",
+                    "is_dir": false,
                     "score": 71,
                     "indices": [0, 1, 4],
                 },
@@ -94,7 +97,7 @@ async fn test_fuzzy_file_search_accepts_cancellation_token() -> Result<()> {
 
     let root_path = root.path().to_string_lossy().to_string();
     let request_id = mcp
-        .send_fuzzy_file_search_request("alp", vec![root_path.clone()], None)
+        .send_fuzzy_file_search_request("alp", vec![root_path.clone()], None, None)
         .await?;
 
     let request_id_2 = mcp
@@ -102,6 +105,7 @@ async fn test_fuzzy_file_search_accepts_cancellation_token() -> Result<()> {
             "alp",
             vec![root_path.clone()],
             Some(request_id.to_string()),
+            None,
         )
         .await?;
 
@@ -122,6 +126,48 @@ async fn test_fuzzy_file_search_accepts_cancellation_token() -> Result<()> {
     assert_eq!(files.len(), 1);
     assert_eq!(files[0]["root"], root_path);
     assert_eq!(files[0]["path"], "alpha.txt");
+    assert_eq!(files[0]["is_dir"], false);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_fuzzy_file_search_can_include_directories() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let root = TempDir::new()?;
+
+    std::fs::create_dir_all(root.path().join("docs"))?;
+    std::fs::write(root.path().join("docs").join("guide.md"), "contents")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let root_path = root.path().to_string_lossy().to_string();
+    let request_id = mcp
+        .send_fuzzy_file_search_request("doc", vec![root_path.clone()], None, Some(true))
+        .await?;
+
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    let files = resp
+        .result
+        .get("files")
+        .ok_or_else(|| anyhow!("files key missing"))?
+        .as_array()
+        .ok_or_else(|| anyhow!("files not array"))?
+        .clone();
+
+    let docs_dir_match = files.iter().find(|f| {
+        f.get("path") == Some(&json!("docs"))
+            && f.get("file_name") == Some(&json!("docs"))
+            && f.get("is_dir") == Some(&json!(true))
+    });
+    let docs_dir_match = docs_dir_match.ok_or_else(|| anyhow!("missing docs dir match"))?;
+    assert_eq!(docs_dir_match["root"], root_path);
 
     Ok(())
 }

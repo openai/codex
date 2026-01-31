@@ -5000,6 +5000,13 @@
             "null"
           ]
         },
+        "includeDirs": {
+          "description": "When true, include matching directories in search results.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "query": {
           "type": "string"
         },
@@ -5050,6 +5057,9 @@
             "null"
           ]
         },
+        "is_dir": {
+          "type": "boolean"
+        },
         "path": {
           "type": "string"
         },
@@ -5064,6 +5074,7 @@
       },
       "required": [
         "file_name",
+        "is_dir",
         "path",
         "root",
         "score"

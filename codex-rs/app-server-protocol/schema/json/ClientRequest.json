@@ -560,6 +560,13 @@
             "null"
           ]
         },
+        "includeDirs": {
+          "description": "When true, include matching directories in search results.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "query": {
           "type": "string"
         },

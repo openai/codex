@@ -624,6 +624,7 @@ impl McpProcess {
         query: &str,
         roots: Vec<String>,
         cancellation_token: Option<String>,
+        include_dirs: Option<bool>,
     ) -> anyhow::Result<i64> {
         let mut params = serde_json::json!({
             "query": query,
@@ -631,6 +632,9 @@ impl McpProcess {
         });
         if let Some(token) = cancellation_token {
             params["cancellationToken"] = serde_json::json!(token);
+        }
+        if let Some(include_dirs) = include_dirs {
+            params["includeDirs"] = serde_json::json!(include_dirs);
         }
         self.send_request("fuzzyFileSearch", Some(params)).await
     }
