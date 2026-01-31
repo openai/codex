@@ -5,8 +5,8 @@ use anyhow::Result;
 use codex_windows_sandbox::allow_null_device;
 use codex_windows_sandbox::convert_string_sid_to_sid;
 use codex_windows_sandbox::create_process_as_user;
-use codex_windows_sandbox::create_readonly_token_with_cap_from;
-use codex_windows_sandbox::create_workspace_write_token_with_cap_from;
+use codex_windows_sandbox::create_readonly_token_with_caps_from;
+use codex_windows_sandbox::create_workspace_write_token_with_caps_from;
 use codex_windows_sandbox::get_current_token_for_restriction;
 use codex_windows_sandbox::hide_current_user_profile_dir;
 use codex_windows_sandbox::log_note;
@@ -20,7 +20,9 @@ use std::path::Path;
 use std::path::PathBuf;
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::GetLastError;
+use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Foundation::HANDLE;
+use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Storage::FileSystem::CreateFileW;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
@@ -48,7 +50,7 @@ struct RunnerRequest {
     codex_home: PathBuf,
     // Real user's CODEX_HOME for shared data (caps, config).
     real_codex_home: PathBuf,
-    cap_sid: String,
+    cap_sids: Vec<String>,
     command: Vec<String>,
     cwd: PathBuf,
     env_map: HashMap<String, String>,
@@ -112,27 +114,43 @@ pub fn main() -> Result<()> {
     );
 
     let policy = parse_policy(&req.policy_json_or_preset).context("parse policy_json_or_preset")?;
-    let psid_cap: *mut c_void = unsafe { convert_string_sid_to_sid(&req.cap_sid).unwrap() };
+    let mut cap_psids: Vec<*mut c_void> = Vec::new();
+    for sid in &req.cap_sids {
+        let Some(psid) = (unsafe { convert_string_sid_to_sid(sid) }) else {
+            anyhow::bail!("ConvertStringSidToSidW failed for capability SID");
+        };
+        cap_psids.push(psid);
+    }
+    if cap_psids.is_empty() {
+        anyhow::bail!("runner: empty capability SID list");
+    }
 
     // Create restricted token from current process token.
     let base = unsafe { get_current_token_for_restriction()? };
-    let token_res: Result<(HANDLE, *mut c_void)> = unsafe {
+    let token_res: Result<HANDLE> = unsafe {
         match &policy {
-            SandboxPolicy::ReadOnly => create_readonly_token_with_cap_from(base, psid_cap),
+            SandboxPolicy::ReadOnly => create_readonly_token_with_caps_from(base, &cap_psids),
             SandboxPolicy::WorkspaceWrite { .. } => {
-                create_workspace_write_token_with_cap_from(base, psid_cap)
+                create_workspace_write_token_with_caps_from(base, &cap_psids)
             }
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
                 unreachable!()
             }
         }
     };
-    let (h_token, psid_to_use) = token_res?;
+    let h_token = token_res?;
     unsafe {
         CloseHandle(base);
     }
     unsafe {
-        allow_null_device(psid_to_use);
+        for psid in &cap_psids {
+            allow_null_device(*psid);
+        }
+        for psid in cap_psids {
+            if !psid.is_null() {
+                LocalFree(psid as HLOCAL);
+            }
+        }
     }
 
     // Open named pipes for stdio.
