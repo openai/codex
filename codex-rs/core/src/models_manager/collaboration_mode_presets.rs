@@ -18,18 +18,6 @@ pub(super) fn builtin_collaboration_mode_presets() -> Vec<CollaborationModeMask>
     ]
 }
 
-pub(crate) fn mask_from_instructions(instructions: &str) -> Option<CollaborationModeMask> {
-    let normalized = instructions.trim();
-    builtin_collaboration_mode_presets()
-        .into_iter()
-        .find(|mask| {
-            mask.developer_instructions
-                .as_ref()
-                .and_then(|value| value.as_ref())
-                .is_some_and(|text| text.trim() == normalized)
-        })
-}
-
 #[cfg(any(test, feature = "test-support"))]
 pub fn test_builtin_collaboration_mode_presets() -> Vec<CollaborationModeMask> {
     builtin_collaboration_mode_presets()
