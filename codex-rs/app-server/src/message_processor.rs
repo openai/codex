@@ -212,18 +212,6 @@ impl MessageProcessor {
             }
         };
 
-        if let Some(reason) = codex_request.experimental_reason()
-            && !self.experimental_api_enabled.load(Ordering::Relaxed)
-        {
-            let error = JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: experimental_required_message(reason),
-                data: None,
-            };
-            self.outgoing.send_error(request_id, error).await;
-            return;
-        }
-
         match codex_request {
             // Handle Initialize internally so CodexMessageProcessor does not have to concern
             // itself with the `initialized` bool.
@@ -304,6 +292,18 @@ impl MessageProcessor {
                     return;
                 }
             }
+        }
+
+        if let Some(reason) = codex_request.experimental_reason()
+            && !self.experimental_api_enabled.load(Ordering::Relaxed)
+        {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: experimental_required_message(reason),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
         }
 
         match codex_request {
