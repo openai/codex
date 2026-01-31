@@ -1759,7 +1759,7 @@ mod tests {
         assert_eq!(overlay.done, true);
         let event = rx.try_recv().expect("expected AppEvent");
         let AppEvent::QueueRequestUserInputAnswers {
-            answers: _,
+            answers,
             interrupted,
             ..
         } = event
@@ -1795,7 +1795,7 @@ mod tests {
         assert_eq!(overlay.done, true);
         let event = rx.try_recv().expect("expected AppEvent");
         let AppEvent::QueueRequestUserInputAnswers {
-            answers: _,
+            answers,
             interrupted,
             ..
         } = event
@@ -1834,7 +1834,7 @@ mod tests {
         assert_eq!(overlay.done, true);
         let event = rx.try_recv().expect("expected AppEvent");
         let AppEvent::QueueRequestUserInputAnswers {
-            answers,
+            answers: _,
             interrupted,
             ..
         } = event
@@ -1873,7 +1873,7 @@ mod tests {
         assert_eq!(overlay.done, true);
         let event = rx.try_recv().expect("expected AppEvent");
         let AppEvent::QueueRequestUserInputAnswers {
-            answers,
+            answers: _,
             interrupted,
             ..
         } = event
