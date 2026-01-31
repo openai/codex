@@ -713,7 +713,8 @@ impl RequestUserInputOverlay {
                 answers.insert(question.id.clone(), answer);
             }
         }
-        let interrupted = self.unanswered_count() > 0;
+        // This path only runs when the user explicitly interrupts the questions UI.
+        let interrupted = true;
         if answers.is_empty() && !interrupted {
             return;
         }
