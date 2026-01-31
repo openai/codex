@@ -50,6 +50,7 @@ members = [
     "codex-client",
     "codex-api",
     "state",
+    "codex-experimental-api-macros",
 ]
 resolver = "2"
 
@@ -81,6 +82,7 @@ codex-common = { path = "common" }
 codex-core = { path = "core" }
 codex-exec = { path = "exec" }
 codex-execpolicy = { path = "execpolicy" }
+codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
 codex-feedback = { path = "feedback" }
 codex-file-search = { path = "file-search" }
 codex-git = { path = "utils/git" }
@@ -155,6 +157,7 @@ image = { version = "^0.25.9", default-features = false }
 include_dir = "0.7.4"
 indexmap = "2.12.0"
 insta = "1.46.0"
+inventory = "0.3.19"
 itertools = "0.14.0"
 keyring = { version = "3.6", default-features = false }
 landlock = "0.4.4"

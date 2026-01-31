@@ -5,6 +5,7 @@ mod collaboration_mode_list;
 mod compaction;
 mod config_rpc;
 mod dynamic_tools;
+mod experimental_api;
 mod initialize;
 mod model_list;
 mod output_schema;

@@ -1124,8 +1124,10 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "codex-experimental-api-macros",
  "codex-protocol",
  "codex-utils-absolute-path",
+ "inventory",
  "mcp-types",
  "pretty_assertions",
  "schemars 0.8.22",
@@ -1575,6 +1577,15 @@ dependencies = [
  "serde_with",
  "starlark",
  "tempfile",
+]
+
+[[package]]
+name = "codex-experimental-api-macros"
+version = "0.0.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.104",
 ]
 
 [[package]]
