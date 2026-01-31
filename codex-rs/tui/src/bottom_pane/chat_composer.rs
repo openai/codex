@@ -538,6 +538,7 @@ impl ChatComposer {
         }
         // Explicit paste events should not trigger Enter suppression.
         self.paste_burst.clear_after_explicit_paste();
+        self.sync_arg_command_element();
         self.sync_popups();
         true
     }
@@ -959,7 +960,7 @@ impl ChatComposer {
     }
 
     fn sync_arg_command_element(&mut self) {
-        if !self.slash_commands_enabled() || !self.collaboration_modes_enabled {
+        if !self.slash_commands_enabled() {
             return;
         }
 
@@ -978,8 +979,7 @@ impl ChatComposer {
             )
             && cmd.highlight_on_typed()
         {
-            let command_text = format!("/{}", cmd.command());
-            let command_len = command_text.len();
+            let command_len = name.len() + 1;
             if first_line.len() > command_len
                 && first_line
                     .as_bytes()
@@ -989,11 +989,6 @@ impl ChatComposer {
                 desired_len = Some(command_len);
             }
         }
-
-        let highlightable = SlashCommand::iter()
-            .filter(|cmd| cmd.highlight_on_typed())
-            .map(|cmd| format!("/{}", cmd.command()))
-            .collect::<Vec<_>>();
 
         let mut elements = self.textarea.text_elements();
         let mut changed = false;
@@ -1015,7 +1010,7 @@ impl ChatComposer {
                     return true;
                 }
                 let slice = text.get(e.byte_range.start..e.byte_range.end);
-                slice.is_some_and(|s| !highlightable.iter().any(|cmd| cmd == s))
+                slice.is_some_and(|s| !Self::is_highlightable_command(s))
             });
             if elements.len() != before {
                 changed = true;
@@ -1027,33 +1022,11 @@ impl ChatComposer {
         }
     }
 
-    fn should_bypass_arg_space(&self) -> bool {
-        if !self.slash_commands_enabled() || !self.collaboration_modes_enabled {
-            return false;
-        }
-        let text = self.textarea.text();
-        let first_line_end = text.find('\n').unwrap_or(text.len());
-        let first_line = &text[..first_line_end];
-        let cursor = self.textarea.cursor();
-        if cursor != first_line_end {
-            return false;
-        }
-        let Some((name, rest, rest_offset)) = parse_slash_name(first_line) else {
+    fn is_highlightable_command(text: &str) -> bool {
+        let Some(name) = text.strip_prefix('/') else {
             return false;
         };
-        if !rest.is_empty() || cursor != rest_offset {
-            return false;
-        }
-        let Some(cmd) = slash_commands::find_builtin_command(
-            name,
-            self.collaboration_modes_enabled,
-            self.connectors_enabled,
-            self.personality_command_enabled,
-            self.windows_degraded_sandbox_active,
-        ) else {
-            return false;
-        };
-        cmd.highlight_on_typed()
+        SlashCommand::iter().any(|cmd| cmd.highlight_on_typed() && cmd.command() == name)
     }
 
     fn set_slash_command_element(&mut self, cmd: SlashCommand) {
@@ -2285,6 +2258,7 @@ impl ChatComposer {
                 // Mirror insert_str() behavior so popups stay in sync when a
                 // pending fast char flushes as normal typed input.
                 self.textarea.insert_str(ch.to_string().as_str());
+                self.sync_arg_command_element();
                 self.sync_popups();
                 true
             }
@@ -2348,10 +2322,6 @@ impl ChatComposer {
                 // Non-ASCII characters (e.g., from IMEs) can arrive in quick bursts, so avoid
                 // holding the first char while still allowing burst detection for paste input.
                 if !ch.is_ascii() {
-                    return self.handle_non_ascii_char(input, now);
-                }
-
-                if ch == ' ' && self.should_bypass_arg_space() {
                     return self.handle_non_ascii_char(input, now);
                 }
 
@@ -4781,42 +4751,6 @@ mod tests {
         );
 
         assert_eq!(composer.textarea.text(), "/plan outline");
-        assert_eq!(
-            composer.textarea.text_elements(),
-            vec![TextElement::new(
-                (0.."/plan".len()).into(),
-                Some("/plan".to_string())
-            )]
-        );
-    }
-
-    #[test]
-    fn slash_plan_space_inserts_immediately() {
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
-
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            true,
-            sender,
-            false,
-            "Ask Codex to do anything".to_string(),
-            false,
-        );
-        composer.set_collaboration_modes_enabled(true);
-        composer.textarea.set_text_clearing_elements("/plan");
-        composer.textarea.set_cursor("/plan".len());
-
-        let (result, _needs_redraw) = composer.handle_input_basic_with_time(
-            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
-            Instant::now(),
-        );
-
-        assert_eq!(InputResult::None, result);
-        assert_eq!(composer.textarea.text(), "/plan ");
-        composer.sync_arg_command_element();
         assert_eq!(
             composer.textarea.text_elements(),
             vec![TextElement::new(
