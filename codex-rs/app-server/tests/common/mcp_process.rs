@@ -165,12 +165,32 @@ impl McpProcess {
         &mut self,
         client_info: ClientInfo,
     ) -> anyhow::Result<JSONRPCMessage> {
-        let params = Some(serde_json::to_value(InitializeParams {
+        self.initialize_with_capabilities(
             client_info,
-            capabilities: Some(InitializeCapabilities {
+            Some(InitializeCapabilities {
                 experimental_api: true,
             }),
-        })?);
+        )
+        .await
+    }
+
+    pub async fn initialize_with_capabilities(
+        &mut self,
+        client_info: ClientInfo,
+        capabilities: Option<InitializeCapabilities>,
+    ) -> anyhow::Result<JSONRPCMessage> {
+        self.initialize_with_params(InitializeParams {
+            client_info,
+            capabilities,
+        })
+        .await
+    }
+
+    async fn initialize_with_params(
+        &mut self,
+        params: InitializeParams,
+    ) -> anyhow::Result<JSONRPCMessage> {
+        let params = Some(serde_json::to_value(params)?);
         let request_id = self.send_request("initialize", params).await?;
         let message = self.read_jsonrpc_message().await?;
         match message {
