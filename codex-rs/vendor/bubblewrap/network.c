@@ -50,7 +50,7 @@ static int
 rtnl_send_request (int              rtnl_fd,
                    struct nlmsghdr *header)
 {
-  struct sockaddr_nl dst_addr = { AF_NETLINK, 0 };
+  struct sockaddr_nl dst_addr = { .nl_family = AF_NETLINK, .nl_pid = 0, .nl_groups = 0 };
   ssize_t sent;
 
   sent = TEMP_FAILURE_RETRY (sendto (rtnl_fd, (void *) header, header->nlmsg_len, 0,
@@ -139,7 +139,7 @@ loopback_setup (void)
   int r, if_loopback;
   cleanup_fd int rtnl_fd = -1;
   char buffer[1024];
-  struct sockaddr_nl src_addr = { AF_NETLINK, 0 };
+  struct sockaddr_nl src_addr = { .nl_family = AF_NETLINK, .nl_pid = 0, .nl_groups = 0 };
   struct nlmsghdr *header;
   struct ifaddrmsg *addmsg;
   struct ifinfomsg *infomsg;
