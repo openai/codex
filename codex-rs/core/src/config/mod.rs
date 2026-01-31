@@ -1499,7 +1499,8 @@ impl Config {
         let developer_instructions = developer_instructions.or(cfg.developer_instructions);
         let model_personality = model_personality
             .or(config_profile.model_personality)
-            .or(cfg.model_personality);
+            .or(cfg.model_personality)
+            .or(Some(Personality::Friendly));
 
         let experimental_compact_prompt_path = config_profile
             .experimental_compact_prompt_file
@@ -3807,7 +3808,7 @@ model_verbosity = "high"
                 model_reasoning_summary: ReasoningSummary::Detailed,
                 model_supports_reasoning_summaries: None,
                 model_verbosity: None,
-                model_personality: None,
+                model_personality: Some(Personality::Friendly),
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 base_instructions: None,
                 developer_instructions: None,
@@ -3892,7 +3893,7 @@ model_verbosity = "high"
             model_reasoning_summary: ReasoningSummary::default(),
             model_supports_reasoning_summaries: None,
             model_verbosity: None,
-            model_personality: None,
+            model_personality: Some(Personality::Friendly),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
             developer_instructions: None,
@@ -3992,7 +3993,7 @@ model_verbosity = "high"
             model_reasoning_summary: ReasoningSummary::default(),
             model_supports_reasoning_summaries: None,
             model_verbosity: None,
-            model_personality: None,
+            model_personality: Some(Personality::Friendly),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
             developer_instructions: None,
@@ -4078,7 +4079,7 @@ model_verbosity = "high"
             model_reasoning_summary: ReasoningSummary::Detailed,
             model_supports_reasoning_summaries: None,
             model_verbosity: Some(Verbosity::High),
-            model_personality: None,
+            model_personality: Some(Personality::Friendly),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
             developer_instructions: None,
