@@ -1,7 +1,7 @@
 load("@crates//:data.bzl", "DEP_DATA")
 load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_platform//platform_data:defs.bzl", "platform_data")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_proc_macro", "rust_test")
 load("@rules_rust//cargo/private:cargo_build_script_wrapper.bzl", "cargo_build_script")
 
 PLATFORMS = [
@@ -111,11 +111,11 @@ def codex_rust_crate(
         deps = deps + [name + "-build-script"]
 
     if lib_srcs:
-        rust_library(
+        lib_rule = rust_proc_macro if proc_macro else rust_library
+        lib_rule(
             name = name,
             crate_name = crate_name,
             crate_features = crate_features,
-            proc_macro = proc_macro,
             deps = deps,
             proc_macro_deps = proc_macro_deps,
             compile_data = compile_data,
