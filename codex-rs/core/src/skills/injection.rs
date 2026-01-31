@@ -2,16 +2,13 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+use crate::analytics_client::AnalyticsEventsClient;
 use crate::analytics_client::SkillInvocation;
-use crate::analytics_client::TrackEventsContext;
-use crate::analytics_client::track_skill_invocations;
-use crate::config::Config;
 use crate::instructions::SkillInstructions;
 use crate::skills::SkillMetadata;
 use codex_otel::OtelManager;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
-use std::sync::Arc;
 use tokio::fs;
 
 #[derive(Debug, Default)]
@@ -23,8 +20,7 @@ pub(crate) struct SkillInjections {
 pub(crate) async fn build_skill_injections(
     mentioned_skills: &[SkillMetadata],
     otel: Option<&OtelManager>,
-    tracking: Option<&TrackEventsContext>,
-    config: Arc<Config>,
+    analytics_client: Option<&AnalyticsEventsClient>,
 ) -> SkillInjections {
     if mentioned_skills.is_empty() {
         return SkillInjections::default();
@@ -63,8 +59,9 @@ pub(crate) async fn build_skill_injections(
         }
     }
 
-    let tracking = tracking.cloned();
-    track_skill_invocations(Arc::clone(&config), tracking, invocations).await;
+    if let Some(analytics_client) = analytics_client {
+        analytics_client.track_skill_invocations(invocations);
+    }
 
     result
 }

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::AuthManager;
 use crate::RolloutRecorder;
+use crate::analytics_client::AnalyticsEventsQueue;
 use crate::agent::AgentControl;
 use crate::exec_policy::ExecPolicyManager;
 use crate::mcp_connection_manager::McpConnectionManager;
@@ -21,6 +22,7 @@ pub(crate) struct SessionServices {
     pub(crate) mcp_connection_manager: Arc<RwLock<McpConnectionManager>>,
     pub(crate) mcp_startup_cancellation_token: Mutex<CancellationToken>,
     pub(crate) unified_exec_manager: UnifiedExecProcessManager,
+    pub(crate) analytics_events_queue: AnalyticsEventsQueue,
     pub(crate) notifier: UserNotifier,
     pub(crate) rollout: Mutex<Option<RolloutRecorder>>,
     pub(crate) user_shell: Arc<crate::shell::Shell>,

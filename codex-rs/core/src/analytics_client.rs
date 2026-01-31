@@ -12,7 +12,6 @@ use sha1::Sha1;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -47,6 +46,59 @@ pub(crate) struct SkillInvocation {
     pub(crate) skill_path: PathBuf,
 }
 
+#[derive(Clone)]
+pub(crate) struct AnalyticsEventsQueue {
+    sender: mpsc::Sender<TrackEventsJob>,
+}
+
+pub(crate) struct AnalyticsEventsClient {
+    queue: AnalyticsEventsQueue,
+    config: Arc<Config>,
+    tracking: TrackEventsContext,
+}
+
+impl AnalyticsEventsQueue {
+    pub(crate) fn new() -> Self {
+        let (sender, mut receiver) = mpsc::channel(ANALYTICS_EVENTS_QUEUE_SIZE);
+        tokio::spawn(async move {
+            while let Some(job) = receiver.recv().await {
+                send_track_skill_invocations(job).await;
+            }
+        });
+        Self { sender }
+    }
+
+    fn try_send(&self, job: TrackEventsJob) {
+        if self.sender.try_send(job).is_err() {
+            //TODO: add a metric for this
+            tracing::warn!("dropping skill analytics events: queue is full");
+        }
+    }
+}
+
+impl AnalyticsEventsClient {
+    pub(crate) fn new(
+        queue: AnalyticsEventsQueue,
+        config: Arc<Config>,
+        tracking: TrackEventsContext,
+    ) -> Self {
+        Self {
+            queue,
+            config,
+            tracking,
+        }
+    }
+
+    pub(crate) fn track_skill_invocations(&self, invocations: Vec<SkillInvocation>) {
+        track_skill_invocations(
+            &self.queue,
+            Arc::clone(&self.config),
+            Some(self.tracking.clone()),
+            invocations,
+        );
+    }
+}
+
 struct TrackEventsJob {
     config: Arc<Config>,
     tracking: TrackEventsContext,
@@ -55,8 +107,6 @@ struct TrackEventsJob {
 
 const ANALYTICS_EVENTS_QUEUE_SIZE: usize = 256;
 const ANALYTICS_EVENTS_TIMEOUT: Duration = Duration::from_secs(10);
-
-static ANALYTICS_EVENTS_SENDER: OnceLock<mpsc::Sender<TrackEventsJob>> = OnceLock::new();
 
 #[derive(Serialize)]
 struct TrackEventsRequest {
@@ -83,7 +133,8 @@ struct TrackEventParams {
     model_slug: Option<String>,
 }
 
-pub(crate) async fn track_skill_invocations(
+pub(crate) fn track_skill_invocations(
+    queue: &AnalyticsEventsQueue,
     config: Arc<Config>,
     tracking: Option<TrackEventsContext>,
     invocations: Vec<SkillInvocation>,
@@ -103,30 +154,12 @@ pub(crate) async fn track_skill_invocations(
     if auth.mode != AuthMode::ChatGPT {
         return;
     }
-    let sender = analytics_events_sender();
     let job = TrackEventsJob {
         config,
         tracking,
         invocations,
     };
-    if sender.try_send(job).is_err() {
-        //TODO: add a metric for this
-        tracing::warn!("dropping skill analytics events: queue is full");
-    }
-}
-
-fn analytics_events_sender() -> mpsc::Sender<TrackEventsJob> {
-    ANALYTICS_EVENTS_SENDER
-        .get_or_init(|| {
-            let (sender, mut receiver) = mpsc::channel(ANALYTICS_EVENTS_QUEUE_SIZE);
-            tokio::spawn(async move {
-                while let Some(job) = receiver.recv().await {
-                    send_track_skill_invocations(job).await;
-                }
-            });
-            sender
-        })
-        .clone()
+    queue.try_send(job);
 }
 
 async fn send_track_skill_invocations(job: TrackEventsJob) {

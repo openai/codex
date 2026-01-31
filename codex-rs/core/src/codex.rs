@@ -14,6 +14,8 @@ use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
 use crate::agent::MAX_THREAD_SPAWN_DEPTH;
 use crate::agent::agent_status_from_event;
+use crate::analytics_client::AnalyticsEventsClient;
+use crate::analytics_client::AnalyticsEventsQueue;
 use crate::analytics_client::build_track_events_context;
 use crate::compact;
 use crate::compact::run_inline_auto_compact_task;
@@ -905,6 +907,7 @@ impl Session {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
+            analytics_events_queue: AnalyticsEventsQueue::new(),
             notifier: UserNotifier::new(config.notify.clone()),
             rollout: Mutex::new(rollout_recorder),
             user_shell: Arc::new(default_shell),
@@ -3398,14 +3401,18 @@ pub(crate) async fn run_turn(
         turn_context.client.get_session_source(),
         crate::default_client::originator().value,
     );
+    let analytics_client = AnalyticsEventsClient::new(
+        sess.services.analytics_events_queue.clone(),
+        Arc::clone(&config),
+        tracking.clone(),
+    );
     let SkillInjections {
         items: skill_items,
         warnings: skill_warnings,
     } = build_skill_injections(
         &mentioned_skills,
         Some(&otel_manager),
-        Some(&tracking),
-        Arc::clone(&config),
+        Some(&analytics_client),
     )
     .await;
 
