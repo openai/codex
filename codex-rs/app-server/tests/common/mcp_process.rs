@@ -599,6 +599,43 @@ impl McpProcess {
         self.send_request("fuzzyFileSearch", Some(params)).await
     }
 
+    pub async fn send_fuzzy_file_search_session_start_request(
+        &mut self,
+        session_id: &str,
+        roots: Vec<String>,
+    ) -> anyhow::Result<i64> {
+        let params = serde_json::json!({
+            "sessionId": session_id,
+            "roots": roots,
+        });
+        self.send_request("fuzzyFileSearch/sessionStart", Some(params))
+            .await
+    }
+
+    pub async fn send_fuzzy_file_search_session_update_request(
+        &mut self,
+        session_id: &str,
+        query: &str,
+    ) -> anyhow::Result<i64> {
+        let params = serde_json::json!({
+            "sessionId": session_id,
+            "query": query,
+        });
+        self.send_request("fuzzyFileSearch/sessionUpdate", Some(params))
+            .await
+    }
+
+    pub async fn send_fuzzy_file_search_session_stop_request(
+        &mut self,
+        session_id: &str,
+    ) -> anyhow::Result<i64> {
+        let params = serde_json::json!({
+            "sessionId": session_id,
+        });
+        self.send_request("fuzzyFileSearch/sessionStop", Some(params))
+            .await
+    }
+
     async fn send_request(
         &mut self,
         method: &str,
