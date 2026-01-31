@@ -5,15 +5,11 @@ expression: popup
 ---
   Update Model Permissions
 
-› 1. Read Only (current)  Codex can read files in the current workspace.
-                          Approval is required to edit files or access the
-                          internet.
-  2. Default              Codex can read and edit files in the current
-                          workspace, and run commands. Approval is required to
-                          access the internet or edit other files. (Identical
-                          to Agent mode)
-  3. Full Access          Codex can edit files outside this workspace and
-                          access the internet without asking for approval.
-                          Exercise caution when using.
+› 1. Default      Codex can read and edit files in the current workspace, and
+                  run commands. Approval is required to access the internet or
+                  edit other files. (Identical to Agent mode)
+  2. Full Access  Codex can edit files outside this workspace and access the
+                  internet without asking for approval. Exercise caution when
+                  using.
 
   Press enter to confirm or esc to go back
