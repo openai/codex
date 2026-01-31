@@ -42,7 +42,6 @@ pub(crate) struct AnalyticsEventsQueue {
 
 pub(crate) struct AnalyticsEventsClient {
     queue: AnalyticsEventsQueue,
-    auth_manager: Arc<AuthManager>,
     config: Arc<Config>,
 }
 
@@ -69,7 +68,6 @@ impl AnalyticsEventsClient {
     pub(crate) fn new(config: Arc<Config>, auth_manager: Arc<AuthManager>) -> Self {
         Self {
             queue: AnalyticsEventsQueue::new(Arc::clone(&auth_manager)),
-            auth_manager,
             config,
         }
     }
