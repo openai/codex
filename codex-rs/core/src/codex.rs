@@ -3194,6 +3194,12 @@ mod handlers {
         .await;
     }
 
+    /// Apply turn-context history updates after rollback.
+    ///
+    /// Truncates the stored history by the requested rollback depth, then pads to match the
+    /// surviving user-turn count. If the latest user turn has a stored collaboration mode,
+    /// update the session configuration; otherwise, force re-injection of collaboration
+    /// instructions on the next turn.
     fn apply_rollback_turn_context_history(
         state: &mut SessionState,
         existing_turn_context_history: Vec<Option<TurnContextItem>>,
