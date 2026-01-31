@@ -11,6 +11,7 @@ use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshReason;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
 use codex_app_server_protocol::ClientInfo;
+use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigReadParams;
@@ -23,6 +24,7 @@ use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::Result as JsonResult;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_core::AuthManager;
@@ -119,6 +121,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) cloud_requirements: CloudRequirementsLoader,
     pub(crate) feedback: CodexFeedback,
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
+    pub(crate) session_source: SessionSource,
 }
 
 impl MessageProcessor {
@@ -134,7 +137,9 @@ impl MessageProcessor {
             cloud_requirements,
             feedback,
             config_warnings,
+            session_source,
         } = args;
+
         let outgoing = Arc::new(outgoing);
         let auth_manager = AuthManager::shared(
             config.codex_home.clone(),
@@ -148,7 +153,7 @@ impl MessageProcessor {
         let thread_manager = Arc::new(ThreadManager::new(
             config.codex_home.clone(),
             auth_manager.clone(),
-            SessionSource::VSCode,
+            session_source,
         ));
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
             auth_manager,
@@ -205,24 +210,33 @@ impl MessageProcessor {
             }
         };
 
-        match codex_request {
+        self.process_client_request(codex_request).await;
+    }
+
+    pub(crate) async fn process_client_request(&mut self, codex_request: ClientRequest) {
+        let request_id = codex_request.request_id().clone();
+        match &codex_request {
             // Handle Initialize internally so CodexMessageProcessor does not have to concern
             // itself with the `initialized` bool.
-            ClientRequest::Initialize { request_id, params } => {
+            ClientRequest::Initialize {
+                request_id: _,
+                params,
+            } => {
                 if self.initialized {
                     let error = JSONRPCErrorError {
                         code: INVALID_REQUEST_ERROR_CODE,
                         message: "Already initialized".to_string(),
                         data: None,
                     };
-                    self.outgoing.send_error(request_id, error).await;
+                    self.outgoing.send_error(request_id.clone(), error).await;
                     return;
                 } else {
+                    let client_info = params.client_info.clone();
                     let ClientInfo {
                         name,
                         title: _title,
                         version,
-                    } = params.client_info;
+                    } = client_info;
                     if let Err(error) = set_default_originator(name.clone()) {
                         match error {
                             SetOriginatorError::InvalidHeaderValue => {
@@ -233,7 +247,7 @@ impl MessageProcessor {
                                     ),
                                     data: None,
                                 };
-                                self.outgoing.send_error(request_id, error).await;
+                                self.outgoing.send_error(request_id.clone(), error).await;
                                 return;
                             }
                             SetOriginatorError::AlreadyInitialized => {
@@ -252,7 +266,9 @@ impl MessageProcessor {
 
                     let user_agent = get_codex_user_agent();
                     let response = InitializeResponse { user_agent };
-                    self.outgoing.send_response(request_id, response).await;
+                    self.outgoing
+                        .send_response(request_id.clone(), response)
+                        .await;
 
                     self.initialized = true;
                     if !self.config_warnings.is_empty() {
@@ -275,7 +291,7 @@ impl MessageProcessor {
                         message: "Not initialized".to_string(),
                         data: None,
                     };
-                    self.outgoing.send_error(request_id, error).await;
+                    self.outgoing.send_error(request_id.clone(), error).await;
                     return;
                 }
             }
@@ -309,6 +325,10 @@ impl MessageProcessor {
         tracing::info!("<- notification: {:?}", notification);
     }
 
+    pub(crate) async fn process_client_notification(&self, notification: ClientNotification) {
+        tracing::info!("<- notification: {:?}", notification);
+    }
+
     pub(crate) fn thread_created_receiver(&self) -> broadcast::Receiver<ThreadId> {
         self.codex_message_processor.thread_created_receiver()
     }
@@ -326,13 +346,21 @@ impl MessageProcessor {
     pub(crate) async fn process_response(&mut self, response: JSONRPCResponse) {
         tracing::info!("<- response: {:?}", response);
         let JSONRPCResponse { id, result, .. } = response;
-        self.outgoing.notify_client_response(id, result).await
+        self.process_client_response(id, result).await;
+    }
+
+    pub(crate) async fn process_client_response(&mut self, id: RequestId, result: JsonResult) {
+        self.outgoing.notify_client_response(id, result).await;
     }
 
     /// Handle an error object received from the peer.
     pub(crate) async fn process_error(&mut self, err: JSONRPCError) {
         tracing::error!("<- error: {:?}", err);
         self.outgoing.notify_client_error(err.id, err.error).await;
+    }
+
+    pub(crate) fn process_client_error(&mut self, id: RequestId, error: JSONRPCErrorError) {
+        tracing::error!("<- error: {:?}", JSONRPCError { id, error });
     }
 
     async fn handle_config_read(&self, request_id: RequestId, params: ConfigReadParams) {
