@@ -31,6 +31,7 @@ use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
+use crate::stream_events_utils::response_input_to_response_item;
 use crate::terminal;
 use crate::transport_manager::TransportManager;
 use crate::truncate::TruncationPolicy;
@@ -208,6 +209,7 @@ use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::render_command_prefix_list;
@@ -1081,6 +1083,14 @@ impl Session {
                     self.record_into_history(&reconstructed_history, &turn_context)
                         .await;
                 }
+                let user_turns = Self::user_turn_count(&reconstructed_history);
+                let turn_context_history =
+                    Self::reconstruct_turn_context_history_from_rollout(&rollout_items);
+                {
+                    let mut state = self.state.lock().await;
+                    state.set_turn_context_history(turn_context_history);
+                    state.reset_turn_context_history(user_turns);
+                }
 
                 // Seed usage info from the recorded rollout so UIs can show token counts
                 // immediately on resume/fork.
@@ -1101,6 +1111,14 @@ impl Session {
                 if !reconstructed_history.is_empty() {
                     self.record_into_history(&reconstructed_history, &turn_context)
                         .await;
+                }
+                let user_turns = Self::user_turn_count(&reconstructed_history);
+                let turn_context_history =
+                    Self::reconstruct_turn_context_history_from_rollout(&rollout_items);
+                {
+                    let mut state = self.state.lock().await;
+                    state.set_turn_context_history(turn_context_history);
+                    state.reset_turn_context_history(user_turns);
                 }
 
                 // Seed usage info from the recorded rollout so UIs can show token counts
@@ -1352,9 +1370,10 @@ impl Session {
         &self,
         previous_collaboration_mode: &CollaborationMode,
         next_collaboration_mode: Option<&CollaborationMode>,
+        force_collaboration_instructions: bool,
     ) -> Option<ResponseItem> {
         if let Some(next_mode) = next_collaboration_mode {
-            if previous_collaboration_mode == next_mode {
+            if !force_collaboration_instructions && previous_collaboration_mode == next_mode {
                 return None;
             }
             // If the next mode has empty developer instructions, this returns None and we emit no
@@ -1371,6 +1390,7 @@ impl Session {
         current_context: &TurnContext,
         previous_collaboration_mode: &CollaborationMode,
         next_collaboration_mode: Option<&CollaborationMode>,
+        force_collaboration_instructions: bool,
     ) -> Vec<ResponseItem> {
         let mut update_items = Vec::new();
         if let Some(env_item) =
@@ -1386,6 +1406,7 @@ impl Session {
         if let Some(collaboration_mode_item) = self.build_collaboration_mode_update_item(
             previous_collaboration_mode,
             next_collaboration_mode,
+            force_collaboration_instructions,
         ) {
             update_items.push(collaboration_mode_item);
         }
@@ -1660,6 +1681,7 @@ impl Session {
     pub async fn notify_user_input_response(
         &self,
         sub_id: &str,
+        call_id: Option<String>,
         response: RequestUserInputResponse,
     ) {
         let entry = {
@@ -1678,6 +1700,36 @@ impl Session {
             }
             None => {
                 warn!("No pending user input found for sub_id: {sub_id}");
+                if response.answers.is_empty() {
+                    warn!(
+                        "dropping empty request_user_input response for sub_id: {sub_id}; likely cancelled"
+                    );
+                    return;
+                }
+                let call_id = call_id.unwrap_or_else(|| sub_id.to_string());
+                let content = match response.to_tool_output_content() {
+                    Ok(content) => content,
+                    Err(err) => {
+                        warn!(
+                            "failed to serialize request_user_input response for call_id: {call_id}: {err}"
+                        );
+                        return;
+                    }
+                };
+                let response_input = ResponseInputItem::FunctionCallOutput {
+                    call_id: call_id.clone(),
+                    output: FunctionCallOutputPayload {
+                        content,
+                        success: Some(true),
+                        ..Default::default()
+                    },
+                };
+                let Some(response_item) = response_input_to_response_item(&response_input) else {
+                    return;
+                };
+                let turn_context = self.new_default_turn_with_sub_id(sub_id.to_string()).await;
+                self.record_conversation_items(&turn_context, &[response_item])
+                    .await;
             }
         }
     }
@@ -1786,6 +1838,46 @@ impl Session {
         history.raw_items().to_vec()
     }
 
+    fn reconstruct_turn_context_history_from_rollout(
+        rollout_items: &[RolloutItem],
+    ) -> Vec<Option<TurnContextItem>> {
+        let mut history = Vec::new();
+        let mut awaiting_turn_context = false;
+        for item in rollout_items {
+            match item {
+                RolloutItem::ResponseItem(ResponseItem::Message { role, .. }) if role == "user" => {
+                    history.push(None);
+                    awaiting_turn_context = true;
+                }
+                RolloutItem::TurnContext(ctx) => {
+                    if awaiting_turn_context {
+                        if let Some(last) = history.last_mut() {
+                            *last = Some(ctx.clone());
+                        } else {
+                            history.push(Some(ctx.clone()));
+                        }
+                        awaiting_turn_context = false;
+                    }
+                }
+                RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+                    let drop = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
+                    let new_len = history.len().saturating_sub(drop);
+                    history.truncate(new_len);
+                    awaiting_turn_context = false;
+                }
+                _ => {}
+            }
+        }
+        history
+    }
+
+    fn user_turn_count(items: &[ResponseItem]) -> usize {
+        items
+            .iter()
+            .filter(|item| matches!(item, ResponseItem::Message { role, .. } if role == "user"))
+            .count()
+    }
+
     /// Append ResponseItems to the in-memory conversation history only.
     pub(crate) async fn record_into_history(
         &self,
@@ -1793,6 +1885,7 @@ impl Session {
         turn_context: &TurnContext,
     ) {
         let mut state = self.state.lock().await;
+        state.record_user_turn_placeholders(items);
         state.record_items(items.iter(), turn_context.truncation_policy);
     }
 
@@ -1813,8 +1906,10 @@ impl Session {
     }
 
     pub(crate) async fn replace_history(&self, items: Vec<ResponseItem>) {
+        let user_turns = Self::user_turn_count(&items);
         let mut state = self.state.lock().await;
         state.replace_history(items);
+        state.reset_turn_context_history(user_turns);
     }
 
     pub(crate) async fn seed_initial_context_if_needed(&self, turn_context: &TurnContext) {
@@ -2078,6 +2173,23 @@ impl Session {
         // those spans, and `record_response_item_and_emit_turn_item` would drop them.
         self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
             .await;
+        let collaboration_mode = self.current_collaboration_mode().await;
+        let turn_context_item = TurnContextItem {
+            cwd: turn_context.cwd.clone(),
+            approval_policy: turn_context.approval_policy,
+            sandbox_policy: turn_context.sandbox_policy.clone(),
+            model: turn_context.client.get_model(),
+            personality: turn_context.personality,
+            collaboration_mode: Some(collaboration_mode),
+            effort: turn_context.client.get_reasoning_effort(),
+            summary: turn_context.client.get_reasoning_summary(),
+            user_instructions: turn_context.user_instructions.clone(),
+            developer_instructions: turn_context.developer_instructions.clone(),
+            final_output_json_schema: turn_context.final_output_json_schema.clone(),
+            truncation_policy: Some(turn_context.truncation_policy.into()),
+        };
+        let mut state = self.state.lock().await;
+        state.set_last_turn_context(turn_context_item);
         let turn_item = TurnItem::UserMessage(UserMessageItem::new(input));
         self.emit_turn_item_started(turn_context, &turn_item).await;
         self.emit_turn_item_completed(turn_context, turn_item).await;
@@ -2441,8 +2553,12 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::PatchApproval { id, decision } => {
                 handlers::patch_approval(&sess, id, decision).await;
             }
-            Op::UserInputAnswer { id, response } => {
-                handlers::request_user_input_response(&sess, id, response).await;
+            Op::UserInputAnswer {
+                id,
+                call_id,
+                response,
+            } => {
+                handlers::request_user_input_response(&sess, id, call_id, response).await;
             }
             Op::DynamicToolResponse { id, response } => {
                 handlers::dynamic_tool_response(&sess, id, response).await;
@@ -2597,11 +2713,18 @@ mod handlers {
         }
 
         let current_context = sess.new_default_turn_with_sub_id(sub_id).await;
+        let force_collaboration_instructions = {
+            let mut state = sess.state.lock().await;
+            let force = state.force_collaboration_instructions;
+            state.force_collaboration_instructions = false;
+            force
+        };
         let update_items = sess.build_settings_update_items(
             Some(&previous_context),
             &current_context,
             &previous_collaboration_mode,
             next_collaboration_mode.as_ref(),
+            force_collaboration_instructions,
         );
         if !update_items.is_empty() {
             sess.record_conversation_items(&current_context, &update_items)
@@ -2685,11 +2808,18 @@ mod handlers {
         // Attempt to inject input into current task
         if let Err(items) = sess.inject_input(items).await {
             sess.seed_initial_context_if_needed(&current_context).await;
+            let force_collaboration_instructions = {
+                let mut state = sess.state.lock().await;
+                let force = state.force_collaboration_instructions;
+                state.force_collaboration_instructions = false;
+                force
+            };
             let update_items = sess.build_settings_update_items(
                 previous_context.as_ref(),
                 &current_context,
                 &previous_collaboration_mode,
                 next_collaboration_mode.as_ref(),
+                force_collaboration_instructions,
             );
             if !update_items.is_empty() {
                 sess.record_conversation_items(&current_context, &update_items)
@@ -2796,9 +2926,11 @@ mod handlers {
     pub async fn request_user_input_response(
         sess: &Arc<Session>,
         id: String,
+        call_id: Option<String>,
         response: RequestUserInputResponse,
     ) {
-        sess.notify_user_input_response(&id, response).await;
+        sess.notify_user_input_response(&id, call_id, response)
+            .await;
     }
 
     pub async fn dynamic_tool_response(
@@ -2977,12 +3109,37 @@ mod handlers {
 
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
 
+        let existing_turn_context_history = {
+            let state = sess.state.lock().await;
+            state.turn_context_history.clone()
+        };
+
         let mut history = sess.clone_history().await;
         history.drop_last_n_user_turns(num_turns);
 
         // Replace with the raw items. We don't want to replace with a normalized
         // version of the history.
+        let user_turns = Self::user_turn_count(history.raw_items());
         sess.replace_history(history.raw_items().to_vec()).await;
+        let mut state = sess.state.lock().await;
+        let mut updated_turn_context_history = existing_turn_context_history;
+        let truncated_len = updated_turn_context_history
+            .len()
+            .saturating_sub(num_turns as usize);
+        updated_turn_context_history.truncate(truncated_len);
+        if updated_turn_context_history.len() < user_turns {
+            updated_turn_context_history.resize_with(user_turns, || None);
+        }
+        state.set_turn_context_history(updated_turn_context_history);
+        let mut applied = false;
+        if state.turn_context_history.len() == user_turns
+            && let Some(turn_context) = state.last_turn_context()
+            && let Some(collaboration_mode) = turn_context.collaboration_mode.clone()
+        {
+            state.session_configuration.collaboration_mode = collaboration_mode;
+            applied = true;
+        }
+        state.force_collaboration_instructions = !applied;
         sess.recompute_token_usage(turn_context.as_ref()).await;
 
         sess.send_event_raw_flushed(Event {
@@ -4517,6 +4674,7 @@ mod tests {
     use codex_app_server_protocol::AppInfo;
     use codex_app_server_protocol::AuthMode;
     use codex_protocol::models::ContentItem;
+    use codex_protocol::models::DeveloperInstructions;
     use codex_protocol::models::ResponseItem;
     use std::path::Path;
     use std::time::Duration;
@@ -4868,6 +5026,119 @@ mod tests {
 
         let history = sess.clone_history().await;
         assert_eq!(expected, history.raw_items());
+    }
+
+    #[tokio::test]
+    async fn thread_rollback_restores_collaboration_mode_from_turn_context_history() {
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
+
+        let initial_context = sess.build_initial_context(tc.as_ref()).await;
+        sess.record_into_history(&initial_context, tc.as_ref())
+            .await;
+
+        let base_mode = sess.current_collaboration_mode().await;
+        let plan_mode = CollaborationMode {
+            mode: ModeKind::Plan,
+            settings: base_mode.settings.clone(),
+        };
+        let code_mode = CollaborationMode {
+            mode: ModeKind::Code,
+            settings: base_mode.settings.clone(),
+        };
+
+        {
+            let mut state = sess.state.lock().await;
+            state.session_configuration.collaboration_mode = plan_mode.clone();
+        }
+        let input1 = vec![UserInput::Text {
+            text: "turn 1".to_string(),
+            text_elements: Vec::new(),
+        }];
+        let response_item1: ResponseItem = ResponseInputItem::from(input1.clone()).into();
+        sess.record_user_prompt_and_emit_turn_item(tc.as_ref(), &input1, response_item1)
+            .await;
+
+        {
+            let mut state = sess.state.lock().await;
+            state.session_configuration.collaboration_mode = code_mode.clone();
+        }
+        let input2 = vec![UserInput::Text {
+            text: "turn 2".to_string(),
+            text_elements: Vec::new(),
+        }];
+        let response_item2: ResponseItem = ResponseInputItem::from(input2.clone()).into();
+        sess.record_user_prompt_and_emit_turn_item(tc.as_ref(), &input2, response_item2)
+            .await;
+
+        handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+        let rollback_event = wait_for_thread_rolled_back(&rx).await;
+        assert_eq!(rollback_event.num_turns, 1);
+
+        let current_mode = sess.current_collaboration_mode().await;
+        assert_eq!(current_mode.mode, ModeKind::Plan);
+    }
+
+    #[tokio::test]
+    async fn thread_rollback_missing_turn_context_forces_collaboration_instructions() {
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
+
+        let initial_context = sess.build_initial_context(tc.as_ref()).await;
+        sess.record_into_history(&initial_context, tc.as_ref())
+            .await;
+
+        let base_mode = sess.current_collaboration_mode().await;
+        let collaboration_mode = CollaborationMode {
+            mode: ModeKind::Custom,
+            settings: Settings {
+                model: base_mode.settings.model.clone(),
+                reasoning_effort: base_mode.settings.reasoning_effort,
+                developer_instructions: Some("rollback instructions".to_string()),
+            },
+        };
+        {
+            let mut state = sess.state.lock().await;
+            state.session_configuration.collaboration_mode = collaboration_mode.clone();
+        }
+
+        let user_turn = vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "turn without turn context".to_string(),
+            }],
+            end_turn: None,
+        }];
+        sess.record_into_history(&user_turn, tc.as_ref()).await;
+
+        handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+        let rollback_event = wait_for_thread_rolled_back(&rx).await;
+        assert_eq!(rollback_event.num_turns, 1);
+
+        let force_collaboration_instructions = {
+            let mut state = sess.state.lock().await;
+            let force = state.force_collaboration_instructions;
+            state.force_collaboration_instructions = false;
+            force
+        };
+        assert!(force_collaboration_instructions);
+
+        let current_context = sess.new_default_turn_with_sub_id("sub-2".to_string()).await;
+        let previous_collaboration_mode = {
+            let state = sess.state.lock().await;
+            state.session_configuration.collaboration_mode.clone()
+        };
+        let update_items = sess.build_settings_update_items(
+            None,
+            &current_context,
+            &previous_collaboration_mode,
+            Some(&previous_collaboration_mode),
+            force_collaboration_instructions,
+        );
+        let expected_item: ResponseItem =
+            DeveloperInstructions::from_collaboration_mode(&previous_collaboration_mode)
+                .expect("expected collaboration instructions")
+                .into();
+        assert!(update_items.contains(&expected_item));
     }
 
     #[tokio::test]
