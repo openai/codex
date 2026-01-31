@@ -1,5 +1,6 @@
-use crate::config_loader::ConfigRequirements;
-use crate::config_loader::ConfigRequirementsToml;
+use super::ConfigExpansionWarning;
+use super::ConfigRequirements;
+use super::ConfigRequirementsToml;
 
 use super::fingerprint::record_origins;
 use super::fingerprint::version_for_toml;
@@ -29,17 +30,12 @@ pub struct ConfigLayerEntry {
     pub config: TomlValue,
     pub version: String,
     pub disabled_reason: Option<String>,
+    pub expansion_warnings: Vec<ConfigExpansionWarning>,
 }
 
 impl ConfigLayerEntry {
     pub fn new(name: ConfigLayerSource, config: TomlValue) -> Self {
-        let version = version_for_toml(&config);
-        Self {
-            name,
-            config,
-            version,
-            disabled_reason: None,
-        }
+        Self::new_with_warnings(name, config, Vec::new())
     }
 
     pub fn new_disabled(
@@ -47,12 +43,37 @@ impl ConfigLayerEntry {
         config: TomlValue,
         disabled_reason: impl Into<String>,
     ) -> Self {
+        Self::new_disabled_with_warnings(name, config, disabled_reason, Vec::new())
+    }
+
+    pub fn new_with_warnings(
+        name: ConfigLayerSource,
+        config: TomlValue,
+        expansion_warnings: Vec<ConfigExpansionWarning>,
+    ) -> Self {
+        let version = version_for_toml(&config);
+        Self {
+            name,
+            config,
+            version,
+            disabled_reason: None,
+            expansion_warnings,
+        }
+    }
+
+    pub fn new_disabled_with_warnings(
+        name: ConfigLayerSource,
+        config: TomlValue,
+        disabled_reason: impl Into<String>,
+        expansion_warnings: Vec<ConfigExpansionWarning>,
+    ) -> Self {
         let version = version_for_toml(&config);
         Self {
             name,
             config,
             version,
             disabled_reason: Some(disabled_reason.into()),
+            expansion_warnings,
         }
     }
 
@@ -88,6 +109,12 @@ impl ConfigLayerEntry {
             ConfigLayerSource::LegacyManagedConfigTomlFromMdm => None,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigExpansionWarningInfo {
+    pub source: ConfigLayerSource,
+    pub warning: ConfigExpansionWarning,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,6 +169,22 @@ impl ConfigLayerStack {
 
     pub fn requirements_toml(&self) -> &ConfigRequirementsToml {
         &self.requirements_toml
+    }
+
+    pub fn expansion_warnings(&self) -> Vec<ConfigExpansionWarningInfo> {
+        let mut warnings = Vec::new();
+        for layer in &self.layers {
+            if layer.expansion_warnings.is_empty() {
+                continue;
+            }
+            for warning in &layer.expansion_warnings {
+                warnings.push(ConfigExpansionWarningInfo {
+                    source: layer.name.clone(),
+                    warning: warning.clone(),
+                });
+            }
+        }
+        warnings
     }
 
     /// Creates a new [ConfigLayerStack] using the specified values to inject a
