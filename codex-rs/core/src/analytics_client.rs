@@ -4,7 +4,6 @@ use crate::default_client::create_client;
 use crate::git_info::collect_git_info;
 use crate::git_info::get_git_repo_root;
 use codex_app_server_protocol::AuthMode;
-use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use serde::Serialize;
 use sha1::Digest;
@@ -19,23 +18,20 @@ use tokio::sync::mpsc;
 pub(crate) struct TrackEventsContext {
     pub(crate) auth: Option<CodexAuth>,
     pub(crate) model_slug: String,
-    pub(crate) conversation_id: String,
-    pub(crate) session_source: SessionSource,
+    pub(crate) thread_id: String,
     pub(crate) product_client_id: String,
 }
 
 pub(crate) fn build_track_events_context(
     auth: Option<CodexAuth>,
     model_slug: String,
-    conversation_id: String,
-    session_source: SessionSource,
+    thread_id: String,
     product_client_id: String,
 ) -> TrackEventsContext {
     TrackEventsContext {
         auth,
         model_slug,
-        conversation_id,
-        session_source,
+        thread_id,
         product_client_id,
     }
 }
@@ -123,13 +119,12 @@ struct TrackEvent {
 
 #[derive(Serialize)]
 struct TrackEventParams {
-    product_surface: Option<String>,
     product_client_id: Option<String>,
     skill_scope: Option<String>,
     skill_path: Option<String>,
     repo_url: Option<String>,
-    conversation_id: Option<String>,
-    method: Option<String>,
+    thread_id: Option<String>,
+    invoke_type: Option<String>,
     model_slug: Option<String>,
 }
 
@@ -214,10 +209,9 @@ async fn send_track_skill_invocations(job: TrackEventsJob) {
             skill_id,
             skill_name: invocation.skill_name.clone(),
             event_params: TrackEventParams {
-                conversation_id: Some(tracking.conversation_id.clone()),
-                method: None,
+                thread_id: Some(tracking.thread_id.clone()),
+                invoke_type: Some("explicit".to_string()),
                 model_slug: Some(tracking.model_slug.clone()),
-                product_surface: Some("codex".to_string()),
                 product_client_id: Some(tracking.product_client_id.clone()),
                 repo_url,
                 skill_scope: Some(skill_scope.to_string()),

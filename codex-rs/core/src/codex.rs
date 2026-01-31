@@ -3394,11 +3394,11 @@ pub(crate) async fn run_turn(
         None => None,
     };
     let config = sess.get_config().await;
+    let thread_id = sess.conversation_id.to_string();
     let tracking = build_track_events_context(
         auth,
         turn_context.client.get_model(),
-        sess.conversation_id.to_string(),
-        turn_context.client.get_session_source(),
+        thread_id,
         crate::default_client::originator().value,
     );
     let analytics_client = AnalyticsEventsClient::new(
