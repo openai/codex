@@ -13,6 +13,7 @@ use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
+use crate::chatwidget::build_status_line_payload;
 use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
@@ -29,6 +30,7 @@ use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
+use crate::status_line::StatusLineRunner;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
@@ -528,6 +530,7 @@ pub(crate) struct App {
     runtime_sandbox_policy_override: Option<SandboxPolicy>,
 
     pub(crate) file_search: FileSearchManager,
+    pub(crate) status_line_runner: StatusLineRunner,
 
     pub(crate) transcript_cells: Vec<Arc<dyn HistoryCell>>,
 
@@ -911,6 +914,7 @@ impl App {
         for event in snapshot.events {
             self.handle_codex_event_replay(event);
         }
+        self.refresh_status_line();
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -989,6 +993,13 @@ impl App {
             codex_core::terminal::user_agent(),
             SessionSource::Cli,
         );
+        if config
+            .tui_status_line
+            .as_ref()
+            .is_some_and(|cmd| !cmd.is_empty())
+        {
+            otel_manager.counter("codex.status_line", 1, &[]);
+        }
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let mut chat_widget = match session_selection {
@@ -1077,6 +1088,7 @@ impl App {
         chat_widget.maybe_prompt_windows_sandbox_enable();
 
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let status_line_runner = StatusLineRunner::new(config.clone(), app_event_tx.clone());
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
 
@@ -1093,6 +1105,7 @@ impl App {
             runtime_approval_policy_override: None,
             runtime_sandbox_policy_override: None,
             file_search,
+            status_line_runner,
             enhanced_keys_supported,
             transcript_cells: Vec::new(),
             overlay: None,
@@ -1227,6 +1240,13 @@ impl App {
         tui: &mut tui::Tui,
         event: TuiEvent,
     ) -> Result<AppRunControl> {
+        if matches!(event, TuiEvent::Draw) {
+            let size = tui.terminal.size()?;
+            if size != tui.terminal.last_known_screen_size {
+                self.refresh_status_line();
+            }
+        }
+
         if self.overlay.is_some() {
             let _ = self.handle_backtrack_overlay_event(tui, event).await?;
         } else {
@@ -1371,6 +1391,10 @@ impl App {
                                 self.config = resume_config;
                                 tui.set_notification_method(self.config.tui_notification_method);
                                 self.file_search.update_search_dir(self.config.cwd.clone());
+                                self.status_line_runner = StatusLineRunner::new(
+                                    self.config.clone(),
+                                    self.app_event_tx.clone(),
+                                );
                                 let init = self.chatwidget_init_for_forked_or_resumed_thread(
                                     tui,
                                     self.config.clone(),
@@ -1569,12 +1593,15 @@ impl App {
             }
             AppEvent::UpdateReasoningEffort(effort) => {
                 self.on_update_reasoning_effort(effort);
+                self.refresh_status_line();
             }
             AppEvent::UpdateModel(model) => {
                 self.chat_widget.set_model(&model);
+                self.refresh_status_line();
             }
             AppEvent::UpdateCollaborationMode(mask) => {
                 self.chat_widget.set_collaboration_mask(mask);
+                self.refresh_status_line();
             }
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
@@ -2206,11 +2233,30 @@ impl App {
                     ));
                 }
             },
+            AppEvent::StatusLineUpdated(status_line_value) => {
+                self.chat_widget.set_status_line(Some(status_line_value));
+            }
+            AppEvent::StatusLineTimeoutWarning { timeout_ms } => {
+                self.chat_widget.add_info_message(
+                    format!(
+                        "Status line command timed out after {timeout_ms}ms. Consider increasing tui.status_line_timeout_ms in your config."
+                    ),
+                    None,
+                );
+            }
+            AppEvent::StatusLineErrorWarning { message } => {
+                self.chat_widget
+                    .add_error_message(format!("Status line command failed. Check tui.status_line in your config.toml. Error: {message}"));
+            }
         }
         Ok(AppRunControl::Continue)
     }
 
     fn handle_codex_event_now(&mut self, event: Event) {
+        let needs_refresh = matches!(
+            event.msg,
+            EventMsg::SessionConfigured(_) | EventMsg::TokenCount(_)
+        );
         if self.suppress_shutdown_complete && matches!(event.msg, EventMsg::ShutdownComplete) {
             self.suppress_shutdown_complete = false;
             return;
@@ -2222,6 +2268,10 @@ impl App {
         }
         self.handle_backtrack_event(&event.msg);
         self.chat_widget.handle_codex_event(event);
+
+        if needs_refresh {
+            self.refresh_status_line();
+        }
     }
 
     fn handle_codex_event_replay(&mut self, event: Event) {
@@ -2475,6 +2525,17 @@ impl App {
         };
     }
 
+    fn refresh_status_line(&mut self) {
+        let payload = build_status_line_payload(&self.chat_widget, &self.config).to_string();
+        if let Err(err) = self.status_line_runner.update_payload(payload) {
+            tracing::warn!(error = %err, "status line: update_payload failed");
+            return;
+        }
+        if let Err(err) = self.status_line_runner.request_update() {
+            tracing::warn!(error = %err, "status line: request_update failed");
+        }
+    }
+
     #[cfg(target_os = "windows")]
     fn spawn_world_writable_scan(
         cwd: PathBuf,
@@ -2609,6 +2670,7 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let status_line_runner = StatusLineRunner::new(config.clone(), app_event_tx.clone());
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let otel_manager = test_otel_manager(&config, model.as_str());
 
@@ -2625,6 +2687,7 @@ mod tests {
             runtime_approval_policy_override: None,
             runtime_sandbox_policy_override: None,
             file_search,
+            status_line_runner,
             transcript_cells: Vec::new(),
             overlay: None,
             deferred_history_lines: Vec::new(),
@@ -2661,6 +2724,7 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let status_line_runner = StatusLineRunner::new(config.clone(), app_event_tx.clone());
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let otel_manager = test_otel_manager(&config, model.as_str());
 
@@ -2678,6 +2742,7 @@ mod tests {
                 runtime_approval_policy_override: None,
                 runtime_sandbox_policy_override: None,
                 file_search,
+                status_line_runner,
                 transcript_cells: Vec::new(),
                 overlay: None,
                 deferred_history_lines: Vec::new(),
