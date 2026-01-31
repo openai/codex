@@ -71,7 +71,7 @@ impl ToolHandler for RequestUserInputHandler {
                 )
             })?;
 
-        let content = response.to_tool_output_content().map_err(|err| {
+        let content = serde_json::to_string(&response).map_err(|err| {
             FunctionCallError::Fatal(format!(
                 "failed to serialize request_user_input response: {err}"
             ))
