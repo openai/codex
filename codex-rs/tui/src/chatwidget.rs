@@ -3043,6 +3043,18 @@ impl ChatWidget {
                 self.app_event_tx
                     .send(AppEvent::CodexOp(Op::SetThreadName { name }));
             }
+            SlashCommand::Plan if !trimmed.is_empty() => {
+                if !self.collaboration_modes_enabled() {
+                    self.dispatch_command(cmd);
+                    return;
+                }
+                let Some(mask) = collaboration_modes::plan_mask(self.models_manager.as_ref())
+                else {
+                    self.dispatch_command(cmd);
+                    return;
+                };
+                self.submit_user_message_with_mode(trimmed.to_string(), mask);
+            }
             SlashCommand::Collab | SlashCommand::Plan => {
                 let _ = trimmed;
                 self.dispatch_command(cmd);
