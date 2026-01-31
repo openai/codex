@@ -1,6 +1,7 @@
 //! Session-wide mutable state.
 
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::TurnContextItem;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -15,6 +16,7 @@ use crate::truncate::TruncationPolicy;
 pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
     pub(crate) history: ContextManager,
+    pub(crate) turn_context_history: Vec<Option<TurnContextItem>>,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
     pub(crate) server_reasoning_included: bool,
     pub(crate) dependency_env: HashMap<String, String>,
@@ -33,6 +35,7 @@ impl SessionState {
         Self {
             session_configuration,
             history,
+            turn_context_history: Vec::new(),
             latest_rate_limits: None,
             server_reasoning_included: false,
             dependency_env: HashMap::new(),
@@ -48,6 +51,52 @@ impl SessionState {
         I::Item: std::ops::Deref<Target = ResponseItem>,
     {
         self.history.record_items(items, policy);
+    }
+
+    pub(crate) fn record_user_turn_placeholders(&mut self, items: &[ResponseItem]) {
+        for item in items {
+            if matches!(item, ResponseItem::Message { role, .. } if role == "user") {
+                self.turn_context_history.push(None);
+            }
+        }
+    }
+
+    pub(crate) fn set_last_turn_context(&mut self, turn_context: TurnContextItem) {
+        if let Some(last) = self.turn_context_history.last_mut()
+            && last.is_none()
+        {
+            *last = Some(turn_context);
+            return;
+        }
+        self.turn_context_history.push(Some(turn_context));
+    }
+
+    pub(crate) fn reset_turn_context_history(&mut self, user_turn_count: usize) {
+        let existing_len = self.turn_context_history.len();
+        if existing_len >= user_turn_count {
+            let start = existing_len - user_turn_count;
+            self.turn_context_history = self.turn_context_history.split_off(start);
+        } else {
+            let mut new_history = Vec::with_capacity(user_turn_count);
+            let padding = user_turn_count - existing_len;
+            new_history.resize_with(padding, || None);
+            new_history.append(&mut self.turn_context_history);
+            self.turn_context_history = new_history;
+        }
+    }
+
+    pub(crate) fn last_turn_context(&self) -> Option<&TurnContextItem> {
+        self.turn_context_history
+            .iter()
+            .rev()
+            .find_map(Option::as_ref)
+    }
+
+    pub(crate) fn set_turn_context_history(
+        &mut self,
+        turn_context_history: Vec<Option<TurnContextItem>>,
+    ) {
+        self.turn_context_history = turn_context_history;
     }
 
     pub(crate) fn clone_history(&self) -> ContextManager {
