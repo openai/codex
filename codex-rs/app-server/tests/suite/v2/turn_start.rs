@@ -485,6 +485,117 @@ async fn turn_start_accepts_personality_override_v2() -> Result<()> {
 }
 
 #[tokio::test]
+async fn turn_start_change_personality_mid_thread_v2() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let sse1 = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Done"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let sse2 = responses::sse(vec![
+        responses::ev_response_created("resp-2"),
+        responses::ev_assistant_message("msg-2", "Done"),
+        responses::ev_completed("resp-2"),
+    ]);
+    let response_mock = responses::mount_sse_sequence(&server, vec![sse1, sse2]).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::from([(Feature::Personality, true)]),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("exp-codex-personality".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            personality: None,
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let _turn: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let turn_req2 = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Hello again".to_string(),
+                text_elements: Vec::new(),
+            }],
+            personality: Some(Personality::Friendly),
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp2: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req2)),
+    )
+    .await??;
+    let _turn2: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp2)?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2, "expected two requests");
+
+    let first_developer_texts = requests[0].message_input_texts("developer");
+    assert!(
+        first_developer_texts
+            .iter()
+            .all(|text| !text.contains("<personality_spec>")),
+        "expected no personality update message in first request, got {first_developer_texts:?}"
+    );
+
+    let second_developer_texts = requests[1].message_input_texts("developer");
+    assert!(
+        second_developer_texts
+            .iter()
+            .any(|text| text.contains("<personality_spec>")),
+        "expected personality update message in second request, got {second_developer_texts:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn turn_start_accepts_local_image_input() -> Result<()> {
     // Two Codex turns hit the mock model (session start + turn/start).
     let responses = vec![
