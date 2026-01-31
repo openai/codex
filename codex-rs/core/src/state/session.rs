@@ -17,7 +17,12 @@ pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
     pub(crate) history: ContextManager,
     pub(crate) turn_context_history: Vec<Option<TurnContextItem>>,
-    pub(crate) force_collaboration_instructions: bool,
+    /// Force a developer-instruction update for collaboration mode on the next turn.
+    ///
+    /// This is set when rollback/backtrack lacks a reliable turn context for the latest user turn,
+    /// so core should re-emit the collaboration developer instructions even if the mode is
+    /// unchanged.
+    pub(crate) force_inject_collaboration_instructions: bool,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
     pub(crate) server_reasoning_included: bool,
     pub(crate) dependency_env: HashMap<String, String>,
@@ -37,7 +42,7 @@ impl SessionState {
             session_configuration,
             history,
             turn_context_history: Vec::new(),
-            force_collaboration_instructions: false,
+            force_inject_collaboration_instructions: false,
             latest_rate_limits: None,
             server_reasoning_included: false,
             dependency_env: HashMap::new(),
