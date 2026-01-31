@@ -20,7 +20,7 @@ use std::time::Duration;
 use std::time::Instant;
 use tokio::time::timeout;
 
-/// This blocks codecs startup, so must be short.
+/// This blocks codex startup, so must be short.
 const CLOUD_REQUIREMENTS_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[async_trait]
