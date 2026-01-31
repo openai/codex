@@ -620,6 +620,9 @@ pub enum WebSearchAction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         query: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        queries: Option<Vec<String>>,
     },
     OpenPage {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1132,12 +1135,14 @@ mod tests {
                     "status": "completed",
                     "action": {
                         "type": "search",
-                        "query": "weather seattle"
+                        "query": "weather seattle",
+                        "queries": ["weather seattle", "seattle weather now"]
                     }
                 }"#,
                 None,
                 Some(WebSearchAction::Search {
                     query: Some("weather seattle".into()),
+                    queries: Some(vec!["weather seattle".into(), "seattle weather now".into()]),
                 }),
                 Some("completed".into()),
                 true,

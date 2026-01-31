@@ -426,6 +426,7 @@ mod tests {
             status: Some("completed".to_string()),
             action: Some(WebSearchAction::Search {
                 query: Some("weather".to_string()),
+                queries: None,
             }),
         };
 
@@ -439,6 +440,7 @@ mod tests {
                     query: "weather".to_string(),
                     action: WebSearchAction::Search {
                         query: Some("weather".to_string()),
+                        queries: None,
                     },
                 }
             ),
