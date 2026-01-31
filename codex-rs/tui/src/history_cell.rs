@@ -1829,6 +1829,17 @@ impl HistoryCell for RequestUserInputResultCell {
             let Some(answer) = answer.filter(|answer| !answer.answers.is_empty()) else {
                 continue;
             };
+            if question.is_secret {
+                lines.extend(wrap_with_prefix(
+                    "••••••",
+                    width,
+                    "    answer: ".dim(),
+                    "            ".dim(),
+                    Style::default().fg(Color::Cyan),
+                ));
+                continue;
+            }
+
             let (options, note) = split_request_user_input_answer(answer);
 
             for option in options {
