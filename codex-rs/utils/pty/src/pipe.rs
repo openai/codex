@@ -119,6 +119,8 @@ async fn spawn_process_with_stdin_mode(
     unsafe {
         command.pre_exec(move || {
             crate::process_group::detach_from_tty()?;
+            #[cfg(target_os = "macos")]
+            let _ = crate::process_group::reset_to_system_crash_reporter();
             #[cfg(target_os = "linux")]
             crate::process_group::set_parent_death_signal(parent_pid)?;
             Ok(())
