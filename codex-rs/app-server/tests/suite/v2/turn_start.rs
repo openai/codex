@@ -556,7 +556,7 @@ async fn turn_start_change_personality_mid_thread_v2() -> Result<()> {
                 text: "Hello again".to_string(),
                 text_elements: Vec::new(),
             }],
-            personality: Some(Personality::Friendly),
+            personality: Some(Personality::Pragmatic),
             ..Default::default()
         })
         .await?;
