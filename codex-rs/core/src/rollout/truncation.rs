@@ -222,10 +222,10 @@ pub(crate) fn truncate_rollout_drop_last_n_user_turns(
     if let Some(replacement_item_index) = boundary.replacement_item_index {
         let compaction_index = boundary.source_index;
         let mut truncated = items[..=compaction_index].to_vec();
-        if let Some(RolloutItem::Compacted(compacted)) = truncated.last_mut() {
-            if let Some(replacement) = &mut compacted.replacement_history {
-                replacement.truncate(replacement_item_index);
-            }
+        if let Some(RolloutItem::Compacted(compacted)) = truncated.last_mut()
+            && let Some(replacement) = &mut compacted.replacement_history
+        {
+            replacement.truncate(replacement_item_index);
         }
         return truncated;
     }
