@@ -1,7 +1,9 @@
 use std::collections::VecDeque;
+use std::fs;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::Child;
 use std::process::ChildStdin;
 use std::process::ChildStdout;
@@ -16,9 +18,11 @@ use anyhow::bail;
 use clap::ArgAction;
 use clap::Parser;
 use clap::Subcommand;
+use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
 use codex_app_server_protocol::AskForApproval;
+use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
@@ -31,10 +35,14 @@ use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::InitializeResponse;
 use codex_app_server_protocol::InputItem;
+use codex_app_server_protocol::JSONRPCError;
+use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::LoginAccountParams;
+use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::LoginChatGptCompleteNotification;
 use codex_app_server_protocol::LoginChatGptResponse;
 use codex_app_server_protocol::ModelListParams;
@@ -56,6 +64,8 @@ use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use dirs::home_dir;
+use serde::Deserialize;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -96,6 +106,21 @@ enum CliCommand {
     },
     /// Send a user message through the app-server V2 thread/turn APIs.
     SendMessageV2 {
+        /// User message to send to Codex.
+        #[arg()]
+        user_message: String,
+    },
+    /// Send a user message through the app-server V2 APIs using external ChatGPT auth tokens.
+    #[command(name = "test-external-auth-message")]
+    TestExternalAuthMessage {
+        /// ID token (JWT) supplied by the parent application.
+        /// If omitted, the token is read from $CODEX_HOME/auth.json (or ~/.codex/auth.json).
+        #[arg(long, value_name = "JWT")]
+        id_token: Option<String>,
+        /// Access token (JWT) supplied by the parent application.
+        /// If omitted, the token is read from $CODEX_HOME/auth.json (or ~/.codex/auth.json).
+        #[arg(long, value_name = "JWT")]
+        access_token: Option<String>,
         /// User message to send to Codex.
         #[arg()]
         user_message: String,
@@ -149,6 +174,17 @@ fn main() -> Result<()> {
         CliCommand::SendMessageV2 { user_message } => {
             send_message_v2(&codex_bin, &config_overrides, user_message)
         }
+        CliCommand::TestExternalAuthMessage {
+            id_token,
+            access_token,
+            user_message,
+        } => test_external_auth_message(
+            &codex_bin,
+            &config_overrides,
+            id_token,
+            access_token,
+            user_message,
+        ),
         CliCommand::TriggerCmdApproval { user_message } => {
             trigger_cmd_approval(&codex_bin, &config_overrides, user_message)
         }
@@ -199,6 +235,116 @@ fn send_message_v2(
     user_message: String,
 ) -> Result<()> {
     send_message_v2_with_policies(codex_bin, config_overrides, user_message, None, None)
+}
+
+fn test_external_auth_message(
+    codex_bin: &str,
+    config_overrides: &[String],
+    id_token: Option<String>,
+    access_token: Option<String>,
+    user_message: String,
+) -> Result<()> {
+    let mut client = CodexClient::spawn(codex_bin, config_overrides)?;
+
+    let initialize = client.initialize()?;
+    println!("< initialize response: {initialize:?}");
+
+    let (id_token, access_token) = resolve_external_auth_tokens(id_token, access_token)?;
+    let login_response = client.login_account(LoginAccountParams::ChatgptAuthTokens {
+        id_token,
+        access_token,
+    })?;
+    println!("< account/login/start response: {login_response:?}");
+    let completion = client.wait_for_account_login_completed()?;
+    println!("< account/login/completed notification: {completion:?}");
+    if !completion.success {
+        bail!(
+            "external auth login failed: {}",
+            completion
+                .error
+                .as_deref()
+                .unwrap_or("unknown error from account/login/completed")
+        );
+    }
+
+    let thread_response = client.thread_start(ThreadStartParams::default())?;
+    println!("< thread/start response: {thread_response:?}");
+    let turn_params = TurnStartParams {
+        thread_id: thread_response.thread.id.clone(),
+        input: vec![V2UserInput::Text {
+            text: user_message,
+            // Test client sends plain text without UI element ranges.
+            text_elements: Vec::new(),
+        }],
+        ..Default::default()
+    };
+
+    let turn_response = client.turn_start(turn_params)?;
+    println!("< turn/start response: {turn_response:?}");
+
+    client.stream_turn(&thread_response.thread.id, &turn_response.turn.id)?;
+
+    Ok(())
+}
+
+#[derive(Deserialize)]
+struct AuthFile {
+    tokens: Option<AuthFileTokens>,
+}
+
+#[derive(Deserialize)]
+struct AuthFileTokens {
+    id_token: Option<String>,
+    access_token: Option<String>,
+}
+
+fn resolve_external_auth_tokens(
+    id_token: Option<String>,
+    access_token: Option<String>,
+) -> Result<(String, String)> {
+    match (id_token, access_token) {
+        (Some(id_token), Some(access_token)) => Ok((id_token, access_token)),
+        (None, None) => read_auth_tokens_from_disk(),
+        _ => {
+            bail!(
+                "--id-token and --access-token must be provided together, or omitted to read from auth.json"
+            )
+        }
+    }
+}
+
+fn read_auth_tokens_from_disk() -> Result<(String, String)> {
+    let auth_path = auth_json_path()?;
+    let auth_path_display = auth_path.display();
+    let contents = fs::read_to_string(&auth_path)
+        .with_context(|| format!("failed to read auth file at {auth_path_display}"))?;
+    let auth: AuthFile = serde_json::from_str(&contents)
+        .with_context(|| format!("failed to parse auth file at {auth_path_display}"))?;
+    let tokens = auth.tokens.context("auth.json missing tokens")?;
+    let id_token = tokens
+        .id_token
+        .context("auth.json missing tokens.id_token")?;
+    let access_token = tokens
+        .access_token
+        .context("auth.json missing tokens.access_token")?;
+    Ok((id_token, access_token))
+}
+
+fn auth_json_path() -> Result<PathBuf> {
+    Ok(codex_home_path()?.join("auth.json"))
+}
+
+fn codex_home_path() -> Result<PathBuf> {
+    if let Ok(val) = std::env::var("CODEX_HOME")
+        && !val.is_empty()
+    {
+        return PathBuf::from(&val)
+            .canonicalize()
+            .with_context(|| format!("failed to resolve CODEX_HOME path: {val}"));
+    }
+
+    let home = home_dir().context("Could not find home directory")?;
+    Ok(home.join(".codex"))
 }
 
 fn trigger_cmd_approval(
@@ -518,6 +664,16 @@ impl CodexClient {
         self.send_request(request, request_id, "loginChatGpt")
     }
 
+    fn login_account(&mut self, params: LoginAccountParams) -> Result<LoginAccountResponse> {
+        let request_id = self.request_id();
+        let request = ClientRequest::LoginAccount {
+            request_id: request_id.clone(),
+            params,
+        };
+
+        self.send_request(request, request_id, "account/login/start")
+    }
+
     fn get_account_rate_limits(&mut self) -> Result<GetAccountRateLimitsResponse> {
         let request_id = self.request_id();
         let request = ClientRequest::GetAccountRateLimits {
@@ -609,6 +765,32 @@ impl CodexClient {
             }
 
             // Not a server notification (likely a conversation event); keep waiting.
+        }
+    }
+
+    fn wait_for_account_login_completed(&mut self) -> Result<AccountLoginCompletedNotification> {
+        loop {
+            let notification = self.next_notification()?;
+
+            if let Ok(server_notification) = ServerNotification::try_from(notification) {
+                match server_notification {
+                    ServerNotification::AccountLoginCompleted(completion) => {
+                        return Ok(completion);
+                    }
+                    ServerNotification::AccountUpdated(status) => {
+                        println!("< account/updated notification: {status:?}");
+                    }
+                    ServerNotification::AccountRateLimitsUpdated(snapshot) => {
+                        println!("< accountRateLimitsUpdated notification: {snapshot:?}");
+                    }
+                    ServerNotification::SessionConfigured(_) => {
+                        // SessionConfigured notifications are unrelated to login; skip.
+                    }
+                    _ => {}
+                }
+            }
+
+            // Not a server notification (likely a turn event); keep waiting.
         }
     }
 
@@ -824,6 +1006,9 @@ impl CodexClient {
             ServerRequest::FileChangeRequestApproval { request_id, params } => {
                 self.approve_file_change_request(request_id, params)?;
             }
+            ServerRequest::ChatgptAuthTokensRefresh { request_id, params } => {
+                self.handle_chatgpt_auth_tokens_refresh(request_id, params)?;
+            }
             other => {
                 bail!("received unsupported server request: {other:?}");
             }
@@ -908,6 +1093,20 @@ impl CodexClient {
         Ok(())
     }
 
+    fn handle_chatgpt_auth_tokens_refresh(
+        &mut self,
+        request_id: RequestId,
+        params: ChatgptAuthTokensRefreshParams,
+    ) -> Result<()> {
+        eprintln!("[error] received account/chatgptAuthTokens/refresh: {params:?}");
+        self.send_server_request_error(
+            request_id,
+            -32000,
+            "app-server-test-client does not support external auth token refresh".to_string(),
+        )?;
+        Ok(())
+    }
+
     fn send_server_request_response<T>(&mut self, request_id: RequestId, response: &T) -> Result<()>
     where
         T: Serialize,
@@ -917,6 +1116,23 @@ impl CodexClient {
             result: serde_json::to_value(response)?,
         });
         self.write_jsonrpc_message(message)
+    }
+
+    fn send_server_request_error(
+        &mut self,
+        request_id: RequestId,
+        code: i64,
+        message: String,
+    ) -> Result<()> {
+        let error = JSONRPCError {
+            id: request_id,
+            error: JSONRPCErrorError {
+                code,
+                message,
+                data: None,
+            },
+        };
+        self.write_jsonrpc_message(JSONRPCMessage::Error(error))
     }
 
     fn write_jsonrpc_message(&mut self, message: JSONRPCMessage) -> Result<()> {
