@@ -27,6 +27,7 @@ base64 = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive"] }
 codex-ansi-escape = { workspace = true }
+codex-app-server = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-backend-client = { workspace = true }

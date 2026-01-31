@@ -11,14 +11,22 @@ use codex_core::config_loader::LoaderOverrides;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::message_processor::MessageProcessor;
 use crate::message_processor::MessageProcessorArgs;
 use crate::outgoing_message::OutgoingMessage;
 use crate::outgoing_message::OutgoingMessageSender;
+use codex_app_server_protocol::ClientNotification;
+use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigWarningNotification;
+use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCMessage;
+use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::Result;
+use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::TextPosition as AppTextPosition;
 use codex_app_server_protocol::TextRange as AppTextRange;
 use codex_core::ExecPolicyError;
@@ -324,6 +332,7 @@ pub async fn run_main(
             cloud_requirements: cloud_requirements.clone(),
             feedback: feedback.clone(),
             config_warnings,
+            session_source: codex_protocol::protocol::SessionSource::VSCode,
         });
         let mut thread_created_rx = processor.thread_created_receiver();
         async move {
@@ -394,4 +403,260 @@ pub async fn run_main(
     let _ = tokio::join!(stdin_reader_handle, processor_handle, stdout_writer_handle);
 
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+pub enum AppServerClientMessage {
+    Request(ClientRequest),
+    Response {
+        id: RequestId,
+        result: Result,
+    },
+    Error {
+        id: RequestId,
+        error: JSONRPCErrorError,
+    },
+    Notification(ClientNotification),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AppServerEventNotification {
+    pub method: String,
+    pub params: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone)]
+pub enum AppServerMessage {
+    Request(ServerRequest),
+    Notification(ServerNotification),
+    EventNotification(AppServerEventNotification),
+    Response {
+        id: RequestId,
+        result: Result,
+    },
+    Error {
+        id: RequestId,
+        error: JSONRPCErrorError,
+    },
+}
+
+pub struct InMemoryAppServer {
+    pub incoming: mpsc::Sender<JSONRPCMessage>,
+    pub outgoing: mpsc::Receiver<JSONRPCMessage>,
+}
+
+pub struct InProcessAppServer {
+    pub incoming: mpsc::Sender<AppServerClientMessage>,
+    pub outgoing: mpsc::Receiver<AppServerMessage>,
+}
+
+pub fn spawn_in_memory(
+    codex_linux_sandbox_exe: Option<PathBuf>,
+    config: Arc<Config>,
+    cli_overrides: Vec<(String, TomlValue)>,
+    loader_overrides: LoaderOverrides,
+    feedback: CodexFeedback,
+    config_warnings: Vec<ConfigWarningNotification>,
+    session_source: codex_protocol::protocol::SessionSource,
+) -> InMemoryAppServer {
+    let (incoming_tx, mut incoming_rx) = mpsc::channel::<JSONRPCMessage>(CHANNEL_CAPACITY);
+    let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingMessage>(CHANNEL_CAPACITY);
+    let (client_outgoing_tx, client_outgoing_rx) =
+        mpsc::channel::<JSONRPCMessage>(CHANNEL_CAPACITY);
+
+    let auth_manager = AuthManager::shared(
+        config.codex_home.clone(),
+        false,
+        config.cli_auth_credentials_store_mode,
+    );
+    let cloud_requirements =
+        cloud_requirements_loader(auth_manager, config.chatgpt_base_url.clone());
+
+    tokio::spawn({
+        let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
+        let mut processor = MessageProcessor::new(MessageProcessorArgs {
+            outgoing: outgoing_message_sender,
+            codex_linux_sandbox_exe,
+            config: Arc::clone(&config),
+            cli_overrides,
+            loader_overrides,
+            cloud_requirements,
+            feedback,
+            config_warnings,
+            session_source,
+        });
+        let mut thread_created_rx = processor.thread_created_receiver();
+        async move {
+            let mut listen_for_threads = true;
+            loop {
+                tokio::select! {
+                    msg = incoming_rx.recv() => {
+                        let Some(msg) = msg else {
+                            break;
+                        };
+                        match msg {
+                            JSONRPCMessage::Request(r) => processor.process_request(r).await,
+                            JSONRPCMessage::Response(r) => processor.process_response(r).await,
+                            JSONRPCMessage::Notification(n) => processor.process_notification(n).await,
+                            JSONRPCMessage::Error(e) => processor.process_error(e).await,
+                        }
+                    }
+                    created = thread_created_rx.recv(), if listen_for_threads => {
+                        match created {
+                            Ok(thread_id) => {
+                                processor.try_attach_thread_listener(thread_id).await;
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                warn!("thread_created receiver lagged; skipping resync");
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                listen_for_threads = false;
+                            }
+                        }
+                    }
+                }
+            }
+
+            info!("in-memory processor task exited (channel closed)");
+        }
+    });
+
+    tokio::spawn(async move {
+        while let Some(outgoing_message) = outgoing_rx.recv().await {
+            let Ok(value) = serde_json::to_value(outgoing_message) else {
+                error!("Failed to convert OutgoingMessage to JSON value");
+                continue;
+            };
+            let jsonrpc = match serde_json::from_value::<JSONRPCMessage>(value) {
+                Ok(message) => message,
+                Err(err) => {
+                    error!("Failed to deserialize OutgoingMessage as JSONRPCMessage: {err}");
+                    continue;
+                }
+            };
+            if client_outgoing_tx.send(jsonrpc).await.is_err() {
+                break;
+            }
+        }
+        info!("in-memory outgoing task exited (channel closed)");
+    });
+
+    InMemoryAppServer {
+        incoming: incoming_tx,
+        outgoing: client_outgoing_rx,
+    }
+}
+
+pub fn spawn_in_memory_typed(
+    codex_linux_sandbox_exe: Option<PathBuf>,
+    config: Arc<Config>,
+    cli_overrides: Vec<(String, TomlValue)>,
+    loader_overrides: LoaderOverrides,
+    feedback: CodexFeedback,
+    config_warnings: Vec<ConfigWarningNotification>,
+    session_source: codex_protocol::protocol::SessionSource,
+) -> InProcessAppServer {
+    let (incoming_tx, mut incoming_rx) = mpsc::channel::<AppServerClientMessage>(CHANNEL_CAPACITY);
+    let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingMessage>(CHANNEL_CAPACITY);
+    let (client_outgoing_tx, client_outgoing_rx) =
+        mpsc::channel::<AppServerMessage>(CHANNEL_CAPACITY);
+
+    let auth_manager = AuthManager::shared(
+        config.codex_home.clone(),
+        false,
+        config.cli_auth_credentials_store_mode,
+    );
+    let cloud_requirements =
+        cloud_requirements_loader(auth_manager, config.chatgpt_base_url.clone());
+
+    tokio::spawn({
+        let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
+        let mut processor = MessageProcessor::new(MessageProcessorArgs {
+            outgoing: outgoing_message_sender,
+            codex_linux_sandbox_exe,
+            config: Arc::clone(&config),
+            cli_overrides,
+            loader_overrides,
+            cloud_requirements,
+            feedback,
+            config_warnings,
+            session_source,
+        });
+        let mut thread_created_rx = processor.thread_created_receiver();
+        async move {
+            let mut listen_for_threads = true;
+            loop {
+                tokio::select! {
+                    msg = incoming_rx.recv() => {
+                        let Some(msg) = msg else {
+                            break;
+                        };
+                        match msg {
+                            AppServerClientMessage::Request(request) => {
+                                processor.process_client_request(request).await;
+                            }
+                            AppServerClientMessage::Response { id, result } => {
+                                processor.process_client_response(id, result).await;
+                            }
+                            AppServerClientMessage::Error { id, error } => {
+                                processor.process_client_error(id, error);
+                            }
+                            AppServerClientMessage::Notification(notification) => {
+                                processor.process_client_notification(notification).await;
+                            }
+                        }
+                    }
+                    created = thread_created_rx.recv(), if listen_for_threads => {
+                        match created {
+                            Ok(thread_id) => {
+                                processor.try_attach_thread_listener(thread_id).await;
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                warn!("thread_created receiver lagged; skipping resync");
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                listen_for_threads = false;
+                            }
+                        }
+                    }
+                }
+            }
+
+            info!("in-process processor task exited (channel closed)");
+        }
+    });
+
+    tokio::spawn(async move {
+        while let Some(outgoing_message) = outgoing_rx.recv().await {
+            let mapped = match outgoing_message {
+                OutgoingMessage::Request(request) => AppServerMessage::Request(request),
+                OutgoingMessage::AppServerNotification(notification) => {
+                    AppServerMessage::Notification(notification)
+                }
+                OutgoingMessage::Notification(notification) => {
+                    AppServerMessage::EventNotification(AppServerEventNotification {
+                        method: notification.method,
+                        params: notification.params,
+                    })
+                }
+                OutgoingMessage::Response(response) => AppServerMessage::Response {
+                    id: response.id,
+                    result: response.result,
+                },
+                OutgoingMessage::Error(error) => AppServerMessage::Error {
+                    id: error.id,
+                    error: error.error,
+                },
+            };
+            if client_outgoing_tx.send(mapped).await.is_err() {
+                break;
+            }
+        }
+        info!("in-process outgoing task exited (channel closed)");
+    });
+
+    InProcessAppServer {
+        incoming: incoming_tx,
+        outgoing: client_outgoing_rx,
+    }
 }
