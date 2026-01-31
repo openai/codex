@@ -59,9 +59,7 @@ impl ContextManager {
         for item in items {
             let item_ref = item.deref();
             let is_ghost_snapshot = matches!(item_ref, ResponseItem::GhostSnapshot { .. });
-            let is_collaboration_mode_update =
-                matches!(item_ref, ResponseItem::CollaborationModeUpdate { .. });
-            if !is_api_message(item_ref) && !is_ghost_snapshot && !is_collaboration_mode_update {
+            if !is_api_message(item_ref) && !is_ghost_snapshot {
                 continue;
             }
 
@@ -74,12 +72,8 @@ impl ContextManager {
     /// normalization and drop un-suited items.
     pub(crate) fn for_prompt(mut self) -> Vec<ResponseItem> {
         self.normalize_history();
-        self.items.retain(|item| {
-            !matches!(
-                item,
-                ResponseItem::GhostSnapshot { .. } | ResponseItem::CollaborationModeUpdate { .. }
-            )
-        });
+        self.items
+            .retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
         self.items
     }
 
@@ -100,8 +94,7 @@ impl ContextManager {
 
         let items_tokens = self.items.iter().fold(0i64, |acc, item| {
             acc + match item {
-                ResponseItem::GhostSnapshot { .. }
-                | ResponseItem::CollaborationModeUpdate { .. } => 0,
+                ResponseItem::GhostSnapshot { .. } => 0,
                 ResponseItem::Reasoning {
                     encrypted_content: Some(content),
                     ..
@@ -308,7 +301,6 @@ impl ContextManager {
             | ResponseItem::CustomToolCall { .. }
             | ResponseItem::Compaction { .. }
             | ResponseItem::GhostSnapshot { .. }
-            | ResponseItem::CollaborationModeUpdate { .. }
             | ResponseItem::Other => item.clone(),
         }
     }
@@ -328,7 +320,6 @@ fn is_api_message(message: &ResponseItem) -> bool {
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::Compaction { .. } => true,
         ResponseItem::GhostSnapshot { .. } => false,
-        ResponseItem::CollaborationModeUpdate { .. } => false,
         ResponseItem::Other => false,
     }
 }
