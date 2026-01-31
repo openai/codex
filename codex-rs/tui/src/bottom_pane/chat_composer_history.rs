@@ -11,6 +11,7 @@ pub(crate) struct HistoryEntry {
     pub(crate) text: String,
     pub(crate) text_elements: Vec<TextElement>,
     pub(crate) local_image_paths: Vec<PathBuf>,
+    pub(crate) pending_pastes: Vec<(String, String)>,
 }
 
 impl HistoryEntry {
@@ -19,6 +20,7 @@ impl HistoryEntry {
             text: String::new(),
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
+            pending_pastes: Vec::new(),
         }
     }
 
@@ -27,6 +29,7 @@ impl HistoryEntry {
             text,
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
+            pending_pastes: Vec::new(),
         }
     }
 }
@@ -82,7 +85,10 @@ impl ChatComposerHistory {
     /// Record a message submitted by the user in the current session so it can
     /// be recalled later.
     pub fn record_local_submission(&mut self, entry: HistoryEntry) {
-        if entry.text.is_empty() && entry.local_image_paths.is_empty() {
+        if entry.text.is_empty()
+            && entry.local_image_paths.is_empty()
+            && entry.pending_pastes.is_empty()
+        {
             return;
         }
 

@@ -20,9 +20,10 @@
 //! The Up/Down history path is managed by [`ChatComposerHistory`]. It merges:
 //!
 //! - Persistent cross-session history (text-only; no element ranges or attachments).
-//! - Local in-session history (full text + text elements + local image paths).
+//! - Local in-session history (full text + text elements + local image paths + pending pastes).
 //!
-//! When recalling a local entry, the composer rehydrates text elements and image attachments.
+//! When recalling a local entry, the composer rehydrates text elements, pending pastes, and image
+//! attachments.
 //! When recalling a persistent entry, only the text is restored.
 //!
 //! # Submission and Prompt Expansion
@@ -497,8 +498,9 @@ impl ChatComposer {
             return false;
         };
         // Persistent ↑/↓ history is text-only (backwards-compatible and avoids persisting
-        // attachments), but local in-session ↑/↓ history can rehydrate elements and image paths.
-        self.set_text_content(entry.text, entry.text_elements, entry.local_image_paths);
+        // attachments), but local in-session ↑/↓ history can rehydrate elements, image paths,
+        // and pending large-paste payloads.
+        self.restore_history_entry(entry);
         true
     }
 
@@ -739,6 +741,11 @@ impl ChatComposer {
         self.sync_popups();
     }
 
+    fn restore_history_entry(&mut self, entry: HistoryEntry) {
+        self.set_text_content(entry.text, entry.text_elements, entry.local_image_paths);
+        self.pending_pastes = entry.pending_pastes;
+    }
+
     /// Update the placeholder text without changing input enablement.
     pub(crate) fn set_placeholder_text(&mut self, placeholder: String) {
         self.placeholder_text = placeholder;
@@ -755,6 +762,7 @@ impl ChatComposer {
         }
         let previous = self.current_text();
         let text_elements = self.textarea.text_elements();
+        let pending_pastes = self.pending_pastes.clone();
         let local_image_paths = self
             .attached_images
             .iter()
@@ -766,6 +774,7 @@ impl ChatComposer {
             text: previous.clone(),
             text_elements,
             local_image_paths,
+            pending_pastes,
         });
         Some(previous)
     }
@@ -1906,6 +1915,7 @@ impl ChatComposer {
                 text: text.clone(),
                 text_elements: text_elements.clone(),
                 local_image_paths,
+                pending_pastes: Vec::new(),
             });
         }
         self.pending_pastes.clear();
@@ -2112,11 +2122,7 @@ impl ChatComposer {
                         _ => unreachable!(),
                     };
                     if let Some(entry) = replace_entry {
-                        self.set_text_content(
-                            entry.text,
-                            entry.text_elements,
-                            entry.local_image_paths,
-                        );
+                        self.restore_history_entry(entry);
                         return (InputResult::None, true);
                     }
                 }
@@ -5093,6 +5099,55 @@ mod tests {
         assert_eq!(text_elements.len(), 1);
         assert_eq!(text_elements[0].placeholder(&text), Some("[Image #1]"));
         assert_eq!(composer.local_image_paths(), vec![path]);
+    }
+
+    #[test]
+    fn history_navigation_restores_large_paste_payloads_after_ctrl_c() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+
+        let large = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 5);
+        composer.handle_paste(large.clone());
+        assert_eq!(composer.pending_pastes.len(), 1);
+        let placeholder = composer.pending_pastes[0].0.clone();
+        assert_eq!(composer.current_text(), placeholder);
+
+        composer.clear_for_ctrl_c();
+        assert!(composer.is_empty());
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+
+        let text = composer.current_text();
+        assert_eq!(text, placeholder);
+        let text_elements = composer.text_elements();
+        assert_eq!(text_elements.len(), 1);
+        assert_eq!(
+            text_elements[0].placeholder(&text),
+            Some(placeholder.as_str())
+        );
+        assert_eq!(composer.pending_pastes.len(), 1);
+        assert_eq!(composer.pending_pastes[0].1, large);
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Submitted {
+                text,
+                text_elements,
+            } => {
+                assert_eq!(text, large);
+                assert!(text_elements.is_empty());
+            }
+            _ => panic!("expected Submitted"),
+        }
     }
 
     #[test]
