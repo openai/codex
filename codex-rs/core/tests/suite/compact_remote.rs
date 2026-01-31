@@ -146,6 +146,119 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_rollback_restores_pre_compact_history() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.features.enable(Feature::RemoteCompaction);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            responses::sse(vec![
+                responses::ev_assistant_message("m1", "FIRST_REMOTE_REPLY"),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m2", "AFTER_COMPACT_REPLY"),
+                responses::ev_completed("resp-2"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m3", "AFTER_ROLLBACK_REPLY"),
+                responses::ev_completed("resp-3"),
+            ]),
+        ],
+    )
+    .await;
+
+    let compacted_history = vec![
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "REMOTE_COMPACTED_SUMMARY".to_string(),
+            }],
+            end_turn: None,
+        },
+        ResponseItem::Compaction {
+            encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+        },
+    ];
+    responses::mount_compact_json_once(
+        harness.server(),
+        serde_json::json!({ "output": compacted_history }),
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello remote compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Compact).await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "after compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::ThreadRollback { num_turns: 2 }).await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ThreadRolledBack(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "after rollback".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let after_rollback_body = responses_mock
+        .requests()
+        .last()
+        .expect("after rollback request missing")
+        .body_json()
+        .to_string();
+    assert!(
+        after_rollback_body.contains("FIRST_REMOTE_REPLY"),
+        "expected after-rollback request to include pre-compaction assistant reply"
+    );
+    assert!(
+        !after_rollback_body.contains("REMOTE_COMPACTED_SUMMARY"),
+        "expected after-rollback request to drop compaction summary"
+    );
+    assert!(
+        !after_rollback_body.contains("ENCRYPTED_COMPACTION_SUMMARY"),
+        "expected after-rollback request to drop compaction encrypted content"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_compact_runs_automatically() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

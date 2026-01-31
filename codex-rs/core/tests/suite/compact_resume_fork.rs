@@ -34,6 +34,7 @@ use tempfile::TempDir;
 use wiremock::MockServer;
 
 const AFTER_SECOND_RESUME: &str = "AFTER_SECOND_RESUME";
+const AFTER_ROLLBACK: &str = "AFTER_ROLLBACK";
 
 fn network_disabled() -> bool {
     std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok()
@@ -656,6 +657,39 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// Scenario: compact a conversation, rollback over the compaction marker, and ensure
+/// the next turn includes the pre-compaction assistant history.
+async fn rollback_over_compaction_restores_pre_compact_history() {
+    if network_disabled() {
+        println!("Skipping test because network is disabled in this sandbox");
+        return;
+    }
+
+    let server = MockServer::start().await;
+    let request_log = mount_compact_rollback_flow(&server).await;
+    let (_home, _config, _manager, base) = start_test_conversation(&server, None).await;
+
+    user_turn(&base, "hello world").await;
+    compact_conversation(&base).await;
+    user_turn(&base, "AFTER_COMPACT").await;
+
+    base.submit(Op::ThreadRollback { num_turns: 2 })
+        .await
+        .expect("submit rollback");
+    wait_for_event(&base, |ev| matches!(ev, EventMsg::ThreadRolledBack(_))).await;
+
+    user_turn(&base, AFTER_ROLLBACK).await;
+
+    let requests = gather_request_bodies(&request_log);
+    let after_rollback_body = requests.last().expect("after rollback request");
+    let body_text = after_rollback_body.to_string();
+    assert!(
+        body_text.contains(&json_fragment(FIRST_REPLY)),
+        "expected after-rollback request to include first assistant reply"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 /// Scenario: after the forked branch is compacted, resuming again should reuse
 /// the compacted history and only append the new user message.
 async fn compact_resume_after_second_compaction_preserves_history() {
@@ -923,6 +957,52 @@ async fn mount_initial_flow(server: &MockServer) -> Vec<ResponseMock> {
     let after_fork = mount_sse_once_match(server, match_after_fork, sse5).await;
 
     vec![first, compact, after_compact, after_resume, after_fork]
+}
+
+async fn mount_compact_rollback_flow(server: &MockServer) -> Vec<ResponseMock> {
+    let sse1 = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed("r1"),
+    ]);
+    let sse2 = sse(vec![
+        ev_assistant_message("m2", SUMMARY_TEXT),
+        ev_completed("r2"),
+    ]);
+    let sse3 = sse(vec![
+        ev_assistant_message("m3", "AFTER_COMPACT_REPLY"),
+        ev_completed("r3"),
+    ]);
+    let sse4 = sse(vec![ev_completed("r4")]);
+
+    let match_first = |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body.contains("\"text\":\"hello world\"")
+            && !body.contains(&format!("\"text\":\"{SUMMARY_TEXT}\""))
+            && !body.contains("\"text\":\"AFTER_COMPACT\"")
+            && !body.contains(&format!("\"text\":\"{AFTER_ROLLBACK}\""))
+    };
+    let first = mount_sse_once_match(server, match_first, sse1).await;
+
+    let match_compact = |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body_contains_text(body, SUMMARIZATION_PROMPT) || body.contains(&json_fragment(FIRST_REPLY))
+    };
+    let compact = mount_sse_once_match(server, match_compact, sse2).await;
+
+    let match_after_compact = |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body.contains("\"text\":\"AFTER_COMPACT\"")
+            && !body.contains(&format!("\"text\":\"{AFTER_ROLLBACK}\""))
+    };
+    let after_compact = mount_sse_once_match(server, match_after_compact, sse3).await;
+
+    let match_after_rollback = |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body.contains(&format!("\"text\":\"{AFTER_ROLLBACK}\""))
+    };
+    let after_rollback = mount_sse_once_match(server, match_after_rollback, sse4).await;
+
+    vec![first, compact, after_compact, after_rollback]
 }
 
 async fn mount_second_compact_flow(server: &MockServer) -> Vec<ResponseMock> {
