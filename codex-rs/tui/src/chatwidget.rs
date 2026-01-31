@@ -108,6 +108,7 @@ use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -3230,23 +3231,28 @@ impl ChatWidget {
         }
 
         let UserMessage {
-            text,
+            text: display_text,
             local_images,
-            text_elements,
+            text_elements: display_text_elements,
             mention_paths,
         } = user_message;
-        if text.is_empty() && local_images.is_empty() {
+        if display_text.is_empty() && local_images.is_empty() {
             return;
         }
         if !local_images.is_empty() && !self.current_model_supports_images() {
-            self.restore_blocked_image_submission(text, text_elements, local_images, mention_paths);
+            self.restore_blocked_image_submission(
+                display_text,
+                display_text_elements,
+                local_images,
+                mention_paths,
+            );
             return;
         }
 
         let mut items: Vec<UserInput> = Vec::new();
 
         // Special-case: "!cmd" executes a local shell command instead of sending to the model.
-        if let Some(stripped) = text.strip_prefix('!') {
+        if let Some(stripped) = display_text.strip_prefix('!') {
             let cmd = stripped.trim();
             if cmd.is_empty() {
                 self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
@@ -3263,20 +3269,23 @@ impl ChatWidget {
             return;
         }
 
+        let (model_text, model_text_elements) =
+            self.expand_directory_mentions_for_model(&display_text, &display_text_elements);
+
         for image in &local_images {
             items.push(UserInput::LocalImage {
                 path: image.path.clone(),
             });
         }
 
-        if !text.is_empty() {
+        if !model_text.is_empty() {
             items.push(UserInput::Text {
-                text: text.clone(),
-                text_elements: text_elements.clone(),
+                text: model_text,
+                text_elements: model_text_elements,
             });
         }
 
-        let mentions = collect_tool_mentions(&text, &mention_paths);
+        let mentions = collect_tool_mentions(&display_text, &mention_paths);
         let mut skill_names_lower: HashSet<String> = HashSet::new();
 
         if let Some(skills) = self.bottom_pane.skills() {
@@ -3335,20 +3344,22 @@ impl ChatWidget {
         });
 
         // Persist the text to cross-session message history.
-        if !text.is_empty() {
+        if !display_text.is_empty() {
             self.codex_op_tx
-                .send(Op::AddToHistory { text: text.clone() })
+                .send(Op::AddToHistory {
+                    text: display_text.clone(),
+                })
                 .unwrap_or_else(|e| {
                     tracing::error!("failed to send AddHistory op: {e}");
                 });
         }
 
         // Only show the text portion in conversation history.
-        if !text.is_empty() {
+        if !display_text.is_empty() {
             let local_image_paths = local_images.into_iter().map(|img| img.path).collect();
             self.add_to_history(history_cell::new_user_prompt(
-                text,
-                text_elements,
+                display_text,
+                display_text_elements,
                 local_image_paths,
             ));
         }
@@ -3382,6 +3393,77 @@ impl ChatWidget {
             self.image_inputs_not_supported_message(),
         ));
         self.request_redraw();
+    }
+
+    fn expand_directory_mentions_for_model(
+        &self,
+        display_text: &str,
+        text_elements: &[TextElement],
+    ) -> (String, Vec<TextElement>) {
+        use std::fs;
+
+        if display_text.is_empty() || text_elements.is_empty() {
+            return (display_text.to_string(), text_elements.to_vec());
+        }
+
+        fn normalize_dir_path_for_prompt(path: &Path) -> String {
+            let mut s = path.to_string_lossy().replace('\\', "/");
+            if !s.ends_with('/') {
+                s.push('/');
+            }
+            s
+        }
+
+        let mut elements = text_elements.to_vec();
+        elements.sort_by_key(|e| e.byte_range.start);
+
+        let mut rebuilt = String::with_capacity(display_text.len());
+        let mut rebuilt_elements = Vec::with_capacity(elements.len());
+        let mut cursor = 0usize;
+
+        for elem in elements {
+            let start = elem.byte_range.start.min(display_text.len());
+            let end = elem.byte_range.end.min(display_text.len());
+            if start > end {
+                continue;
+            }
+            if start > cursor {
+                rebuilt.push_str(&display_text[cursor..start]);
+            }
+
+            let elem_text = &display_text[start..end];
+            let payload = elem.placeholder(display_text).map(str::to_string);
+            let resolved_dir = payload
+                .as_deref()
+                .filter(|payload| payload.ends_with('/'))
+                .and_then(|payload| {
+                    AbsolutePathBuf::resolve_path_against_base(payload, &self.config.cwd).ok()
+                })
+                .and_then(|abs| {
+                    fs::metadata(abs.as_path())
+                        .ok()
+                        .and_then(|meta| meta.is_dir().then_some(abs))
+                });
+
+            if let Some(abs) = resolved_dir {
+                let abs_dir = normalize_dir_path_for_prompt(abs.as_path());
+                rebuilt.push_str(&format!("[{elem_text}]({abs_dir})"));
+            } else {
+                let new_start = rebuilt.len();
+                rebuilt.push_str(elem_text);
+                let new_end = rebuilt.len();
+                let placeholder = payload.or_else(|| Some(elem_text.to_string()));
+                rebuilt_elements.push(TextElement::new((new_start..new_end).into(), placeholder));
+            }
+
+            cursor = end;
+        }
+
+        if cursor < display_text.len() {
+            rebuilt.push_str(&display_text[cursor..]);
+        }
+
+        (rebuilt, rebuilt_elements)
     }
 
     /// Replay a subset of initial events into the UI to seed the transcript when

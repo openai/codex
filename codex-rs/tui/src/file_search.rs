@@ -84,6 +84,7 @@ impl FileSearchManager {
             &self.search_dir,
             file_search::FileSearchOptions {
                 compute_indices: true,
+                include_dirs: true,
                 ..Default::default()
             },
             reporter,
