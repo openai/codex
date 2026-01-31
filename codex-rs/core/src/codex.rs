@@ -3057,6 +3057,11 @@ mod handlers {
 
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
 
+        let existing_turn_context_history = {
+            let state = sess.state.lock().await;
+            state.turn_context_history.clone()
+        };
+
         let mut history = sess.clone_history().await;
         history.drop_last_n_user_turns(num_turns);
 
@@ -3065,6 +3070,15 @@ mod handlers {
         let user_turns = Self::user_turn_count(history.raw_items());
         sess.replace_history(history.raw_items().to_vec()).await;
         let mut state = sess.state.lock().await;
+        let mut updated_turn_context_history = existing_turn_context_history;
+        let truncated_len = updated_turn_context_history
+            .len()
+            .saturating_sub(num_turns as usize);
+        updated_turn_context_history.truncate(truncated_len);
+        if updated_turn_context_history.len() < user_turns {
+            updated_turn_context_history.resize_with(user_turns, || None);
+        }
+        state.set_turn_context_history(updated_turn_context_history);
         let mut applied = false;
         if state.turn_context_history.len() == user_turns
             && let Some(turn_context) = state.last_turn_context()
@@ -5017,6 +5031,56 @@ mod tests {
 
         let history = sess.clone_history().await;
         assert_eq!(expected, history.raw_items());
+    }
+
+    #[tokio::test]
+    async fn thread_rollback_restores_collaboration_mode_from_turn_context_history() {
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
+
+        let initial_context = sess.build_initial_context(tc.as_ref()).await;
+        sess.record_into_history(&initial_context, tc.as_ref())
+            .await;
+
+        let base_mode = sess.current_collaboration_mode().await;
+        let plan_mode = CollaborationMode {
+            mode: ModeKind::Plan,
+            settings: base_mode.settings.clone(),
+        };
+        let code_mode = CollaborationMode {
+            mode: ModeKind::Code,
+            settings: base_mode.settings.clone(),
+        };
+
+        {
+            let mut state = sess.state.lock().await;
+            state.session_configuration.collaboration_mode = plan_mode.clone();
+        }
+        let input1 = vec![UserInput::Text {
+            text: "turn 1".to_string(),
+            text_elements: Vec::new(),
+        }];
+        let response_item1: ResponseItem = ResponseInputItem::from(input1.clone()).into();
+        sess.record_user_prompt_and_emit_turn_item(tc.as_ref(), &input1, response_item1)
+            .await;
+
+        {
+            let mut state = sess.state.lock().await;
+            state.session_configuration.collaboration_mode = code_mode.clone();
+        }
+        let input2 = vec![UserInput::Text {
+            text: "turn 2".to_string(),
+            text_elements: Vec::new(),
+        }];
+        let response_item2: ResponseItem = ResponseInputItem::from(input2.clone()).into();
+        sess.record_user_prompt_and_emit_turn_item(tc.as_ref(), &input2, response_item2)
+            .await;
+
+        handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+        let rollback_event = wait_for_thread_rolled_back(&rx).await;
+        assert_eq!(rollback_event.num_turns, 1);
+
+        let current_mode = sess.current_collaboration_mode().await;
+        assert_eq!(current_mode.mode, ModeKind::Plan);
     }
 
     #[tokio::test]
