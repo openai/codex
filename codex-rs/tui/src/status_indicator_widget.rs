@@ -4,7 +4,6 @@
 use std::time::Duration;
 use std::time::Instant;
 
-use codex_core::protocol::Op;
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -17,6 +16,7 @@ use ratatui::widgets::WidgetRef;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app_event::AppEvent;
+use crate::app_event::AppServerAction;
 use crate::app_event_sender::AppEventSender;
 use crate::exec_cell::spinner;
 use crate::key_hint;
@@ -82,7 +82,8 @@ impl StatusIndicatorWidget {
     }
 
     pub(crate) fn interrupt(&self) {
-        self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
+        self.app_event_tx
+            .send(AppEvent::AppServerAction(AppServerAction::Interrupt));
     }
 
     /// Update the animated header label (left of the brackets).

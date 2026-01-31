@@ -17,8 +17,10 @@ impl AppEventSender {
     /// error and log it.
     pub(crate) fn send(&self, event: AppEvent) {
         // Record inbound events for high-fidelity session replay.
-        // Avoid double-logging Ops; those are logged at the point of submission.
-        if !matches!(event, AppEvent::CodexOp(_)) {
+        // Avoid double-logging app-server actions; those are logged at the point of submission.
+        if let AppEvent::AppServerAction(action) = &event {
+            session_log::log_outbound_app_action(action);
+        } else {
             session_log::log_inbound_app_event(&event);
         }
         if let Err(e) = self.app_event_tx.send(event) {

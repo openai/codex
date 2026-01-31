@@ -64,6 +64,8 @@ use codex_app_server_protocol::LoginChatGptCompleteNotification;
 use codex_app_server_protocol::LoginChatGptResponse;
 use codex_app_server_protocol::LogoutAccountResponse;
 use codex_app_server_protocol::LogoutChatGptResponse;
+use codex_app_server_protocol::McpElicitationResolveParams;
+use codex_app_server_protocol::McpElicitationResolveResponse;
 use codex_app_server_protocol::McpServerOauthLoginCompletedNotification;
 use codex_app_server_protocol::McpServerOauthLoginParams;
 use codex_app_server_protocol::McpServerOauthLoginResponse;
@@ -98,6 +100,8 @@ use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
+use codex_app_server_protocol::ThreadCompactParams;
+use codex_app_server_protocol::ThreadCompactResponse;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadItem;
@@ -112,6 +116,8 @@ use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadSetNameParams;
 use codex_app_server_protocol::ThreadSetNameResponse;
+use codex_app_server_protocol::ThreadShutdownParams;
+use codex_app_server_protocol::ThreadShutdownResponse;
 use codex_app_server_protocol::ThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
 use codex_app_server_protocol::ThreadStartParams;
@@ -447,6 +453,12 @@ impl CodexMessageProcessor {
             ClientRequest::ThreadRollback { request_id, params } => {
                 self.thread_rollback(request_id, params).await;
             }
+            ClientRequest::ThreadCompact { request_id, params } => {
+                self.thread_compact(request_id, params).await;
+            }
+            ClientRequest::ThreadShutdown { request_id, params } => {
+                self.thread_shutdown(request_id, params).await;
+            }
             ClientRequest::ThreadList { request_id, params } => {
                 self.thread_list(request_id, params).await;
             }
@@ -512,6 +524,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::McpServerStatusList { request_id, params } => {
                 self.list_mcp_server_status(request_id, params).await;
+            }
+            ClientRequest::McpElicitationResolve { request_id, params } => {
+                self.mcp_elicitation_resolve(request_id, params).await;
             }
             ClientRequest::LoginAccount { request_id, params } => {
                 self.login_v2(request_id, params).await;
@@ -2051,6 +2066,63 @@ impl CodexMessageProcessor {
         }
     }
 
+    async fn thread_compact(&mut self, request_id: RequestId, params: ThreadCompactParams) {
+        let ThreadCompactParams { thread_id } = params;
+        let (thread_uuid, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match thread.submit(Op::Compact).await {
+            Ok(turn_id) => {
+                let turn = Turn {
+                    id: turn_id.clone(),
+                    items: Vec::new(),
+                    error: None,
+                    status: TurnStatus::InProgress,
+                };
+                let response = ThreadCompactResponse { turn: turn.clone() };
+                self.outgoing.send_response(request_id, response).await;
+
+                let notif = TurnStartedNotification {
+                    thread_id: thread_uuid.to_string(),
+                    turn,
+                };
+                self.outgoing
+                    .send_server_notification(ServerNotification::TurnStarted(notif))
+                    .await;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to start compact turn: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn thread_shutdown(&mut self, request_id: RequestId, params: ThreadShutdownParams) {
+        let ThreadShutdownParams { thread_id } = params;
+        let (thread_uuid, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let _ = thread.submit(Op::Shutdown).await;
+        self.thread_manager.remove_thread(&thread_uuid).await;
+
+        let response = ThreadShutdownResponse {};
+        self.outgoing.send_response(request_id, response).await;
+    }
+
     async fn thread_list(&self, request_id: RequestId, params: ThreadListParams) {
         let ThreadListParams {
             cursor,
@@ -3143,6 +3215,34 @@ impl CodexMessageProcessor {
         });
     }
 
+    async fn mcp_elicitation_resolve(
+        &self,
+        request_id: RequestId,
+        params: McpElicitationResolveParams,
+    ) {
+        let McpElicitationResolveParams {
+            thread_id,
+            server_name,
+            request_id: elicitation_id,
+            decision,
+        } = params;
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+        let op = Op::ResolveElicitation {
+            server_name,
+            request_id: elicitation_id,
+            decision: decision.to_core(),
+        };
+        let _ = thread.submit(op).await;
+        let response = McpElicitationResolveResponse {};
+        self.outgoing.send_response(request_id, response).await;
+    }
+
     async fn list_mcp_server_status_task(
         outgoing: Arc<OutgoingMessageSender>,
         request_id: RequestId,
@@ -4090,6 +4190,7 @@ impl CodexMessageProcessor {
         let has_any_overrides = params.cwd.is_some()
             || params.approval_policy.is_some()
             || params.sandbox_policy.is_some()
+            || params.windows_sandbox_level.is_some()
             || params.model.is_some()
             || params.effort.is_some()
             || params.summary.is_some()
@@ -4103,7 +4204,7 @@ impl CodexMessageProcessor {
                     cwd: params.cwd,
                     approval_policy: params.approval_policy.map(AskForApproval::to_core),
                     sandbox_policy: params.sandbox_policy.map(|p| p.to_core()),
-                    windows_sandbox_level: None,
+                    windows_sandbox_level: params.windows_sandbox_level,
                     model: params.model,
                     effort: params.effort.map(Some),
                     summary: params.summary,

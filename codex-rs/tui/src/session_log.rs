@@ -7,11 +7,11 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 
 use codex_core::config::Config;
-use codex_core::protocol::Op;
 use serde::Serialize;
 use serde_json::json;
 
 use crate::app_event::AppEvent;
+use crate::app_event::AppServerAction;
 
 static LOGGER: LazyLock<SessionLogger> = LazyLock::new(SessionLogger::new);
 
@@ -128,6 +128,16 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
         AppEvent::CodexEvent(ev) => {
             write_record("to_tui", "codex_event", ev);
         }
+        AppEvent::CodexThreadEvent { thread_id, event } => {
+            let value = json!({
+                "ts": now_ts(),
+                "dir": "to_tui",
+                "kind": "codex_event",
+                "thread_id": thread_id.to_string(),
+                "payload": event,
+            });
+            LOGGER.write_json_line(value);
+        }
         AppEvent::NewSession => {
             let value = json!({
                 "ts": now_ts(),
@@ -177,11 +187,11 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
     }
 }
 
-pub(crate) fn log_outbound_op(op: &Op) {
+pub(crate) fn log_outbound_app_action(action: &AppServerAction) {
     if !LOGGER.is_enabled() {
         return;
     }
-    write_record("from_tui", "op", op);
+    write_record("from_tui", "app_server_action", action);
 }
 
 pub(crate) fn log_session_end() {
