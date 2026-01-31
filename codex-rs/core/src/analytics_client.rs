@@ -146,7 +146,7 @@ pub(crate) fn track_skill_invocations(
     let Some(auth) = tracking.auth.as_ref() else {
         return;
     };
-    if auth.mode != AuthMode::Chatgpt {
+    if !auth.is_chatgpt_auth() {
         return;
     }
     let job = TrackEventsJob {
@@ -166,7 +166,7 @@ async fn send_track_skill_invocations(job: TrackEventsJob) {
     let Some(auth) = tracking.auth.as_ref() else {
         return;
     };
-    if auth.mode != AuthMode::Chatgpt {
+    if !auth.is_chatgpt_auth() {
         return;
     }
     let access_token = match auth.get_token() {
