@@ -69,7 +69,7 @@ For complete documentation of the `Op` and `EventMsg` variants, refer to [protoc
   - `Op::UserInput` – Legacy form of user input
   - `Op::Interrupt` – Interrupts a running turn
   - `Op::ExecApproval` – Approve or deny code execution
-  - `Op::UserInputAnswer` – Provide answers for a `request_user_input` tool call
+  - `Op::UserInputAnswer` – Provide answers for a `request_user_input` tool call (optionally include `call_id`)
   - `Op::ListSkills` – Request skills for one or more cwd values (optionally `force_reload`)
   - `Op::UserTurn` and `Op::OverrideTurnContext` accept an optional `personality` override that updates the model’s communication style
 - `EventMsg`

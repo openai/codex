@@ -294,17 +294,25 @@ pub(crate) async fn apply_bespoke_event_handling(
                         }),
                     })
                     .collect();
+                let call_id = request.call_id.clone();
                 let params = ToolRequestUserInputParams {
                     thread_id: conversation_id.to_string(),
                     turn_id: request.turn_id,
-                    item_id: request.call_id,
+                    item_id: call_id.clone(),
                     questions,
                 };
                 let rx = outgoing
                     .send_request(ServerRequestPayload::ToolRequestUserInput(params))
                     .await;
+                let response_call_id = call_id.clone();
                 tokio::spawn(async move {
-                    on_request_user_input_response(event_turn_id, rx, conversation).await;
+                    on_request_user_input_response(
+                        event_turn_id,
+                        response_call_id,
+                        rx,
+                        conversation,
+                    )
+                    .await;
                 });
             } else {
                 error!(
@@ -317,6 +325,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 if let Err(err) = conversation
                     .submit(Op::UserInputAnswer {
                         id: event_turn_id,
+                        call_id: Some(request.call_id.clone()),
                         response: empty,
                     })
                     .await
@@ -1483,6 +1492,7 @@ async fn on_exec_approval_response(
 
 async fn on_request_user_input_response(
     event_turn_id: String,
+    call_id: String,
     receiver: oneshot::Receiver<JsonValue>,
     conversation: Arc<CodexThread>,
 ) {
@@ -1497,6 +1507,7 @@ async fn on_request_user_input_response(
             if let Err(err) = conversation
                 .submit(Op::UserInputAnswer {
                     id: event_turn_id,
+                    call_id: Some(call_id.clone()),
                     response: empty,
                 })
                 .await
@@ -1532,6 +1543,7 @@ async fn on_request_user_input_response(
     if let Err(err) = conversation
         .submit(Op::UserInputAnswer {
             id: event_turn_id,
+            call_id: Some(call_id),
             response,
         })
         .await

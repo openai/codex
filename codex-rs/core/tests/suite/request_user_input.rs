@@ -165,6 +165,7 @@ async fn request_user_input_round_trip_resolves_pending() -> anyhow::Result<()> 
     codex
         .submit(Op::UserInputAnswer {
             id: request.turn_id.clone(),
+            call_id: Some(request.call_id.clone()),
             response,
         })
         .await?;

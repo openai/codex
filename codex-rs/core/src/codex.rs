@@ -3143,27 +3143,29 @@ mod handlers {
 
         // Replace with the raw items. We don't want to replace with a normalized
         // version of the history.
-        let user_turns = Self::user_turn_count(history.raw_items());
+        let user_turns = Session::user_turn_count(history.raw_items());
         sess.replace_history(history.raw_items().to_vec()).await;
-        let mut state = sess.state.lock().await;
-        let mut updated_turn_context_history = existing_turn_context_history;
-        let truncated_len = updated_turn_context_history
-            .len()
-            .saturating_sub(num_turns as usize);
-        updated_turn_context_history.truncate(truncated_len);
-        if updated_turn_context_history.len() < user_turns {
-            updated_turn_context_history.resize_with(user_turns, || None);
-        }
-        state.set_turn_context_history(updated_turn_context_history);
-        let mut applied = false;
-        if state.turn_context_history.len() == user_turns
-            && let Some(turn_context) = state.last_turn_context()
-            && let Some(collaboration_mode) = turn_context.collaboration_mode.clone()
         {
-            state.session_configuration.collaboration_mode = collaboration_mode;
-            applied = true;
+            let mut state = sess.state.lock().await;
+            let mut updated_turn_context_history = existing_turn_context_history;
+            let truncated_len = updated_turn_context_history
+                .len()
+                .saturating_sub(num_turns as usize);
+            updated_turn_context_history.truncate(truncated_len);
+            if updated_turn_context_history.len() < user_turns {
+                updated_turn_context_history.resize_with(user_turns, || None);
+            }
+            state.set_turn_context_history(updated_turn_context_history);
+            let mut applied = false;
+            if state.turn_context_history.len() == user_turns
+                && let Some(turn_context) = state.last_turn_context()
+                && let Some(collaboration_mode) = turn_context.collaboration_mode.clone()
+            {
+                state.session_configuration.collaboration_mode = collaboration_mode;
+                applied = true;
+            }
+            state.force_collaboration_instructions = !applied;
         }
-        state.force_collaboration_instructions = !applied;
         sess.recompute_token_usage(turn_context.as_ref()).await;
 
         sess.send_event_raw_flushed(Event {
