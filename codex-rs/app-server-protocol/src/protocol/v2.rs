@@ -86,6 +86,10 @@ macro_rules! v2_enum_from_core {
 pub enum CodexErrorInfo {
     ContextWindowExceeded,
     UsageLimitExceeded,
+    ModelCap {
+        model: String,
+        reset_after_seconds: Option<u64>,
+    },
     HttpConnectionFailed {
         #[serde(rename = "httpStatusCode")]
         #[ts(rename = "httpStatusCode")]
@@ -122,6 +126,13 @@ impl From<CoreCodexErrorInfo> for CodexErrorInfo {
         match value {
             CoreCodexErrorInfo::ContextWindowExceeded => CodexErrorInfo::ContextWindowExceeded,
             CoreCodexErrorInfo::UsageLimitExceeded => CodexErrorInfo::UsageLimitExceeded,
+            CoreCodexErrorInfo::ModelCap {
+                model,
+                reset_after_seconds,
+            } => CodexErrorInfo::ModelCap {
+                model,
+                reset_after_seconds,
+            },
             CoreCodexErrorInfo::HttpConnectionFailed { http_status_code } => {
                 CodexErrorInfo::HttpConnectionFailed { http_status_code }
             }
@@ -824,6 +835,24 @@ pub enum LoginAccountParams {
     #[serde(rename = "chatgpt")]
     #[ts(rename = "chatgpt")]
     Chatgpt,
+    /// [UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.
+    /// The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.
+    #[serde(rename = "chatgptAuthTokens")]
+    #[ts(rename = "chatgptAuthTokens")]
+    ChatgptAuthTokens {
+        /// ID token (JWT) supplied by the client.
+        ///
+        /// This token is used for identity and account metadata (email, plan type,
+        /// workspace id).
+        #[serde(rename = "idToken")]
+        #[ts(rename = "idToken")]
+        id_token: String,
+        /// Access token (JWT) supplied by the client.
+        /// This token is used for backend API requests.
+        #[serde(rename = "accessToken")]
+        #[ts(rename = "accessToken")]
+        access_token: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -843,6 +872,9 @@ pub enum LoginAccountResponse {
         /// URL the client should open in a browser to initiate the OAuth flow.
         auth_url: String,
     },
+    #[serde(rename = "chatgptAuthTokens", rename_all = "camelCase")]
+    #[ts(rename = "chatgptAuthTokens", rename_all = "camelCase")]
+    ChatgptAuthTokens {},
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -873,6 +905,37 @@ pub struct CancelLoginAccountResponse {
 #[ts(export_to = "v2/")]
 pub struct LogoutAccountResponse {}
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ChatgptAuthTokensRefreshReason {
+    /// Codex attempted a backend request and received `401 Unauthorized`.
+    Unauthorized,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ChatgptAuthTokensRefreshParams {
+    pub reason: ChatgptAuthTokensRefreshReason,
+    /// Workspace/account identifier that Codex was previously using.
+    ///
+    /// Clients that manage multiple accounts/workspaces can use this as a hint
+    /// to refresh the token for the correct workspace.
+    ///
+    /// This may be `null` when the prior ID token did not include a workspace
+    /// identifier (`chatgpt_account_id`) or when the token could not be parsed.
+    pub previous_account_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ChatgptAuthTokensRefreshResponse {
+    pub id_token: String,
+    pub access_token: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -884,6 +947,11 @@ pub struct GetAccountRateLimitsResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct GetAccountParams {
+    /// When `true`, requests a proactive token refresh before returning.
+    ///
+    /// In managed auth mode this triggers the normal refresh-token flow. In
+    /// external auth mode this flag is ignored. Clients should refresh tokens
+    /// themselves and call `account/login/start` with `chatgptAuthTokens`.
     #[serde(default)]
     pub refresh_token: bool,
 }
@@ -1003,6 +1071,8 @@ pub struct AppInfo {
     pub name: String,
     pub description: Option<String>,
     pub logo_url: Option<String>,
+    pub logo_url_dark: Option<String>,
+    pub distribution_channel: Option<String>,
     pub install_url: Option<String>,
     #[serde(default)]
     pub is_accessible: bool,
@@ -1228,9 +1298,22 @@ pub struct ThreadArchiveResponse {}
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ThreadSetNameParams {
+    pub thread_id: String,
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ThreadUnarchiveParams {
     pub thread_id: String,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSetNameResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -1897,6 +1980,10 @@ pub enum UserInput {
         name: String,
         path: PathBuf,
     },
+    Mention {
+        name: String,
+        path: String,
+    },
 }
 
 impl UserInput {
@@ -1912,6 +1999,7 @@ impl UserInput {
             UserInput::Image { url } => CoreUserInput::Image { image_url: url },
             UserInput::LocalImage { path } => CoreUserInput::LocalImage { path },
             UserInput::Skill { name, path } => CoreUserInput::Skill { name, path },
+            UserInput::Mention { name, path } => CoreUserInput::Mention { name, path },
         }
     }
 }
@@ -1929,6 +2017,7 @@ impl From<CoreUserInput> for UserInput {
             CoreUserInput::Image { image_url } => UserInput::Image { url: image_url },
             CoreUserInput::LocalImage { path } => UserInput::LocalImage { path },
             CoreUserInput::Skill { name, path } => UserInput::Skill { name, path },
+            CoreUserInput::Mention { name, path } => UserInput::Mention { name, path },
             _ => unreachable!("unsupported user input variant"),
         }
     }
@@ -1945,6 +2034,11 @@ pub enum ThreadItem {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     AgentMessage { id: String, text: String },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    /// EXPERIMENTAL - proposed plan item content. The completed plan item is
+    /// authoritative and may not match the concatenation of `PlanDelta` text.
+    Plan { id: String, text: String },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     Reasoning {
@@ -2051,6 +2145,10 @@ impl From<CoreTurnItem> for ThreadItem {
                     .collect::<String>();
                 ThreadItem::AgentMessage { id: agent.id, text }
             }
+            CoreTurnItem::Plan(plan) => ThreadItem::Plan {
+                id: plan.id,
+                text: plan.text,
+            },
             CoreTurnItem::Reasoning(reasoning) => ThreadItem::Reasoning {
                 id: reasoning.id,
                 summary: reasoning.summary_text,
@@ -2212,6 +2310,16 @@ pub struct ThreadStartedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ThreadNameUpdatedNotification {
+    pub thread_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub thread_name: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct TurnStartedNotification {
     pub thread_id: String,
     pub turn: Turn,
@@ -2323,6 +2431,18 @@ pub struct RawResponseItemCompletedNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct AgentMessageDeltaNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub delta: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// EXPERIMENTAL - proposed plan streaming deltas for plan items. Clients should
+/// not assume concatenated deltas match the completed plan item content.
+pub struct PlanDeltaNotification {
     pub thread_id: String,
     pub turn_id: String,
     pub item_id: String,
@@ -2517,13 +2637,15 @@ pub struct ToolRequestUserInputOption {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-/// EXPERIMENTAL. Represents one request_user_input question and its optional options.
+/// EXPERIMENTAL. Represents one request_user_input question and its required options.
 pub struct ToolRequestUserInputQuestion {
     pub id: String,
     pub header: String,
     pub question: String,
     #[serde(default)]
     pub is_other: bool,
+    #[serde(default)]
+    pub is_secret: bool,
     pub options: Option<Vec<ToolRequestUserInputOption>>,
 }
 
@@ -2732,6 +2854,10 @@ mod tests {
                     name: "skill-creator".to_string(),
                     path: PathBuf::from("/repo/.codex/skills/skill-creator/SKILL.md"),
                 },
+                CoreUserInput::Mention {
+                    name: "Demo App".to_string(),
+                    path: "app://demo-app".to_string(),
+                },
             ],
         });
 
@@ -2753,6 +2879,10 @@ mod tests {
                     UserInput::Skill {
                         name: "skill-creator".to_string(),
                         path: PathBuf::from("/repo/.codex/skills/skill-creator/SKILL.md"),
+                    },
+                    UserInput::Mention {
+                        name: "Demo App".to_string(),
+                        path: "app://demo-app".to_string(),
                     },
                 ],
             }

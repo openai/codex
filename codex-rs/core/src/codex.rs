@@ -27,10 +27,13 @@ use crate::features::maybe_push_unstable_features_warning;
 use crate::models_manager::manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
+use crate::rollout::session_index;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
+use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::terminal;
+use crate::transport_manager::TransportManager;
 use crate::truncate::TruncationPolicy;
 use crate::user_notification::UserNotifier;
 use crate::util::error_or_panic;
@@ -43,6 +46,7 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::BaseInstructions;
@@ -85,6 +89,7 @@ use tracing::debug;
 use tracing::error;
 use tracing::field;
 use tracing::info;
+use tracing::info_span;
 use tracing::instrument;
 use tracing::trace_span;
 use tracing::warn;
@@ -119,8 +124,15 @@ use crate::mcp::effective_mcp_servers;
 use crate::mcp::maybe_prompt_and_install_mcp_dependencies;
 use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
+use crate::mentions::build_connector_slug_counts;
+use crate::mentions::build_skill_name_counts;
+use crate::mentions::collect_explicit_app_paths;
+use crate::mentions::collect_tool_mentions_from_messages;
 use crate::model_provider_info::CHAT_WIRE_API_DEPRECATION_SUMMARY;
 use crate::project_doc::get_user_instructions;
+use crate::proposed_plan_parser::ProposedPlanParser;
+use crate::proposed_plan_parser::ProposedPlanSegment;
+use crate::proposed_plan_parser::extract_proposed_plan_text;
 use crate::protocol::AgentMessageContentDeltaEvent;
 use crate::protocol::AgentReasoningSectionBreakEvent;
 use crate::protocol::ApplyPatchApprovalRequestEvent;
@@ -133,6 +145,7 @@ use crate::protocol::EventMsg;
 use crate::protocol::ExecApprovalRequestEvent;
 use crate::protocol::McpServerRefreshConfig;
 use crate::protocol::Op;
+use crate::protocol::PlanDeltaEvent;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::ReasoningContentDeltaEvent;
 use crate::protocol::ReasoningRawContentDeltaEvent;
@@ -163,7 +176,12 @@ use crate::skills::SkillInjections;
 use crate::skills::SkillMetadata;
 use crate::skills::SkillsManager;
 use crate::skills::build_skill_injections;
+use crate::skills::collect_env_var_dependencies;
 use crate::skills::collect_explicit_skill_mentions;
+use crate::skills::injection::ToolMentionKind;
+use crate::skills::injection::app_id_from_path;
+use crate::skills::injection::tool_kind_for_path;
+use crate::skills::resolve_skill_dependencies_for_turn;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
 use crate::state::SessionState;
@@ -314,6 +332,12 @@ impl Codex {
             .clone()
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
             .unwrap_or_else(|| model_info.get_model_instructions(config.model_personality));
+        // Respect explicit thread-start tools; fall back to persisted tools when resuming a thread.
+        let dynamic_tools = if dynamic_tools.is_empty() {
+            conversation_history.get_dynamic_tools().unwrap_or_default()
+        } else {
+            dynamic_tools
+        };
 
         // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.collaboration_mode
         // to avoid extracting these fields separately and constructing CollaborationMode here.
@@ -338,6 +362,8 @@ impl Codex {
             sandbox_policy: config.sandbox_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
+            codex_home: config.codex_home.clone(),
+            thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             session_source,
             dynamic_tools,
@@ -347,6 +373,7 @@ impl Codex {
         let session_source_clone = session_configuration.session_source.clone();
         let (agent_status_tx, agent_status_rx) = watch::channel(AgentStatus::PendingInit);
 
+        let session_init_span = info_span!("session_init");
         let session = Session::new(
             session_configuration,
             config.clone(),
@@ -360,6 +387,7 @@ impl Codex {
             skills_manager,
             agent_control,
         )
+        .instrument(session_init_span)
         .await
         .map_err(|e| {
             error!("Failed to create session: {e:#}");
@@ -368,7 +396,10 @@ impl Codex {
         let thread_id = session.conversation_id;
 
         // This task will run until Op::Shutdown is received.
-        tokio::spawn(submission_loop(Arc::clone(&session), config, rx_sub));
+        let session_loop_span = info_span!("session_loop", thread_id = %thread_id);
+        tokio::spawn(
+            submission_loop(Arc::clone(&session), config, rx_sub).instrument(session_loop_span),
+        );
         let codex = Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
@@ -458,6 +489,7 @@ pub(crate) struct TurnContext {
     pub(crate) developer_instructions: Option<String>,
     pub(crate) compact_prompt: Option<String>,
     pub(crate) user_instructions: Option<String>,
+    pub(crate) collaboration_mode_kind: ModeKind,
     pub(crate) personality: Option<Personality>,
     pub(crate) approval_policy: AskForApproval,
     pub(crate) sandbox_policy: SandboxPolicy,
@@ -523,6 +555,10 @@ pub(crate) struct SessionConfiguration {
     /// `ConfigureSession` operation so that the business-logic layer can
     /// operate deterministically.
     cwd: PathBuf,
+    /// Directory containing all Codex state for this session.
+    codex_home: PathBuf,
+    /// Optional user-facing name for the thread, updated during the session.
+    thread_name: Option<String>,
 
     // TODO(pakrym): Remove config from here
     original_config_do_not_use: Arc<Config>,
@@ -532,6 +568,10 @@ pub(crate) struct SessionConfiguration {
 }
 
 impl SessionConfiguration {
+    pub(crate) fn codex_home(&self) -> &PathBuf {
+        &self.codex_home
+    }
+
     fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
         ThreadConfigSnapshot {
             model: self.collaboration_mode.model().to_string(),
@@ -596,10 +636,16 @@ impl Session {
         per_turn_config.model_personality = session_configuration.personality;
         per_turn_config.web_search_mode = Some(resolve_web_search_mode_for_turn(
             per_turn_config.web_search_mode,
+            session_configuration.provider.is_azure_responses_endpoint(),
             session_configuration.sandbox_policy.get(),
         ));
         per_turn_config.features = config.features.clone();
         per_turn_config
+    }
+
+    pub(crate) async fn codex_home(&self) -> PathBuf {
+        let state = self.state.lock().await;
+        state.session_configuration.codex_home().clone()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -612,6 +658,7 @@ impl Session {
         model_info: ModelInfo,
         conversation_id: ThreadId,
         sub_id: String,
+        transport_manager: TransportManager,
     ) -> TurnContext {
         let otel_manager = otel_manager.clone().with_model(
             session_configuration.collaboration_mode.model(),
@@ -628,6 +675,7 @@ impl Session {
             session_configuration.model_reasoning_summary,
             conversation_id,
             session_configuration.session_source.clone(),
+            transport_manager,
         );
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -643,6 +691,7 @@ impl Session {
             developer_instructions: session_configuration.developer_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
+            collaboration_mode_kind: session_configuration.collaboration_mode.mode,
             personality: session_configuration.personality,
             approval_policy: session_configuration.approval_policy.value(),
             sandbox_policy: session_configuration.sandbox_policy.get().clone(),
@@ -660,7 +709,7 @@ impl Session {
 
     #[allow(clippy::too_many_arguments)]
     async fn new(
-        session_configuration: SessionConfiguration,
+        mut session_configuration: SessionConfiguration,
         config: Arc<Config>,
         auth_manager: Arc<AuthManager>,
         models_manager: Arc<ModelsManager>,
@@ -698,6 +747,7 @@ impl Session {
                         BaseInstructions {
                             text: session_configuration.base_instructions.clone(),
                         },
+                        session_configuration.dynamic_tools.clone(),
                     ),
                 )
             }
@@ -798,7 +848,7 @@ impl Session {
             session_configuration.collaboration_mode.model(),
             auth.and_then(CodexAuth::get_account_id),
             auth.and_then(CodexAuth::get_account_email),
-            auth.map(|a| a.mode),
+            auth.map(CodexAuth::api_auth_mode),
             config.otel.log_user_prompt,
             terminal::user_agent(),
             session_configuration.session_source.clone(),
@@ -839,6 +889,16 @@ impl Session {
                 otel_manager.clone(),
             );
         }
+        let thread_name =
+            match session_index::find_thread_name_by_id(&config.codex_home, &conversation_id).await
+            {
+                Ok(name) => name,
+                Err(err) => {
+                    warn!("Failed to read session index for thread name: {err}");
+                    None
+                }
+            };
+        session_configuration.thread_name = thread_name.clone();
         let state = SessionState::new(session_configuration.clone());
 
         let services = SessionServices {
@@ -857,6 +917,7 @@ impl Session {
             skills_manager,
             agent_control,
             state_db: state_db_ctx.clone(),
+            transport_manager: TransportManager::new(),
         };
 
         let sess = Arc::new(Session {
@@ -879,6 +940,7 @@ impl Session {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
                 forked_from_id,
+                thread_name: session_configuration.thread_name.clone(),
                 model: session_configuration.collaboration_mode.model().to_string(),
                 model_provider_id: config.model_provider_id.clone(),
                 approval_policy: session_configuration.approval_policy.value(),
@@ -1176,6 +1238,7 @@ impl Session {
             model_info,
             self.conversation_id,
             sub_id,
+            self.services.transport_manager.clone(),
         );
         if let Some(final_schema) = final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
@@ -1259,27 +1322,31 @@ impl Session {
         previous: Option<&Arc<TurnContext>>,
         next: &TurnContext,
     ) -> Option<ResponseItem> {
-        let personality = next.personality?;
-        if let Some(prev) = previous
-            && prev.personality == Some(personality)
-        {
+        if !self.features.enabled(Feature::Personality) {
             return None;
         }
-        let model_info = next.client.get_model_info();
-        let personality_message = Self::personality_message_for(&model_info, personality);
+        let previous = previous?;
 
-        personality_message.map(|personality_message| {
-            DeveloperInstructions::personality_spec_message(personality_message).into()
-        })
+        // if a personality is specified and it's different from the previous one, build a personality update item
+        if let Some(personality) = next.personality
+            && next.personality != previous.personality
+        {
+            let model_info = next.client.get_model_info();
+            let personality_message = Self::personality_message_for(&model_info, personality);
+            personality_message.map(|personality_message| {
+                DeveloperInstructions::personality_spec_message(personality_message).into()
+            })
+        } else {
+            None
+        }
     }
 
     fn personality_message_for(model_info: &ModelInfo, personality: Personality) -> Option<String> {
         model_info
-            .model_instructions_template
+            .model_messages
             .as_ref()
-            .and_then(|template| template.personality_messages.as_ref())
-            .and_then(|messages| messages.0.get(&personality))
-            .cloned()
+            .and_then(|spec| spec.get_personality_message(Some(personality)))
+            .filter(|message| !message.is_empty())
     }
 
     fn build_collaboration_mode_update_item(
@@ -1421,8 +1488,7 @@ impl Session {
             .lock()
             .await
             .session_configuration
-            .original_config_do_not_use
-            .codex_home
+            .codex_home()
             .clone();
 
         if !features.enabled(Feature::ExecPolicy) {
@@ -1819,14 +1885,32 @@ impl Session {
             items.push(DeveloperInstructions::new(developer_instructions.to_string()).into());
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
-        let collaboration_mode = {
+        let (collaboration_mode, base_instructions) = {
             let state = self.state.lock().await;
-            state.session_configuration.collaboration_mode.clone()
+            (
+                state.session_configuration.collaboration_mode.clone(),
+                state.session_configuration.base_instructions.clone(),
+            )
         };
         if let Some(collab_instructions) =
             DeveloperInstructions::from_collaboration_mode(&collaboration_mode)
         {
             items.push(collab_instructions.into());
+        }
+        if self.features.enabled(Feature::Personality)
+            && let Some(personality) = turn_context.personality
+        {
+            let model_info = turn_context.client.get_model_info();
+            let has_baked_personality = model_info.supports_personality()
+                && base_instructions == model_info.get_model_instructions(Some(personality));
+            if !has_baked_personality
+                && let Some(personality_message) =
+                    Self::personality_message_for(&model_info, personality)
+            {
+                items.push(
+                    DeveloperInstructions::personality_spec_message(personality_message).into(),
+                );
+            }
         }
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
             items.push(
@@ -1934,6 +2018,16 @@ impl Session {
     {
         let mut state = self.state.lock().await;
         state.record_mcp_dependency_prompted(names);
+    }
+
+    pub async fn dependency_env(&self) -> HashMap<String, String> {
+        let state = self.state.lock().await;
+        state.dependency_env()
+    }
+
+    pub async fn set_dependency_env(&self, values: HashMap<String, String>) {
+        let mut state = self.state.lock().await;
+        state.set_dependency_env(values);
     }
 
     pub(crate) async fn set_server_reasoning_included(&self, included: bool) {
@@ -2190,7 +2284,7 @@ impl Session {
         let config = self.get_config().await;
         let mcp_servers = with_codex_apps_mcp(
             mcp_servers,
-            self.features.enabled(Feature::Connectors),
+            self.features.enabled(Feature::Apps),
             auth.as_ref(),
             config.as_ref(),
         );
@@ -2382,6 +2476,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::ThreadRollback { num_turns } => {
                 handlers::thread_rollback(&sess, sub.id.clone(), num_turns).await;
             }
+            Op::SetThreadName { name } => {
+                handlers::set_thread_name(&sess, sub.id.clone(), name).await;
+            }
             Op::RunUserShellCommand { command } => {
                 handlers::run_user_shell_command(
                     &sess,
@@ -2425,6 +2522,7 @@ mod handlers {
     use crate::mcp::collect_mcp_snapshot_from_manager;
     use crate::mcp::effective_mcp_servers;
     use crate::review_prompts::resolve_review_request;
+    use crate::rollout::session_index;
     use crate::tasks::CompactTask;
     use crate::tasks::RegularTask;
     use crate::tasks::UndoTask;
@@ -2441,6 +2539,7 @@ mod handlers {
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
     use codex_protocol::protocol::SkillsListEntry;
+    use codex_protocol::protocol::ThreadNameUpdatedEvent;
     use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::WarningEvent;
@@ -2894,6 +2993,72 @@ mod handlers {
         .await;
     }
 
+    /// Persists the thread name in the session index, updates in-memory state, and emits
+    /// a `ThreadNameUpdated` event on success.
+    ///
+    /// This appends the name to `CODEX_HOME/sessions_index.jsonl` via `session_index::append_thread_name` for the
+    /// current `thread_id`, then updates `SessionConfiguration::thread_name`.
+    ///
+    /// Returns an error event if the name is empty or session persistence is disabled.
+    pub async fn set_thread_name(sess: &Arc<Session>, sub_id: String, name: String) {
+        let Some(name) = crate::util::normalize_thread_name(&name) else {
+            let event = Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: "Thread name cannot be empty.".to_string(),
+                    codex_error_info: Some(CodexErrorInfo::BadRequest),
+                }),
+            };
+            sess.send_event_raw(event).await;
+            return;
+        };
+
+        let persistence_enabled = {
+            let rollout = sess.services.rollout.lock().await;
+            rollout.is_some()
+        };
+        if !persistence_enabled {
+            let event = Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: "Session persistence is disabled; cannot rename thread.".to_string(),
+                    codex_error_info: Some(CodexErrorInfo::Other),
+                }),
+            };
+            sess.send_event_raw(event).await;
+            return;
+        };
+
+        let codex_home = sess.codex_home().await;
+        if let Err(e) =
+            session_index::append_thread_name(&codex_home, sess.conversation_id, &name).await
+        {
+            let event = Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: format!("Failed to set thread name: {e}"),
+                    codex_error_info: Some(CodexErrorInfo::Other),
+                }),
+            };
+            sess.send_event_raw(event).await;
+            return;
+        }
+
+        {
+            let mut state = sess.state.lock().await;
+            state.session_configuration.thread_name = Some(name.clone());
+        }
+
+        sess.send_event_raw(Event {
+            id: sub_id,
+            msg: EventMsg::ThreadNameUpdated(ThreadNameUpdatedEvent {
+                thread_id: sess.conversation_id,
+                thread_name: Some(name),
+            }),
+        })
+        .await;
+    }
+
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
         sess.services
@@ -3030,6 +3195,7 @@ async fn spawn_review_thread(
         per_turn_config.model_reasoning_summary,
         sess.conversation_id,
         parent_turn_context.client.get_session_source(),
+        parent_turn_context.client.transport_manager(),
     );
 
     let review_turn_context = TurnContext {
@@ -3040,6 +3206,7 @@ async fn spawn_review_thread(
         developer_instructions: None,
         user_instructions: None,
         compact_prompt: parent_turn_context.compact_prompt.clone(),
+        collaboration_mode_kind: parent_turn_context.collaboration_mode_kind,
         personality: parent_turn_context.personality,
         approval_policy: parent_turn_context.approval_policy,
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
@@ -3152,13 +3319,14 @@ pub(crate) async fn run_turn(
     let model_info = turn_context.client.get_model_info();
     let auto_compact_limit = model_info.auto_compact_token_limit().unwrap_or(i64::MAX);
     let total_usage_tokens = sess.get_total_token_usage().await;
+    let event = EventMsg::TurnStarted(TurnStartedEvent {
+        model_context_window: turn_context.client.get_model_context_window(),
+        collaboration_mode_kind: turn_context.collaboration_mode_kind,
+    });
+    sess.send_event(&turn_context, event).await;
     if total_usage_tokens >= auto_compact_limit {
         run_auto_compact(&sess, &turn_context).await;
     }
-    let event = EventMsg::TurnStarted(TurnStartedEvent {
-        model_context_window: turn_context.client.get_model_context_window(),
-    });
-    sess.send_event(&turn_context, event).await;
 
     let skills_outcome = Some(
         sess.services
@@ -3167,9 +3335,47 @@ pub(crate) async fn run_turn(
             .await,
     );
 
+    let (skill_name_counts, skill_name_counts_lower) = skills_outcome.as_ref().map_or_else(
+        || (HashMap::new(), HashMap::new()),
+        |outcome| build_skill_name_counts(&outcome.skills, &outcome.disabled_paths),
+    );
+    let connector_slug_counts = if turn_context.client.config().features.enabled(Feature::Apps) {
+        let mcp_tools = match sess
+            .services
+            .mcp_connection_manager
+            .read()
+            .await
+            .list_all_tools()
+            .or_cancel(&cancellation_token)
+            .await
+        {
+            Ok(mcp_tools) => mcp_tools,
+            Err(_) => return None,
+        };
+        let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
+        build_connector_slug_counts(&connectors)
+    } else {
+        HashMap::new()
+    };
     let mentioned_skills = skills_outcome.as_ref().map_or_else(Vec::new, |outcome| {
-        collect_explicit_skill_mentions(&input, &outcome.skills, &outcome.disabled_paths)
+        collect_explicit_skill_mentions(
+            &input,
+            &outcome.skills,
+            &outcome.disabled_paths,
+            &skill_name_counts,
+            &connector_slug_counts,
+        )
     });
+    let explicit_app_paths = collect_explicit_app_paths(&input);
+
+    let config = turn_context.client.config();
+    if config
+        .features
+        .enabled(Feature::SkillEnvVarDependencyPrompt)
+    {
+        let env_var_dependencies = collect_env_var_dependencies(&mentioned_skills);
+        resolve_skill_dependencies_for_turn(&sess, &turn_context, &env_var_dependencies).await;
+    }
 
     maybe_prompt_and_install_mcp_dependencies(
         sess.as_ref(),
@@ -3253,12 +3459,17 @@ pub(crate) async fn run_turn(
             })
             .map(|user_message| user_message.message())
             .collect::<Vec<String>>();
+        let tool_selection = SamplingRequestToolSelection {
+            explicit_app_paths: &explicit_app_paths,
+            skill_name_counts_lower: &skill_name_counts_lower,
+        };
         match run_sampling_request(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
             Arc::clone(&turn_diff_tracker),
             &mut client_session,
             sampling_request_input,
+            tool_selection,
             cancellation_token.child_token(),
         )
         .await
@@ -3333,40 +3544,79 @@ async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) 
 }
 
 fn filter_connectors_for_input(
-    connectors: Vec<connectors::ConnectorInfo>,
+    connectors: Vec<connectors::AppInfo>,
     input: &[ResponseItem],
-) -> Vec<connectors::ConnectorInfo> {
+    explicit_app_paths: &[String],
+    skill_name_counts_lower: &HashMap<String, usize>,
+) -> Vec<connectors::AppInfo> {
     let user_messages = collect_user_messages(input);
-    if user_messages.is_empty() {
+    if user_messages.is_empty() && explicit_app_paths.is_empty() {
         return Vec::new();
+    }
+
+    let mentions = collect_tool_mentions_from_messages(&user_messages);
+    let mention_names_lower = mentions
+        .plain_names
+        .iter()
+        .map(|name| name.to_ascii_lowercase())
+        .collect::<HashSet<String>>();
+
+    let connector_slug_counts = build_connector_slug_counts(&connectors);
+    let mut allowed_connector_ids: HashSet<String> = HashSet::new();
+    for path in explicit_app_paths
+        .iter()
+        .chain(mentions.paths.iter())
+        .filter(|path| tool_kind_for_path(path) == ToolMentionKind::App)
+    {
+        if let Some(connector_id) = app_id_from_path(path) {
+            allowed_connector_ids.insert(connector_id.to_string());
+        }
     }
 
     connectors
         .into_iter()
-        .filter(|connector| connector_inserted_in_messages(connector, &user_messages))
+        .filter(|connector| {
+            connector_inserted_in_messages(
+                connector,
+                &mention_names_lower,
+                &allowed_connector_ids,
+                &connector_slug_counts,
+                skill_name_counts_lower,
+            )
+        })
         .collect()
 }
 
 fn connector_inserted_in_messages(
-    connector: &connectors::ConnectorInfo,
-    user_messages: &[String],
+    connector: &connectors::AppInfo,
+    mention_names_lower: &HashSet<String>,
+    allowed_connector_ids: &HashSet<String>,
+    connector_slug_counts: &HashMap<String, usize>,
+    skill_name_counts_lower: &HashMap<String, usize>,
 ) -> bool {
-    let label = connectors::connector_display_label(connector);
-    let needle = label.to_lowercase();
-    let legacy = format!("{label} connector").to_lowercase();
-    user_messages.iter().any(|message| {
-        let message = message.to_lowercase();
-        message.contains(&needle) || message.contains(&legacy)
-    })
+    if allowed_connector_ids.contains(&connector.id) {
+        return true;
+    }
+
+    let mention_slug = connectors::connector_mention_slug(connector);
+    let connector_count = connector_slug_counts
+        .get(&mention_slug)
+        .copied()
+        .unwrap_or(0);
+    let skill_count = skill_name_counts_lower
+        .get(&mention_slug)
+        .copied()
+        .unwrap_or(0);
+    connector_count == 1 && skill_count == 0 && mention_names_lower.contains(&mention_slug)
 }
 
 fn filter_codex_apps_mcp_tools(
     mut mcp_tools: HashMap<String, crate::mcp_connection_manager::ToolInfo>,
-    connectors: &[connectors::ConnectorInfo],
+    connectors: &[connectors::AppInfo],
 ) -> HashMap<String, crate::mcp_connection_manager::ToolInfo> {
     let allowed: HashSet<&str> = connectors
         .iter()
-        .map(|connector| connector.connector_id.as_str())
+        .map(|connector| connector.id.as_str())
         .collect();
 
     mcp_tools.retain(|_, tool| {
@@ -3386,6 +3636,11 @@ fn codex_apps_connector_id(tool: &crate::mcp_connection_manager::ToolInfo) -> Op
     tool.connector_id.as_deref()
 }
 
+struct SamplingRequestToolSelection<'a> {
+    explicit_app_paths: &'a [String],
+    skill_name_counts_lower: &'a HashMap<String, usize>,
+}
+
 #[instrument(level = "trace",
     skip_all,
     fields(
@@ -3400,6 +3655,7 @@ async fn run_sampling_request(
     turn_diff_tracker: SharedTurnDiffTracker,
     client_session: &mut ModelClientSession,
     input: Vec<ResponseItem>,
+    tool_selection: SamplingRequestToolSelection<'_>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
     let mut mcp_tools = sess
@@ -3410,14 +3666,14 @@ async fn run_sampling_request(
         .list_all_tools()
         .or_cancel(&cancellation_token)
         .await?;
-    let connectors_for_tools = if turn_context
-        .client
-        .config()
-        .features
-        .enabled(Feature::Connectors)
-    {
+    let connectors_for_tools = if turn_context.client.config().features.enabled(Feature::Apps) {
         let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
-        Some(filter_connectors_for_input(connectors, &input))
+        Some(filter_connectors_for_input(
+            connectors,
+            &input,
+            tool_selection.explicit_app_paths,
+            tool_selection.skill_name_counts_lower,
+        ))
     } else {
         None
     };
@@ -3464,7 +3720,9 @@ async fn run_sampling_request(
         )
         .await
         {
-            Ok(output) => return Ok(output),
+            Ok(output) => {
+                return Ok(output);
+            }
             Err(CodexErr::ContextWindowExceeded) => {
                 sess.set_total_tokens_full(&turn_context).await;
                 return Err(CodexErr::ContextWindowExceeded);
@@ -3485,6 +3743,17 @@ async fn run_sampling_request(
 
         // Use the configured provider-specific stream retry budget.
         let max_retries = turn_context.client.get_provider().stream_max_retries();
+        if retries >= max_retries && client_session.try_switch_fallback_transport() {
+            sess.send_event(
+                &turn_context,
+                EventMsg::Warning(WarningEvent {
+                    message: format!("Falling back from WebSockets to HTTPS transport. {err:#}"),
+                }),
+            )
+            .await;
+            retries = 0;
+            continue;
+        }
         if retries < max_retries {
             retries += 1;
             let delay = match &err {
@@ -3518,6 +3787,381 @@ async fn run_sampling_request(
 struct SamplingRequestResult {
     needs_follow_up: bool,
     last_agent_message: Option<String>,
+}
+
+/// Ephemeral per-response state for streaming a single proposed plan.
+/// This is intentionally not persisted or stored in session/state since it
+/// only exists while a response is actively streaming. The final plan text
+/// is extracted from the completed assistant message.
+/// Tracks a single proposed plan item across a streaming response.
+struct ProposedPlanItemState {
+    item_id: String,
+    started: bool,
+    completed: bool,
+}
+
+/// Per-item plan parsers so we can buffer text while detecting `<proposed_plan>`
+/// tags without ever mixing buffered lines across item ids.
+struct PlanParsers {
+    assistant: HashMap<String, ProposedPlanParser>,
+}
+
+impl PlanParsers {
+    fn new() -> Self {
+        Self {
+            assistant: HashMap::new(),
+        }
+    }
+
+    fn assistant_parser_mut(&mut self, item_id: &str) -> &mut ProposedPlanParser {
+        self.assistant
+            .entry(item_id.to_string())
+            .or_insert_with(ProposedPlanParser::new)
+    }
+
+    fn take_assistant_parser(&mut self, item_id: &str) -> Option<ProposedPlanParser> {
+        self.assistant.remove(item_id)
+    }
+
+    fn drain_assistant_parsers(&mut self) -> Vec<(String, ProposedPlanParser)> {
+        self.assistant.drain().collect()
+    }
+}
+
+/// Aggregated state used only while streaming a plan-mode response.
+/// Includes per-item parsers, deferred agent message bookkeeping, and the plan item lifecycle.
+struct PlanModeStreamState {
+    /// Per-item parsers for assistant streams in plan mode.
+    plan_parsers: PlanParsers,
+    /// Agent message items started by the model but deferred until we see non-plan text.
+    pending_agent_message_items: HashMap<String, TurnItem>,
+    /// Agent message items whose start notification has been emitted.
+    started_agent_message_items: HashSet<String>,
+    /// Leading whitespace buffered until we see non-whitespace text for an item.
+    leading_whitespace_by_item: HashMap<String, String>,
+    /// Tracks plan item lifecycle while streaming plan output.
+    plan_item_state: ProposedPlanItemState,
+}
+
+impl PlanModeStreamState {
+    fn new(turn_id: &str) -> Self {
+        Self {
+            plan_parsers: PlanParsers::new(),
+            pending_agent_message_items: HashMap::new(),
+            started_agent_message_items: HashSet::new(),
+            leading_whitespace_by_item: HashMap::new(),
+            plan_item_state: ProposedPlanItemState::new(turn_id),
+        }
+    }
+}
+
+impl ProposedPlanItemState {
+    fn new(turn_id: &str) -> Self {
+        Self {
+            item_id: format!("{turn_id}-plan"),
+            started: false,
+            completed: false,
+        }
+    }
+
+    async fn start(&mut self, sess: &Session, turn_context: &TurnContext) {
+        if self.started || self.completed {
+            return;
+        }
+        self.started = true;
+        let item = TurnItem::Plan(PlanItem {
+            id: self.item_id.clone(),
+            text: String::new(),
+        });
+        sess.emit_turn_item_started(turn_context, &item).await;
+    }
+
+    async fn push_delta(&mut self, sess: &Session, turn_context: &TurnContext, delta: &str) {
+        if self.completed {
+            return;
+        }
+        if delta.is_empty() {
+            return;
+        }
+        let event = PlanDeltaEvent {
+            thread_id: sess.conversation_id.to_string(),
+            turn_id: turn_context.sub_id.clone(),
+            item_id: self.item_id.clone(),
+            delta: delta.to_string(),
+        };
+        sess.send_event(turn_context, EventMsg::PlanDelta(event))
+            .await;
+    }
+
+    async fn complete_with_text(
+        &mut self,
+        sess: &Session,
+        turn_context: &TurnContext,
+        text: String,
+    ) {
+        if self.completed || !self.started {
+            return;
+        }
+        self.completed = true;
+        let item = TurnItem::Plan(PlanItem {
+            id: self.item_id.clone(),
+            text,
+        });
+        sess.emit_turn_item_completed(turn_context, item).await;
+    }
+}
+
+/// In plan mode we defer agent message starts until the parser emits non-plan
+/// text. The parser buffers each line until it can rule out a tag prefix, so
+/// plan-only outputs never show up as empty assistant messages.
+async fn maybe_emit_pending_agent_message_start(
+    sess: &Session,
+    turn_context: &TurnContext,
+    state: &mut PlanModeStreamState,
+    item_id: &str,
+) {
+    if state.started_agent_message_items.contains(item_id) {
+        return;
+    }
+    if let Some(item) = state.pending_agent_message_items.remove(item_id) {
+        sess.emit_turn_item_started(turn_context, &item).await;
+        state
+            .started_agent_message_items
+            .insert(item_id.to_string());
+    }
+}
+
+/// Agent messages are text-only today; concatenate all text entries.
+fn agent_message_text(item: &codex_protocol::items::AgentMessageItem) -> String {
+    item.content
+        .iter()
+        .map(|entry| match entry {
+            codex_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
+        })
+        .collect()
+}
+
+/// Split the stream into normal assistant text vs. proposed plan content.
+/// Normal text becomes AgentMessage deltas; plan content becomes PlanDelta +
+/// TurnItem::Plan.
+async fn handle_plan_segments(
+    sess: &Session,
+    turn_context: &TurnContext,
+    state: &mut PlanModeStreamState,
+    item_id: &str,
+    segments: Vec<ProposedPlanSegment>,
+) {
+    for segment in segments {
+        match segment {
+            ProposedPlanSegment::Normal(delta) => {
+                if delta.is_empty() {
+                    continue;
+                }
+                let has_non_whitespace = delta.chars().any(|ch| !ch.is_whitespace());
+                if !has_non_whitespace && !state.started_agent_message_items.contains(item_id) {
+                    let entry = state
+                        .leading_whitespace_by_item
+                        .entry(item_id.to_string())
+                        .or_default();
+                    entry.push_str(&delta);
+                    continue;
+                }
+                let delta = if !state.started_agent_message_items.contains(item_id) {
+                    if let Some(prefix) = state.leading_whitespace_by_item.remove(item_id) {
+                        format!("{prefix}{delta}")
+                    } else {
+                        delta
+                    }
+                } else {
+                    delta
+                };
+                maybe_emit_pending_agent_message_start(sess, turn_context, state, item_id).await;
+
+                let event = AgentMessageContentDeltaEvent {
+                    thread_id: sess.conversation_id.to_string(),
+                    turn_id: turn_context.sub_id.clone(),
+                    item_id: item_id.to_string(),
+                    delta,
+                };
+                sess.send_event(turn_context, EventMsg::AgentMessageContentDelta(event))
+                    .await;
+            }
+            ProposedPlanSegment::ProposedPlanStart => {
+                if !state.plan_item_state.completed {
+                    state.plan_item_state.start(sess, turn_context).await;
+                }
+            }
+            ProposedPlanSegment::ProposedPlanDelta(delta) => {
+                if !state.plan_item_state.completed {
+                    if !state.plan_item_state.started {
+                        state.plan_item_state.start(sess, turn_context).await;
+                    }
+                    state
+                        .plan_item_state
+                        .push_delta(sess, turn_context, &delta)
+                        .await;
+                }
+            }
+            ProposedPlanSegment::ProposedPlanEnd => {}
+        }
+    }
+}
+
+/// Flush any buffered proposed-plan segments when a specific assistant message ends.
+async fn flush_proposed_plan_segments_for_item(
+    sess: &Session,
+    turn_context: &TurnContext,
+    state: &mut PlanModeStreamState,
+    item_id: &str,
+) {
+    let Some(mut parser) = state.plan_parsers.take_assistant_parser(item_id) else {
+        return;
+    };
+    let segments = parser.finish();
+    if segments.is_empty() {
+        return;
+    }
+    handle_plan_segments(sess, turn_context, state, item_id, segments).await;
+}
+
+/// Flush any remaining assistant plan parsers when the response completes.
+async fn flush_proposed_plan_segments_all(
+    sess: &Session,
+    turn_context: &TurnContext,
+    state: &mut PlanModeStreamState,
+) {
+    for (item_id, mut parser) in state.plan_parsers.drain_assistant_parsers() {
+        let segments = parser.finish();
+        if segments.is_empty() {
+            continue;
+        }
+        handle_plan_segments(sess, turn_context, state, &item_id, segments).await;
+    }
+}
+
+/// Emit completion for plan items by parsing the finalized assistant message.
+async fn maybe_complete_plan_item_from_message(
+    sess: &Session,
+    turn_context: &TurnContext,
+    state: &mut PlanModeStreamState,
+    item: &ResponseItem,
+) {
+    if let ResponseItem::Message { role, content, .. } = item
+        && role == "assistant"
+    {
+        let mut text = String::new();
+        for entry in content {
+            if let ContentItem::OutputText { text: chunk } = entry {
+                text.push_str(chunk);
+            }
+        }
+        if let Some(plan_text) = extract_proposed_plan_text(&text) {
+            if !state.plan_item_state.started {
+                state.plan_item_state.start(sess, turn_context).await;
+            }
+            state
+                .plan_item_state
+                .complete_with_text(sess, turn_context, plan_text)
+                .await;
+        }
+    }
+}
+
+/// Emit a completed agent message in plan mode, respecting deferred starts.
+async fn emit_agent_message_in_plan_mode(
+    sess: &Session,
+    turn_context: &TurnContext,
+    agent_message: codex_protocol::items::AgentMessageItem,
+    state: &mut PlanModeStreamState,
+) {
+    let agent_message_id = agent_message.id.clone();
+    let text = agent_message_text(&agent_message);
+    if text.trim().is_empty() {
+        state.pending_agent_message_items.remove(&agent_message_id);
+        state.started_agent_message_items.remove(&agent_message_id);
+        return;
+    }
+
+    maybe_emit_pending_agent_message_start(sess, turn_context, state, &agent_message_id).await;
+
+    if !state
+        .started_agent_message_items
+        .contains(&agent_message_id)
+    {
+        let start_item = state
+            .pending_agent_message_items
+            .remove(&agent_message_id)
+            .unwrap_or_else(|| {
+                TurnItem::AgentMessage(codex_protocol::items::AgentMessageItem {
+                    id: agent_message_id.clone(),
+                    content: Vec::new(),
+                })
+            });
+        sess.emit_turn_item_started(turn_context, &start_item).await;
+        state
+            .started_agent_message_items
+            .insert(agent_message_id.clone());
+    }
+
+    sess.emit_turn_item_completed(turn_context, TurnItem::AgentMessage(agent_message))
+        .await;
+    state.started_agent_message_items.remove(&agent_message_id);
+}
+
+/// Emit completion for a plan-mode turn item, handling agent messages specially.
+async fn emit_turn_item_in_plan_mode(
+    sess: &Session,
+    turn_context: &TurnContext,
+    turn_item: TurnItem,
+    previously_active_item: Option<&TurnItem>,
+    state: &mut PlanModeStreamState,
+) {
+    match turn_item {
+        TurnItem::AgentMessage(agent_message) => {
+            emit_agent_message_in_plan_mode(sess, turn_context, agent_message, state).await;
+        }
+        _ => {
+            if previously_active_item.is_none() {
+                sess.emit_turn_item_started(turn_context, &turn_item).await;
+            }
+            sess.emit_turn_item_completed(turn_context, turn_item).await;
+        }
+    }
+}
+
+/// Handle a completed assistant response item in plan mode, returning true if handled.
+async fn handle_assistant_item_done_in_plan_mode(
+    sess: &Session,
+    turn_context: &TurnContext,
+    item: &ResponseItem,
+    state: &mut PlanModeStreamState,
+    previously_active_item: Option<&TurnItem>,
+    last_agent_message: &mut Option<String>,
+) -> bool {
+    if let ResponseItem::Message { role, .. } = item
+        && role == "assistant"
+    {
+        maybe_complete_plan_item_from_message(sess, turn_context, state, item).await;
+
+        if let Some(turn_item) = handle_non_tool_response_item(item, true).await {
+            emit_turn_item_in_plan_mode(
+                sess,
+                turn_context,
+                turn_item,
+                previously_active_item,
+                state,
+            )
+            .await;
+        }
+
+        sess.record_conversation_items(turn_context, std::slice::from_ref(item))
+            .await;
+        if let Some(agent_message) = last_assistant_message_from_item(item, true) {
+            *last_agent_message = Some(agent_message);
+        }
+        return true;
+    }
+    false
 }
 
 async fn drain_in_flight(
@@ -3556,10 +4200,6 @@ async fn try_run_sampling_request(
     prompt: &Prompt,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
-    // TODO: If we need to guarantee the persisted mode always matches the prompt used for this
-    // turn, capture it in TurnContext at creation time. Using SessionConfiguration here avoids
-    // duplicating model settings on TurnContext, but a later Op could update the session config
-    // before this write occurs.
     let collaboration_mode = sess.current_collaboration_mode().await;
     let rollout_item = RolloutItem::TurnContext(TurnContextItem {
         cwd: turn_context.cwd.clone(),
@@ -3604,6 +4244,8 @@ async fn try_run_sampling_request(
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
     let mut should_emit_turn_diff = false;
+    let plan_mode = turn_context.collaboration_mode_kind == ModeKind::Plan;
+    let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
     let receiving_span = trace_span!("receiving_stream");
     let outcome: CodexResult<SamplingRequestResult> = loop {
         let handle_responses = trace_span!(
@@ -3642,6 +4284,33 @@ async fn try_run_sampling_request(
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
                 let previously_active_item = active_item.take();
+                if let Some(state) = plan_mode_state.as_mut() {
+                    if let Some(previous) = previously_active_item.as_ref() {
+                        let item_id = previous.id();
+                        if matches!(previous, TurnItem::AgentMessage(_)) {
+                            flush_proposed_plan_segments_for_item(
+                                &sess,
+                                &turn_context,
+                                state,
+                                &item_id,
+                            )
+                            .await;
+                        }
+                    }
+                    if handle_assistant_item_done_in_plan_mode(
+                        &sess,
+                        &turn_context,
+                        &item,
+                        state,
+                        previously_active_item.as_ref(),
+                        &mut last_agent_message,
+                    )
+                    .await
+                    {
+                        continue;
+                    }
+                }
+
                 let mut ctx = HandleOutputCtx {
                     sess: sess.clone(),
                     turn_context: turn_context.clone(),
@@ -3661,8 +4330,17 @@ async fn try_run_sampling_request(
                 needs_follow_up |= output_result.needs_follow_up;
             }
             ResponseEvent::OutputItemAdded(item) => {
-                if let Some(turn_item) = handle_non_tool_response_item(&item).await {
-                    sess.emit_turn_item_started(&turn_context, &turn_item).await;
+                if let Some(turn_item) = handle_non_tool_response_item(&item, plan_mode).await {
+                    if let Some(state) = plan_mode_state.as_mut()
+                        && matches!(turn_item, TurnItem::AgentMessage(_))
+                    {
+                        let item_id = turn_item.id();
+                        state
+                            .pending_agent_message_items
+                            .insert(item_id, turn_item.clone());
+                    } else {
+                        sess.emit_turn_item_started(&turn_context, &turn_item).await;
+                    }
                     active_item = Some(turn_item);
                 }
             }
@@ -3686,6 +4364,9 @@ async fn try_run_sampling_request(
                 response_id: _,
                 token_usage,
             } => {
+                if let Some(state) = plan_mode_state.as_mut() {
+                    flush_proposed_plan_segments_all(&sess, &turn_context, state).await;
+                }
                 sess.update_token_usage_info(&turn_context, token_usage.as_ref())
                     .await;
                 should_emit_turn_diff = true;
@@ -3701,14 +4382,25 @@ async fn try_run_sampling_request(
                 // In review child threads, suppress assistant text deltas; the
                 // UI will show a selection popup from the final ReviewOutput.
                 if let Some(active) = active_item.as_ref() {
-                    let event = AgentMessageContentDeltaEvent {
-                        thread_id: sess.conversation_id.to_string(),
-                        turn_id: turn_context.sub_id.clone(),
-                        item_id: active.id(),
-                        delta: delta.clone(),
-                    };
-                    sess.send_event(&turn_context, EventMsg::AgentMessageContentDelta(event))
-                        .await;
+                    let item_id = active.id();
+                    if let Some(state) = plan_mode_state.as_mut()
+                        && matches!(active, TurnItem::AgentMessage(_))
+                    {
+                        let segments = state
+                            .plan_parsers
+                            .assistant_parser_mut(&item_id)
+                            .parse(&delta);
+                        handle_plan_segments(&sess, &turn_context, state, &item_id, segments).await;
+                    } else {
+                        let event = AgentMessageContentDeltaEvent {
+                            thread_id: sess.conversation_id.to_string(),
+                            turn_id: turn_context.sub_id.clone(),
+                            item_id,
+                            delta,
+                        };
+                        sess.send_event(&turn_context, EventMsg::AgentMessageContentDelta(event))
+                            .await;
+                    }
                 } else {
                     error_or_panic("OutputTextDelta without active item".to_string());
                 }
@@ -3841,6 +4533,7 @@ mod tests {
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::registry::ToolHandler;
     use crate::turn_diff_tracker::TurnDiffTracker;
+    use codex_app_server_protocol::AppInfo;
     use codex_app_server_protocol::AuthMode;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
@@ -3860,6 +4553,30 @@ mod tests {
     struct InstructionsTestCase {
         slug: &'static str,
         expects_apply_patch_instructions: bool,
+    }
+
+    fn user_message(text: &str) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: text.to_string(),
+            }],
+            end_turn: None,
+        }
+    }
+
+    fn make_connector(id: &str, name: &str) -> AppInfo {
+        AppInfo {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: None,
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            install_url: None,
+            is_accessible: true,
+        }
     }
 
     #[tokio::test]
@@ -3926,6 +4643,43 @@ mod tests {
             let base_instructions = session.get_base_instructions().await;
             assert_eq!(base_instructions.text, model_info.base_instructions);
         }
+    }
+
+    #[test]
+    fn filter_connectors_for_input_skips_duplicate_slug_mentions() {
+        let connectors = vec![
+            make_connector("one", "Foo Bar"),
+            make_connector("two", "Foo-Bar"),
+        ];
+        let input = vec![user_message("use $foo-bar")];
+        let explicit_app_paths = Vec::new();
+        let skill_name_counts_lower = HashMap::new();
+
+        let selected = filter_connectors_for_input(
+            connectors,
+            &input,
+            &explicit_app_paths,
+            &skill_name_counts_lower,
+        );
+
+        assert_eq!(selected, Vec::new());
+    }
+
+    #[test]
+    fn filter_connectors_for_input_skips_when_skill_name_conflicts() {
+        let connectors = vec![make_connector("one", "Todoist")];
+        let input = vec![user_message("use $todoist")];
+        let explicit_app_paths = Vec::new();
+        let skill_name_counts_lower = HashMap::from([("todoist".to_string(), 1)]);
+
+        let selected = filter_connectors_for_input(
+            connectors,
+            &input,
+            &explicit_app_paths,
+            &skill_name_counts_lower,
+        );
+
+        assert_eq!(selected, Vec::new());
     }
 
     #[tokio::test]
@@ -4236,6 +4990,8 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
+            codex_home: config.codex_home.clone(),
+            thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
@@ -4317,6 +5073,8 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
+            codex_home: config.codex_home.clone(),
+            thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
@@ -4533,7 +5291,7 @@ mod tests {
             model_info.slug.as_str(),
             None,
             Some("test@test.com".to_string()),
-            Some(AuthMode::ChatGPT),
+            Some(AuthMode::Chatgpt),
             false,
             "test".to_string(),
             session_source,
@@ -4582,6 +5340,8 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
+            codex_home: config.codex_home.clone(),
+            thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
@@ -4618,6 +5378,7 @@ mod tests {
             skills_manager,
             agent_control,
             state_db: None,
+            transport_manager: TransportManager::new(),
         };
 
         let turn_context = Session::make_turn_context(
@@ -4629,6 +5390,7 @@ mod tests {
             model_info,
             conversation_id,
             "turn_id".to_string(),
+            services.transport_manager.clone(),
         );
 
         let session = Session {
@@ -4694,6 +5456,8 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
+            codex_home: config.codex_home.clone(),
+            thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
@@ -4730,6 +5494,7 @@ mod tests {
             skills_manager,
             agent_control,
             state_db: None,
+            transport_manager: TransportManager::new(),
         };
 
         let turn_context = Arc::new(Session::make_turn_context(
@@ -4741,6 +5506,7 @@ mod tests {
             model_info,
             conversation_id,
             "turn_id".to_string(),
+            services.transport_manager.clone(),
         ));
 
         let session = Arc::new(Session {

@@ -6,16 +6,12 @@
 //! on every keystroke, and drops the session when the query becomes empty.
 
 use codex_file_search as file_search;
-use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
-
-const MAX_FILE_SEARCH_RESULTS: NonZeroUsize = NonZeroUsize::new(20).unwrap();
-const NUM_FILE_SEARCH_THREADS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 
 pub(crate) struct FileSearchManager {
     state: Arc<Mutex<SearchState>>,
@@ -40,6 +36,17 @@ impl FileSearchManager {
             search_dir,
             app_tx: tx,
         }
+    }
+
+    /// Updates the directory used for file searches.
+    /// This should be called when the session's CWD changes on resume.
+    /// Drops the current session so it will be recreated with the new directory on next query.
+    pub fn update_search_dir(&mut self, new_dir: PathBuf) {
+        self.search_dir = new_dir;
+        #[expect(clippy::unwrap_used)]
+        let mut st = self.state.lock().unwrap();
+        st.session.take();
+        st.latest_query.clear();
     }
 
     /// Call whenever the user edits the `@` token.
@@ -75,12 +82,9 @@ impl FileSearchManager {
         });
         let session = file_search::create_session(
             &self.search_dir,
-            file_search::SessionOptions {
-                limit: MAX_FILE_SEARCH_RESULTS,
-                exclude: Vec::new(),
-                threads: NUM_FILE_SEARCH_THREADS,
+            file_search::FileSearchOptions {
                 compute_indices: true,
-                respect_gitignore: true,
+                ..Default::default()
             },
             reporter,
         );

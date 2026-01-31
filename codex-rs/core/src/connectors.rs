@@ -3,9 +3,8 @@ use std::env;
 use std::path::PathBuf;
 
 use async_channel::unbounded;
+pub use codex_app_server_protocol::AppInfo;
 use codex_protocol::protocol::SandboxPolicy;
-use serde::Deserialize;
-use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
 use crate::AuthManager;
@@ -15,28 +14,13 @@ use crate::features::Feature;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp::with_codex_apps_mcp;
+use crate::mcp_connection_manager::DEFAULT_STARTUP_TIMEOUT;
 use crate::mcp_connection_manager::McpConnectionManager;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConnectorInfo {
-    #[serde(rename = "id")]
-    pub connector_id: String,
-    #[serde(rename = "name")]
-    pub connector_name: String,
-    #[serde(default, rename = "description")]
-    pub connector_description: Option<String>,
-    #[serde(default, rename = "logo_url")]
-    pub logo_url: Option<String>,
-    #[serde(default, rename = "install_url")]
-    pub install_url: Option<String>,
-    #[serde(default)]
-    pub is_accessible: bool,
-}
 
 pub async fn list_accessible_connectors_from_mcp_tools(
     config: &Config,
-) -> anyhow::Result<Vec<ConnectorInfo>> {
-    if !config.features.enabled(Feature::Connectors) {
+) -> anyhow::Result<Vec<AppInfo>> {
+    if !config.features.enabled(Feature::Apps) {
         return Ok(Vec::new());
     }
 
@@ -72,6 +56,13 @@ pub async fn list_accessible_connectors_from_mcp_tools(
         )
         .await;
 
+    if let Some(cfg) = mcp_servers.get(CODEX_APPS_MCP_SERVER_NAME) {
+        let timeout = cfg.startup_timeout_sec.unwrap_or(DEFAULT_STARTUP_TIMEOUT);
+        mcp_connection_manager
+            .wait_for_server_ready(CODEX_APPS_MCP_SERVER_NAME, timeout)
+            .await;
+    }
+
     let tools = mcp_connection_manager.list_all_tools().await;
     cancel_token.cancel();
 
@@ -86,13 +77,17 @@ fn auth_manager_from_config(config: &Config) -> std::sync::Arc<AuthManager> {
     )
 }
 
-pub fn connector_display_label(connector: &ConnectorInfo) -> String {
-    format_connector_label(&connector.connector_name, &connector.connector_id)
+pub fn connector_display_label(connector: &AppInfo) -> String {
+    format_connector_label(&connector.name, &connector.id)
+}
+
+pub fn connector_mention_slug(connector: &AppInfo) -> String {
+    connector_name_slug(&connector_display_label(connector))
 }
 
 pub(crate) fn accessible_connectors_from_mcp_tools(
     mcp_tools: &HashMap<String, crate::mcp_connection_manager::ToolInfo>,
-) -> Vec<ConnectorInfo> {
+) -> Vec<AppInfo> {
     let tools = mcp_tools.values().filter_map(|tool| {
         if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
             return None;
@@ -105,33 +100,36 @@ pub(crate) fn accessible_connectors_from_mcp_tools(
 }
 
 pub fn merge_connectors(
-    connectors: Vec<ConnectorInfo>,
-    accessible_connectors: Vec<ConnectorInfo>,
-) -> Vec<ConnectorInfo> {
-    let mut merged: HashMap<String, ConnectorInfo> = connectors
+    connectors: Vec<AppInfo>,
+    accessible_connectors: Vec<AppInfo>,
+) -> Vec<AppInfo> {
+    let mut merged: HashMap<String, AppInfo> = connectors
         .into_iter()
         .map(|mut connector| {
             connector.is_accessible = false;
-            (connector.connector_id.clone(), connector)
+            (connector.id.clone(), connector)
         })
         .collect();
 
     for mut connector in accessible_connectors {
         connector.is_accessible = true;
-        let connector_id = connector.connector_id.clone();
+        let connector_id = connector.id.clone();
         if let Some(existing) = merged.get_mut(&connector_id) {
             existing.is_accessible = true;
-            if existing.connector_name == existing.connector_id
-                && connector.connector_name != connector.connector_id
-            {
-                existing.connector_name = connector.connector_name;
+            if existing.name == existing.id && connector.name != connector.id {
+                existing.name = connector.name;
             }
-            if existing.connector_description.is_none() && connector.connector_description.is_some()
-            {
-                existing.connector_description = connector.connector_description;
+            if existing.description.is_none() && connector.description.is_some() {
+                existing.description = connector.description;
             }
             if existing.logo_url.is_none() && connector.logo_url.is_some() {
                 existing.logo_url = connector.logo_url;
+            }
+            if existing.logo_url_dark.is_none() && connector.logo_url_dark.is_some() {
+                existing.logo_url_dark = connector.logo_url_dark;
+            }
+            if existing.distribution_channel.is_none() && connector.distribution_channel.is_some() {
+                existing.distribution_channel = connector.distribution_channel;
             }
         } else {
             merged.insert(connector_id, connector);
@@ -141,23 +139,20 @@ pub fn merge_connectors(
     let mut merged = merged.into_values().collect::<Vec<_>>();
     for connector in &mut merged {
         if connector.install_url.is_none() {
-            connector.install_url = Some(connector_install_url(
-                &connector.connector_name,
-                &connector.connector_id,
-            ));
+            connector.install_url = Some(connector_install_url(&connector.name, &connector.id));
         }
     }
     merged.sort_by(|left, right| {
         right
             .is_accessible
             .cmp(&left.is_accessible)
-            .then_with(|| left.connector_name.cmp(&right.connector_name))
-            .then_with(|| left.connector_id.cmp(&right.connector_id))
+            .then_with(|| left.name.cmp(&right.name))
+            .then_with(|| left.id.cmp(&right.id))
     });
     merged
 }
 
-fn collect_accessible_connectors<I>(tools: I) -> Vec<ConnectorInfo>
+fn collect_accessible_connectors<I>(tools: I) -> Vec<AppInfo>
 where
     I: IntoIterator<Item = (String, Option<String>)>,
 {
@@ -172,14 +167,16 @@ where
             connectors.insert(connector_id, connector_name);
         }
     }
-    let mut accessible: Vec<ConnectorInfo> = connectors
+    let mut accessible: Vec<AppInfo> = connectors
         .into_iter()
-        .map(|(connector_id, connector_name)| ConnectorInfo {
-            install_url: Some(connector_install_url(&connector_name, &connector_id)),
-            connector_id,
-            connector_name,
-            connector_description: None,
+        .map(|(connector_id, connector_name)| AppInfo {
+            id: connector_id.clone(),
+            name: connector_name.clone(),
+            description: None,
             logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            install_url: Some(connector_install_url(&connector_name, &connector_id)),
             is_accessible: true,
         })
         .collect();
@@ -187,8 +184,8 @@ where
         right
             .is_accessible
             .cmp(&left.is_accessible)
-            .then_with(|| left.connector_name.cmp(&right.connector_name))
-            .then_with(|| left.connector_id.cmp(&right.connector_id))
+            .then_with(|| left.name.cmp(&right.name))
+            .then_with(|| left.id.cmp(&right.id))
     });
     accessible
 }
@@ -205,7 +202,7 @@ pub fn connector_install_url(name: &str, connector_id: &str) -> String {
     format!("https://chatgpt.com/apps/{slug}/{connector_id}")
 }
 
-fn connector_name_slug(name: &str) -> String {
+pub fn connector_name_slug(name: &str) -> String {
     let mut normalized = String::with_capacity(name.len());
     for character in name.chars() {
         if character.is_ascii_alphanumeric() {

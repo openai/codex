@@ -2,6 +2,7 @@ use super::CONFIG_TOML_FILE;
 use super::ConfigToml;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
+use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
@@ -109,6 +110,7 @@ pub struct ConfigService {
     codex_home: PathBuf,
     cli_overrides: Vec<(String, TomlValue)>,
     loader_overrides: LoaderOverrides,
+    cloud_requirements: CloudRequirementsLoader,
 }
 
 impl ConfigService {
@@ -116,11 +118,13 @@ impl ConfigService {
         codex_home: PathBuf,
         cli_overrides: Vec<(String, TomlValue)>,
         loader_overrides: LoaderOverrides,
+        cloud_requirements: CloudRequirementsLoader,
     ) -> Self {
         Self {
             codex_home,
             cli_overrides,
             loader_overrides,
+            cloud_requirements,
         }
     }
 
@@ -129,6 +133,7 @@ impl ConfigService {
             codex_home,
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
+            cloud_requirements: CloudRequirementsLoader::default(),
         }
     }
 
@@ -146,6 +151,7 @@ impl ConfigService {
                     .cli_overrides(self.cli_overrides.clone())
                     .loader_overrides(self.loader_overrides.clone())
                     .fallback_cwd(Some(cwd.to_path_buf()))
+                    .cloud_requirements(self.cloud_requirements.clone())
                     .build()
                     .await
                     .map_err(|err| {
@@ -376,6 +382,7 @@ impl ConfigService {
             cwd,
             &self.cli_overrides,
             self.loader_overrides.clone(),
+            self.cloud_requirements.clone(),
         )
         .await
     }
@@ -813,6 +820,7 @@ remote_compaction = true
                 managed_preferences_base64: None,
                 macos_managed_config_requirements_base64: None,
             },
+            CloudRequirementsLoader::default(),
         );
 
         let response = service
@@ -895,6 +903,7 @@ remote_compaction = true
                 managed_preferences_base64: None,
                 macos_managed_config_requirements_base64: None,
             },
+            CloudRequirementsLoader::default(),
         );
 
         let result = service
@@ -999,6 +1008,7 @@ remote_compaction = true
                 managed_preferences_base64: None,
                 macos_managed_config_requirements_base64: None,
             },
+            CloudRequirementsLoader::default(),
         );
 
         let error = service
@@ -1047,6 +1057,7 @@ remote_compaction = true
                 managed_preferences_base64: None,
                 macos_managed_config_requirements_base64: None,
             },
+            CloudRequirementsLoader::default(),
         );
 
         let response = service
@@ -1094,6 +1105,7 @@ remote_compaction = true
                 managed_preferences_base64: None,
                 macos_managed_config_requirements_base64: None,
             },
+            CloudRequirementsLoader::default(),
         );
 
         let result = service

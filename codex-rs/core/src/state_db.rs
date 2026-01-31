@@ -11,30 +11,28 @@ use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
-use codex_state::DB_METRIC_BACKFILL;
+use codex_state::DB_METRIC_COMPARE_ERROR;
+pub use codex_state::LogEntry;
 use codex_state::STATE_DB_FILENAME;
 use codex_state::ThreadMetadataBuilder;
 use serde_json::Value;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::info;
 use tracing::warn;
 use uuid::Uuid;
 
 /// Core-facing handle to the optional SQLite-backed state runtime.
 pub type StateDbHandle = Arc<codex_state::StateRuntime>;
 
-/// Initialize the state runtime when the `sqlite` feature flag is enabled.
-pub async fn init_if_enabled(config: &Config, otel: Option<&OtelManager>) -> Option<StateDbHandle> {
+/// Initialize the state runtime when the `sqlite` feature flag is enabled. To only be used
+/// inside `core`. The initialization should not be done anywhere else.
+pub(crate) async fn init_if_enabled(
+    config: &Config,
+    otel: Option<&OtelManager>,
+) -> Option<StateDbHandle> {
     let state_path = config.codex_home.join(STATE_DB_FILENAME);
     if !config.features.enabled(Feature::Sqlite) {
-        // We delete the file on best effort basis to maintain retro-compatibility in the future.
-        let wal_path = state_path.with_extension("sqlite-wal");
-        let shm_path = state_path.with_extension("sqlite-shm");
-        for path in [state_path.as_path(), wal_path.as_path(), shm_path.as_path()] {
-            tokio::fs::remove_file(path).await.ok();
-        }
         return None;
     }
     let existed = tokio::fs::try_exists(&state_path).await.unwrap_or(false);
@@ -58,25 +56,36 @@ pub async fn init_if_enabled(config: &Config, otel: Option<&OtelManager>) -> Opt
         }
     };
     if !existed {
-        let stats = metadata::backfill_sessions(runtime.as_ref(), config, otel).await;
-        info!(
-            "state db backfill scanned={}, upserted={}, failed={}",
-            stats.scanned, stats.upserted, stats.failed
-        );
-        if let Some(otel) = otel {
-            otel.counter(
-                DB_METRIC_BACKFILL,
-                stats.upserted as i64,
-                &[("status", "upserted")],
-            );
-            otel.counter(
-                DB_METRIC_BACKFILL,
-                stats.failed as i64,
-                &[("status", "failed")],
-            );
-        }
+        let runtime_for_backfill = Arc::clone(&runtime);
+        let config_for_backfill = config.clone();
+        let otel_for_backfill = otel.cloned();
+        tokio::task::spawn(async move {
+            metadata::backfill_sessions(
+                runtime_for_backfill.as_ref(),
+                &config_for_backfill,
+                otel_for_backfill.as_ref(),
+            )
+            .await;
+        });
     }
     Some(runtime)
+}
+
+/// Get the DB if the feature is enabled and the DB exists.
+pub async fn get_state_db(config: &Config, otel: Option<&OtelManager>) -> Option<StateDbHandle> {
+    let state_path = config.codex_home.join(STATE_DB_FILENAME);
+    if !config.features.enabled(Feature::Sqlite)
+        || !tokio::fs::try_exists(&state_path).await.unwrap_or(false)
+    {
+        return None;
+    }
+    codex_state::StateRuntime::init(
+        config.codex_home.clone(),
+        config.model_provider_id.clone(),
+        otel.cloned(),
+    )
+    .await
+    .ok()
 }
 
 /// Open the state runtime when the SQLite file exists, without feature gating.
@@ -268,9 +277,10 @@ pub async fn apply_rollout_items(
 pub fn record_discrepancy(stage: &str, reason: &str) {
     // We access the global metric because the call sites might not have access to the broader
     // OtelManager.
+    tracing::warn!("state db record_discrepancy: {stage}{reason}");
     if let Some(metric) = codex_otel::metrics::global() {
         let _ = metric.counter(
-            "codex.db.discrepancy",
+            DB_METRIC_COMPARE_ERROR,
             1,
             &[("stage", stage), ("reason", reason)],
         );

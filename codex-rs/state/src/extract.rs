@@ -30,6 +30,11 @@ pub fn apply_rollout_item(
 }
 
 fn apply_session_meta_from_item(metadata: &mut ThreadMetadata, meta_line: &SessionMetaLine) {
+    if metadata.id != meta_line.meta.id {
+        // Ignore session_meta lines that don't match the canonical thread ID,
+        // e.g., forked rollouts that embed the source session metadata.
+        return;
+    }
     metadata.id = meta_line.meta.id;
     metadata.source = enum_to_string(&meta_line.meta.source);
     if let Some(provider) = meta_line.meta.model_provider.as_deref() {

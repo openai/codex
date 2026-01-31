@@ -12,6 +12,7 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::SandboxMode;
 use codex_core::config::ConfigService;
 use codex_core::config::ConfigServiceError;
+use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigRequirementsToml;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::SandboxModeRequirement as CoreSandboxModeRequirement;
@@ -29,9 +30,15 @@ impl ConfigApi {
         codex_home: PathBuf,
         cli_overrides: Vec<(String, TomlValue)>,
         loader_overrides: LoaderOverrides,
+        cloud_requirements: CloudRequirementsLoader,
     ) -> Self {
         Self {
-            service: ConfigService::new(codex_home, cli_overrides, loader_overrides),
+            service: ConfigService::new(
+                codex_home,
+                cli_overrides,
+                loader_overrides,
+                cloud_requirements,
+            ),
         }
     }
 
@@ -136,6 +143,7 @@ mod tests {
                 CoreSandboxModeRequirement::ExternalSandbox,
             ]),
             mcp_servers: None,
+            rules: None,
         };
 
         let mapped = map_requirements_toml_to_api(requirements);

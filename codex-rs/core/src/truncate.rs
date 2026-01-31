@@ -34,18 +34,6 @@ impl From<TruncationPolicyConfig> for TruncationPolicy {
 }
 
 impl TruncationPolicy {
-    /// Scale the underlying budget by `multiplier`, rounding up to avoid under-budgeting.
-    pub fn mul(self, multiplier: f64) -> Self {
-        match self {
-            TruncationPolicy::Bytes(bytes) => {
-                TruncationPolicy::Bytes((bytes as f64 * multiplier).ceil() as usize)
-            }
-            TruncationPolicy::Tokens(tokens) => {
-                TruncationPolicy::Tokens((tokens as f64 * multiplier).ceil() as usize)
-            }
-        }
-    }
-
     /// Returns a token budget derived from this policy.
     ///
     /// - For `Tokens`, this is the explicit token limit.
@@ -69,6 +57,21 @@ impl TruncationPolicy {
         match self {
             TruncationPolicy::Bytes(bytes) => *bytes,
             TruncationPolicy::Tokens(tokens) => approx_bytes_for_tokens(*tokens),
+        }
+    }
+}
+
+impl std::ops::Mul<f64> for TruncationPolicy {
+    type Output = Self;
+
+    fn mul(self, multiplier: f64) -> Self::Output {
+        match self {
+            TruncationPolicy::Bytes(bytes) => {
+                TruncationPolicy::Bytes((bytes as f64 * multiplier).ceil() as usize)
+            }
+            TruncationPolicy::Tokens(tokens) => {
+                TruncationPolicy::Tokens((tokens as f64 * multiplier).ceil() as usize)
+            }
         }
     }
 }

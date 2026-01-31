@@ -44,16 +44,23 @@ pub use cli::Cli;
 /// * `path`  – Path to the matched file (relative to the search directory).
 /// * `indices` – Optional list of character indices that matched the query.
 ///   These are only filled when the caller of [`run`] sets
-///   `compute_indices` to `true`.  The indices vector follows the
+///   `options.compute_indices` to `true`. The indices vector follows the
 ///   guidance from `nucleo::pattern::Pattern::indices`: they are
 ///   unique and sorted in ascending order so that callers can use
 ///   them directly for highlighting.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct FileMatch {
     pub score: u32,
-    pub path: String,
+    pub path: PathBuf,
+    pub root: PathBuf,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub indices: Option<Vec<u32>>, // Sorted & deduplicated when present
+}
+
+impl FileMatch {
+    pub fn full_path(&self) -> PathBuf {
+        self.root.join(&self.path)
+    }
 }
 
 /// Returns the final path component for a matched path, falling back to the full path.
@@ -80,7 +87,7 @@ pub struct FileSearchSnapshot {
 }
 
 #[derive(Debug, Clone)]
-pub struct SessionOptions {
+pub struct FileSearchOptions {
     pub limit: NonZero<usize>,
     pub exclude: Vec<String>,
     pub threads: NonZero<usize>,
@@ -88,7 +95,7 @@ pub struct SessionOptions {
     pub respect_gitignore: bool,
 }
 
-impl Default for SessionOptions {
+impl Default for FileSearchOptions {
     fn default() -> Self {
         Self {
             #[expect(clippy::unwrap_used)]
@@ -133,19 +140,24 @@ impl Drop for FileSearchSession {
 
 pub fn create_session(
     search_directory: &Path,
-    options: SessionOptions,
+    options: FileSearchOptions,
     reporter: Arc<dyn SessionReporter>,
 ) -> anyhow::Result<FileSearchSession> {
-    create_session_inner(search_directory, options, reporter, None)
+    create_session_inner(
+        vec![search_directory.to_path_buf()],
+        options,
+        reporter,
+        None,
+    )
 }
 
 fn create_session_inner(
-    search_directory: &Path,
-    options: SessionOptions,
+    search_directories: Vec<PathBuf>,
+    options: FileSearchOptions,
     reporter: Arc<dyn SessionReporter>,
     cancel_flag: Option<Arc<AtomicBool>>,
 ) -> anyhow::Result<FileSearchSession> {
-    let SessionOptions {
+    let FileSearchOptions {
         limit,
         exclude,
         threads,
@@ -153,7 +165,10 @@ fn create_session_inner(
         respect_gitignore,
     } = options;
 
-    let override_matcher = build_override_matcher(search_directory, &exclude)?;
+    let Some(primary_search_directory) = search_directories.first() else {
+        anyhow::bail!("at least one search directory is required");
+    };
+    let override_matcher = build_override_matcher(primary_search_directory, &exclude)?;
     let (work_tx, work_rx) = unbounded();
 
     let notify_tx = work_tx.clone();
@@ -171,7 +186,7 @@ fn create_session_inner(
     let cancelled = cancel_flag.unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
 
     let inner = Arc::new(SessionInner {
-        search_directory: search_directory.to_path_buf(),
+        search_directories,
         limit: limit.get(),
         threads: threads.get(),
         compute_indices,
@@ -239,19 +254,20 @@ pub async fn run_main<T: Reporter>(
         }
     };
 
-    let cancel_flag = Arc::new(AtomicBool::new(false));
     let FileSearchResults {
         total_match_count,
         matches,
     } = run(
         &pattern_text,
-        limit,
-        &search_directory,
-        exclude,
-        threads,
-        cancel_flag,
-        compute_indices,
-        true,
+        vec![search_directory.to_path_buf()],
+        FileSearchOptions {
+            limit,
+            exclude,
+            threads,
+            compute_indices,
+            respect_gitignore: true,
+        },
+        None,
     )?;
     let match_count = matches.len();
     let matches_truncated = total_match_count > match_count;
@@ -268,30 +284,14 @@ pub async fn run_main<T: Reporter>(
 
 /// The worker threads will periodically check `cancel_flag` to see if they
 /// should stop processing files.
-#[allow(clippy::too_many_arguments)]
 pub fn run(
     pattern_text: &str,
-    limit: NonZero<usize>,
-    search_directory: &Path,
-    exclude: Vec<String>,
-    threads: NonZero<usize>,
-    cancel_flag: Arc<AtomicBool>,
-    compute_indices: bool,
-    respect_gitignore: bool,
+    roots: Vec<PathBuf>,
+    options: FileSearchOptions,
+    cancel_flag: Option<Arc<AtomicBool>>,
 ) -> anyhow::Result<FileSearchResults> {
     let reporter = Arc::new(RunReporter::default());
-    let session = create_session_inner(
-        search_directory,
-        SessionOptions {
-            limit,
-            exclude,
-            threads,
-            compute_indices,
-            respect_gitignore,
-        },
-        reporter.clone(),
-        Some(cancel_flag),
-    )?;
+    let session = create_session_inner(roots, options, reporter.clone(), cancel_flag)?;
 
     session.update_query(pattern_text);
 
@@ -339,7 +339,7 @@ fn create_pattern(pattern: &str) -> Pattern {
 }
 
 struct SessionInner {
-    search_directory: PathBuf,
+    search_directories: Vec<PathBuf>,
     limit: usize,
     threads: usize,
     compute_indices: bool,
@@ -373,12 +373,39 @@ fn build_override_matcher(
     Ok(Some(matcher))
 }
 
+fn get_file_path<'a>(path: &'a Path, search_directories: &[PathBuf]) -> Option<(usize, &'a str)> {
+    let mut best_match: Option<(usize, &Path)> = None;
+    for (idx, root) in search_directories.iter().enumerate() {
+        if let Ok(rel_path) = path.strip_prefix(root) {
+            let root_depth = root.components().count();
+            match best_match {
+                Some((best_idx, _))
+                    if search_directories[best_idx].components().count() >= root_depth => {}
+                _ => {
+                    best_match = Some((idx, rel_path));
+                }
+            }
+        }
+    }
+
+    let (root_idx, rel_path) = best_match?;
+    rel_path.to_str().map(|p| (root_idx, p))
+}
+
 fn walker_worker(
     inner: Arc<SessionInner>,
     override_matcher: Option<ignore::overrides::Override>,
     injector: Injector<Arc<str>>,
 ) {
-    let mut walk_builder = WalkBuilder::new(&inner.search_directory);
+    let Some(first_root) = inner.search_directories.first() else {
+        let _ = inner.work_tx.send(WorkSignal::WalkComplete);
+        return;
+    };
+
+    let mut walk_builder = WalkBuilder::new(first_root);
+    for root in inner.search_directories.iter().skip(1) {
+        walk_builder.add(root);
+    }
     walk_builder
         .threads(inner.threads)
         // Allow hidden entries.
@@ -401,36 +428,29 @@ fn walker_worker(
 
     let walker = walk_builder.build_parallel();
 
-    fn get_file_path<'a>(
-        entry_result: &'a Result<ignore::DirEntry, ignore::Error>,
-        search_directory: &Path,
-    ) -> Option<&'a str> {
-        let entry = match entry_result {
-            Ok(entry) => entry,
-            Err(_) => return None,
-        };
-        if entry.file_type().is_some_and(|ft| ft.is_dir()) {
-            return None;
-        }
-        let path = entry.path();
-        match path.strip_prefix(search_directory) {
-            Ok(rel_path) => rel_path.to_str(),
-            Err(_) => None,
-        }
-    }
-
     walker.run(|| {
         const CHECK_INTERVAL: usize = 1024;
         let mut n = 0;
-        let search_directory = inner.search_directory.clone();
+        let search_directories = inner.search_directories.clone();
         let injector = injector.clone();
         let cancelled = inner.cancelled.clone();
         let shutdown = inner.shutdown.clone();
 
         Box::new(move |entry| {
-            if let Some(path) = get_file_path(&entry, &search_directory) {
-                injector.push(Arc::from(path), |path, cols| {
-                    cols[0] = Utf32String::from(path.as_ref());
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => return ignore::WalkState::Continue,
+            };
+            if entry.file_type().is_some_and(|ft| ft.is_dir()) {
+                return ignore::WalkState::Continue;
+            }
+            let path = entry.path();
+            let Some(full_path) = path.to_str() else {
+                return ignore::WalkState::Continue;
+            };
+            if let Some((_, relative_path)) = get_file_path(path, &search_directories) {
+                injector.push(Arc::from(full_path), |_, cols| {
+                    cols[0] = Utf32String::from(relative_path);
                 });
             }
             n += 1;
@@ -513,6 +533,8 @@ fn matcher_worker(
                         .take(limit)
                         .filter_map(|match_| {
                             let item = snapshot.get_item(match_.idx)?;
+                            let full_path = item.data.as_ref();
+                            let (root_idx, relative_path) = get_file_path(Path::new(full_path), &inner.search_directories)?;
                             let indices = if let Some(indices_matcher) = indices_matcher.as_mut() {
                                 let mut idx_vec = Vec::<u32>::new();
                                 let haystack = item.matcher_columns[0].slice(..);
@@ -525,7 +547,8 @@ fn matcher_worker(
                             };
                             Some(FileMatch {
                                 score: match_.score,
-                                path: item.data.as_ref().to_string(),
+                                path: PathBuf::from(relative_path),
+                                root: inner.search_directories[root_idx].clone(),
                                 indices,
                             })
                         })
@@ -723,7 +746,7 @@ mod tests {
     fn session_scanned_file_count_is_monotonic_across_queries() {
         let dir = create_temp_tree(200);
         let reporter = Arc::new(RecordingReporter::default());
-        let session = create_session(dir.path(), SessionOptions::default(), reporter.clone())
+        let session = create_session(dir.path(), FileSearchOptions::default(), reporter.clone())
             .expect("session");
 
         session.update_query("file-00");
@@ -743,7 +766,7 @@ mod tests {
     fn session_streams_updates_before_walk_complete() {
         let dir = create_temp_tree(600);
         let reporter = Arc::new(RecordingReporter::default());
-        let session = create_session(dir.path(), SessionOptions::default(), reporter.clone())
+        let session = create_session(dir.path(), FileSearchOptions::default(), reporter.clone())
             .expect("session");
 
         session.update_query("file-0");
@@ -760,7 +783,7 @@ mod tests {
         fs::write(dir.path().join("alpha.txt"), "alpha").unwrap();
         fs::write(dir.path().join("beta.txt"), "beta").unwrap();
         let reporter = Arc::new(RecordingReporter::default());
-        let session = create_session(dir.path(), SessionOptions::default(), reporter.clone())
+        let session = create_session(dir.path(), FileSearchOptions::default(), reporter.clone())
             .expect("session");
 
         session.update_query("alpha");
@@ -776,7 +799,7 @@ mod tests {
             last_update
                 .matches
                 .iter()
-                .any(|file_match| file_match.path.contains("beta.txt"))
+                .any(|file_match| file_match.path.to_string_lossy().contains("beta.txt"))
         );
     }
 
@@ -787,8 +810,8 @@ mod tests {
         fs::write(dir.path().join("beta.txt"), "beta").unwrap();
         let reporter = Arc::new(RecordingReporter::default());
         let session = create_session_inner(
-            dir.path(),
-            SessionOptions::default(),
+            vec![dir.path().to_path_buf()],
+            FileSearchOptions::default(),
             reporter.clone(),
             None,
         )
@@ -816,8 +839,8 @@ mod tests {
 
         let reporter_a = Arc::new(RecordingReporter::default());
         let session_a = create_session_inner(
-            root_a.path(),
-            SessionOptions::default(),
+            vec![root_a.path().to_path_buf()],
+            FileSearchOptions::default(),
             reporter_a,
             Some(cancel_flag.clone()),
         )
@@ -825,8 +848,8 @@ mod tests {
 
         let reporter_b = Arc::new(RecordingReporter::default());
         let session_b = create_session_inner(
-            root_b.path(),
-            SessionOptions::default(),
+            vec![root_b.path().to_path_buf()],
+            FileSearchOptions::default(),
             reporter_b.clone(),
             Some(cancel_flag),
         )
@@ -846,7 +869,7 @@ mod tests {
     fn session_emits_updates_when_query_changes() {
         let dir = create_temp_tree(200);
         let reporter = Arc::new(RecordingReporter::default());
-        let session = create_session(dir.path(), SessionOptions::default(), reporter.clone())
+        let session = create_session(dir.path(), FileSearchOptions::default(), reporter.clone())
             .expect("session");
 
         session.update_query("zzzzzzzz");
@@ -866,17 +889,15 @@ mod tests {
     #[test]
     fn run_returns_matches_for_query() {
         let dir = create_temp_tree(40);
-        let results = run(
-            "file-000",
-            NonZero::new(20).unwrap(),
-            dir.path(),
-            Vec::new(),
-            NonZero::new(2).unwrap(),
-            Arc::new(AtomicBool::new(false)),
-            false,
-            true,
-        )
-        .expect("run ok");
+        let options = FileSearchOptions {
+            limit: NonZero::new(20).unwrap(),
+            exclude: Vec::new(),
+            threads: NonZero::new(2).unwrap(),
+            compute_indices: false,
+            respect_gitignore: true,
+        };
+        let results =
+            run("file-000", vec![dir.path().to_path_buf()], options, None).expect("run ok");
 
         assert!(!results.matches.is_empty());
         assert!(results.total_match_count >= results.matches.len());
@@ -884,7 +905,7 @@ mod tests {
             results
                 .matches
                 .iter()
-                .any(|m| m.path.contains("file-0000.txt"))
+                .any(|m| m.path.to_string_lossy().contains("file-0000.txt"))
         );
     }
 
@@ -893,19 +914,14 @@ mod tests {
         let dir = create_temp_tree(200);
         let cancel_flag = Arc::new(AtomicBool::new(true));
         let search_dir = dir.path().to_path_buf();
+        let options = FileSearchOptions {
+            compute_indices: false,
+            ..Default::default()
+        };
         let (tx, rx) = std::sync::mpsc::channel();
 
         let handle = thread::spawn(move || {
-            let result = run(
-                "file-",
-                NonZero::new(20).unwrap(),
-                &search_dir,
-                Vec::new(),
-                NonZero::new(2).unwrap(),
-                cancel_flag,
-                false,
-                true,
-            );
+            let result = run("file-", vec![search_dir], options, Some(cancel_flag));
             let _ = tx.send(result);
         });
 

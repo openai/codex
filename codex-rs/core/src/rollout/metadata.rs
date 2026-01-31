@@ -15,12 +15,15 @@ use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_state::BackfillStats;
 use codex_state::DB_ERROR_METRIC;
+use codex_state::DB_METRIC_BACKFILL;
+use codex_state::DB_METRIC_BACKFILL_DURATION_MS;
 use codex_state::ExtractionOutcome;
 use codex_state::ThreadMetadataBuilder;
 use codex_state::apply_rollout_item;
 use std::cmp::Reverse;
 use std::path::Path;
 use std::path::PathBuf;
+use tracing::info;
 use tracing::warn;
 
 const ROLLOUT_PREFIX: &str = "rollout-";
@@ -125,7 +128,8 @@ pub(crate) async fn backfill_sessions(
     runtime: &codex_state::StateRuntime,
     config: &Config,
     otel: Option<&OtelManager>,
-) -> BackfillStats {
+) {
+    let timer = otel.and_then(|otel| otel.start_timer(DB_METRIC_BACKFILL_DURATION_MS, &[]).ok());
     let sessions_root = config.codex_home.join(rollout::SESSIONS_SUBDIR);
     let archived_root = config.codex_home.join(rollout::ARCHIVED_SESSIONS_SUBDIR);
     let mut rollout_paths: Vec<(PathBuf, bool)> = Vec::new();
@@ -191,7 +195,33 @@ pub(crate) async fn backfill_sessions(
             }
         }
     }
-    stats
+
+    info!(
+        "state db backfill scanned={}, upserted={}, failed={}",
+        stats.scanned, stats.upserted, stats.failed
+    );
+    if let Some(otel) = otel {
+        otel.counter(
+            DB_METRIC_BACKFILL,
+            stats.upserted as i64,
+            &[("status", "upserted")],
+        );
+        otel.counter(
+            DB_METRIC_BACKFILL,
+            stats.failed as i64,
+            &[("status", "failed")],
+        );
+    }
+    if let Some(timer) = timer.as_ref() {
+        let status = if stats.failed == 0 {
+            "success"
+        } else if stats.upserted == 0 {
+            "failed"
+        } else {
+            "partial_failure"
+        };
+        let _ = timer.record(&[("status", status)]);
+    }
 }
 
 async fn file_modified_time_utc(path: &Path) -> Option<DateTime<Utc>> {
@@ -285,6 +315,7 @@ mod tests {
             source: SessionSource::default(),
             model_provider: Some("openai".to_string()),
             base_instructions: None,
+            dynamic_tools: None,
         };
         let session_meta_line = SessionMetaLine {
             meta: session_meta,

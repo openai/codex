@@ -19,6 +19,7 @@ workspace = true
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 codex-arg0 = { workspace = true }
+codex-cloud-requirements = { workspace = true }
 codex-common = { workspace = true, features = [
     "cli",
     "elapsed",
@@ -47,6 +48,7 @@ ts-rs = { workspace = true, features = [
     "serde-json-impl",
     "no-serde-warnings",
 ] }
+uuid = { workspace = true }
 
 
 [dev-dependencies]
