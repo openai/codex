@@ -34,7 +34,7 @@ fn permissions_texts(input: &[serde_json::Value]) -> Vec<String> {
                 .first()?
                 .get("text")?
                 .as_str()?;
-            if text.contains("`approval_policy`") {
+            if text.contains("<permissions instructions>") {
                 Some(text.to_string())
             } else {
                 None
@@ -439,7 +439,7 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
         &sandbox_policy,
         AskForApproval::OnRequest,
         &Policy::empty(),
-        false,
+        true,
         test.config.cwd.as_path(),
     )
     .into_text();

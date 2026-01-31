@@ -464,12 +464,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RequestRule,
         key: "request_rule",
-        stage: Stage::Experimental {
-            name: "Smart approvals",
-            menu_description: "Get smarter \"Don't ask again\" rule requests.",
-            announcement: "NEW: Try Smart approvals to get smarter \"Don't ask again\" requests. Enable in /experimental!",
-        },
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::WindowsSandbox,

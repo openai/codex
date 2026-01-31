@@ -320,7 +320,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         .expect("prior assistant message");
     let pos_permissions = messages
         .iter()
-        .position(|(role, text)| role == "developer" && text.contains("`approval_policy`"))
+        .position(|(role, text)| role == "developer" && text.contains("<permissions instructions>"))
         .expect("permissions message");
     let pos_user_instructions = messages
         .iter()
