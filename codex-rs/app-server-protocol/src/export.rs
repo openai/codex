@@ -1464,6 +1464,40 @@ mod tests {
     }
 
     #[test]
+    fn generate_ts_with_experimental_api_retains_experimental_entries() -> Result<()> {
+        let output_dir =
+            std::env::temp_dir().join(format!("codex_ts_types_experimental_{}", Uuid::now_v7()));
+        fs::create_dir(&output_dir)?;
+
+        struct TempDirGuard(PathBuf);
+
+        impl Drop for TempDirGuard {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let _guard = TempDirGuard(output_dir.clone());
+
+        let options = GenerateTsOptions {
+            generate_indices: false,
+            ensure_headers: false,
+            run_prettier: false,
+            experimental_api: true,
+        };
+        generate_ts_with_options(&output_dir, None, options)?;
+
+        let client_request_ts = fs::read_to_string(output_dir.join("ClientRequest.ts"))?;
+        assert_eq!(client_request_ts.contains("mock/experimentalMethod"), true);
+
+        let thread_start_ts =
+            fs::read_to_string(output_dir.join("v2").join("ThreadStartParams.ts"))?;
+        assert_eq!(thread_start_ts.contains("mockExperimentalField"), true);
+
+        Ok(())
+    }
+
+    #[test]
     fn stable_schema_filter_removes_mock_thread_start_field() -> Result<()> {
         let output_dir = std::env::temp_dir().join(format!("codex_schema_{}", Uuid::now_v7()));
         fs::create_dir(&output_dir)?;
