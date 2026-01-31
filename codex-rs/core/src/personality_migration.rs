@@ -89,7 +89,12 @@ async fn has_recorded_sessions(codex_home: &Path, default_provider: &str) -> io:
         1,
         None,
         ThreadSortKey::CreatedAt,
-        thread_list_config(allowed_sources, default_provider),
+        ThreadListConfig {
+            allowed_sources,
+            model_providers: None,
+            default_provider,
+            layout: ThreadListLayout::NestedByDate,
+        },
     )
     .await?;
     if !sessions.items.is_empty() {
@@ -101,7 +106,12 @@ async fn has_recorded_sessions(codex_home: &Path, default_provider: &str) -> io:
         1,
         None,
         ThreadSortKey::CreatedAt,
-        thread_list_config(allowed_sources, default_provider),
+        ThreadListConfig {
+            allowed_sources,
+            model_providers: None,
+            default_provider,
+            layout: ThreadListLayout::Flat,
+        },
     )
     .await?;
     Ok(!archived_sessions.items.is_empty())
@@ -117,18 +127,6 @@ async fn create_marker(marker_path: &Path) -> io::Result<()> {
         Ok(mut file) => file.write_all(b"v1\n").await,
         Err(err) if err.kind() == io::ErrorKind::AlreadyExists => Ok(()),
         Err(err) => Err(err),
-    }
-}
-
-fn thread_list_config<'a>(
-    allowed_sources: &'a [SessionSource],
-    default_provider: &'a str,
-) -> ThreadListConfig<'a> {
-    ThreadListConfig {
-        allowed_sources,
-        model_providers: None,
-        default_provider,
-        layout: ThreadListLayout::NestedByDate,
     }
 }
 

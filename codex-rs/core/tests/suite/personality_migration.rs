@@ -1,3 +1,4 @@
+use codex_core::ARCHIVED_SESSIONS_SUBDIR;
 use codex_core::SESSIONS_SUBDIR;
 use codex_core::config::ConfigToml;
 use codex_core::personality_migration::PERSONALITY_MIGRATION_FILENAME;
@@ -32,6 +33,16 @@ async fn write_session_with_user_event(codex_home: &Path) -> io::Result<()> {
         .join("2025")
         .join("01")
         .join("01");
+    write_rollout_with_user_event(&dir, thread_id).await
+}
+
+async fn write_archived_session_with_user_event(codex_home: &Path) -> io::Result<()> {
+    let thread_id = ThreadId::new();
+    let dir = codex_home.join(ARCHIVED_SESSIONS_SUBDIR);
+    write_rollout_with_user_event(&dir, thread_id).await
+}
+
+async fn write_rollout_with_user_event(dir: &Path, thread_id: ThreadId) -> io::Result<()> {
     tokio::fs::create_dir_all(&dir).await?;
     let file_path = dir.join(format!("rollout-{TEST_TIMESTAMP}-{thread_id}.jsonl"));
     let mut file = tokio::fs::File::create(&file_path).await?;
@@ -65,10 +76,10 @@ async fn write_session_with_user_event(codex_home: &Path) -> io::Result<()> {
         })),
     };
 
-    file.write_all(format!("{}\n", serde_json::to_string(&meta_line)?).as_bytes())
-        .await?;
-    file.write_all(format!("{}\n", serde_json::to_string(&user_event)?).as_bytes())
-        .await?;
+    let meta_json = serde_json::to_string(&meta_line)?;
+    file.write_all(format!("{meta_json}\n").as_bytes()).await?;
+    let user_json = serde_json::to_string(&user_event)?;
+    file.write_all(format!("{user_json}\n").as_bytes()).await?;
     Ok(())
 }
 
@@ -110,6 +121,24 @@ async fn no_marker_no_sessions_no_change() -> io::Result<()> {
 async fn no_marker_sessions_sets_personality() -> io::Result<()> {
     let temp = TempDir::new()?;
     write_session_with_user_event(temp.path()).await?;
+
+    let status = maybe_migrate_personality(temp.path(), &ConfigToml::default()).await?;
+
+    assert_eq!(status, PersonalityMigrationStatus::Applied);
+    assert_eq!(
+        tokio::fs::try_exists(temp.path().join(PERSONALITY_MIGRATION_FILENAME)).await?,
+        true
+    );
+
+    let persisted = read_config_toml(temp.path()).await?;
+    assert_eq!(persisted.model_personality, Some(Personality::Pragmatic));
+    Ok(())
+}
+
+#[tokio::test]
+async fn no_marker_archived_sessions_sets_personality() -> io::Result<()> {
+    let temp = TempDir::new()?;
+    write_archived_session_with_user_event(temp.path()).await?;
 
     let status = maybe_migrate_personality(temp.path(), &ConfigToml::default()).await?;
 
