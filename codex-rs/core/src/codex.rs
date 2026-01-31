@@ -1721,22 +1721,15 @@ impl Session {
                     return;
                 }
                 let call_id = call_id.unwrap_or_else(|| sub_id.to_string());
-                let content = match serde_json::to_string(&response) {
-                    Ok(content) => content,
+                let call_id_for_log = call_id.clone();
+                let response_item = match response.to_function_call_output(call_id) {
+                    Ok(item) => item,
                     Err(err) => {
                         warn!(
-                            "failed to serialize request_user_input response for call_id: {call_id}: {err}"
+                            "failed to serialize request_user_input response for call_id: {call_id_for_log}: {err}"
                         );
                         return;
                     }
-                };
-                let response_item = ResponseItem::FunctionCallOutput {
-                    call_id,
-                    output: FunctionCallOutputPayload {
-                        content,
-                        success: Some(true),
-                        ..Default::default()
-                    },
                 };
                 let turn_context = self.new_default_turn_with_sub_id(sub_id.to_string()).await;
                 self.record_conversation_items(&turn_context, &[response_item])
