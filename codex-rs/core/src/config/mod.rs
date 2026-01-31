@@ -1500,7 +1500,11 @@ impl Config {
         let model_personality = model_personality
             .or(config_profile.model_personality)
             .or(cfg.model_personality)
-            .or(Some(Personality::Friendly));
+            .or_else(|| {
+                features
+                    .enabled(Feature::Personality)
+                    .then_some(Personality::Friendly)
+            });
 
         let experimental_compact_prompt_path = config_profile
             .experimental_compact_prompt_file
