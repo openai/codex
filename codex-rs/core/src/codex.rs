@@ -42,6 +42,7 @@ use async_channel::Receiver;
 use async_channel::Sender;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecPolicyAmendment;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
@@ -205,8 +206,6 @@ use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_async_utils::OrCancelExt;
 use codex_otel::OtelManager;
 use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::CollaborationModeMask;
-use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -1401,26 +1400,6 @@ impl Session {
         }
     }
 
-    fn collaboration_mode_mask_from_mode(mode: &CollaborationMode) -> CollaborationModeMask {
-        CollaborationModeMask {
-            name: Self::collaboration_mode_name(mode.mode).to_string(),
-            mode: Some(mode.mode),
-            model: Some(mode.model().to_string()),
-            reasoning_effort: Some(mode.reasoning_effort()),
-            developer_instructions: Some(mode.settings.developer_instructions.clone()),
-        }
-    }
-
-    fn collaboration_mode_name(kind: ModeKind) -> &'static str {
-        match kind {
-            ModeKind::Plan => "Plan",
-            ModeKind::Code => "Code",
-            ModeKind::PairProgramming => "Pair Programming",
-            ModeKind::Execute => "Execute",
-            ModeKind::Custom => "Custom",
-        }
-    }
-
     fn build_settings_update_items(
         &self,
         previous_context: Option<&Arc<TurnContext>>,
@@ -1436,13 +1415,6 @@ impl Session {
             self.build_permissions_update_item(previous_context, current_context)
         {
             update_items.push(permissions_item);
-        }
-        if let Some(next_mode) = next_collaboration_mode {
-            if previous_collaboration_mode != next_mode {
-                update_items.push(ResponseItem::CollaborationModeUpdate {
-                    mask: Self::collaboration_mode_mask_from_mode(next_mode),
-                });
-            }
         }
         if let Some(collaboration_mode_item) = self.build_collaboration_mode_update_item(
             previous_collaboration_mode,
@@ -1953,9 +1925,6 @@ impl Session {
                 state.session_configuration.base_instructions.clone(),
             )
         };
-        items.push(ResponseItem::CollaborationModeUpdate {
-            mask: Self::collaboration_mode_mask_from_mode(&collaboration_mode),
-        });
         if let Some(collab_instructions) =
             DeveloperInstructions::from_collaboration_mode(&collaboration_mode)
         {
@@ -3149,9 +3118,6 @@ mod handlers {
 
     fn last_collaboration_mask(items: &[ResponseItem]) -> Option<CollaborationModeMask> {
         items.iter().rev().find_map(|item| {
-            if let ResponseItem::CollaborationModeUpdate { mask } = item {
-                return Some(mask.clone());
-            }
             let ResponseItem::Message { role, content, .. } = item else {
                 return None;
             };

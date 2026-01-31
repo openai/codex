@@ -9,7 +9,6 @@ use serde::ser::Serializer;
 use ts_rs::TS;
 
 use crate::config_types::CollaborationMode;
-use crate::config_types::CollaborationModeMask;
 use crate::config_types::SandboxMode;
 use crate::protocol::AskForApproval;
 use crate::protocol::COLLABORATION_MODE_CLOSE_TAG;
@@ -98,9 +97,6 @@ pub enum ResponseItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         phase: Option<MessagePhase>,
-    },
-    CollaborationModeUpdate {
-        mask: CollaborationModeMask,
     },
     Reasoning {
         #[serde(default, skip_serializing)]

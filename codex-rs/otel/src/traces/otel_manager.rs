@@ -679,7 +679,6 @@ impl OtelManager {
             ResponseItem::CustomToolCall { .. } => "custom_tool_call".into(),
             ResponseItem::CustomToolCallOutput { .. } => "custom_tool_call_output".into(),
             ResponseItem::WebSearchCall { .. } => "web_search_call".into(),
-            ResponseItem::CollaborationModeUpdate { .. } => "collaboration_mode_update".into(),
             ResponseItem::GhostSnapshot { .. } => "ghost_snapshot".into(),
             ResponseItem::Compaction { .. } => "compaction".into(),
             ResponseItem::Other => "other".into(),
