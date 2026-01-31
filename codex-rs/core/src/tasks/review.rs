@@ -28,6 +28,11 @@ use super::SessionTaskContext;
 #[derive(Clone, Copy)]
 pub(crate) struct ReviewTask;
 
+struct ReviewConversation {
+    receiver: async_channel::Receiver<Event>,
+    review_session: Arc<Session>,
+}
+
 impl ReviewTask {
     pub(crate) fn new() -> Self {
         Self
@@ -54,7 +59,7 @@ impl SessionTask for ReviewTask {
             .counter("codex.task.review", 1, &[]);
 
         // Start sub-codex conversation and get the receiver for events.
-        let output = match start_review_conversation(
+        let (output, review_token_usage) = match start_review_conversation(
             session.clone(),
             ctx.clone(),
             input,
@@ -62,11 +67,27 @@ impl SessionTask for ReviewTask {
         )
         .await
         {
-            Some(receiver) => process_review_events(session.clone(), ctx.clone(), receiver).await,
-            None => None,
+            Some(conversation) => {
+                let output =
+                    process_review_events(session.clone(), ctx.clone(), conversation.receiver)
+                        .await;
+                let review_token_usage = conversation
+                    .review_session
+                    .token_info()
+                    .await
+                    .map(|info| info.total_token_usage);
+                (output, review_token_usage)
+            }
+            None => (None, None),
         };
         if !cancellation_token.is_cancelled() {
             exit_review_mode(session.clone_session(), output.clone(), ctx.clone()).await;
+            if let Some(review_token_usage) = review_token_usage {
+                session
+                    .clone_session()
+                    .append_background_token_usage(ctx.as_ref(), &review_token_usage)
+                    .await;
+            }
         }
         None
     }
@@ -81,7 +102,7 @@ async fn start_review_conversation(
     ctx: Arc<TurnContext>,
     input: Vec<UserInput>,
     cancellation_token: CancellationToken,
-) -> Option<async_channel::Receiver<Event>> {
+) -> Option<ReviewConversation> {
     let config = ctx.client.config();
     let mut sub_agent_config = config.as_ref().clone();
     // Carry over review-only feature restrictions so the delegate cannot
@@ -108,7 +129,10 @@ async fn start_review_conversation(
     )
     .await)
         .ok()
-        .map(|io| io.rx_event)
+        .map(|io| ReviewConversation {
+            receiver: io.rx_event,
+            review_session: io.session,
+        })
 }
 
 async fn process_review_events(

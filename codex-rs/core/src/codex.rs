@@ -1944,6 +1944,42 @@ impl Session {
         state.clone_history()
     }
 
+    pub(crate) async fn token_info(&self) -> Option<TokenUsageInfo> {
+        let state = self.state.lock().await;
+        state.token_info()
+    }
+
+    /// Add token usage that occurred outside the main thread (e.g. in a sub-agent).
+    ///
+    /// This increments `total_token_usage` without changing `last_token_usage`, so UIs
+    /// can keep context-window indicators anchored to the main thread's latest turn.
+    pub(crate) async fn append_background_token_usage(
+        &self,
+        turn_context: &TurnContext,
+        usage: &TokenUsage,
+    ) {
+        if usage.is_zero() {
+            return;
+        }
+
+        {
+            let mut state = self.state.lock().await;
+            let model_context_window = turn_context.client.get_model_context_window();
+            let mut info = state.token_info().unwrap_or(TokenUsageInfo {
+                total_token_usage: TokenUsage::default(),
+                last_token_usage: usage.clone(),
+                model_context_window,
+            });
+            info.total_token_usage.add_assign(usage);
+            if info.model_context_window.is_none() {
+                info.model_context_window = model_context_window;
+            }
+            state.set_token_info(Some(info));
+        }
+
+        self.send_token_count_event(turn_context).await;
+    }
+
     pub(crate) async fn update_token_usage_info(
         &self,
         turn_context: &TurnContext,
@@ -4793,6 +4829,43 @@ mod tests {
 
         let actual = session.state.lock().await.token_info();
         assert_eq!(actual, Some(info2));
+    }
+
+    #[tokio::test]
+    async fn append_background_token_usage_increments_total_without_touching_last() {
+        let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
+
+        let initial = crate::protocol::TokenUsage {
+            input_tokens: 10,
+            cached_input_tokens: 2,
+            output_tokens: 4,
+            reasoning_output_tokens: 1,
+            total_tokens: 17,
+        };
+        session
+            .update_token_usage_info(&turn_context, Some(&initial))
+            .await;
+
+        let before = session.token_info().await.expect("token info seeded");
+        assert_eq!(before.total_token_usage, initial);
+        assert_eq!(before.last_token_usage, initial);
+
+        let review = crate::protocol::TokenUsage {
+            input_tokens: 3,
+            cached_input_tokens: 1,
+            output_tokens: 8,
+            reasoning_output_tokens: 0,
+            total_tokens: 12,
+        };
+        session
+            .append_background_token_usage(&turn_context, &review)
+            .await;
+
+        let after = session.token_info().await.expect("token info present");
+        let mut expected_total = initial.clone();
+        expected_total.add_assign(&review);
+        assert_eq!(after.total_token_usage, expected_total);
+        assert_eq!(after.last_token_usage, initial);
     }
 
     #[tokio::test]
