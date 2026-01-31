@@ -245,7 +245,7 @@ fn filter_thread_start_params_ts(
     let mut content =
         fs::read_to_string(&path).with_context(|| format!("Failed to read {}", path.display()))?;
 
-    let Some((_eq_index, open_brace, close_brace)) = type_alias_brace_span(&content) else {
+    let Some((open_brace, close_brace)) = type_body_brace_span(&content) else {
         return Ok(());
     };
     let inner = &content[open_brace + 1..close_brace];
@@ -254,10 +254,11 @@ fn filter_thread_start_params_ts(
         .filter(|field| field.type_name == "ThreadStartParams")
         .map(|field| field.field_name)
         .collect();
-    let fields = split_top_level(inner, ',');
+    let fields = split_top_level_multi(inner, &[',', ';']);
     let filtered_fields: Vec<String> = fields
         .into_iter()
         .filter(|field| {
+            let field = strip_leading_block_comments(field);
             parse_property_name(field)
                 .is_none_or(|name| !experimental_field_names.contains(name.as_str()))
         })
@@ -461,11 +462,21 @@ fn split_type_alias(content: &str) -> Option<(String, String, String)> {
     Some((prefix, body, suffix))
 }
 
-fn type_alias_brace_span(content: &str) -> Option<(usize, usize, usize)> {
-    let eq_index = content.find('=')?;
-    let after_eq = &content[eq_index + 1..];
-    let (open_rel, close_rel) = find_top_level_brace_span(after_eq)?;
-    Some((eq_index, eq_index + 1 + open_rel, eq_index + 1 + close_rel))
+fn type_body_brace_span(content: &str) -> Option<(usize, usize)> {
+    if let Some(eq_index) = content.find('=') {
+        let after_eq = &content[eq_index + 1..];
+        let (open_rel, close_rel) = find_top_level_brace_span(after_eq)?;
+        return Some((eq_index + 1 + open_rel, eq_index + 1 + close_rel));
+    }
+
+    const INTERFACE_MARKER: &str = "export interface";
+    let interface_index = content.find(INTERFACE_MARKER)?;
+    let after_interface = &content[interface_index + INTERFACE_MARKER.len()..];
+    let (open_rel, close_rel) = find_top_level_brace_span(after_interface)?;
+    Some((
+        interface_index + INTERFACE_MARKER.len() + open_rel,
+        interface_index + INTERFACE_MARKER.len() + close_rel,
+    ))
 }
 
 fn find_top_level_brace_span(input: &str) -> Option<(usize, usize)> {
@@ -488,11 +499,15 @@ fn find_top_level_brace_span(input: &str) -> Option<(usize, usize)> {
 }
 
 fn split_top_level(input: &str, delimiter: char) -> Vec<String> {
+    split_top_level_multi(input, &[delimiter])
+}
+
+fn split_top_level_multi(input: &str, delimiters: &[char]) -> Vec<String> {
     let mut state = ScanState::default();
     let mut start = 0usize;
     let mut parts = Vec::new();
     for (index, ch) in input.char_indices() {
-        if !state.in_string() && ch == delimiter && state.depth.is_top_level() {
+        if !state.in_string() && state.depth.is_top_level() && delimiters.contains(&ch) {
             let part = input[start..index].trim();
             if !part.is_empty() {
                 parts.push(part.to_string());
@@ -529,6 +544,19 @@ fn parse_property(input: &str) -> Option<(String, &str)> {
     let name = parse_property_name(input)?;
     let colon_index = input.find(':')?;
     Some((name, input[colon_index + 1..].trim_start()))
+}
+
+fn strip_leading_block_comments(input: &str) -> &str {
+    let mut rest = input.trim_start();
+    loop {
+        let Some(after_prefix) = rest.strip_prefix("/*") else {
+            return rest;
+        };
+        let Some(end_rel) = after_prefix.find("*/") else {
+            return rest;
+        };
+        rest = after_prefix[end_rel + 2..].trim_start();
+    }
 }
 
 fn parse_property_name(input: &str) -> Option<String> {
@@ -1222,7 +1250,6 @@ fn generate_index_ts(out_dir: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::common::EXPERIMENTAL_CLIENT_METHODS;
     use crate::protocol::v2;
     use anyhow::Result;
     use pretty_assertions::assert_eq;
@@ -1257,10 +1284,10 @@ mod tests {
         generate_ts_with_options(&output_dir, None, options)?;
 
         let client_request_ts = fs::read_to_string(output_dir.join("ClientRequest.ts"))?;
-        assert_eq!(client_request_ts.contains("collaborationMode/list"), false);
+        assert_eq!(client_request_ts.contains("mock/experimentalMethod"), false);
         let thread_start_ts =
             fs::read_to_string(output_dir.join("v2").join("ThreadStartParams.ts"))?;
-        assert_eq!(thread_start_ts.contains("dynamicTools"), false);
+        assert_eq!(thread_start_ts.contains("mockExperimentalField"), false);
 
         let mut undefined_offenders = Vec::new();
         let mut optional_nullable_offenders = BTreeSet::new();
@@ -1437,7 +1464,7 @@ mod tests {
     }
 
     #[test]
-    fn stable_schema_filter_removes_dynamic_tools() -> Result<()> {
+    fn stable_schema_filter_removes_mock_thread_start_field() -> Result<()> {
         let output_dir = std::env::temp_dir().join(format!("codex_schema_{}", Uuid::now_v7()));
         fs::create_dir(&output_dir)?;
         let schema = write_json_schema_with_return::<v2::ThreadStartParams>(
@@ -1457,13 +1484,45 @@ mod tests {
         let properties = def_schema["properties"]
             .as_object()
             .expect("ThreadStartParams should have properties");
-        assert_eq!(properties.contains_key("dynamicTools"), false);
+        assert_eq!(properties.contains_key("mockExperimentalField"), false);
         let _cleanup = fs::remove_dir_all(&output_dir);
         Ok(())
     }
 
     #[test]
-    fn stable_schema_filter_removes_experimental_methods() -> Result<()> {
+    fn thread_start_ts_filter_handles_interface_shape() -> Result<()> {
+        let output_dir = std::env::temp_dir().join(format!("codex_ts_filter_{}", Uuid::now_v7()));
+        let v2_dir = output_dir.join("v2");
+        fs::create_dir_all(&v2_dir)?;
+
+        struct TempDirGuard(PathBuf);
+
+        impl Drop for TempDirGuard {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let _guard = TempDirGuard(output_dir.clone());
+        let path = v2_dir.join("ThreadStartParams.ts");
+        let content = r#"export interface ThreadStartParams {
+  model: string | null;
+  mockExperimentalField: string | null;
+  experimentalRawEvents: boolean;
+}
+"#;
+        fs::write(&path, content)?;
+
+        let registered_fields = experimental_fields();
+        filter_thread_start_params_ts(&output_dir, &registered_fields)?;
+
+        let filtered = fs::read_to_string(&path)?;
+        assert_eq!(filtered.contains("mockExperimentalField"), false);
+        Ok(())
+    }
+
+    #[test]
+    fn stable_schema_filter_removes_mock_experimental_method() -> Result<()> {
         let output_dir = std::env::temp_dir().join(format!("codex_schema_{}", Uuid::now_v7()));
         fs::create_dir(&output_dir)?;
         let schema =
@@ -1472,13 +1531,7 @@ mod tests {
         filter_experimental_schema(&mut bundle)?;
 
         let bundle_str = serde_json::to_string(&bundle)?;
-        for method in EXPERIMENTAL_CLIENT_METHODS
-            .iter()
-            .copied()
-            .filter(|method| !method.is_empty())
-        {
-            assert_eq!(bundle_str.contains(method), false);
-        }
+        assert_eq!(bundle_str.contains("mock/experimentalMethod"), false);
         let _cleanup = fs::remove_dir_all(&output_dir);
         Ok(())
     }
@@ -1491,20 +1544,17 @@ mod tests {
 
         let thread_start_json =
             fs::read_to_string(output_dir.join("v2").join("ThreadStartParams.json"))?;
-        assert_eq!(thread_start_json.contains("dynamicTools"), false);
+        assert_eq!(thread_start_json.contains("mockExperimentalField"), false);
 
         let client_request_json = fs::read_to_string(output_dir.join("ClientRequest.json"))?;
-        for method in EXPERIMENTAL_CLIENT_METHODS
-            .iter()
-            .copied()
-            .filter(|method| !method.is_empty())
-        {
-            assert_eq!(client_request_json.contains(method), false);
-        }
+        assert_eq!(
+            client_request_json.contains("mock/experimentalMethod"),
+            false
+        );
 
         let bundle_json =
             fs::read_to_string(output_dir.join("codex_app_server_protocol.schemas.json"))?;
-        assert_eq!(bundle_json.contains("dynamicTools"), false);
+        assert_eq!(bundle_json.contains("mockExperimentalField"), false);
 
         let _cleanup = fs::remove_dir_all(&output_dir);
         Ok(())

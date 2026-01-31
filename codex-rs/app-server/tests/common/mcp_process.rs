@@ -38,6 +38,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::ListConversationsParams;
 use codex_app_server_protocol::LoginAccountParams;
 use codex_app_server_protocol::LoginApiKeyParams;
+use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::NewConversationParams;
 use codex_app_server_protocol::RemoveConversationListenerParams;
@@ -475,6 +476,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("collaborationMode/list", params).await
+    }
+
+    /// Send a `mock/experimentalMethod` JSON-RPC request.
+    pub async fn send_mock_experimental_method_request(
+        &mut self,
+        params: MockExperimentalMethodParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("mock/experimentalMethod", params).await
     }
 
     /// Send a `resumeConversation` JSON-RPC request.

@@ -236,6 +236,12 @@ client_request_definitions! {
         params: v2::CollaborationModeListParams,
         response: v2::CollaborationModeListResponse,
     },
+    #[experimental("mock/experimentalMethod")]
+    /// EXPERIMENTAL - test-only method used to validate experimental gating.
+    MockExperimentalMethod => "mock/experimentalMethod" {
+        params: v2::MockExperimentalMethodParams,
+        response: v2::MockExperimentalMethodResponse,
+    },
 
     McpServerOauthLogin => "mcpServer/oauth/login" {
         params: v2::McpServerOauthLoginParams,
@@ -1047,29 +1053,25 @@ mod tests {
     }
 
     #[test]
-    fn collaboration_mode_list_is_marked_experimental() {
-        let request = ClientRequest::CollaborationModeList {
+    fn mock_experimental_method_is_marked_experimental() {
+        let request = ClientRequest::MockExperimentalMethod {
             request_id: RequestId::Integer(1),
-            params: v2::CollaborationModeListParams::default(),
+            params: v2::MockExperimentalMethodParams::default(),
         };
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
-        assert_eq!(reason, Some("collaborationMode/list"));
+        assert_eq!(reason, Some("mock/experimentalMethod"));
     }
 
     #[test]
-    fn thread_start_dynamic_tools_is_marked_experimental() {
+    fn thread_start_mock_field_is_marked_experimental() {
         let request = ClientRequest::ThreadStart {
             request_id: RequestId::Integer(1),
             params: v2::ThreadStartParams {
-                dynamic_tools: Some(vec![v2::DynamicToolSpec {
-                    name: "tool".to_string(),
-                    description: "desc".to_string(),
-                    input_schema: json!({"type": "object"}),
-                }]),
+                mock_experimental_field: Some("mock".to_string()),
                 ..Default::default()
             },
         };
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
-        assert_eq!(reason, Some("thread/start.dynamicTools"));
+        assert_eq!(reason, Some("thread/start.mockExperimentalField"));
     }
 }
