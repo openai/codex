@@ -60,6 +60,10 @@ impl SessionState {
         self.history.record_items(items, policy);
     }
 
+    /// Keep `turn_context_history` aligned with user turns even when no TurnContextItem exists
+    /// yet (e.g., legacy rollouts or model-sourced user messages). We push a `None` placeholder
+    /// for each user message so later rollback/backtrack logic can safely index the latest
+    /// user turn and optionally fill the slot with a TurnContextItem.
     pub(crate) fn record_user_turn_placeholders(&mut self, items: &[ResponseItem]) {
         for item in items {
             if matches!(item, ResponseItem::Message { role, .. } if role == "user") {
