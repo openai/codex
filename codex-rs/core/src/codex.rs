@@ -1118,6 +1118,14 @@ impl Session {
                     self.record_into_history(&reconstructed_history, &turn_context)
                         .await;
                 }
+                let user_turns = Self::user_turn_count(&reconstructed_history);
+                let turn_context_history =
+                    Self::reconstruct_turn_context_history_from_rollout(&rollout_items);
+                {
+                    let mut state = self.state.lock().await;
+                    state.set_turn_context_history(turn_context_history);
+                    state.reset_turn_context_history(user_turns);
+                }
 
                 // Seed usage info from the recorded rollout so UIs can show token counts
                 // immediately on resume/fork.
@@ -1138,6 +1146,14 @@ impl Session {
                 if !reconstructed_history.is_empty() {
                     self.record_into_history(&reconstructed_history, &turn_context)
                         .await;
+                }
+                let user_turns = Self::user_turn_count(&reconstructed_history);
+                let turn_context_history =
+                    Self::reconstruct_turn_context_history_from_rollout(&rollout_items);
+                {
+                    let mut state = self.state.lock().await;
+                    state.set_turn_context_history(turn_context_history);
+                    state.reset_turn_context_history(user_turns);
                 }
 
                 // Seed usage info from the recorded rollout so UIs can show token counts
@@ -1819,6 +1835,46 @@ impl Session {
         history.raw_items().to_vec()
     }
 
+    fn reconstruct_turn_context_history_from_rollout(
+        rollout_items: &[RolloutItem],
+    ) -> Vec<Option<TurnContextItem>> {
+        let mut history = Vec::new();
+        let mut awaiting_turn_context = false;
+        for item in rollout_items {
+            match item {
+                RolloutItem::ResponseItem(ResponseItem::Message { role, .. }) if role == "user" => {
+                    history.push(None);
+                    awaiting_turn_context = true;
+                }
+                RolloutItem::TurnContext(ctx) => {
+                    if awaiting_turn_context {
+                        if let Some(last) = history.last_mut() {
+                            *last = Some(ctx.clone());
+                        } else {
+                            history.push(Some(ctx.clone()));
+                        }
+                        awaiting_turn_context = false;
+                    }
+                }
+                RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+                    let drop = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
+                    let new_len = history.len().saturating_sub(drop);
+                    history.truncate(new_len);
+                    awaiting_turn_context = false;
+                }
+                _ => {}
+            }
+        }
+        history
+    }
+
+    fn user_turn_count(items: &[ResponseItem]) -> usize {
+        items
+            .iter()
+            .filter(|item| matches!(item, ResponseItem::Message { role, .. } if role == "user"))
+            .count()
+    }
+
     /// Append ResponseItems to the in-memory conversation history only.
     pub(crate) async fn record_into_history(
         &self,
@@ -1826,6 +1882,7 @@ impl Session {
         turn_context: &TurnContext,
     ) {
         let mut state = self.state.lock().await;
+        state.record_user_turn_placeholders(items);
         state.record_items(items.iter(), turn_context.truncation_policy);
     }
 
@@ -1847,8 +1904,10 @@ impl Session {
     }
 
     pub(crate) async fn replace_history(&self, items: Vec<ResponseItem>) {
+        let user_turns = Self::user_turn_count(&items);
         let mut state = self.state.lock().await;
         state.replace_history(items);
+        state.reset_turn_context_history(user_turns);
     }
 
     pub(crate) async fn seed_initial_context_if_needed(&self, turn_context: &TurnContext) {
@@ -2112,6 +2171,23 @@ impl Session {
         // those spans, and `record_response_item_and_emit_turn_item` would drop them.
         self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
             .await;
+        let collaboration_mode = self.current_collaboration_mode().await;
+        let turn_context_item = TurnContextItem {
+            cwd: turn_context.cwd.clone(),
+            approval_policy: turn_context.approval_policy,
+            sandbox_policy: turn_context.sandbox_policy.clone(),
+            model: turn_context.client.get_model(),
+            personality: turn_context.personality,
+            collaboration_mode: Some(collaboration_mode),
+            effort: turn_context.client.get_reasoning_effort(),
+            summary: turn_context.client.get_reasoning_summary(),
+            user_instructions: turn_context.user_instructions.clone(),
+            developer_instructions: turn_context.developer_instructions.clone(),
+            final_output_json_schema: turn_context.final_output_json_schema.clone(),
+            truncation_policy: Some(turn_context.truncation_policy.into()),
+        };
+        let mut state = self.state.lock().await;
+        state.set_last_turn_context(turn_context_item);
         let turn_item = TurnItem::UserMessage(UserMessageItem::new(input));
         self.emit_turn_item_started(turn_context, &turn_item).await;
         self.emit_turn_item_completed(turn_context, turn_item).await;
@@ -2983,17 +3059,26 @@ mod handlers {
 
         let mut history = sess.clone_history().await;
         history.drop_last_n_user_turns(num_turns);
-        if let Some(mask) = last_collaboration_mask(history.raw_items()) {
-            let mut state = sess.state.lock().await;
+
+        // Replace with the raw items. We don't want to replace with a normalized
+        // version of the history.
+        let user_turns = Self::user_turn_count(history.raw_items());
+        sess.replace_history(history.raw_items().to_vec()).await;
+        let mut state = sess.state.lock().await;
+        let mut applied = false;
+        if state.turn_context_history.len() == user_turns
+            && let Some(turn_context) = state.last_turn_context()
+            && let Some(collaboration_mode) = turn_context.collaboration_mode.clone()
+        {
+            state.session_configuration.collaboration_mode = collaboration_mode;
+            applied = true;
+        }
+        if !applied && let Some(mask) = last_collaboration_mask(history.raw_items()) {
             state.session_configuration.collaboration_mode = state
                 .session_configuration
                 .collaboration_mode
                 .apply_mask(&mask);
         }
-
-        // Replace with the raw items. We don't want to replace with a normalized
-        // version of the history.
-        sess.replace_history(history.raw_items().to_vec()).await;
         sess.recompute_token_usage(turn_context.as_ref()).await;
 
         sess.send_event_raw_flushed(Event {
