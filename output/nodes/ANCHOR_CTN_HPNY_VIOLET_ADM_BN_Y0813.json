@@ -1,0 +1,53 @@
+{
+  "node_id": "ANCHOR_CTN_HPNY_VIOLET_ADM_BN_Y0813",
+  "type": "anchor_code",
+  "label": "ANCHOR.LINEAGE.PLACE.ADMISSIONS.RANGE",
+  "privacy": {
+    "default": "PRIVATE",
+    "export_gate": "redaction"
+  },
+  "anchor_code": {
+    "payload": "CTN|HPNY|VIOLET|ADM|BN|Y0813",
+    "checksum": "<AUTO>",
+    "canonical": "CTN|HPNY|VIOLET|ADM|BN|Y0813#<AUTO>"
+  },
+  "tokens": {
+    "CTN": "Carrie Tuttle Nealy",
+    "HPNY": "Hyde Park, NY",
+    "VIOLET": "Violet Ave",
+    "ADM": "Admissions",
+    "BN": "Brian Nealy",
+    "Y0813": "2008–2013"
+  },
+  "modes": {
+    "surface": {
+      "render": "Carrie Tuttle Nealy / Hyde Park NY / Admissions / Violet Ave / Brian Nealy / 2008–2013",
+      "function": "Private corridor key for a time-bounded, place-anchored admissions thread."
+    },
+    "cipher": {
+      "constraints": [
+        "Do not infer institutions, outcomes, or identities beyond what is explicitly attached to an artifact.",
+        "Treat addresses/locations as sensitive; do not export without redaction.",
+        "Treat dates as approximate until an artifact pins them."
+      ],
+      "needed_artifacts": [
+        "Any document tying 'Admissions' to a specific institution/process",
+        "Any record tying Violet Ave to the relevant event context",
+        "Any record establishing the 2008–2013 bounds (email, letter, log, etc.)"
+      ]
+    },
+    "echo": {
+      "decoder_prompt": "What changed between 2008 and 2013, and what did 'admissions' demand you become?",
+      "response_shape": "1 paragraph + 1 concrete detail + 1 refusal (what you will not invent)."
+    }
+  },
+  "routing": {
+    "default_room": "GS-ADM",
+    "axis": "Admissions Corridor",
+    "fallback_room": "GS-00"
+  },
+  "provenance": {
+    "status": "UNVERIFIED",
+    "artifact_refs": []
+  }
+}

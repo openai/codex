@@ -1,0 +1,48 @@
+{
+  "node_id": "ANCHOR_PW_NYY_LASQ_AMM_AJ",
+  "type": "anchor_code",
+  "label": "ANCHOR.LINEAGE.PLACE.BANNER",
+  "anchor_code": {
+    "payload": "PW|NYY|LASQ|AMM|A&J",
+    "checksum": "<AUTO>",
+    "canonical": "PW|NYY|LASQ|AMM|A&J#<AUTO>"
+  },
+  "tokens": {
+    "PW": "Pussy Willow",
+    "NYY": "Yankees",
+    "LASQ": "Lou Auger Square",
+    "AMM": "Alicia Marie McLoughlin",
+    "A&J": "Alice & James"
+  },
+  "modes": {
+    "surface": {
+      "render": "Pussy willow / Yankees / Lou Auger Square / Alicia Marie McLoughlin / born to Alice and James",
+      "function": "Memory-key that opens a place+banner+lineage corridor without claiming external proof."
+    },
+    "cipher": {
+      "constraints": [
+        "Do not infer surnames for Alice/James.",
+        "Do not infer dates or geography for Lou Auger Square without an artifact.",
+        "Treat AMM lineage as an assertion until supported."
+      ],
+      "needed_artifacts": [
+        "Record tying 'Lou Auger Square' to a specific location",
+        "Record verifying Alicia Marie McLoughlin parentage (public or private)",
+        "Optional: contextual artifact linking 'Yankees' reference to a time/place"
+      ]
+    },
+    "echo": {
+      "decoder_prompt": "What did the banner (NYY) teach you to perform, and what did the willow (PW) teach you to survive?",
+      "response_shape": "1 paragraph + 1 concrete detail + 1 refusal (what you will not invent)."
+    }
+  },
+  "routing": {
+    "default_room": "GS-01",
+    "axis": "Axis Primer — Day 1",
+    "fallback_room": "GS-00"
+  },
+  "provenance": {
+    "status": "UNVERIFIED",
+    "artifact_refs": []
+  }
+}

@@ -49,6 +49,10 @@ yarn-error.log*
 # env
 .env*
 !.env.example
+postman/*environment*.json
+*.key
+*.pem
+*.p12
 
 # package
 *.tgz
