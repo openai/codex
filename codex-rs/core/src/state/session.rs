@@ -82,6 +82,11 @@ impl SessionState {
         self.turn_context_history.push(Some(turn_context));
     }
 
+    /// Trim or left-pad `turn_context_history` to align with the current number of user turns.
+    ///
+    /// When history is replaced (e.g., during replay/rollback), we need the last N entries
+    /// corresponding to the surviving user turns. If the stored list is shorter than the
+    /// user-turn count, we pad with `None` so indices remain aligned.
     pub(crate) fn reset_turn_context_history(&mut self, user_turn_count: usize) {
         let existing_len = self.turn_context_history.len();
         if existing_len >= user_turn_count {
