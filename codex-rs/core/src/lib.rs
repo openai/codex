@@ -33,6 +33,7 @@ mod exec_policy;
 pub mod features;
 mod flags;
 pub mod git_info;
+pub mod hooks;
 pub mod instructions;
 pub mod landlock;
 pub mod mcp;
@@ -122,7 +123,6 @@ pub use transport_manager::TransportManager;
 mod function_tool;
 mod state;
 mod tasks;
-mod user_notification;
 mod user_shell_command;
 pub mod util;
 
