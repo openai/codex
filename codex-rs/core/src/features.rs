@@ -503,11 +503,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::PowershellUtf8,
         key: "powershell_utf8",
         #[cfg(windows)]
-        stage: Stage::Experimental {
-            name: "Powershell UTF-8 support",
-            menu_description: "Enable UTF-8 output in Powershell.",
-            announcement: "Codex now supports UTF-8 output in Powershell. If you are seeing problems, disable in /experimental.",
-        },
+        stage: Stage::Stable,
         #[cfg(windows)]
         default_enabled: true,
         #[cfg(not(windows))]
