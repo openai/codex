@@ -19,6 +19,7 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationPolicyConfig;
+use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
@@ -186,5 +187,6 @@ fn test_remote_model(slug: &str, priority: i32) -> ModelInfo {
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
+        input_modalities: default_input_modalities(),
     }
 }

@@ -7,6 +7,7 @@ use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_protocol::openai_models::default_input_modalities;
 use core_test_support::load_default_config_for_test;
 use indoc::indoc;
 use pretty_assertions::assert_eq;
@@ -99,6 +100,7 @@ fn gpt_52_codex() -> ModelPreset {
         upgrade: None,
         show_in_picker: true,
         supported_in_api: true,
+        input_modalities: default_input_modalities(),
     }
 }
 
@@ -142,6 +144,7 @@ fn gpt_5_1_codex_max() -> ModelPreset {
         )),
         show_in_picker: true,
         supported_in_api: true,
+        input_modalities: default_input_modalities(),
     }
 }
 
@@ -177,6 +180,7 @@ fn gpt_5_1_codex_mini() -> ModelPreset {
         )),
         show_in_picker: true,
         supported_in_api: true,
+        input_modalities: default_input_modalities(),
     }
 }
 
@@ -222,6 +226,7 @@ fn gpt_5_2() -> ModelPreset {
         )),
         show_in_picker: true,
         supported_in_api: true,
+        input_modalities: default_input_modalities(),
     }
 }
 
@@ -255,6 +260,7 @@ fn bengalfox() -> ModelPreset {
         upgrade: None,
         show_in_picker: false,
         supported_in_api: true,
+        input_modalities: default_input_modalities(),
     }
 }
 
@@ -288,6 +294,7 @@ fn boomslang() -> ModelPreset {
         upgrade: None,
         show_in_picker: false,
         supported_in_api: true,
+        input_modalities: default_input_modalities(),
     }
 }
 
@@ -327,6 +334,7 @@ fn gpt_5_codex() -> ModelPreset {
         )),
         show_in_picker: false,
         supported_in_api: true,
+        input_modalities: default_input_modalities(),
     }
 }
 
@@ -362,6 +370,7 @@ fn gpt_5_codex_mini() -> ModelPreset {
         )),
         show_in_picker: false,
         supported_in_api: true,
+        input_modalities: default_input_modalities(),
     }
 }
 
@@ -401,6 +410,7 @@ fn gpt_5_1_codex() -> ModelPreset {
         )),
         show_in_picker: false,
         supported_in_api: true,
+        input_modalities: default_input_modalities(),
     }
 }
 
@@ -444,6 +454,7 @@ fn gpt_5() -> ModelPreset {
         )),
         show_in_picker: false,
         supported_in_api: true,
+        input_modalities: default_input_modalities(),
     }
 }
 
@@ -483,6 +494,7 @@ fn gpt_5_1() -> ModelPreset {
         )),
         show_in_picker: false,
         supported_in_api: true,
+        input_modalities: default_input_modalities(),
     }
 }
 

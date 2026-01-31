@@ -390,6 +390,10 @@ impl ChatComposer {
         self.skills = skills;
     }
 
+    pub fn set_image_paste_enabled(&mut self, enabled: bool) {
+        self.config.image_paste_enabled = enabled;
+    }
+
     pub fn set_connector_mentions(&mut self, connectors_snapshot: Option<ConnectorsSnapshot>) {
         self.connectors_snapshot = connectors_snapshot;
     }

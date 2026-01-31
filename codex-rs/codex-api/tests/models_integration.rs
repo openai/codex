@@ -11,6 +11,7 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationPolicyConfig;
+use codex_protocol::openai_models::default_input_modalities;
 use http::HeaderMap;
 use http::Method;
 use wiremock::Mock;
@@ -88,6 +89,7 @@ async fn models_client_hits_models_endpoint() {
             auto_compact_token_limit: None,
             effective_context_window_percent: 95,
             experimental_supported_tools: Vec::new(),
+            input_modalities: default_input_modalities(),
         }],
     };
 

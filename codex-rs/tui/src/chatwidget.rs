@@ -208,6 +208,7 @@ use codex_core::ThreadManager;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_file_search::FileMatch;
+use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::UpdatePlanArgs;
@@ -2741,6 +2742,13 @@ impl ChatWidget {
     }
 
     pub(crate) fn attach_image(&mut self, path: PathBuf) {
+        if !self.current_model_supports_images() {
+            self.add_to_history(history_cell::new_warning_event(
+                self.image_inputs_not_supported_message(),
+            ));
+            self.request_redraw();
+            return;
+        }
         tracing::info!("attach_image path={path:?}");
         self.bottom_pane.attach_image(path);
         self.request_redraw();
@@ -3170,6 +3178,16 @@ impl ChatWidget {
             mention_paths,
         } = user_message;
         if text.is_empty() && local_images.is_empty() {
+            return;
+        }
+        if !local_images.is_empty() && !self.current_model_supports_images() {
+            let local_image_paths = local_images.iter().map(|img| img.path.clone()).collect();
+            self.bottom_pane
+                .set_composer_text(text, text_elements, local_image_paths);
+            self.add_to_history(history_cell::new_warning_event(
+                self.image_inputs_not_supported_message(),
+            ));
+            self.request_redraw();
             return;
         }
 
@@ -5229,6 +5247,32 @@ impl ChatWidget {
             .unwrap_or(false)
     }
 
+    fn current_model_supports_images(&self) -> bool {
+        let model = self.current_model();
+        self.models_manager
+            .try_list_models(&self.config)
+            .ok()
+            .and_then(|models| {
+                models
+                    .into_iter()
+                    .find(|preset| preset.model == model)
+                    .map(|preset| preset.input_modalities.contains(&InputModality::Image))
+            })
+            .unwrap_or(true)
+    }
+
+    fn sync_image_paste_enabled(&mut self) {
+        let enabled = self.current_model_supports_images();
+        self.bottom_pane.set_image_paste_enabled(enabled);
+    }
+
+    fn image_inputs_not_supported_message(&self) -> String {
+        format!(
+            "Model {} does not support image inputs. Remove images or switch models.",
+            self.current_model()
+        )
+    }
+
     #[allow(dead_code)] // Used in tests
     pub(crate) fn current_collaboration_mode(&self) -> &CollaborationMode {
         &self.current_collaboration_mode
@@ -5301,6 +5345,7 @@ impl ChatWidget {
     fn refresh_model_display(&mut self) {
         let effective = self.effective_collaboration_mode();
         self.session_header.set_model(effective.model());
+        self.sync_image_paste_enabled();
     }
 
     fn model_display_name(&self) -> &str {
