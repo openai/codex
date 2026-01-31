@@ -87,13 +87,6 @@ impl SessionState {
         }
     }
 
-    pub(crate) fn last_turn_context(&self) -> Option<&TurnContextItem> {
-        self.turn_context_history
-            .iter()
-            .rev()
-            .find_map(Option::as_ref)
-    }
-
     pub(crate) fn set_turn_context_history(
         &mut self,
         turn_context_history: Vec<Option<TurnContextItem>>,
