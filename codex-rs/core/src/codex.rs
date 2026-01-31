@@ -14,6 +14,8 @@ use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
 use crate::agent::MAX_THREAD_SPAWN_DEPTH;
 use crate::agent::agent_status_from_event;
+use crate::analytics_client::AnalyticsEventsClient;
+use crate::analytics_client::build_track_events_context;
 use crate::compact;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
@@ -904,6 +906,10 @@ impl Session {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
+            analytics_events_client: AnalyticsEventsClient::new(
+                Arc::clone(&config),
+                Arc::clone(&auth_manager),
+            ),
             notifier: UserNotifier::new(config.notify.clone()),
             rollout: Mutex::new(rollout_recorder),
             user_shell: Arc::new(default_shell),
@@ -3385,10 +3391,18 @@ pub(crate) async fn run_turn(
     .await;
 
     let otel_manager = turn_context.client.get_otel_manager();
+    let thread_id = sess.conversation_id.to_string();
+    let tracking = build_track_events_context(turn_context.client.get_model(), thread_id);
     let SkillInjections {
         items: skill_items,
         warnings: skill_warnings,
-    } = build_skill_injections(&mentioned_skills, Some(&otel_manager)).await;
+    } = build_skill_injections(
+        &mentioned_skills,
+        Some(&otel_manager),
+        &sess.services.analytics_events_client,
+        tracking.clone(),
+    )
+    .await;
 
     for message in skill_warnings {
         sess.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))
@@ -5347,6 +5361,10 @@ mod tests {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
+            analytics_events_client: AnalyticsEventsClient::new(
+                Arc::clone(&config),
+                Arc::clone(&auth_manager),
+            ),
             notifier: UserNotifier::new(None),
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
@@ -5463,6 +5481,10 @@ mod tests {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
+            analytics_events_client: AnalyticsEventsClient::new(
+                Arc::clone(&config),
+                Arc::clone(&auth_manager),
+            ),
             notifier: UserNotifier::new(None),
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
