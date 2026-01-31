@@ -106,8 +106,7 @@ async fn should_install_mcp_dependencies(
             let empty = RequestUserInputResponse {
                 answers: HashMap::new(),
             };
-            sess.notify_user_input_response(sub_id, empty.clone())
-                .await;
+            sess.notify_user_input_response(sub_id, empty.clone()).await;
             empty
         }
         response = response_fut => response.unwrap_or_else(|| RequestUserInputResponse {
