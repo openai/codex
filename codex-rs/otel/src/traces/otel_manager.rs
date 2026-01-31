@@ -1,3 +1,9 @@
+use crate::metrics::names::API_CALL_COUNT_METRIC;
+use crate::metrics::names::API_CALL_DURATION_METRIC;
+use crate::metrics::names::SSE_EVENT_COUNT_METRIC;
+use crate::metrics::names::SSE_EVENT_DURATION_METRIC;
+use crate::metrics::names::TOOL_CALL_COUNT_METRIC;
+use crate::metrics::names::TOOL_CALL_DURATION_METRIC;
 use crate::otel_provider::traceparent_context_from_env;
 use chrono::SecondsFormat;
 use chrono::Utc;
@@ -28,6 +34,8 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 pub use crate::OtelEventMetadata;
 pub use crate::OtelManager;
 pub use crate::ToolDecisionSource;
+
+const SSE_UNKNOWN_KIND: &str = "unknown";
 
 impl OtelManager {
     #[allow(clippy::too_many_arguments)]
@@ -148,6 +156,21 @@ impl OtelManager {
         error: Option<&str>,
         duration: Duration,
     ) {
+        let success = status.is_some_and(|code| (200..=299).contains(&code)) && error.is_none();
+        let success_str = if success { "true" } else { "false" };
+        let status_str = status
+            .map(|code| code.to_string())
+            .unwrap_or_else(|| "none".to_string());
+        self.counter(
+            API_CALL_COUNT_METRIC,
+            1,
+            &[("status", status_str.as_str()), ("success", success_str)],
+        );
+        self.record_duration(
+            API_CALL_DURATION_METRIC,
+            duration,
+            &[("status", status_str.as_str()), ("success", success_str)],
+        );
         tracing::event!(
             tracing::Level::INFO,
             event.name = "codex.api_request",
@@ -215,6 +238,16 @@ impl OtelManager {
     }
 
     fn sse_event(&self, kind: &str, duration: Duration) {
+        self.counter(
+            SSE_EVENT_COUNT_METRIC,
+            1,
+            &[("kind", kind), ("success", "true")],
+        );
+        self.record_duration(
+            SSE_EVENT_DURATION_METRIC,
+            duration,
+            &[("kind", kind), ("success", "true")],
+        );
         tracing::event!(
             tracing::Level::INFO,
             event.name = "codex.sse_event",
@@ -236,6 +269,17 @@ impl OtelManager {
     where
         T: Display,
     {
+        let kind_str = kind.map_or(SSE_UNKNOWN_KIND, String::as_str);
+        self.counter(
+            SSE_EVENT_COUNT_METRIC,
+            1,
+            &[("kind", kind_str), ("success", "false")],
+        );
+        self.record_duration(
+            SSE_EVENT_DURATION_METRIC,
+            duration,
+            &[("kind", kind_str), ("success", "false")],
+        );
         match kind {
             Some(kind) => tracing::event!(
                 tracing::Level::INFO,
@@ -443,12 +487,12 @@ impl OtelManager {
     ) {
         let success_str = if success { "true" } else { "false" };
         self.counter(
-            "codex.tool.call",
+            TOOL_CALL_COUNT_METRIC,
             1,
             &[("tool", tool_name), ("success", success_str)],
         );
         self.record_duration(
-            "codex.tool.call.duration_ms",
+            TOOL_CALL_DURATION_METRIC,
             duration,
             &[("tool", tool_name), ("success", success_str)],
         );

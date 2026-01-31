@@ -1017,6 +1017,7 @@ impl ChatWidget {
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
         self.plan_stream_controller = None;
+        self.otel_manager.reset_runtime_metrics();
         self.bottom_pane.clear_quit_shortcut_hint();
         self.quit_shortcut_expires_at = None;
         self.quit_shortcut_key = None;
@@ -1038,6 +1039,21 @@ impl ChatWidget {
             self.add_boxed_history(cell);
         }
         self.flush_unified_exec_wait_streak();
+        if !from_replay {
+            let runtime_metrics = self.otel_manager.runtime_metrics_summary();
+            if runtime_metrics.is_some() {
+                let elapsed_seconds = self
+                    .bottom_pane
+                    .status_widget()
+                    .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds);
+                self.add_to_history(history_cell::FinalMessageSeparator::new(
+                    elapsed_seconds,
+                    runtime_metrics,
+                ));
+            }
+            self.needs_final_message_separator = false;
+            self.had_work_activity = false;
+        }
         // Mark task stopped and request redraw now that all content is in history.
         self.agent_turn_running = false;
         self.update_task_running_state();
@@ -1887,7 +1903,10 @@ impl ChatWidget {
                     .status_widget()
                     .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds)
                     .map(|current| self.worked_elapsed_from(current));
-                self.add_to_history(history_cell::FinalMessageSeparator::new(elapsed_seconds));
+                self.add_to_history(history_cell::FinalMessageSeparator::new(
+                    elapsed_seconds,
+                    None,
+                ));
                 self.needs_final_message_separator = false;
                 self.had_work_activity = false;
             } else if self.needs_final_message_separator {
