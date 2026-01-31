@@ -1849,3 +1849,129 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
 
     Ok(())
 }
+
+#[tokio::test(flavor = "current_thread")]
+#[cfg(unix)]
+async fn approving_execpolicy_prefix_applies_to_env_prefixed_commands() -> Result<()> {
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::UnlessTrusted;
+    let sandbox_policy = SandboxPolicy::ReadOnly;
+    let sandbox_policy_for_config = sandbox_policy.clone();
+    let mut builder = test_codex().with_config(move |config| {
+        config.approval_policy = Constrained::allow_any(approval_policy);
+        config.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+    });
+    let test = builder.build(&server).await?;
+
+    let call_id_first = "allow-prefix-env-first";
+    let command_first = "FOO=bar python3 -c 'print(\"first\")'";
+    let args_first = json!({
+        "command": command_first,
+        "timeout_ms": 1_000,
+        "prefix_rule": ["python3"],
+    });
+    let first_event = ev_function_call(
+        call_id_first,
+        "shell_command",
+        &serde_json::to_string(&args_first)?,
+    );
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-prefix-env-1"),
+            first_event,
+            ev_completed("resp-prefix-env-1"),
+        ]),
+    )
+    .await;
+    let _first_results = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-prefix-env-1", "done"),
+            ev_completed("resp-prefix-env-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "allow prefix env first",
+        approval_policy,
+        sandbox_policy.clone(),
+    )
+    .await?;
+
+    let approval = expect_exec_approval(&test, command_first).await;
+    let expected_amendment = ExecPolicyAmendment::new(vec!["python3".to_string()]);
+    assert_eq!(
+        approval.proposed_execpolicy_amendment,
+        Some(expected_amendment.clone())
+    );
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: "0".into(),
+            decision: ReviewDecision::ApprovedExecpolicyAmendment {
+                proposed_execpolicy_amendment: expected_amendment,
+            },
+        })
+        .await?;
+    wait_for_completion(&test).await;
+
+    let policy_path = test.home.path().join("rules").join("default.rules");
+    let policy_contents = fs::read_to_string(&policy_path)?;
+    assert!(
+        policy_contents.contains(r#"prefix_rule(pattern=["python3"], decision="allow")"#),
+        "unexpected policy contents: {policy_contents}"
+    );
+
+    let call_id_second = "allow-prefix-env-second";
+    let command_second = "FOO=baz python3 -c 'print(\"second\")'";
+    let args_second = json!({
+        "command": command_second,
+        "timeout_ms": 1_000,
+    });
+    let second_event = ev_function_call(
+        call_id_second,
+        "shell_command",
+        &serde_json::to_string(&args_second)?,
+    );
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-prefix-env-3"),
+            second_event,
+            ev_completed("resp-prefix-env-3"),
+        ]),
+    )
+    .await;
+    let second_results = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-prefix-env-2", "done"),
+            ev_completed("resp-prefix-env-4"),
+        ]),
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "allow prefix env second",
+        approval_policy,
+        sandbox_policy.clone(),
+    )
+    .await?;
+
+    wait_for_completion_without_approval(&test).await;
+
+    let second_output = parse_result(
+        &second_results
+            .single_request()
+            .function_call_output(call_id_second),
+    );
+    assert_eq!(second_output.exit_code.unwrap_or(0), 0);
+
+    Ok(())
+}
