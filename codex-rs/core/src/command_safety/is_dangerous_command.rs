@@ -135,12 +135,12 @@ fn is_dangerous_to_call_with_exec(command: &[String]) -> bool {
 
 fn git_branch_is_delete(branch_args: &[String]) -> bool {
     // Git allows stacking short flags (for example, `-dv` or `-vd`). Treat any
-    // `-d*`/`-D*` group as a delete flag unless it is exactly `-d`/`-D`.
-    branch_args.iter().any(|arg| {
-        matches!(arg.as_str(), "-d" | "-D" | "--delete")
+    // short-flag group containing `d`/`D` as a delete flag.
+    branch_args.iter().map(String::as_str).any(|arg| {
+        matches!(arg, "-d" | "-D" | "--delete")
             || arg.starts_with("--delete=")
-            || (arg.starts_with("-d") && arg != "-d")
-            || (arg.starts_with("-D") && arg != "-D")
+            || short_flag_group_contains(arg, 'd')
+            || short_flag_group_contains(arg, 'D')
     })
 }
 
@@ -250,6 +250,9 @@ mod tests {
         ])));
         assert!(command_might_be_dangerous(&vec_str(&[
             "git", "branch", "-vd", "feature",
+        ])));
+        assert!(command_might_be_dangerous(&vec_str(&[
+            "git", "branch", "-vD", "feature",
         ])));
         assert!(command_might_be_dangerous(&vec_str(&[
             "git", "branch", "-Dvv", "feature",
