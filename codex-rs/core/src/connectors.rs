@@ -85,6 +85,42 @@ pub fn connector_mention_slug(connector: &AppInfo) -> String {
     connector_name_slug(&connector_display_label(connector))
 }
 
+pub fn render_apps_section(connectors: &[AppInfo]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    lines.push("## Apps".to_string());
+    lines.push(
+        "Apps (connectors) are MCP tools. Users may refer to apps, connectors, or MCPs interchangeably; treat those requests as app mentions when they match an available app, otherwise ask for clarification."
+            .to_string(),
+    );
+    lines.push("### How to mention apps".to_string());
+    lines.push(
+        "- Use `$<app-slug>` to select a unique app by slug (derived from the display name)."
+            .to_string(),
+    );
+    lines.push(
+        "- Use `[$<name>](app://<app-id>)` when the name is ambiguous or collides with a skill."
+            .to_string(),
+    );
+    lines.push(
+        "- If the user asks to use an app/connector/MCP but did not mention it, ask them to add a `$` mention or pick from `/apps`."
+            .to_string(),
+    );
+    lines.push("### Available apps".to_string());
+
+    if connectors.is_empty() {
+        lines.push("- None detected. Ask the user to install an app or run /apps.".to_string());
+    } else {
+        for connector in connectors {
+            let slug = connector_mention_slug(connector);
+            let name = connector.name.as_str();
+            let id = connector.id.as_str();
+            lines.push(format!("- {slug}: {name} (id: {id})"));
+        }
+    }
+
+    lines.join("\n")
+}
+
 pub(crate) fn accessible_connectors_from_mcp_tools(
     mcp_tools: &HashMap<String, crate::mcp_connection_manager::ToolInfo>,
 ) -> Vec<AppInfo> {
