@@ -4,17 +4,15 @@ use app_test_support::McpProcess;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
 use codex_app_server_protocol::ClientInfo;
-use codex_app_server_protocol::CollaborationModeListParams;
-use codex_app_server_protocol::DynamicToolSpec;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use pretty_assertions::assert_eq;
-use serde_json::json;
 use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -23,7 +21,7 @@ use tokio::time::timeout;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tokio::test]
-async fn collaboration_mode_list_requires_experimental_api_capability() -> Result<()> {
+async fn mock_experimental_method_requires_experimental_api_capability() -> Result<()> {
     let codex_home = TempDir::new()?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
 
@@ -40,19 +38,19 @@ async fn collaboration_mode_list_requires_experimental_api_capability() -> Resul
     };
 
     let request_id = mcp
-        .send_list_collaboration_modes_request(CollaborationModeListParams {})
+        .send_mock_experimental_method_request(MockExperimentalMethodParams::default())
         .await?;
     let error = timeout(
         DEFAULT_TIMEOUT,
         mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
     )
     .await??;
-    assert_experimental_capability_error(error, "collaborationMode/list");
+    assert_experimental_capability_error(error, "mock/experimentalMethod");
     Ok(())
 }
 
 #[tokio::test]
-async fn thread_start_dynamic_tools_requires_experimental_api_capability() -> Result<()> {
+async fn thread_start_mock_field_requires_experimental_api_capability() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -70,21 +68,9 @@ async fn thread_start_dynamic_tools_requires_experimental_api_capability() -> Re
         anyhow::bail!("expected initialize response, got {init:?}");
     };
 
-    let dynamic_tool = DynamicToolSpec {
-        name: "demo_tool".to_string(),
-        description: "Demo dynamic tool".to_string(),
-        input_schema: json!({
-            "type": "object",
-            "properties": {
-                "city": { "type": "string" }
-            },
-            "required": ["city"],
-            "additionalProperties": false,
-        }),
-    };
     let request_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            dynamic_tools: Some(vec![dynamic_tool]),
+            mock_experimental_field: Some("mock".to_string()),
             ..Default::default()
         })
         .await?;
@@ -94,7 +80,7 @@ async fn thread_start_dynamic_tools_requires_experimental_api_capability() -> Re
         mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
     )
     .await??;
-    assert_experimental_capability_error(error, "thread/start.dynamicTools");
+    assert_experimental_capability_error(error, "thread/start.mockExperimentalField");
     Ok(())
 }
 
