@@ -1576,7 +1576,7 @@ mod tests {
         // Build expected from the same helpers used by the builder.
         let mut expected: BTreeMap<String, ToolSpec> = BTreeMap::from([]);
         for spec in [
-            create_exec_command_tool(false),
+            create_exec_command_tool(true),
             create_write_stdin_tool(),
             create_list_mcp_resources_tool(),
             create_list_mcp_resource_templates_tool(),
@@ -2410,7 +2410,7 @@ mod tests {
 
     #[test]
     fn test_shell_tool() {
-        let tool = super::create_shell_tool(false);
+        let tool = super::create_shell_tool(true);
         let ToolSpec::Function(ResponsesApiTool {
             description, name, ..
         }) = &tool
@@ -2440,7 +2440,7 @@ Examples of valid command strings:
 
     #[test]
     fn test_shell_command_tool() {
-        let tool = super::create_shell_command_tool(false);
+        let tool = super::create_shell_command_tool(true);
         let ToolSpec::Function(ResponsesApiTool {
             description, name, ..
         }) = &tool

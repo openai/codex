@@ -44,15 +44,15 @@ use thiserror::Error;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AuthMode {
     ApiKey,
-    ChatGPT,
+    Chatgpt,
 }
 
 /// Authentication mechanism used by the current user.
 #[derive(Debug, Clone)]
 pub enum CodexAuth {
     ApiKey(ApiKeyAuth),
-    ChatGpt(ChatGptAuth),
-    ChatGptAuthTokens(ChatGptAuthTokens),
+    Chatgpt(ChatgptAuth),
+    ChatgptAuthTokens(ChatgptAuthTokens),
 }
 
 #[derive(Debug, Clone)]
@@ -61,18 +61,18 @@ pub struct ApiKeyAuth {
 }
 
 #[derive(Debug, Clone)]
-pub struct ChatGptAuth {
-    state: ChatGptAuthState,
+pub struct ChatgptAuth {
+    state: ChatgptAuthState,
     storage: Arc<dyn AuthStorageBackend>,
 }
 
 #[derive(Debug, Clone)]
-pub struct ChatGptAuthTokens {
-    state: ChatGptAuthState,
+pub struct ChatgptAuthTokens {
+    state: ChatgptAuthState,
 }
 
 #[derive(Debug, Clone)]
-struct ChatGptAuthState {
+struct ChatgptAuthState {
     auth_dot_json: Arc<Mutex<Option<AuthDotJson>>>,
     client: CodexHttpClient,
 }
@@ -161,18 +161,18 @@ impl CodexAuth {
         }
 
         let storage_mode = auth_dot_json.storage_mode(auth_credentials_store_mode);
-        let state = ChatGptAuthState {
+        let state = ChatgptAuthState {
             auth_dot_json: Arc::new(Mutex::new(Some(auth_dot_json))),
             client,
         };
 
         match auth_mode {
-            ApiAuthMode::ChatGPT => {
+            ApiAuthMode::Chatgpt => {
                 let storage = create_auth_storage(codex_home.to_path_buf(), storage_mode);
-                Ok(Self::ChatGpt(ChatGptAuth { state, storage }))
+                Ok(Self::Chatgpt(ChatgptAuth { state, storage }))
             }
             ApiAuthMode::ChatgptAuthTokens => {
-                Ok(Self::ChatGptAuthTokens(ChatGptAuthTokens { state }))
+                Ok(Self::ChatgptAuthTokens(ChatgptAuthTokens { state }))
             }
             ApiAuthMode::ApiKey => unreachable!("api key mode is handled above"),
         }
@@ -189,31 +189,31 @@ impl CodexAuth {
     pub fn internal_auth_mode(&self) -> AuthMode {
         match self {
             Self::ApiKey(_) => AuthMode::ApiKey,
-            Self::ChatGpt(_) | Self::ChatGptAuthTokens(_) => AuthMode::ChatGPT,
+            Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) => AuthMode::Chatgpt,
         }
     }
 
     pub fn api_auth_mode(&self) -> ApiAuthMode {
         match self {
             Self::ApiKey(_) => ApiAuthMode::ApiKey,
-            Self::ChatGpt(_) => ApiAuthMode::ChatGPT,
-            Self::ChatGptAuthTokens(_) => ApiAuthMode::ChatgptAuthTokens,
+            Self::Chatgpt(_) => ApiAuthMode::Chatgpt,
+            Self::ChatgptAuthTokens(_) => ApiAuthMode::ChatgptAuthTokens,
         }
     }
 
     pub fn is_chatgpt_auth(&self) -> bool {
-        self.internal_auth_mode() == AuthMode::ChatGPT
+        self.internal_auth_mode() == AuthMode::Chatgpt
     }
 
     pub fn is_external_chatgpt_tokens(&self) -> bool {
-        matches!(self, Self::ChatGptAuthTokens(_))
+        matches!(self, Self::ChatgptAuthTokens(_))
     }
 
     /// Returns `None` is `is_internal_auth_mode() != AuthMode::ApiKey`.
     pub fn api_key(&self) -> Option<&str> {
         match self {
             Self::ApiKey(auth) => Some(auth.api_key.as_str()),
-            Self::ChatGpt(_) | Self::ChatGptAuthTokens(_) => None,
+            Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) => None,
         }
     }
 
@@ -234,7 +234,7 @@ impl CodexAuth {
     pub fn get_token(&self) -> Result<String, std::io::Error> {
         match self {
             Self::ApiKey(auth) => Ok(auth.api_key.clone()),
-            Self::ChatGpt(_) | Self::ChatGptAuthTokens(_) => {
+            Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) => {
                 let access_token = self.get_token_data()?.access_token;
                 Ok(access_token)
             }
@@ -278,8 +278,8 @@ impl CodexAuth {
     /// Returns `None` if `is_chatgpt_auth()` is false.
     fn get_current_auth_json(&self) -> Option<AuthDotJson> {
         let state = match self {
-            Self::ChatGpt(auth) => &auth.state,
-            Self::ChatGptAuthTokens(auth) => &auth.state,
+            Self::Chatgpt(auth) => &auth.state,
+            Self::ChatgptAuthTokens(auth) => &auth.state,
             Self::ApiKey(_) => return None,
         };
         #[expect(clippy::unwrap_used)]
@@ -294,7 +294,7 @@ impl CodexAuth {
     /// Consider this private to integration tests.
     pub fn create_dummy_chatgpt_auth_for_testing() -> Self {
         let auth_dot_json = AuthDotJson {
-            auth_mode: Some(ApiAuthMode::ChatGPT),
+            auth_mode: Some(ApiAuthMode::Chatgpt),
             openai_api_key: None,
             tokens: Some(TokenData {
                 id_token: Default::default(),
@@ -306,12 +306,12 @@ impl CodexAuth {
         };
 
         let client = crate::default_client::create_client();
-        let state = ChatGptAuthState {
+        let state = ChatgptAuthState {
             auth_dot_json: Arc::new(Mutex::new(Some(auth_dot_json))),
             client,
         };
         let storage = create_auth_storage(PathBuf::new(), AuthCredentialsStoreMode::File);
-        Self::ChatGpt(ChatGptAuth { state, storage })
+        Self::Chatgpt(ChatgptAuth { state, storage })
     }
 
     fn from_api_key_with_client(api_key: &str, _client: CodexHttpClient) -> Self {
@@ -325,7 +325,7 @@ impl CodexAuth {
     }
 }
 
-impl ChatGptAuth {
+impl ChatgptAuth {
     fn current_auth_json(&self) -> Option<AuthDotJson> {
         #[expect(clippy::unwrap_used)]
         self.state.auth_dot_json.lock().unwrap().clone()
@@ -436,8 +436,8 @@ pub fn enforce_login_restrictions(config: &Config) -> std::io::Result<()> {
     if let Some(required_method) = config.forced_login_method {
         let method_violation = match (required_method, auth.internal_auth_mode()) {
             (ForcedLoginMethod::Api, AuthMode::ApiKey) => None,
-            (ForcedLoginMethod::Chatgpt, AuthMode::ChatGPT) => None,
-            (ForcedLoginMethod::Api, AuthMode::ChatGPT) => Some(
+            (ForcedLoginMethod::Chatgpt, AuthMode::Chatgpt) => None,
+            (ForcedLoginMethod::Api, AuthMode::Chatgpt) => Some(
                 "API key login is required, but ChatGPT is currently being used. Logging out."
                     .to_string(),
             ),
@@ -750,7 +750,7 @@ impl AuthDotJson {
         if self.openai_api_key.is_some() {
             return ApiAuthMode::ApiKey;
         }
-        ApiAuthMode::ChatGPT
+        ApiAuthMode::Chatgpt
     }
 
     fn storage_mode(
@@ -1127,11 +1127,11 @@ impl AuthManager {
             None => return Ok(()),
         };
         match auth {
-            CodexAuth::ChatGptAuthTokens(_) => {
+            CodexAuth::ChatgptAuthTokens(_) => {
                 self.refresh_external_auth(ExternalAuthRefreshReason::Unauthorized)
                     .await
             }
-            CodexAuth::ChatGpt(chatgpt_auth) => {
+            CodexAuth::Chatgpt(chatgpt_auth) => {
                 let token_data = chatgpt_auth.current_token_data().ok_or_else(|| {
                     RefreshTokenError::Transient(std::io::Error::other(
                         "Token data is not available.",
@@ -1170,7 +1170,7 @@ impl AuthManager {
 
     async fn refresh_if_stale(&self, auth: &CodexAuth) -> Result<bool, RefreshTokenError> {
         let chatgpt_auth = match auth {
-            CodexAuth::ChatGpt(chatgpt_auth) => chatgpt_auth,
+            CodexAuth::Chatgpt(chatgpt_auth) => chatgpt_auth,
             _ => return Ok(false),
         };
 
@@ -1250,7 +1250,7 @@ impl AuthManager {
 
     async fn refresh_tokens(
         &self,
-        auth: &ChatGptAuth,
+        auth: &ChatgptAuth,
         refresh_token: String,
     ) -> Result<(), RefreshTokenError> {
         let refresh_response = try_refresh_token(refresh_token, auth.client()).await?;
@@ -1373,7 +1373,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(None, auth.api_key());
-        assert_eq!(AuthMode::ChatGPT, auth.internal_auth_mode());
+        assert_eq!(AuthMode::Chatgpt, auth.internal_auth_mode());
 
         let auth_dot_json = auth
             .get_current_auth_json()

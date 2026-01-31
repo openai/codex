@@ -58,6 +58,7 @@ use tracing::warn;
 
 pub struct EventProcessorWithJsonOutput {
     last_message_path: Option<PathBuf>,
+    last_proposed_plan: Option<String>,
     next_event_id: AtomicU64,
     // Tracks running commands by call_id, including the associated item id.
     running_commands: HashMap<String, RunningCommand>,
@@ -102,6 +103,7 @@ impl EventProcessorWithJsonOutput {
     pub fn new(last_message_path: Option<PathBuf>) -> Self {
         Self {
             last_message_path,
+            last_proposed_plan: None,
             next_event_id: AtomicU64::new(0),
             running_commands: HashMap::new(),
             running_patch_applies: HashMap::new(),
@@ -119,6 +121,13 @@ impl EventProcessorWithJsonOutput {
             protocol::EventMsg::SessionConfigured(ev) => self.handle_session_configured(ev),
             protocol::EventMsg::ThreadNameUpdated(_) => Vec::new(),
             protocol::EventMsg::AgentMessage(ev) => self.handle_agent_message(ev),
+            protocol::EventMsg::ItemCompleted(protocol::ItemCompletedEvent {
+                item: codex_protocol::items::TurnItem::Plan(item),
+                ..
+            }) => {
+                self.last_proposed_plan = Some(item.text.clone());
+                Vec::new()
+            }
             protocol::EventMsg::AgentReasoning(ev) => self.handle_reasoning_event(ev),
             protocol::EventMsg::ExecCommandBegin(ev) => self.handle_exec_command_begin(ev),
             protocol::EventMsg::ExecCommandEnd(ev) => self.handle_exec_command_end(ev),
@@ -855,7 +864,10 @@ impl EventProcessor for EventProcessorWithJsonOutput {
                 last_agent_message,
             }) => {
                 if let Some(output_file) = self.last_message_path.as_deref() {
-                    handle_last_message(last_agent_message.as_deref(), output_file);
+                    let last_message = last_agent_message
+                        .as_deref()
+                        .or(self.last_proposed_plan.as_deref());
+                    handle_last_message(last_message, output_file);
                 }
                 CodexStatus::InitiateShutdown
             }

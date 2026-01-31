@@ -91,7 +91,7 @@ pub(crate) fn compose_account_display(
     let auth = auth_manager.auth_cached()?;
 
     match auth {
-        CodexAuth::ChatGpt(_) | CodexAuth::ChatGptAuthTokens(_) => {
+        CodexAuth::Chatgpt(_) | CodexAuth::ChatgptAuthTokens(_) => {
             let email = auth.get_account_email();
             let plan = plan
                 .map(|plan_type| title_case(format!("{plan_type:?}").as_str()))

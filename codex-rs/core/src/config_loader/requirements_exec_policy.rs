@@ -9,16 +9,43 @@ use serde::Deserialize;
 use std::sync::Arc;
 use thiserror::Error;
 
-/// TOML types for expressing exec policy requirements.
-///
-/// These types are kept separate from `ConfigRequirementsToml` and are
-/// converted into `codex-execpolicy` rules.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct RequirementsExecPolicyTomlRoot {
-    pub exec_policy: RequirementsExecPolicyToml,
+#[derive(Debug, Clone)]
+pub(crate) struct RequirementsExecPolicy {
+    policy: Policy,
 }
 
-/// TOML representation of `[exec_policy]` within `requirements.toml`.
+impl RequirementsExecPolicy {
+    pub fn new(policy: Policy) -> Self {
+        Self { policy }
+    }
+}
+
+impl PartialEq for RequirementsExecPolicy {
+    fn eq(&self, other: &Self) -> bool {
+        policy_fingerprint(&self.policy) == policy_fingerprint(&other.policy)
+    }
+}
+
+impl Eq for RequirementsExecPolicy {}
+
+impl AsRef<Policy> for RequirementsExecPolicy {
+    fn as_ref(&self) -> &Policy {
+        &self.policy
+    }
+}
+
+fn policy_fingerprint(policy: &Policy) -> Vec<String> {
+    let mut entries = Vec::new();
+    for (program, rules) in policy.rules().iter_all() {
+        for rule in rules {
+            entries.push(format!("{program}:{rule:?}"));
+        }
+    }
+    entries.sort();
+    entries
+}
+
+/// TOML representation of `[rules]` within `requirements.toml`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct RequirementsExecPolicyToml {
     pub prefix_rules: Vec<RequirementsExecPolicyPrefixRuleToml>,
@@ -65,14 +92,14 @@ impl RequirementsExecPolicyDecisionToml {
 
 #[derive(Debug, Error)]
 pub enum RequirementsExecPolicyParseError {
-    #[error("exec policy prefix_rules cannot be empty")]
+    #[error("rules prefix_rules cannot be empty")]
     EmptyPrefixRules,
 
-    #[error("exec policy prefix_rule at index {rule_index} has an empty pattern")]
+    #[error("rules prefix_rule at index {rule_index} has an empty pattern")]
     EmptyPattern { rule_index: usize },
 
     #[error(
-        "exec policy prefix_rule at index {rule_index} has an invalid pattern token at index {token_index}: {reason}"
+        "rules prefix_rule at index {rule_index} has an invalid pattern token at index {token_index}: {reason}"
     )]
     InvalidPatternToken {
         rule_index: usize,
@@ -80,12 +107,20 @@ pub enum RequirementsExecPolicyParseError {
         reason: String,
     },
 
-    #[error("exec policy prefix_rule at index {rule_index} has an empty justification")]
+    #[error("rules prefix_rule at index {rule_index} has an empty justification")]
     EmptyJustification { rule_index: usize },
+
+    #[error("rules prefix_rule at index {rule_index} is missing a decision")]
+    MissingDecision { rule_index: usize },
+
+    #[error(
+        "rules prefix_rule at index {rule_index} has decision 'allow', which is not permitted in requirements.toml: Codex merges these rules with other config and uses the most restrictive result (use 'prompt' or 'forbidden')"
+    )]
+    AllowDecisionNotAllowed { rule_index: usize },
 }
 
 impl RequirementsExecPolicyToml {
-    /// Convert requirements TOML exec policy rules into the internal `.rules`
+    /// Convert requirements TOML rules into the internal `.rules`
     /// representation used by `codex-execpolicy`.
     pub fn to_policy(&self) -> Result<Policy, RequirementsExecPolicyParseError> {
         if self.prefix_rules.is_empty() {
@@ -112,10 +147,17 @@ impl RequirementsExecPolicyToml {
                 .map(|(token_index, token)| parse_pattern_token(token, rule_index, token_index))
                 .collect::<Result<Vec<_>, _>>()?;
 
-            let decision = rule
-                .decision
-                .map(RequirementsExecPolicyDecisionToml::as_decision)
-                .unwrap_or(Decision::Allow);
+            let decision = match rule.decision {
+                Some(RequirementsExecPolicyDecisionToml::Allow) => {
+                    return Err(RequirementsExecPolicyParseError::AllowDecisionNotAllowed {
+                        rule_index,
+                    });
+                }
+                Some(decision) => decision.as_decision(),
+                None => {
+                    return Err(RequirementsExecPolicyParseError::MissingDecision { rule_index });
+                }
+            };
             let justification = rule.justification.clone();
 
             let (first_token, remaining_tokens) = pattern_tokens
@@ -138,6 +180,12 @@ impl RequirementsExecPolicyToml {
         }
 
         Ok(Policy::new(rules_by_program))
+    }
+
+    pub(crate) fn to_requirements_policy(
+        &self,
+    ) -> Result<RequirementsExecPolicy, RequirementsExecPolicyParseError> {
+        self.to_policy().map(RequirementsExecPolicy::new)
     }
 }
 

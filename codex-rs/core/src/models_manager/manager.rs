@@ -274,7 +274,7 @@ impl ModelsManager {
         let mut merged_presets = ModelPreset::merge(remote_presets, existing_presets);
         let chatgpt_mode = matches!(
             self.auth_manager.get_internal_auth_mode(),
-            Some(AuthMode::ChatGPT)
+            Some(AuthMode::Chatgpt)
         );
         merged_presets = ModelPreset::filter_by_auth(merged_presets, chatgpt_mode);
 

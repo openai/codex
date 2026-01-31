@@ -12,8 +12,10 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::SandboxMode;
 use codex_core::config::ConfigService;
 use codex_core::config::ConfigServiceError;
+use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigRequirementsToml;
 use codex_core::config_loader::LoaderOverrides;
+use codex_core::config_loader::ResidencyRequirement as CoreResidencyRequirement;
 use codex_core::config_loader::SandboxModeRequirement as CoreSandboxModeRequirement;
 use serde_json::json;
 use std::path::PathBuf;
@@ -29,9 +31,15 @@ impl ConfigApi {
         codex_home: PathBuf,
         cli_overrides: Vec<(String, TomlValue)>,
         loader_overrides: LoaderOverrides,
+        cloud_requirements: CloudRequirementsLoader,
     ) -> Self {
         Self {
-            service: ConfigService::new(codex_home, cli_overrides, loader_overrides),
+            service: ConfigService::new(
+                codex_home,
+                cli_overrides,
+                loader_overrides,
+                cloud_requirements,
+            ),
         }
     }
 
@@ -84,6 +92,9 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
                 .filter_map(map_sandbox_mode_requirement_to_api)
                 .collect()
         }),
+        enforce_residency: requirements
+            .enforce_residency
+            .map(map_residency_requirement_to_api),
     }
 }
 
@@ -93,6 +104,14 @@ fn map_sandbox_mode_requirement_to_api(mode: CoreSandboxModeRequirement) -> Opti
         CoreSandboxModeRequirement::WorkspaceWrite => Some(SandboxMode::WorkspaceWrite),
         CoreSandboxModeRequirement::DangerFullAccess => Some(SandboxMode::DangerFullAccess),
         CoreSandboxModeRequirement::ExternalSandbox => None,
+    }
+}
+
+fn map_residency_requirement_to_api(
+    residency: CoreResidencyRequirement,
+) -> codex_app_server_protocol::ResidencyRequirement {
+    match residency {
+        CoreResidencyRequirement::Us => codex_app_server_protocol::ResidencyRequirement::Us,
     }
 }
 
@@ -136,6 +155,8 @@ mod tests {
                 CoreSandboxModeRequirement::ExternalSandbox,
             ]),
             mcp_servers: None,
+            rules: None,
+            enforce_residency: Some(CoreResidencyRequirement::Us),
         };
 
         let mapped = map_requirements_toml_to_api(requirements);
@@ -150,6 +171,10 @@ mod tests {
         assert_eq!(
             mapped.allowed_sandbox_modes,
             Some(vec![SandboxMode::ReadOnly]),
+        );
+        assert_eq!(
+            mapped.enforce_residency,
+            Some(codex_app_server_protocol::ResidencyRequirement::Us),
         );
     }
 }

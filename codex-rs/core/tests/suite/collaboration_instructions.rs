@@ -83,7 +83,7 @@ async fn no_collaboration_instructions_by_default() -> Result<()> {
     let input = req.single_request().input();
     let dev_texts = developer_texts(&input);
     assert_eq!(dev_texts.len(), 1);
-    assert!(dev_texts[0].contains("`approval_policy`"));
+    assert!(dev_texts[0].contains("<permissions instructions>"));
 
     Ok(())
 }

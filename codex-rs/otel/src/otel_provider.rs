@@ -75,12 +75,16 @@ impl OtelProvider {
         let metrics = if matches!(metric_exporter, OtelExporter::None) {
             None
         } else {
-            Some(MetricsClient::new(MetricsConfig::otlp(
+            let mut config = MetricsConfig::otlp(
                 settings.environment.clone(),
                 settings.service_name.clone(),
                 settings.service_version.clone(),
                 metric_exporter,
-            ))?)
+            );
+            if settings.runtime_metrics {
+                config = config.with_runtime_reader();
+            }
+            Some(MetricsClient::new(config)?)
         };
 
         if let Some(metrics) = metrics.as_ref() {

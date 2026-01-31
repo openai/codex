@@ -101,6 +101,8 @@ pub enum Feature {
     RemoteModels,
     /// Experimental shell snapshotting.
     ShellSnapshot,
+    /// Enable runtime metrics snapshots via a manual reader.
+    RuntimeMetrics,
     /// Persist rollout metadata to a local SQLite database.
     Sqlite,
     /// Append additional AGENTS.md guidance to user instructions.
@@ -438,6 +440,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::RuntimeMetrics,
+        key: "runtime_metrics",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::Sqlite,
         key: "sqlite",
         stage: Stage::UnderDevelopment,
@@ -464,12 +472,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RequestRule,
         key: "request_rule",
-        stage: Stage::Experimental {
-            name: "Smart approvals",
-            menu_description: "Get smarter \"Don't ask again\" rule requests.",
-            announcement: "NEW: Try Smart approvals to get smarter \"Don't ask again\" requests. Enable in /experimental!",
-        },
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::WindowsSandbox,

@@ -27,7 +27,7 @@ pub fn run_main() -> i32 {
             match std::io::stdin().read_to_string(&mut buf) {
                 Ok(_) => {
                     if buf.is_empty() {
-                        eprintln!("Usage: apply_patch 'PATCH'\n       echo 'PATCH' | apply-patch");
+                        eprintln!("Usage: apply_patch 'PATCH'\n       echo 'PATCH' | apply_patch");
                         return 2;
                     }
                     buf

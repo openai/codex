@@ -55,6 +55,7 @@ use codex_exec::exec_events::TurnStartedEvent;
 use codex_exec::exec_events::Usage;
 use codex_exec::exec_events::WebSearchItem;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
@@ -117,6 +118,7 @@ fn task_started_produces_turn_started_event() {
         "t1",
         EventMsg::TurnStarted(codex_core::protocol::TurnStartedEvent {
             model_context_window: Some(32_000),
+            collaboration_mode_kind: ModeKind::Custom,
         }),
     ));
 
@@ -129,6 +131,7 @@ fn web_search_end_emits_item_completed() {
     let query = "rust async await".to_string();
     let action = WebSearchAction::Search {
         query: Some(query.clone()),
+        queries: None,
     };
     let out = ep.collect_thread_events(&event(
         "w1",
@@ -193,6 +196,7 @@ fn web_search_begin_then_end_reuses_item_id() {
     };
     let action = WebSearchAction::Search {
         query: Some("rust async await".to_string()),
+        queries: None,
     };
     let end = ep.collect_thread_events(&event(
         "w1",

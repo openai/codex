@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::config::types::OtelExporterKind as Kind;
 use crate::config::types::OtelHttpProtocol as Protocol;
 use crate::default_client::originator;
+use crate::features::Feature;
 use codex_otel::config::OtelExporter;
 use codex_otel::config::OtelHttpProtocol;
 use codex_otel::config::OtelSettings;
@@ -77,6 +78,7 @@ pub fn build_provider(
 
     let originator = originator();
     let service_name = service_name_override.unwrap_or(originator.value.as_str());
+    let runtime_metrics = config.features.enabled(Feature::RuntimeMetrics);
 
     OtelProvider::from(&OtelSettings {
         service_name: service_name.to_string(),
@@ -86,6 +88,7 @@ pub fn build_provider(
         exporter,
         trace_exporter,
         metrics_exporter,
+        runtime_metrics,
     })
 }
 

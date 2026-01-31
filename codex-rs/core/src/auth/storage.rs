@@ -565,7 +565,7 @@ mod tests {
         let auth_file = get_auth_file(codex_home.path());
         std::fs::write(&auth_file, "stale")?;
         let auth = AuthDotJson {
-            auth_mode: Some(AuthMode::ChatGPT),
+            auth_mode: Some(AuthMode::Chatgpt),
             openai_api_key: None,
             tokens: Some(TokenData {
                 id_token: Default::default(),

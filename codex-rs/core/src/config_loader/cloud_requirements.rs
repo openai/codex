@@ -32,6 +32,12 @@ impl fmt::Debug for CloudRequirementsLoader {
     }
 }
 
+impl Default for CloudRequirementsLoader {
+    fn default() -> Self {
+        Self::new(async { None })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
