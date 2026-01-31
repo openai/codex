@@ -101,6 +101,8 @@ pub enum Feature {
     RemoteModels,
     /// Experimental shell snapshotting.
     ShellSnapshot,
+    /// Enable runtime metrics snapshots via a manual reader.
+    RuntimeMetrics,
     /// Persist rollout metadata to a local SQLite database.
     Sqlite,
     /// Append additional AGENTS.md guidance to user instructions.
@@ -435,6 +437,12 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "Snapshot your shell environment to avoid re-running login scripts for every command.",
             announcement: "NEW! Try shell snapshotting to make your Codex faster. Enable in /experimental!",
         },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RuntimeMetrics,
+        key: "runtime_metrics",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {

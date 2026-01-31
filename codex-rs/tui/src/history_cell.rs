@@ -45,6 +45,7 @@ use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::web_search::web_search_detail;
+use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::PlanItemArg;
@@ -1966,32 +1967,94 @@ pub(crate) fn new_reasoning_summary_block(full_reasoning_buffer: String) -> Box<
 /// divider.
 pub struct FinalMessageSeparator {
     elapsed_seconds: Option<u64>,
+    runtime_metrics: Option<RuntimeMetricsSummary>,
 }
 impl FinalMessageSeparator {
     /// Creates a separator; `elapsed_seconds` typically comes from the status indicator timer.
-    pub(crate) fn new(elapsed_seconds: Option<u64>) -> Self {
-        Self { elapsed_seconds }
+    pub(crate) fn new(
+        elapsed_seconds: Option<u64>,
+        runtime_metrics: Option<RuntimeMetricsSummary>,
+    ) -> Self {
+        Self {
+            elapsed_seconds,
+            runtime_metrics,
+        }
     }
 }
 impl HistoryCell for FinalMessageSeparator {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let elapsed_seconds = self
+        let mut label_parts = Vec::new();
+        if let Some(elapsed_seconds) = self
             .elapsed_seconds
-            .map(super::status_indicator_widget::fmt_elapsed_compact);
-        if let Some(elapsed_seconds) = elapsed_seconds {
-            let worked_for = format!("─ Worked for {elapsed_seconds} ─");
-            let worked_for_width = worked_for.width();
-            vec![
-                Line::from_iter([
-                    worked_for,
-                    "─".repeat((width as usize).saturating_sub(worked_for_width)),
-                ])
-                .dim(),
-            ]
-        } else {
-            vec![Line::from_iter(["─".repeat(width as usize).dim()])]
+            .map(super::status_indicator_widget::fmt_elapsed_compact)
+        {
+            label_parts.push(format!("Worked for {elapsed_seconds}"));
         }
+        if let Some(metrics_label) = self.runtime_metrics.and_then(runtime_metrics_label) {
+            label_parts.push(metrics_label);
+        }
+
+        if label_parts.is_empty() {
+            return vec![Line::from_iter(["─".repeat(width as usize).dim()])];
+        }
+
+        let label = format!("─ {} ─", label_parts.join(" • "));
+        let (label, _suffix, label_width) = take_prefix_by_width(&label, width as usize);
+        vec![
+            Line::from_iter([
+                label,
+                "─".repeat((width as usize).saturating_sub(label_width)),
+            ])
+            .dim(),
+        ]
     }
+}
+
+fn runtime_metrics_label(summary: RuntimeMetricsSummary) -> Option<String> {
+    let mut parts = Vec::new();
+    if summary.tool_calls.count > 0 {
+        let duration = format_duration_ms(summary.tool_calls.duration_ms);
+        let calls = pluralize(summary.tool_calls.count, "call", "calls");
+        parts.push(format!(
+            "Local tools: {} {calls} ({duration})",
+            summary.tool_calls.count
+        ));
+    }
+    if summary.api_calls.count > 0 {
+        let duration = format_duration_ms(summary.api_calls.duration_ms);
+        let calls = pluralize(summary.api_calls.count, "call", "calls");
+        parts.push(format!(
+            "Inference: {} {calls} ({duration})",
+            summary.api_calls.count
+        ));
+    }
+    if summary.streaming_events.count > 0 {
+        let duration = format_duration_ms(summary.streaming_events.duration_ms);
+        let stream_label = pluralize(summary.streaming_events.count, "Stream", "Streams");
+        let events = pluralize(summary.streaming_events.count, "event", "events");
+        parts.push(format!(
+            "{stream_label}: {} {events} ({duration})",
+            summary.streaming_events.count
+        ));
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" • "))
+    }
+}
+
+fn format_duration_ms(duration_ms: u64) -> String {
+    if duration_ms >= 1_000 {
+        let seconds = duration_ms as f64 / 1_000.0;
+        format!("{seconds:.1}s")
+    } else {
+        format!("{duration_ms}ms")
+    }
+}
+
+fn pluralize(count: u64, singular: &'static str, plural: &'static str) -> &'static str {
+    if count == 1 { singular } else { plural }
 }
 
 fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
@@ -2026,6 +2089,8 @@ mod tests {
     use codex_core::config::types::McpServerConfig;
     use codex_core::config::types::McpServerTransportConfig;
     use codex_core::protocol::McpAuthStatus;
+    use codex_otel::RuntimeMetricTotals;
+    use codex_otel::RuntimeMetricsSummary;
     use codex_protocol::models::WebSearchAction;
     use codex_protocol::parse_command::ParsedCommand;
     use dirs::home_dir;
@@ -2099,6 +2164,32 @@ mod tests {
             lines,
             vec!["↳ Interacted with background terminal", "  └ (waited)"],
         );
+    }
+
+    #[test]
+    fn final_message_separator_includes_runtime_metrics() {
+        let summary = RuntimeMetricsSummary {
+            tool_calls: RuntimeMetricTotals {
+                count: 3,
+                duration_ms: 2_450,
+            },
+            api_calls: RuntimeMetricTotals {
+                count: 2,
+                duration_ms: 1_200,
+            },
+            streaming_events: RuntimeMetricTotals {
+                count: 6,
+                duration_ms: 900,
+            },
+        };
+        let cell = FinalMessageSeparator::new(Some(12), Some(summary));
+        let rendered = render_lines(&cell.display_lines(120));
+
+        assert_eq!(rendered.len(), 1);
+        assert!(rendered[0].contains("Worked for 12s"));
+        assert!(rendered[0].contains("Local tools: 3 calls (2.5s)"));
+        assert!(rendered[0].contains("Inference: 2 calls (1.2s)"));
+        assert!(rendered[0].contains("Streams: 6 events (900ms)"));
     }
 
     #[test]
