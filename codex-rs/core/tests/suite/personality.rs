@@ -404,9 +404,7 @@ async fn ignores_remote_model_personality_if_remote_models_disabled() -> anyhow:
         upgrade: None,
         base_instructions: "base instructions".to_string(),
         model_messages: Some(ModelMessages {
-            instructions_template: Some(
-                "Base instructions\n{{ personality_message }}\n".to_string(),
-            ),
+            instructions_template: Some("Base instructions\n{{ personality }}\n".to_string()),
             instructions_variables: Some(ModelInstructionsVariables {
                 personality_default: None,
                 personality_friendly: Some(remote_personality_message.to_string()),
@@ -486,7 +484,7 @@ async fn ignores_remote_model_personality_if_remote_models_disabled() -> anyhow:
         "expected instructions to include the local friendly personality template, got: {instructions_text:?}"
     );
     assert!(
-        !instructions_text.contains("{{ personality_message }}"),
+        !instructions_text.contains("{{ personality }}"),
         "expected legacy personality placeholder to be replaced, got: {instructions_text:?}"
     );
 
@@ -556,6 +554,7 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
             config.features.enable(Feature::RemoteModels);
             config.features.enable(Feature::Personality);
             config.model = Some(remote_slug.to_string());
+            config.model_personality = Some(Personality::Friendly);
         });
     let test = builder.build(&server).await?;
 
@@ -580,7 +579,7 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
-            personality: None,
+            personality: Some(Personality::Friendly),
         })
         .await?;
 
@@ -630,9 +629,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
         upgrade: None,
         base_instructions: "base instructions".to_string(),
         model_messages: Some(ModelMessages {
-            instructions_template: Some(
-                "Base instructions\n{{ personality_message }}\n".to_string(),
-            ),
+            instructions_template: Some("Base instructions\n{{ personality }}\n".to_string()),
             instructions_variables: Some(ModelInstructionsVariables {
                 personality_default: None,
                 personality_friendly: Some(remote_friendly_message.to_string()),
