@@ -29,6 +29,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::bottom_pane::PreparedDraft;
 use crate::version::CODEX_CLI_VERSION;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
@@ -575,6 +576,8 @@ pub(crate) struct ChatWidget {
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
     external_editor_state: ExternalEditorState,
+    // Stashed message, if any
+    stash: Option<PreparedDraft>,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -2297,9 +2300,11 @@ impl ChatWidget {
             feedback_audience,
             current_rollout_path: None,
             external_editor_state: ExternalEditorState::Closed,
+            stash: None,
         };
 
         widget.prefetch_rate_limits();
+        widget.refresh_stash_indicator();
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
@@ -2442,9 +2447,11 @@ impl ChatWidget {
             feedback_audience,
             current_rollout_path: None,
             external_editor_state: ExternalEditorState::Closed,
+            stash: None,
         };
 
         widget.prefetch_rate_limits();
+        widget.refresh_stash_indicator();
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
@@ -2576,9 +2583,11 @@ impl ChatWidget {
             feedback_audience,
             current_rollout_path: None,
             external_editor_state: ExternalEditorState::Closed,
+            stash: None,
         };
 
         widget.prefetch_rate_limits();
+        widget.refresh_stash_indicator();
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
@@ -2691,6 +2700,13 @@ impl ChatWidget {
                     self.request_redraw();
                 }
             }
+            KeyEvent {
+                code: KeyCode::Char('s'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } if self.bottom_pane.no_modal_or_popup_active() && self.stash.is_some() => {
+                self.restore_stash();
+            }
             _ => match self.bottom_pane.handle_key_event(key_event) {
                 InputResult::Submitted {
                     text,
@@ -2714,6 +2730,10 @@ impl ChatWidget {
                     } else {
                         self.queue_user_message(user_message);
                     }
+
+                    // Only attempts to restore stash if the composer is still empty and has no
+                    // attachments/pending pastes
+                    self.restore_stash();
                 }
                 InputResult::Queued {
                     text,
@@ -2735,13 +2755,32 @@ impl ChatWidget {
                 InputResult::CommandWithArgs(cmd, args) => {
                     self.dispatch_command_with_args(cmd, args);
                 }
+                InputResult::Stashed(stash) => {
+                    self.stash = Some(stash);
+                    self.refresh_stash_indicator();
+                    self.request_redraw();
+                }
                 InputResult::None => {}
             },
         }
     }
 
+    pub(crate) fn restore_stash(&mut self) -> bool {
+        if self.bottom_pane.composer_has_draft() {
+            self.show_stash_hint();
+            return false;
+        }
+
+        if let Some(stash) = self.stash.take() {
+            self.bottom_pane.restore_stash(stash);
+            self.refresh_stash_indicator();
+            return true;
+        }
+
+        false
+    }
+
     pub(crate) fn attach_image(&mut self, path: PathBuf) {
-        tracing::info!("attach_image path={path:?}");
         self.bottom_pane.attach_image(path);
         self.request_redraw();
     }
@@ -3622,6 +3661,11 @@ impl ChatWidget {
             .map(|m| m.text.clone())
             .collect();
         self.bottom_pane.set_queued_user_messages(messages);
+    }
+
+    /// Update the stash indicator in the bottom pane.
+    fn refresh_stash_indicator(&mut self) {
+        self.bottom_pane.set_stashed(self.stash.is_some());
     }
 
     pub(crate) fn add_diff_in_progress(&mut self) {
@@ -5775,6 +5819,11 @@ impl ChatWidget {
     pub(crate) fn clear_esc_backtrack_hint(&mut self) {
         self.bottom_pane.clear_esc_backtrack_hint();
     }
+
+    pub(crate) fn show_stash_hint(&mut self) {
+        self.bottom_pane.show_stash_hint();
+    }
+
     /// Forward an `Op` directly to codex.
     pub(crate) fn submit_op(&mut self, op: Op) {
         // Record outbound operation for session replay fidelity.

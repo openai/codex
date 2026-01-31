@@ -850,6 +850,7 @@ async fn make_chatwidget_manual(
         feedback_audience: FeedbackAudience::External,
         current_rollout_path: None,
         external_editor_state: ExternalEditorState::Closed,
+        stash: None,
     };
     widget.set_model(&resolved_model);
     (widget, rx, op_rx)
@@ -5006,4 +5007,45 @@ async fn review_queues_user_messages_snapshot() {
     })
     .unwrap();
     assert_snapshot!(term.backend().vt100().screen().contents());
+}
+
+#[tokio::test]
+async fn stash_indicator() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.bottom_pane
+        .set_composer_text("I will be stashed".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+
+    assert!(chat.stash.is_some());
+    assert!(chat.bottom_pane.stash_exists());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+    assert!(chat.stash.is_none());
+    assert!(!chat.bottom_pane.stash_exists());
+    assert_eq!(
+        chat.bottom_pane.composer_text(),
+        "I will be stashed".to_string()
+    );
+}
+
+#[tokio::test]
+async fn auto_restore_stash_after_submit() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    let stashed_text = "stashed draft".to_string();
+    chat.bottom_pane
+        .set_composer_text(stashed_text.clone(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+
+    assert!(chat.stash.is_some());
+
+    chat.bottom_pane
+        .set_composer_text("steering message".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert!(chat.stash.is_none());
+    assert_eq!(chat.bottom_pane.composer_text(), stashed_text);
 }

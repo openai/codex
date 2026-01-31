@@ -19,6 +19,7 @@ use std::path::PathBuf;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::queued_user_messages::QueuedUserMessages;
+use crate::bottom_pane::stash_indicator::StashIndicator;
 use crate::bottom_pane::unified_exec_footer::UnifiedExecFooter;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
@@ -78,8 +79,10 @@ pub mod popup_consts;
 mod queued_user_messages;
 mod scroll_state;
 mod selection_popup_common;
+mod stash_indicator;
 mod textarea;
 mod unified_exec_footer;
+pub(crate) use chat_composer::PreparedDraft;
 pub(crate) use feedback_view::FeedbackNoteView;
 
 /// How long the "press again to quit" hint stays visible.
@@ -149,6 +152,8 @@ pub(crate) struct BottomPane {
     unified_exec_footer: UnifiedExecFooter,
     /// Queued user messages to show above the composer while a turn is running.
     queued_user_messages: QueuedUserMessages,
+    /// Shows an indicator when there are stashed changes.
+    stash_indicator: StashIndicator,
     context_window_percent: Option<i64>,
     context_window_used_tokens: Option<i64>,
 }
@@ -197,6 +202,7 @@ impl BottomPane {
             status: None,
             unified_exec_footer: UnifiedExecFooter::new(),
             queued_user_messages: QueuedUserMessages::new(),
+            stash_indicator: StashIndicator::new(),
             esc_backtrack_hint: false,
             animations_enabled,
             context_window_percent: None,
@@ -407,6 +413,19 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    /// Restores composer text, images, pending pastes, and mention paths from a PreparedDraft
+    pub(crate) fn restore_stash(&mut self, stash: PreparedDraft) {
+        self.composer
+            .set_text_content_with_local_images_and_pending_pastes(
+                stash.text,
+                stash.text_elements,
+                stash.local_images,
+                stash.pending_pastes,
+                stash.mention_paths,
+            );
+        self.request_redraw();
+    }
+
     #[allow(dead_code)]
     pub(crate) fn set_composer_input_enabled(
         &mut self,
@@ -525,6 +544,11 @@ impl BottomPane {
         }
     }
 
+    pub(crate) fn show_stash_hint(&mut self) {
+        self.composer.set_stash_hint(true);
+        self.request_redraw();
+    }
+
     // esc_backtrack_hint_visible removed; hints are controlled internally.
 
     pub fn set_task_running(&mut self, running: bool) {
@@ -602,6 +626,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn set_stashed(&mut self, stashed: bool) {
+        self.stash_indicator.stash_exists = stashed;
+        self.request_redraw();
+    }
+
     pub(crate) fn set_unified_exec_processes(&mut self, processes: Vec<String>) {
         if self.unified_exec_footer.set_processes(processes) {
             self.request_redraw();
@@ -616,6 +645,11 @@ impl BottomPane {
 
     pub(crate) fn composer_is_empty(&self) -> bool {
         self.composer.is_empty()
+    }
+
+    // Check if the composer has a text, images, or pending pastes draft.
+    pub(crate) fn composer_has_draft(&self) -> bool {
+        self.composer.has_draft()
     }
 
     pub(crate) fn is_task_running(&self) -> bool {
@@ -799,13 +833,21 @@ impl BottomPane {
                 flex.push(0, RenderableItem::Borrowed(&self.unified_exec_footer));
             }
             let has_queued_messages = !self.queued_user_messages.messages.is_empty();
+            let has_stash = self.stash_indicator.stash_exists;
+            let has_aux = has_queued_messages || has_stash;
+
             let has_status_or_footer =
                 self.status.is_some() || !self.unified_exec_footer.is_empty();
-            if has_queued_messages && has_status_or_footer {
+            if has_aux && has_status_or_footer {
                 flex.push(0, RenderableItem::Owned("".into()));
             }
-            flex.push(1, RenderableItem::Borrowed(&self.queued_user_messages));
-            if !has_queued_messages && has_status_or_footer {
+            if has_queued_messages {
+                flex.push(1, RenderableItem::Borrowed(&self.queued_user_messages));
+            }
+            if has_stash {
+                flex.push(0, RenderableItem::Borrowed(&self.stash_indicator));
+            }
+            if !has_aux && has_status_or_footer {
                 flex.push(0, RenderableItem::Owned("".into()));
             }
             let mut flex2 = FlexRenderable::new();
@@ -813,6 +855,11 @@ impl BottomPane {
             flex2.push(0, RenderableItem::Borrowed(&self.composer));
             RenderableItem::Owned(Box::new(flex2))
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn stash_exists(&self) -> bool {
+        self.stash_indicator.stash_exists
     }
 }
 
@@ -833,9 +880,11 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use codex_core::protocol::Op;
+    use codex_protocol::models::local_image_label_text;
     use codex_protocol::protocol::SkillScope;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
+    use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use std::cell::Cell;
@@ -1159,6 +1208,122 @@ mod tests {
         assert_snapshot!(
             "status_and_queued_messages_snapshot",
             render_snapshot(&pane, area)
+        );
+    }
+
+    #[test]
+    fn status_and_stash_snapshot() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(true);
+        pane.set_stashed(true);
+
+        let width = 48;
+        let height = pane.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        assert_snapshot!("status_and_stash_snapshot", render_snapshot(&pane, area));
+    }
+
+    #[test]
+    fn status_and_queued_messages_and_stash_snapshot() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(true);
+        pane.set_queued_user_messages(vec!["Queued follow-up question".to_string()]);
+        pane.set_stashed(true);
+
+        let width = 48;
+        let height = pane.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        assert_snapshot!(
+            "status_and_queued_messages_and_stash_snapshot",
+            render_snapshot(&pane, area)
+        );
+    }
+
+    #[test]
+    fn restore_stash_preserves_image_placeholders() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        let placeholder1 = local_image_label_text(1);
+        let placeholder3 = local_image_label_text(3);
+        let text = format!("{placeholder1} then {placeholder3}");
+        let mut text_elements = Vec::new();
+        for placeholder in [&placeholder1, &placeholder3] {
+            let start = text
+                .find(placeholder)
+                .expect("placeholder should exist in text");
+            let end = start + placeholder.len();
+            text_elements.push(TextElement::new((start..end).into(), None));
+        }
+
+        let path1 = PathBuf::from("/tmp/image1.png");
+        let path3 = PathBuf::from("/tmp/image3.png");
+        let stash = PreparedDraft {
+            text: text.clone(),
+            text_elements,
+            local_images: vec![
+                LocalImageAttachment {
+                    placeholder: placeholder1.clone(),
+                    path: path1.clone(),
+                },
+                LocalImageAttachment {
+                    placeholder: placeholder3.clone(),
+                    path: path3.clone(),
+                },
+            ],
+            pending_pastes: Vec::new(),
+            mention_paths: HashMap::new(),
+        };
+
+        pane.restore_stash(stash);
+
+        assert_eq!(pane.composer.current_text(), text);
+        assert_eq!(
+            pane.composer.local_images(),
+            vec![
+                LocalImageAttachment {
+                    placeholder: placeholder1,
+                    path: path1,
+                },
+                LocalImageAttachment {
+                    placeholder: placeholder3,
+                    path: path3,
+                },
+            ]
         );
     }
 

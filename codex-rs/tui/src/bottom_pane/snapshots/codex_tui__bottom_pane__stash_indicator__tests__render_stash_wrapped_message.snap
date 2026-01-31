@@ -1,0 +1,24 @@
+---
+source: tui/src/bottom_pane/stash_indicator.rs
+expression: "format!(\"{buf:?}\")"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 20, height: 4 },
+    content: [
+        "  ↳ Stashed         ",
+        "    (restores after ",
+        "    current message ",
+        "    is sent)        ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 4, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM | ITALIC,
+        x: 11, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 4, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM | ITALIC,
+        x: 19, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 4, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM | ITALIC,
+        x: 19, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 4, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: DIM | ITALIC,
+        x: 12, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

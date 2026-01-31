@@ -121,6 +121,7 @@ use super::footer::render_footer_hint_items;
 use super::footer::render_footer_line;
 use super::footer::reset_mode_after_activity;
 use super::footer::single_line_footer_layout;
+use super::footer::stash_hint_mode;
 use super::footer::toggle_shortcut_mode;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
@@ -183,6 +184,7 @@ pub enum InputResult {
         text: String,
         text_elements: Vec<TextElement>,
     },
+    Stashed(PreparedDraft),
     Command(SlashCommand),
     CommandWithArgs(SlashCommand, String),
     None,
@@ -246,6 +248,32 @@ impl ChatComposerConfig {
             image_paste_enabled: false,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum PrepareMode {
+    ForSubmit,
+    ForStash,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+/// Snapshot of composer state prepared for stashing or submission.
+///
+/// This captures the rendered text plus the associated text elements, local
+/// image attachments, and any pending paste payloads so the state can be
+/// restored later.
+pub(crate) struct PreparedDraft {
+    /// Composer text. For submission this is after preprocessing (e.g., prompt
+    /// expansion); for stash this is the raw user input.
+    pub(crate) text: String,
+    /// Text elements corresponding to placeholders within `text`.
+    pub(crate) text_elements: Vec<TextElement>,
+    /// Local image attachments paired with their placeholder labels.
+    pub(crate) local_images: Vec<LocalImageAttachment>,
+    /// Pending paste payloads keyed by placeholder inserted into `text`.
+    pub(crate) pending_pastes: Vec<(String, String)>,
+    /// Mapping from mention names to their resolved paths.
+    pub(crate) mention_paths: HashMap<String, String>,
 }
 pub(crate) struct ChatComposer {
     textarea: TextArea,
@@ -476,6 +504,13 @@ impl ChatComposer {
     /// Returns true if the composer currently contains no user input.
     pub(crate) fn is_empty(&self) -> bool {
         self.textarea.is_empty()
+    }
+
+    // Returns true if the composer has no user input, no attached images, and no pending pastes.
+    pub(crate) fn has_draft(&self) -> bool {
+        !self.textarea.is_empty()
+            || !self.attached_images.is_empty()
+            || !self.pending_pastes.is_empty()
     }
 
     /// Record the history metadata advertised by `SessionConfiguredEvent` so
@@ -747,6 +782,45 @@ impl ChatComposer {
     /// Move the cursor to the end of the current text buffer.
     pub(crate) fn move_cursor_to_end(&mut self) {
         self.textarea.set_cursor(self.textarea.text().len());
+    }
+
+    /// Replaces the entire composer with `text`, resets cursor, sets pending pastes,
+    /// preserves placeholder-to-path mappings for local images, and restores mention paths.
+    pub(crate) fn set_text_content_with_local_images_and_pending_pastes(
+        &mut self,
+        text: String,
+        text_elements: Vec<TextElement>,
+        local_images: Vec<LocalImageAttachment>,
+        pending_pastes: Vec<(String, String)>,
+        mention_paths: HashMap<String, String>,
+    ) {
+        // Clear any existing content, placeholders, and attachments first.
+        self.textarea.set_text_clearing_elements("");
+        self.pending_pastes.clear();
+        self.attached_images.clear();
+        self.mention_paths.clear();
+
+        self.textarea.set_text_with_elements(&text, &text_elements);
+
+        let image_placeholders: HashSet<String> = text_elements
+            .iter()
+            .filter_map(|elem| elem.placeholder(&text).map(str::to_string))
+            .collect();
+        self.attached_images = local_images
+            .into_iter()
+            .filter(|img| image_placeholders.contains(&img.placeholder))
+            .map(|img| AttachedImage {
+                placeholder: img.placeholder,
+                path: img.path,
+            })
+            .collect();
+
+        self.pending_pastes = pending_pastes;
+        self.pending_pastes
+            .retain(|(ph, _)| self.textarea.text().contains(ph));
+        self.mention_paths = mention_paths;
+        self.textarea.set_cursor(0);
+        self.sync_popups();
     }
 
     pub(crate) fn clear_for_ctrl_c(&mut self) -> Option<String> {
@@ -1796,9 +1870,7 @@ impl ChatComposer {
         }
     }
 
-    /// Prepare text for submission/queuing. Returns None if submission should be suppressed.
-    /// On success, clears pending paste payloads because placeholders have been expanded.
-    fn prepare_submission_text(&mut self) -> Option<(String, Vec<TextElement>)> {
+    fn prepare_composer_text(&mut self, mode: PrepareMode) -> Option<PreparedDraft> {
         let mut text = self.textarea.text().to_string();
         let original_input = text.clone();
         let original_text_elements = self.textarea.text_elements();
@@ -1812,7 +1884,7 @@ impl ChatComposer {
         let input_starts_with_space = original_input.starts_with(' ');
         self.textarea.set_text_clearing_elements("");
 
-        if !self.pending_pastes.is_empty() {
+        if matches!(mode, PrepareMode::ForSubmit) && !self.pending_pastes.is_empty() {
             // Expand placeholders so element byte ranges stay aligned.
             let (expanded, expanded_elements) =
                 Self::expand_pending_pastes(&text, text_elements, &self.pending_pastes);
@@ -1823,51 +1895,54 @@ impl ChatComposer {
         let expanded_input = text.clone();
 
         // If there is neither text nor attachments, suppress submission entirely.
-        text = text.trim().to_string();
-        text_elements = Self::trim_text_elements(&expanded_input, &text, text_elements);
+        if matches!(mode, PrepareMode::ForSubmit) {
+            text = text.trim().to_string();
+            text_elements = Self::trim_text_elements(&expanded_input, &text, text_elements);
 
-        if self.slash_commands_enabled()
-            && let Some((name, _rest, _rest_offset)) = parse_slash_name(&text)
-        {
-            let treat_as_plain_text = input_starts_with_space || name.contains('/');
-            if !treat_as_plain_text {
-                let is_builtin = slash_commands::find_builtin_command(
-                    name,
-                    self.collaboration_modes_enabled,
-                    self.connectors_enabled,
-                    self.personality_command_enabled,
-                    self.windows_degraded_sandbox_active,
-                )
-                .is_some();
-                let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
-                let is_known_prompt = name
-                    .strip_prefix(&prompt_prefix)
-                    .map(|prompt_name| {
-                        self.custom_prompts
-                            .iter()
-                            .any(|prompt| prompt.name == prompt_name)
-                    })
-                    .unwrap_or(false);
-                if !is_builtin && !is_known_prompt {
-                    let message = format!(
-                        r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
-                    );
-                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                        history_cell::new_info_event(message, None),
-                    )));
-                    self.set_text_content(
-                        original_input.clone(),
-                        original_text_elements,
-                        original_local_image_paths,
-                    );
-                    self.pending_pastes.clone_from(&original_pending_pastes);
-                    self.textarea.set_cursor(original_input.len());
-                    return None;
+            if self.slash_commands_enabled()
+                && let Some((name, _rest, _rest_offset)) = parse_slash_name(&text)
+            {
+                let treat_as_plain_text = input_starts_with_space || name.contains('/');
+                if !treat_as_plain_text {
+                    let is_builtin = slash_commands::find_builtin_command(
+                        name,
+                        self.collaboration_modes_enabled,
+                        self.connectors_enabled,
+                        self.personality_command_enabled,
+                        self.windows_degraded_sandbox_active,
+                    )
+                    .is_some();
+                    let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
+                    let is_known_prompt = name
+                        .strip_prefix(&prompt_prefix)
+                        .map(|prompt_name| {
+                            self.custom_prompts
+                                .iter()
+                                .any(|prompt| prompt.name == prompt_name)
+                        })
+                        .unwrap_or(false);
+                    if !is_builtin && !is_known_prompt {
+                        let message = format!(
+                            r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
+                        );
+                        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                            history_cell::new_info_event(message, None),
+                        )));
+                        self.set_text_content(
+                            original_input.clone(),
+                            original_text_elements,
+                            original_local_image_paths,
+                        );
+                        self.pending_pastes.clone_from(&original_pending_pastes);
+                        self.textarea.set_cursor(original_input.len());
+                        return None;
+                    }
                 }
             }
         }
 
-        if self.slash_commands_enabled() {
+        // Prompt expansion only applies to submission; stash preserves raw input.
+        if matches!(mode, PrepareMode::ForSubmit) && self.slash_commands_enabled() {
             let expanded_prompt =
                 match expand_custom_prompt(&text, &text_elements, &self.custom_prompts) {
                     Ok(expanded) => expanded,
@@ -1890,13 +1965,17 @@ impl ChatComposer {
                 text_elements = expanded.text_elements;
             }
         }
-        // Custom prompt expansion can remove or rewrite image placeholders, so prune any
-        // attachments that no longer have a corresponding placeholder in the expanded text.
-        self.prune_attached_images_for_submission(&text, &text_elements);
+        // Image pruning applies to all submissions (prompt expansion can rewrite placeholders,
+        // and users may delete placeholder text manually). Stash preserves raw attachments.
+        if matches!(mode, PrepareMode::ForSubmit) {
+            self.prune_attached_images_for_submission(&text, &text_elements);
+        }
         if text.is_empty() && self.attached_images.is_empty() {
             return None;
         }
-        if !text.is_empty() || !self.attached_images.is_empty() {
+        if matches!(mode, PrepareMode::ForSubmit)
+            && (!text.is_empty() || !self.attached_images.is_empty())
+        {
             let local_image_paths = self
                 .attached_images
                 .iter()
@@ -1908,8 +1987,26 @@ impl ChatComposer {
                 local_image_paths,
             });
         }
+        let pending_pastes = self.pending_pastes.clone();
         self.pending_pastes.clear();
-        Some((text, text_elements))
+
+        let local_images = self.local_images();
+        let mention_paths = self.mention_paths.clone();
+
+        Some(PreparedDraft {
+            text,
+            text_elements,
+            local_images,
+            pending_pastes,
+            mention_paths,
+        })
+    }
+
+    /// Prepare text for submission/queuing. Returns None if submission should be suppressed.
+    /// On success, clears pending paste payloads because placeholders have been expanded.
+    fn prepare_submission_text(&mut self) -> Option<(String, Vec<TextElement>)> {
+        self.prepare_composer_text(PrepareMode::ForSubmit)
+            .map(|prepared| (prepared.text, prepared.text_elements))
     }
 
     /// Common logic for handling message submission/queuing.
@@ -2007,6 +2104,19 @@ impl ChatComposer {
             self.pending_pastes = original_pending_pastes;
             (InputResult::None, true)
         }
+    }
+
+    fn handle_stash(&mut self) -> (InputResult, bool) {
+        let Some(prepared_draft) = self.prepare_composer_text(PrepareMode::ForStash) else {
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                history_cell::new_error_event("Nothing to stash".to_string()),
+            )));
+            return (InputResult::None, true);
+        };
+
+        self.set_text_content(String::new(), Vec::new(), Vec::new());
+
+        (InputResult::Stashed(prepared_draft), true)
     }
 
     /// Check if the first line is a bare slash command (no args) and dispatch it.
@@ -2136,6 +2246,11 @@ impl ChatComposer {
                 let should_queue = !self.steer_enabled;
                 self.handle_submission(should_queue)
             }
+            KeyEvent {
+                code: KeyCode::Char('s'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => self.handle_stash(),
             input => self.handle_input_basic(input),
         }
     }
@@ -2417,6 +2532,7 @@ impl ChatComposer {
 
         match self.footer_mode {
             FooterMode::EscHint => FooterMode::EscHint,
+            FooterMode::CantUnstashHint => FooterMode::CantUnstashHint,
             FooterMode::ShortcutOverlay => FooterMode::ShortcutOverlay,
             FooterMode::QuitShortcutReminder if self.quit_shortcut_hint_visible() => {
                 FooterMode::QuitShortcutReminder
@@ -2798,6 +2914,14 @@ impl ChatComposer {
             self.footer_mode = reset_mode_after_activity(self.footer_mode);
         }
     }
+
+    pub(crate) fn set_stash_hint(&mut self, show: bool) {
+        if show {
+            self.footer_mode = stash_hint_mode(self.footer_mode, self.is_task_running);
+        } else {
+            self.footer_mode = reset_mode_after_activity(self.footer_mode);
+        }
+    }
 }
 
 fn skill_display_name(skill: &SkillMetadata) -> &str {
@@ -2880,6 +3004,7 @@ impl ChatComposer {
                     FooterMode::QuitShortcutReminder
                     | FooterMode::ShortcutOverlay
                     | FooterMode::EscHint
+                    | FooterMode::CantUnstashHint
                     | FooterMode::ComposerHasDraft => false,
                 };
                 let show_queue_hint = match footer_props.mode {
@@ -2889,6 +3014,7 @@ impl ChatComposer {
                     FooterMode::QuitShortcutReminder
                     | FooterMode::ComposerEmpty
                     | FooterMode::ShortcutOverlay
+                    | FooterMode::CantUnstashHint
                     | FooterMode::EscHint => false,
                 };
                 let context_line = context_window_line(
@@ -2950,6 +3076,7 @@ impl ChatComposer {
                         }
                         FooterMode::EscHint
                         | FooterMode::QuitShortcutReminder
+                        | FooterMode::CantUnstashHint
                         | FooterMode::ShortcutOverlay => None,
                     }
                 };
@@ -2957,6 +3084,7 @@ impl ChatComposer {
                     footer_props.mode,
                     FooterMode::EscHint
                         | FooterMode::QuitShortcutReminder
+                        | FooterMode::CantUnstashHint
                         | FooterMode::ShortcutOverlay
                 ) {
                     false
@@ -4591,6 +4719,9 @@ mod tests {
             InputResult::Queued { .. } => {
                 panic!("expected command dispatch, but composer queued literal text")
             }
+            InputResult::Stashed(_) => {
+                panic!("expected command dispatch, but composer stashed literal text")
+            }
             InputResult::None => panic!("expected Command result for '/init'"),
         }
         assert!(composer.textarea.is_empty(), "composer should be cleared");
@@ -4692,6 +4823,9 @@ mod tests {
             InputResult::Queued { .. } => {
                 panic!("expected command dispatch after Tab completion, got literal queue")
             }
+            InputResult::Stashed(_) => {
+                panic!("expected command dispatch, but composer stashed literal text")
+            }
             InputResult::None => panic!("expected Command result for '/diff'"),
         }
         assert!(composer.textarea.is_empty());
@@ -4730,6 +4864,9 @@ mod tests {
             }
             InputResult::Queued { .. } => {
                 panic!("expected command dispatch, but composer queued literal text")
+            }
+            InputResult::Stashed(_) => {
+                panic!("expected command dispatch, but composer stashed literal text")
             }
             InputResult::None => panic!("expected Command result for '/mention'"),
         }
@@ -6935,5 +7072,159 @@ mod tests {
             height: 5,
         };
         assert_eq!(composer.cursor_pos(area), None);
+    }
+
+    #[test]
+    fn ctrl_s_stashes_message() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_text_content("This will be stashed".to_string(), Vec::new(), Vec::new());
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+
+        let InputResult::Stashed(stash) = result else {
+            panic!("expected stashed result, got {result:?}");
+        };
+
+        assert_eq!(stash.text, "This will be stashed".to_string());
+        assert!(stash.text_elements.is_empty());
+        assert!(stash.local_images.is_empty());
+        assert!(stash.pending_pastes.is_empty());
+        assert!(composer.textarea.is_empty());
+    }
+
+    #[test]
+    fn ctrl_s_stashes_message_with_pending_paste() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let large_content = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 5);
+        composer.handle_paste(large_content.clone());
+        let placeholder = composer
+            .pending_pastes
+            .first()
+            .expect("expected pending paste")
+            .0
+            .clone();
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+
+        let InputResult::Stashed(stash) = result else {
+            panic!("expected stashed result, got {result:?}");
+        };
+
+        assert_eq!(stash.text, placeholder);
+        assert_eq!(
+            stash.pending_pastes,
+            vec![(stash.text.clone(), large_content)]
+        );
+        assert!(composer.textarea.is_empty());
+        assert!(composer.pending_pastes.is_empty());
+    }
+
+    #[test]
+    fn ctrl_s_stash_preserves_mention_paths() {
+        // Issue: mention_paths (file/skill mentions inserted via popup) should survive
+        // stash/restore cycle so they resolve correctly on submission.
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        // Simulate inserting a file mention via popup (which records the path mapping).
+        let text_with_mention = "Check $myfile for issues".to_string();
+        composer.set_text_content(text_with_mention.clone(), Vec::new(), Vec::new());
+        composer
+            .mention_paths
+            .insert("myfile".to_string(), "/path/to/myfile.rs".to_string());
+
+        // Stash the draft.
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+
+        let InputResult::Stashed(stash) = result else {
+            panic!("expected stashed result, got {result:?}");
+        };
+
+        // Verify mention_paths is preserved in the stash.
+        assert_eq!(stash.text, text_with_mention);
+        assert_eq!(
+            stash.mention_paths.get("myfile"),
+            Some(&"/path/to/myfile.rs".to_string())
+        );
+
+        // Restore the stash and verify mention_paths is restored.
+        composer.set_text_content_with_local_images_and_pending_pastes(
+            stash.text,
+            stash.text_elements,
+            stash.local_images,
+            stash.pending_pastes,
+            stash.mention_paths,
+        );
+
+        assert_eq!(composer.current_text(), text_with_mention);
+        let restored_paths = composer.take_mention_paths();
+        assert_eq!(
+            restored_paths.get("myfile"),
+            Some(&"/path/to/myfile.rs".to_string())
+        );
+    }
+
+    #[test]
+    fn has_draft_detects_text_images_and_pending_pastes() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        // 1) empty
+        assert!(!composer.has_draft());
+
+        // 2) text
+        composer.set_text_content("hello".to_string(), Vec::new(), Vec::new());
+        assert!(composer.has_draft());
+
+        // reset
+        composer.set_text_content(String::new(), Vec::new(), Vec::new());
+        assert!(!composer.has_draft());
+
+        // 3) pending pastes
+        composer.handle_paste("x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 1));
+        assert!(composer.has_draft());
+
+        // reset
+        composer.set_text_content(String::new(), Vec::new(), Vec::new());
+        assert!(!composer.has_draft());
+
+        // 4) image attachment
+        composer.attach_image(PathBuf::from("/tmp/fake.png"));
+        assert!(composer.has_draft());
     }
 }
