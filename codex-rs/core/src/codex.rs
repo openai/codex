@@ -2659,6 +2659,7 @@ mod handlers {
     use codex_protocol::protocol::ThreadNameUpdatedEvent;
     use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
+    use codex_protocol::protocol::TurnContextItem;
     use codex_protocol::protocol::WarningEvent;
     use codex_protocol::request_user_input::RequestUserInputResponse;
 
@@ -2675,6 +2676,8 @@ mod handlers {
     use std::sync::Arc;
     use tracing::info;
     use tracing::warn;
+
+    use crate::state::session::SessionState;
 
     pub async fn interrupt(sess: &Arc<Session>) {
         sess.interrupt_task().await;
@@ -3109,27 +3112,12 @@ mod handlers {
         sess.replace_history(history.raw_items().to_vec()).await;
         {
             let mut state = sess.state.lock().await;
-            let mut updated_turn_context_history = existing_turn_context_history;
-            let truncated_len = updated_turn_context_history
-                .len()
-                .saturating_sub(num_turns as usize);
-            updated_turn_context_history.truncate(truncated_len);
-            if updated_turn_context_history.len() < user_turns {
-                updated_turn_context_history.resize_with(user_turns, || None);
-            }
-            state.set_turn_context_history(updated_turn_context_history);
-            let mut applied = false;
-            if state.turn_context_history.len() == user_turns
-                && let Some(collaboration_mode) = state
-                    .turn_context_history
-                    .last()
-                    .and_then(|turn_context| turn_context.as_ref())
-                    .and_then(|turn_context| turn_context.collaboration_mode.clone())
-            {
-                state.session_configuration.collaboration_mode = collaboration_mode;
-                applied = true;
-            }
-            state.force_inject_collaboration_instructions = !applied;
+            apply_rollback_turn_context_history(
+                &mut state,
+                existing_turn_context_history,
+                num_turns,
+                user_turns,
+            );
         }
         sess.recompute_token_usage(turn_context.as_ref()).await;
 
@@ -3204,6 +3192,35 @@ mod handlers {
             }),
         })
         .await;
+    }
+
+    fn apply_rollback_turn_context_history(
+        state: &mut SessionState,
+        existing_turn_context_history: Vec<Option<TurnContextItem>>,
+        num_turns: u32,
+        user_turns: usize,
+    ) {
+        let mut updated_turn_context_history = existing_turn_context_history;
+        let truncated_len = updated_turn_context_history
+            .len()
+            .saturating_sub(num_turns as usize);
+        updated_turn_context_history.truncate(truncated_len);
+        if updated_turn_context_history.len() < user_turns {
+            updated_turn_context_history.resize_with(user_turns, || None);
+        }
+        state.set_turn_context_history(updated_turn_context_history);
+        if state.turn_context_history.len() == user_turns
+            && let Some(collaboration_mode) = state
+                .turn_context_history
+                .last()
+                .and_then(|turn_context| turn_context.as_ref())
+                .and_then(|turn_context| turn_context.collaboration_mode.clone())
+        {
+            state.session_configuration.collaboration_mode = collaboration_mode;
+            state.force_inject_collaboration_instructions = false;
+        } else {
+            state.force_inject_collaboration_instructions = true;
+        }
     }
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
