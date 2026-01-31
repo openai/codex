@@ -5373,6 +5373,10 @@ mod tests {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
+            analytics_events_client: AnalyticsEventsClient::new(
+                AnalyticsEventsQueue::new(),
+                Arc::clone(&config),
+            ),
             notifier: UserNotifier::new(None),
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
@@ -5489,6 +5493,10 @@ mod tests {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
+            analytics_events_client: AnalyticsEventsClient::new(
+                AnalyticsEventsQueue::new(),
+                Arc::clone(&config),
+            ),
             notifier: UserNotifier::new(None),
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
