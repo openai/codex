@@ -105,7 +105,9 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
+use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputEvent;
+use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
 use crossterm::event::KeyCode;
@@ -387,6 +389,13 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) otel_manager: OtelManager,
 }
 
+struct PendingRequestUserInputAnswers {
+    turn_id: String,
+    call_id: String,
+    answers: HashMap<String, RequestUserInputAnswer>,
+    interrupted: bool,
+}
+
 #[derive(Default)]
 enum RateLimitSwitchPromptState {
     #[default]
@@ -529,6 +538,8 @@ pub(crate) struct ChatWidget {
     suppress_session_configured_redraw: bool,
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
+    // Partial request_user_input answers to send before the next user turn.
+    pending_request_user_input_answers: VecDeque<PendingRequestUserInputAnswers>,
     // Pending notification to show when unfocused on next Draw
     pending_notification: Option<Notification>,
     /// When `Some`, the user has pressed a quit shortcut and the second press
@@ -796,6 +807,7 @@ impl ChatWidget {
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.set_skills(None);
         self.bottom_pane.set_connectors_snapshot(None);
+        self.clear_pending_request_user_input_answers();
         self.thread_id = Some(event.session_id);
         self.thread_name = event.thread_name.clone();
         self.forked_from = event.forked_from_id;
@@ -2278,6 +2290,7 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
+            pending_request_user_input_answers: VecDeque::new(),
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
@@ -2427,6 +2440,7 @@ impl ChatWidget {
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             queued_user_messages: VecDeque::new(),
+            pending_request_user_input_answers: VecDeque::new(),
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
@@ -2557,6 +2571,7 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
+            pending_request_user_input_answers: VecDeque::new(),
             show_welcome_banner: false,
             suppress_session_configured_redraw: true,
             pending_notification: None,
@@ -3155,6 +3170,54 @@ impl ChatWidget {
         }
     }
 
+    pub(crate) fn queue_request_user_input_answers(
+        &mut self,
+        turn_id: String,
+        call_id: String,
+        answers: HashMap<String, RequestUserInputAnswer>,
+        interrupted: bool,
+    ) {
+        if answers.is_empty() && !interrupted {
+            return;
+        }
+        if let Some(existing) = self
+            .pending_request_user_input_answers
+            .iter_mut()
+            .find(|pending| pending.call_id == call_id)
+        {
+            existing.turn_id = turn_id;
+            existing.answers = answers;
+            existing.interrupted = interrupted;
+            return;
+        }
+        self.pending_request_user_input_answers
+            .push_back(PendingRequestUserInputAnswers {
+                turn_id,
+                call_id,
+                answers,
+                interrupted,
+            });
+    }
+
+    fn flush_pending_request_user_input_answers(&mut self) {
+        let pending = std::mem::take(&mut self.pending_request_user_input_answers);
+        for pending in pending {
+            let call_id = pending.call_id;
+            self.submit_op(Op::UserInputAnswer {
+                id: pending.turn_id,
+                call_id: Some(call_id),
+                response: RequestUserInputResponse {
+                    answers: pending.answers,
+                    interrupted: pending.interrupted,
+                },
+            });
+        }
+    }
+
+    fn clear_pending_request_user_input_answers(&mut self) {
+        self.pending_request_user_input_answers.clear();
+    }
+
     fn submit_user_message(&mut self, user_message: UserMessage) {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
@@ -3233,6 +3296,7 @@ impl ChatWidget {
                 });
             }
         }
+        self.flush_pending_request_user_input_answers();
 
         let effective_mode = self.effective_collaboration_mode();
         let collaboration_mode = if self.collaboration_modes_enabled() {
@@ -3389,15 +3453,11 @@ impl ChatWidget {
             EventMsg::McpStartupUpdate(ev) => self.on_mcp_startup_update(ev),
             EventMsg::McpStartupComplete(ev) => self.on_mcp_startup_complete(ev),
             EventMsg::TurnAborted(ev) => match ev.reason {
-                TurnAbortReason::Interrupted => {
-                    self.on_interrupted_turn(ev.reason);
-                }
+                TurnAbortReason::Interrupted => self.on_interrupted_turn(ev.reason),
                 TurnAbortReason::Replaced => {
                     self.on_error("Turn aborted: replaced by a new task".to_owned())
                 }
-                TurnAbortReason::ReviewEnded => {
-                    self.on_interrupted_turn(ev.reason);
-                }
+                TurnAbortReason::ReviewEnded => self.on_interrupted_turn(ev.reason),
             },
             EventMsg::PlanUpdate(update) => self.on_plan_update(update),
             EventMsg::ExecApprovalRequest(ev) => {
@@ -3411,7 +3471,14 @@ impl ChatWidget {
                 self.on_elicitation_request(ev);
             }
             EventMsg::RequestUserInput(ev) => {
-                self.on_request_user_input(ev);
+                // Replay should not reopen interactive question UIs for now; we only replay the
+                // persisted tool call/output items. Once we reconstruct answers on replay,
+                // remove this guard and render the questions from history instead.
+                // TODO: Support request_user_input replay by reconstructing question/answer
+                // history and rendering without re-prompting.
+                if !from_replay {
+                    self.on_request_user_input(ev);
+                }
             }
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::TerminalInteraction(delta) => self.on_terminal_interaction(delta),
@@ -3467,7 +3534,7 @@ impl ChatWidget {
             EventMsg::CollabWaitingEnd(ev) => self.on_collab_event(collab::waiting_end(ev)),
             EventMsg::CollabCloseBegin(_) => {}
             EventMsg::CollabCloseEnd(ev) => self.on_collab_event(collab::close_end(ev)),
-            EventMsg::ThreadRolledBack(_) => {}
+            EventMsg::ThreadRolledBack(_) => self.clear_pending_request_user_input_answers(),
             EventMsg::RawResponseItem(_)
             | EventMsg::ItemStarted(_)
             | EventMsg::AgentMessageContentDelta(_)

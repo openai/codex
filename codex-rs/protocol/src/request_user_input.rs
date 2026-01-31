@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use crate::models::FunctionCallOutputPayload;
+use crate::models::ResponseItem;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -35,12 +37,38 @@ pub struct RequestUserInputArgs {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct RequestUserInputAnswer {
+    /// Answers are strings; freeform notes are encoded as a `"user_note: <text>"`
+    /// entry in this list because the protocol has no dedicated note field.
     pub answers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct RequestUserInputResponse {
     pub answers: HashMap<String, RequestUserInputAnswer>,
+    /// True when the questions UI was interrupted before all answers were provided.
+    #[serde(default)]
+    pub interrupted: bool,
+}
+
+impl RequestUserInputResponse {
+    pub fn to_output_content(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(self)
+    }
+
+    pub fn to_function_call_output(
+        &self,
+        call_id: String,
+    ) -> Result<ResponseItem, serde_json::Error> {
+        let content = self.to_output_content()?;
+        Ok(ResponseItem::FunctionCallOutput {
+            call_id,
+            output: FunctionCallOutputPayload {
+                content,
+                success: Some(true),
+                ..Default::default()
+            },
+        })
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]

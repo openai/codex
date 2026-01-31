@@ -1660,6 +1660,7 @@ impl Session {
     pub async fn notify_user_input_response(
         &self,
         sub_id: &str,
+        call_id: Option<String>,
         response: RequestUserInputResponse,
     ) {
         let entry = {
@@ -1672,14 +1673,53 @@ impl Session {
                 None => None,
             }
         };
+
         match entry {
             Some(tx_response) => {
                 tx_response.send(response).ok();
             }
             None => {
-                warn!("No pending user input found for sub_id: {sub_id}");
+                // No pending user-input sender means the tool response arrived after the
+                // original request_user_input turn ended (e.g., the TUI queued partial
+                // answers on interrupt and is replaying them on the next user turn).
+                // Record a function_call_output so history/rollout includes the tool
+                // response in the correct order before the next user message, without
+                // starting a new model request immediately.
+                if response.answers.is_empty() && !response.interrupted {
+                    warn!(
+                        "dropping empty request_user_input response for sub_id: {sub_id}; likely cancelled"
+                    );
+                    return;
+                }
+                let call_id = call_id.unwrap_or_else(|| sub_id.to_string());
+                let call_id_for_log = call_id.clone();
+                let response_item = match response.to_function_call_output(call_id) {
+                    Ok(item) => item,
+                    Err(err) => {
+                        warn!(
+                            "failed to serialize request_user_input response for call_id: {call_id_for_log}: {err}"
+                        );
+                        return;
+                    }
+                };
+                let turn_context = self.new_default_turn_with_sub_id(sub_id.to_string()).await;
+                self.record_conversation_items(&turn_context, &[response_item])
+                    .await;
             }
         }
+    }
+
+    pub async fn cancel_request_user_input(&self, sub_id: &str) {
+        let _ = {
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.remove_pending_user_input(sub_id)
+                }
+                None => None,
+            }
+        };
     }
 
     pub async fn notify_dynamic_tool_response(&self, call_id: &str, response: DynamicToolResponse) {
@@ -2441,8 +2481,12 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::PatchApproval { id, decision } => {
                 handlers::patch_approval(&sess, id, decision).await;
             }
-            Op::UserInputAnswer { id, response } => {
-                handlers::request_user_input_response(&sess, id, response).await;
+            Op::UserInputAnswer {
+                id,
+                call_id,
+                response,
+            } => {
+                handlers::request_user_input_response(&sess, id, call_id, response).await;
             }
             Op::DynamicToolResponse { id, response } => {
                 handlers::dynamic_tool_response(&sess, id, response).await;
@@ -2796,9 +2840,11 @@ mod handlers {
     pub async fn request_user_input_response(
         sess: &Arc<Session>,
         id: String,
+        call_id: Option<String>,
         response: RequestUserInputResponse,
     ) {
-        sess.notify_user_input_response(&id, response).await;
+        sess.notify_user_input_response(&id, call_id, response)
+            .await;
     }
 
     pub async fn dynamic_tool_response(
