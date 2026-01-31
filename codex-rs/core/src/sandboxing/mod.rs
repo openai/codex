@@ -51,6 +51,18 @@ pub struct ExecEnv {
     pub arg0: Option<String>,
 }
 
+/// Bundled arguments for sandbox transformation.
+///
+/// This keeps call sites self-documenting when several fields are optional.
+pub(crate) struct SandboxTransformRequest<'a> {
+    pub spec: CommandSpec,
+    pub policy: &'a SandboxPolicy,
+    pub sandbox: SandboxType,
+    pub sandbox_policy_cwd: &'a Path,
+    pub codex_linux_sandbox_exe: Option<&'a PathBuf>,
+    pub windows_sandbox_level: WindowsSandboxLevel,
+}
+
 pub enum SandboxPreference {
     Auto,
     Require,
@@ -104,13 +116,16 @@ impl SandboxManager {
 
     pub(crate) fn transform(
         &self,
-        mut spec: CommandSpec,
-        policy: &SandboxPolicy,
-        sandbox: SandboxType,
-        sandbox_policy_cwd: &Path,
-        codex_linux_sandbox_exe: Option<&PathBuf>,
-        windows_sandbox_level: WindowsSandboxLevel,
+        request: SandboxTransformRequest<'_>,
     ) -> Result<ExecEnv, SandboxTransformError> {
+        let SandboxTransformRequest {
+            mut spec,
+            policy,
+            sandbox,
+            sandbox_policy_cwd,
+            codex_linux_sandbox_exe,
+            windows_sandbox_level,
+        } = request;
         let mut env = spec.env;
         if !policy.has_full_network_access() {
             env.insert(

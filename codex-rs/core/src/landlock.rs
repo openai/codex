@@ -6,8 +6,9 @@ use std::path::Path;
 use std::path::PathBuf;
 use tokio::process::Child;
 
-/// Spawn a shell tool command under the Linux Landlock+seccomp sandbox helper
-/// (codex-linux-sandbox).
+/// Spawn a shell tool command under the Linux sandbox helper
+/// (codex-linux-sandbox), which currently uses bubblewrap for filesystem
+/// isolation plus seccomp for network restrictions.
 ///
 /// Unlike macOS Seatbelt where we directly embed the policy text, the Linux
 /// helper accepts a list of `--sandbox-permission`/`-s` flags mirroring the
@@ -40,6 +41,9 @@ where
 }
 
 /// Converts the sandbox policy into the CLI invocation for `codex-linux-sandbox`.
+///
+/// The helper performs the actual sandboxing (bubblewrap + seccomp) after
+/// parsing these arguments. See `docs/linux_sandbox.md` for the Linux semantics.
 pub(crate) fn create_linux_sandbox_command_args(
     command: Vec<String>,
     sandbox_policy: &SandboxPolicy,
@@ -60,10 +64,13 @@ pub(crate) fn create_linux_sandbox_command_args(
         sandbox_policy_cwd,
         "--sandbox-policy".to_string(),
         sandbox_policy_json,
-        // Separator so that command arguments starting with `-` are not parsed as
-        // options of the helper itself.
-        "--".to_string(),
+        "--use-bwrap-sandbox".to_string(),
+        "--use-vendored-bwrap".to_string(),
     ];
+
+    // Separator so that command arguments starting with `-` are not parsed as
+    // options of the helper itself.
+    linux_cmd.push("--".to_string());
 
     // Append the original tool command.
     linux_cmd.extend(command);

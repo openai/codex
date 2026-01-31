@@ -282,14 +282,15 @@ impl<'a> SandboxAttempt<'a> {
         &self,
         spec: CommandSpec,
     ) -> Result<crate::sandboxing::ExecEnv, SandboxTransformError> {
-        self.manager.transform(
-            spec,
-            self.policy,
-            self.sandbox,
-            self.sandbox_cwd,
-            self.codex_linux_sandbox_exe,
-            self.windows_sandbox_level,
-        )
+        self.manager
+            .transform(crate::sandboxing::SandboxTransformRequest {
+                spec,
+                policy: self.policy,
+                sandbox: self.sandbox,
+                sandbox_policy_cwd: self.sandbox_cwd,
+                codex_linux_sandbox_exe: self.codex_linux_sandbox_exe,
+                windows_sandbox_level: self.windows_sandbox_level,
+            })
     }
 }
 

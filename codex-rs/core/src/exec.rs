@@ -184,14 +184,14 @@ pub async fn process_exec_tool_call(
 
     let manager = SandboxManager::new();
     let exec_env = manager
-        .transform(
+        .transform(crate::sandboxing::SandboxTransformRequest {
             spec,
-            sandbox_policy,
-            sandbox_type,
-            sandbox_cwd,
-            codex_linux_sandbox_exe.as_ref(),
+            policy: sandbox_policy,
+            sandbox: sandbox_type,
+            sandbox_policy_cwd: sandbox_cwd,
+            codex_linux_sandbox_exe: codex_linux_sandbox_exe.as_ref(),
             windows_sandbox_level,
-        )
+        })
         .map_err(CodexErr::from)?;
 
     // Route through the sandboxing module for a single, unified execution path.
