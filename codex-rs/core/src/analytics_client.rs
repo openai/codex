@@ -212,7 +212,7 @@ async fn send_track_skill_invocations(job: TrackEventsJob) {
         );
         events.push(TrackEvent {
             event_type: "skill_invocation",
-            skill_id: "skill_id_alex_test".to_string(),
+            skill_id,
             skill_name: invocation.skill_name.clone(),
             event_params: TrackEventParams {
                 thread_id: Some(tracking.thread_id.clone()),
