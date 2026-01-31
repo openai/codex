@@ -115,7 +115,7 @@ pub async fn load_config_layers_state(
     )
     .await?;
 
-    if let Some(requirements) = cloud_requirements.get().await {
+    if let Some(requirements) = cloud_requirements.get().await? {
         config_requirements_toml
             .merge_unset_fields(RequirementSource::CloudRequirements, requirements);
     }

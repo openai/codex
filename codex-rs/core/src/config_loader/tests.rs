@@ -545,7 +545,7 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
         enforce_residency: None,
     };
     let expected = requirements.clone();
-    let cloud_requirements = CloudRequirementsLoader::new(async move { Some(requirements) });
+    let cloud_requirements = CloudRequirementsLoader::new(async move { Ok(Some(requirements)) });
 
     let layers = load_config_layers_state(
         &codex_home,
