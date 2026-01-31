@@ -157,22 +157,39 @@ impl CloudRequirementsService {
             }
         })?;
 
+        let elapsed_ms = started_at.elapsed().as_millis();
         match result.as_ref() {
             Ok(Some(requirements)) => {
                 tracing::info!(
-                    elapsed_ms = started_at.elapsed().as_millis(),
+                    elapsed_ms,
+                    status = "success",
                     requirements = ?requirements,
                     "Cloud requirements load completed"
+                );
+                println!(
+                    "cloud_requirements status=success elapsed_ms={elapsed_ms} value={requirements:?}"
                 );
             }
             Ok(None) => {
                 tracing::info!(
-                    elapsed_ms = started_at.elapsed().as_millis(),
-                    "Cloud requirements load completed (none)"
+                    elapsed_ms,
+                    status = "none",
+                    requirements = %"none",
+                    "Cloud requirements load completed"
                 );
+                println!("cloud_requirements status=none elapsed_ms={elapsed_ms} value=none");
             }
             Err(err) => {
-                tracing::warn!(error = %err, "Cloud requirements load failed");
+                tracing::warn!(
+                    elapsed_ms,
+                    status = "error",
+                    requirements = %"none",
+                    error = %err,
+                    "Cloud requirements load failed"
+                );
+                println!(
+                    "cloud_requirements status=error elapsed_ms={elapsed_ms} value=none error={err}"
+                );
             }
         }
 
