@@ -76,18 +76,36 @@ pub(crate) fn truncate_rollout_before_nth_user_message_from_start(
 #[derive(Debug, Clone)]
 struct UserTurnRef {
     source_index: usize,
+    replacement_item_index: Option<usize>,
     text: String,
 }
 
-fn user_turn_from_item(item: &ResponseItem, source_index: usize) -> Option<UserTurnRef> {
+fn user_turn_from_item_with_replacement(
+    item: &ResponseItem,
+    source_index: usize,
+    replacement_item_index: Option<usize>,
+) -> Option<UserTurnRef> {
     let turn_item = event_mapping::parse_turn_item(item)?;
     match turn_item {
         TurnItem::UserMessage(user) => Some(UserTurnRef {
             source_index,
+            replacement_item_index,
             text: user.message(),
         }),
         _ => None,
     }
+}
+
+fn user_turn_from_item(item: &ResponseItem, source_index: usize) -> Option<UserTurnRef> {
+    user_turn_from_item_with_replacement(item, source_index, None)
+}
+
+fn user_turn_from_replacement_item(
+    item: &ResponseItem,
+    source_index: usize,
+    replacement_item_index: usize,
+) -> Option<UserTurnRef> {
+    user_turn_from_item_with_replacement(item, source_index, Some(replacement_item_index))
 }
 
 fn select_user_turns_for_compaction(turns: &[UserTurnRef]) -> Vec<UserTurnRef> {
@@ -106,6 +124,7 @@ fn select_user_turns_for_compaction(turns: &[UserTurnRef]) -> Vec<UserTurnRef> {
                 let truncated = truncate_text(&turn.text, TruncationPolicy::Tokens(remaining));
                 selected.push(UserTurnRef {
                     source_index: turn.source_index,
+                    replacement_item_index: turn.replacement_item_index,
                     text: truncated,
                 });
                 break;
@@ -122,7 +141,8 @@ fn user_turns_from_replacement(
 ) -> Vec<UserTurnRef> {
     replacement
         .iter()
-        .filter_map(|item| user_turn_from_item(item, source_index))
+        .enumerate()
+        .filter_map(|(idx, item)| user_turn_from_replacement_item(item, source_index, idx))
         .collect()
 }
 
@@ -152,6 +172,7 @@ fn effective_user_turns(items: &[RolloutItem]) -> Vec<UserTurnRef> {
                         };
                         selected.push(UserTurnRef {
                             source_index: idx,
+                            replacement_item_index: None,
                             text: summary,
                         });
                         selected
@@ -197,7 +218,19 @@ pub(crate) fn truncate_rollout_drop_last_n_user_turns(
         return items[..first_user_idx].to_vec();
     }
 
-    let cut_idx = user_turns[user_turns.len().saturating_sub(n_from_end)].source_index;
+    let boundary = &user_turns[user_turns.len().saturating_sub(n_from_end)];
+    if let Some(replacement_item_index) = boundary.replacement_item_index {
+        let compaction_index = boundary.source_index;
+        let mut truncated = items[..=compaction_index].to_vec();
+        if let Some(RolloutItem::Compacted(compacted)) = truncated.last_mut() {
+            if let Some(replacement) = &mut compacted.replacement_history {
+                replacement.truncate(replacement_item_index);
+            }
+        }
+        return truncated;
+    }
+
+    let cut_idx = boundary.source_index;
 
     items[..cut_idx].to_vec()
 }
@@ -404,6 +437,38 @@ mod tests {
 
         let truncated = truncate_rollout_drop_last_n_user_turns(&rollout_items, 99);
         let expected = vec![RolloutItem::ResponseItem(system)];
+        assert_eq!(
+            serde_json::to_value(&truncated).unwrap(),
+            serde_json::to_value(&expected).unwrap()
+        );
+    }
+
+    #[test]
+    fn truncate_rollout_drop_last_n_user_turns_truncates_replacement_history() {
+        let replacement = vec![
+            user_input_msg("u1"),
+            assistant_msg("a1"),
+            user_input_msg("u2"),
+            assistant_msg("a2"),
+        ];
+        let rollout_items = vec![
+            RolloutItem::ResponseItem(user_input_msg("pre")),
+            RolloutItem::Compacted(CompactedItem {
+                message: "ignored".to_string(),
+                replacement_history: Some(replacement),
+            }),
+            RolloutItem::ResponseItem(user_input_msg("u3")),
+            RolloutItem::ResponseItem(assistant_msg("a3")),
+        ];
+
+        let truncated = truncate_rollout_drop_last_n_user_turns(&rollout_items, 2);
+        let expected = vec![
+            RolloutItem::ResponseItem(user_input_msg("pre")),
+            RolloutItem::Compacted(CompactedItem {
+                message: "ignored".to_string(),
+                replacement_history: Some(vec![user_input_msg("u1"), assistant_msg("a1")]),
+            }),
+        ];
         assert_eq!(
             serde_json::to_value(&truncated).unwrap(),
             serde_json::to_value(&expected).unwrap()
