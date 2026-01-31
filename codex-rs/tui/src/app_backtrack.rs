@@ -207,6 +207,8 @@ impl App {
             return;
         }
 
+        // Optimistically apply the target mode for the rollback preview, but remember the
+        // prior mode so we can restore it if core rejects the rollback.
         let previous_collaboration_mask = self
             .chat_widget
             .replace_collaboration_mask(selection.collaboration_mode.clone());
@@ -472,6 +474,7 @@ impl App {
                 if pending.thread_id != self.chat_widget.thread_id() {
                     return;
                 }
+                // Rollback failed: revert the optimistic mode switch to the pre-rollback mask.
                 self.chat_widget
                     .replace_collaboration_mask(pending.previous_collaboration_mask);
             }

@@ -3217,7 +3217,7 @@ mod handlers {
             && let Some(collaboration_mode) = state
                 .turn_context_history
                 .last()
-                .and_then(|turn_context| turn_context.as_ref())
+                .and_then(Option::as_ref)
                 .and_then(|turn_context| turn_context.collaboration_mode.clone())
         {
             state.session_configuration.collaboration_mode = collaboration_mode;
