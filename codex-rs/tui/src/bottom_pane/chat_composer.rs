@@ -145,6 +145,7 @@ use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
+use strum::IntoEnumIterator;
 
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
@@ -927,7 +928,7 @@ impl ChatComposer {
 
     pub(crate) fn insert_str(&mut self, text: &str) {
         self.textarea.insert_str(text);
-        self.sync_plan_command_element();
+        self.sync_arg_command_element();
         self.sync_popups();
     }
 
@@ -944,7 +945,7 @@ impl ChatComposer {
             ActivePopup::None => self.handle_key_event_without_popup(key_event),
         };
 
-        self.sync_plan_command_element();
+        self.sync_arg_command_element();
 
         // Update (or hide/show) popup after processing the key.
         self.sync_popups();
@@ -957,7 +958,7 @@ impl ChatComposer {
         !matches!(self.active_popup, ActivePopup::None)
     }
 
-    fn sync_plan_command_element(&mut self) {
+    fn sync_arg_command_element(&mut self) {
         if !self.slash_commands_enabled() || !self.collaboration_modes_enabled {
             return;
         }
@@ -965,31 +966,57 @@ impl ChatComposer {
         let text = self.textarea.text().to_string();
         let first_line_end = text.find('\n').unwrap_or(text.len());
         let first_line = &text[..first_line_end];
-        let command = SlashCommand::Plan.command();
-        let command_text = format!("/{command}");
-        let command_len = command_text.len();
-        let wants_plan = first_line
-            .strip_prefix(&command_text)
-            .and_then(|rest| rest.chars().next())
-            .is_some_and(char::is_whitespace);
+        let mut desired_len = None;
+
+        if let Some((name, _rest, _rest_offset)) = parse_slash_name(first_line)
+            && let Some(cmd) = slash_commands::find_builtin_command(
+                name,
+                self.collaboration_modes_enabled,
+                self.connectors_enabled,
+                self.personality_command_enabled,
+                self.windows_degraded_sandbox_active,
+            )
+            && cmd.highlight_on_typed()
+        {
+            let command_text = format!("/{}", cmd.command());
+            let command_len = command_text.len();
+            if first_line.len() > command_len
+                && first_line
+                    .as_bytes()
+                    .get(command_len)
+                    .is_some_and(|ch| ch.is_ascii_whitespace())
+            {
+                desired_len = Some(command_len);
+            }
+        }
+
+        let highlightable = SlashCommand::iter()
+            .filter(|cmd| cmd.highlight_on_typed())
+            .map(|cmd| format!("/{}", cmd.command()))
+            .collect::<Vec<_>>();
 
         let mut elements = self.textarea.text_elements();
-        let has_plan = elements
-            .iter()
-            .any(|e| e.byte_range.start == 0 && e.byte_range.end == command_len);
-        let overlaps_plan = elements
-            .iter()
-            .any(|e| e.byte_range.start < command_len && e.byte_range.end > 0);
-
         let mut changed = false;
-        if wants_plan {
-            if !has_plan && !overlaps_plan {
+        if let Some(command_len) = desired_len {
+            let has_element = elements
+                .iter()
+                .any(|e| e.byte_range.start == 0 && e.byte_range.end == command_len);
+            let overlaps = elements
+                .iter()
+                .any(|e| e.byte_range.start < command_len && e.byte_range.end > 0);
+            if !has_element && !overlaps {
                 elements.push(TextElement::new((0..command_len).into(), None));
                 changed = true;
             }
         } else {
             let before = elements.len();
-            elements.retain(|e| !(e.byte_range.start == 0 && e.byte_range.end == command_len));
+            elements.retain(|e| {
+                if e.byte_range.start != 0 {
+                    return true;
+                }
+                let slice = text.get(e.byte_range.start..e.byte_range.end);
+                slice.is_some_and(|s| !highlightable.iter().any(|cmd| cmd == s))
+            });
             if elements.len() != before {
                 changed = true;
             }
@@ -1000,7 +1027,7 @@ impl ChatComposer {
         }
     }
 
-    fn should_bypass_plan_space(&self) -> bool {
+    fn should_bypass_arg_space(&self) -> bool {
         if !self.slash_commands_enabled() || !self.collaboration_modes_enabled {
             return false;
         }
@@ -1014,7 +1041,19 @@ impl ChatComposer {
         let Some((name, rest, rest_offset)) = parse_slash_name(first_line) else {
             return false;
         };
-        name == SlashCommand::Plan.command() && rest.is_empty() && cursor == rest_offset
+        if !rest.is_empty() || cursor != rest_offset {
+            return false;
+        }
+        let Some(cmd) = slash_commands::find_builtin_command(
+            name,
+            self.collaboration_modes_enabled,
+            self.connectors_enabled,
+            self.personality_command_enabled,
+            self.windows_degraded_sandbox_active,
+        ) else {
+            return false;
+        };
+        cmd.highlight_on_typed()
     }
 
     fn set_slash_command_element(&mut self, cmd: SlashCommand) {
@@ -1095,7 +1134,7 @@ impl ChatComposer {
                             let starts_with_cmd =
                                 first_line.trim_start().starts_with(&format!("/{command}"));
                             if !starts_with_cmd {
-                                if cmd == SlashCommand::Plan {
+                                if cmd.inline_element_on_popup_select() {
                                     self.set_slash_command_element(cmd);
                                 } else {
                                     self.textarea
@@ -1172,7 +1211,7 @@ impl ChatComposer {
                 if let Some(sel) = popup.selected_item() {
                     match sel {
                         CommandItem::Builtin(cmd) => {
-                            if cmd == SlashCommand::Plan {
+                            if cmd.inline_element_on_popup_select() {
                                 if let Some((name, rest, _rest_offset)) =
                                     parse_slash_name(first_line)
                                     && name == cmd.command()
@@ -2142,10 +2181,7 @@ impl ChatComposer {
                     self.personality_command_enabled,
                     self.windows_degraded_sandbox_active,
                 )
-                && matches!(
-                    cmd,
-                    SlashCommand::Review | SlashCommand::Rename | SlashCommand::Plan
-                )
+                && cmd.supports_args()
             {
                 self.textarea.set_text_clearing_elements("");
                 return Some(InputResult::CommandWithArgs(cmd, rest.to_string()));
@@ -2315,7 +2351,7 @@ impl ChatComposer {
                     return self.handle_non_ascii_char(input, now);
                 }
 
-                if ch == ' ' && self.should_bypass_plan_space() {
+                if ch == ' ' && self.should_bypass_arg_space() {
                     return self.handle_non_ascii_char(input, now);
                 }
 
@@ -4780,7 +4816,7 @@ mod tests {
 
         assert_eq!(InputResult::None, result);
         assert_eq!(composer.textarea.text(), "/plan ");
-        composer.sync_plan_command_element();
+        composer.sync_arg_command_element();
         assert_eq!(
             composer.textarea.text_elements(),
             vec![TextElement::new(

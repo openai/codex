@@ -45,6 +45,13 @@ pub enum SlashCommand {
     TestApproval,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct SlashCommandArgUi {
+    pub hint: &'static str,
+    pub inline_element_on_select: bool,
+    pub highlight_on_typed: bool,
+}
+
 impl SlashCommand {
     /// User-visible description shown in the popup.
     pub fn description(self) -> &'static str {
@@ -83,8 +90,31 @@ impl SlashCommand {
 
     /// Optional argument hint shown in the popup (e.g. "[prompt]").
     pub fn argument_hint(self) -> Option<&'static str> {
+        self.arg_ui().map(|ui| ui.hint)
+    }
+
+    pub fn supports_args(self) -> bool {
+        matches!(
+            self,
+            SlashCommand::Plan | SlashCommand::Review | SlashCommand::Rename
+        )
+    }
+
+    pub fn inline_element_on_popup_select(self) -> bool {
+        self.arg_ui().is_some_and(|ui| ui.inline_element_on_select)
+    }
+
+    pub fn highlight_on_typed(self) -> bool {
+        self.arg_ui().is_some_and(|ui| ui.highlight_on_typed)
+    }
+
+    pub fn arg_ui(self) -> Option<SlashCommandArgUi> {
         match self {
-            SlashCommand::Plan => Some("[prompt]"),
+            SlashCommand::Plan => Some(SlashCommandArgUi {
+                hint: "[prompt]",
+                inline_element_on_select: true,
+                highlight_on_typed: true,
+            }),
             _ => None,
         }
     }
