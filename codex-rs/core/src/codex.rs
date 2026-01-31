@@ -33,7 +33,6 @@ use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
-use crate::stream_events_utils::response_input_to_response_item;
 use crate::terminal;
 use crate::transport_manager::TransportManager;
 use crate::truncate::TruncationPolicy;
@@ -212,7 +211,6 @@ use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
-use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CodexErrorInfo;
@@ -1719,7 +1717,6 @@ impl Session {
     pub async fn notify_user_input_response(
         &self,
         sub_id: &str,
-        call_id: Option<String>,
         response: RequestUserInputResponse,
     ) {
         let entry = {
@@ -1738,36 +1735,6 @@ impl Session {
             }
             None => {
                 warn!("No pending user input found for sub_id: {sub_id}");
-                if response.answers.is_empty() {
-                    warn!(
-                        "dropping empty request_user_input response for sub_id: {sub_id}; likely cancelled"
-                    );
-                    return;
-                }
-                let call_id = call_id.unwrap_or_else(|| sub_id.to_string());
-                let content = match response.to_tool_output_content() {
-                    Ok(content) => content,
-                    Err(err) => {
-                        warn!(
-                            "failed to serialize request_user_input response for call_id: {call_id}: {err}"
-                        );
-                        return;
-                    }
-                };
-                let response_input = ResponseInputItem::FunctionCallOutput {
-                    call_id: call_id.clone(),
-                    output: FunctionCallOutputPayload {
-                        content,
-                        success: Some(true),
-                        ..Default::default()
-                    },
-                };
-                let Some(response_item) = response_input_to_response_item(&response_input) else {
-                    return;
-                };
-                let turn_context = self.new_default_turn_with_sub_id(sub_id.to_string()).await;
-                self.record_conversation_items(&turn_context, &[response_item])
-                    .await;
             }
         }
     }
@@ -2592,12 +2559,8 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::PatchApproval { id, decision } => {
                 handlers::patch_approval(&sess, id, decision).await;
             }
-            Op::UserInputAnswer {
-                id,
-                call_id,
-                response,
-            } => {
-                handlers::request_user_input_response(&sess, id, call_id, response).await;
+            Op::UserInputAnswer { id, response } => {
+                handlers::request_user_input_response(&sess, id, response).await;
             }
             Op::DynamicToolResponse { id, response } => {
                 handlers::dynamic_tool_response(&sess, id, response).await;
@@ -2951,11 +2914,9 @@ mod handlers {
     pub async fn request_user_input_response(
         sess: &Arc<Session>,
         id: String,
-        call_id: Option<String>,
         response: RequestUserInputResponse,
     ) {
-        sess.notify_user_input_response(&id, call_id, response)
-            .await;
+        sess.notify_user_input_response(&id, response).await;
     }
 
     pub async fn dynamic_tool_response(

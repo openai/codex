@@ -380,13 +380,7 @@ async fn handle_request_user_input(
         cancel_token,
     )
     .await;
-    let _ = codex
-        .submit(Op::UserInputAnswer {
-            id,
-            call_id: Some(event.call_id.clone()),
-            response,
-        })
-        .await;
+    let _ = codex.submit(Op::UserInputAnswer { id, response }).await;
 }
 
 async fn await_user_input_with_cancel<F>(
@@ -405,7 +399,7 @@ where
                 answers: HashMap::new(),
             };
             parent_session
-                .notify_user_input_response(sub_id, None, empty.clone())
+                .notify_user_input_response(sub_id, empty.clone())
                 .await;
             empty
         }
