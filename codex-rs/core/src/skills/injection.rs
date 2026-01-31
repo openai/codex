@@ -20,7 +20,8 @@ pub(crate) struct SkillInjections {
 pub(crate) async fn build_skill_injections(
     mentioned_skills: &[SkillMetadata],
     otel: Option<&OtelManager>,
-    analytics_client: Option<&AnalyticsEventsClient>,
+    analytics_client: &AnalyticsEventsClient,
+    tracking: TrackEventsContext,
 ) -> SkillInjections {
     if mentioned_skills.is_empty() {
         return SkillInjections::default();
@@ -59,9 +60,7 @@ pub(crate) async fn build_skill_injections(
         }
     }
 
-    if let Some(analytics_client) = analytics_client {
-        analytics_client.track_skill_invocations(invocations);
-    }
+    analytics_client.track_skill_invocations(tracking, invocations);
 
     result
 }

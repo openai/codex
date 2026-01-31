@@ -15,7 +15,6 @@ use crate::agent::AgentStatus;
 use crate::agent::MAX_THREAD_SPAWN_DEPTH;
 use crate::agent::agent_status_from_event;
 use crate::analytics_client::AnalyticsEventsClient;
-use crate::analytics_client::AnalyticsEventsQueue;
 use crate::analytics_client::build_track_events_context;
 use crate::compact;
 use crate::compact::run_inline_auto_compact_task;
@@ -908,8 +907,8 @@ impl Session {
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
             analytics_events_client: AnalyticsEventsClient::new(
-                AnalyticsEventsQueue::new(),
                 Arc::clone(&config),
+                Arc::clone(&auth_manager),
             ),
             notifier: UserNotifier::new(config.notify.clone()),
             rollout: Mutex::new(rollout_recorder),
@@ -3392,27 +3391,16 @@ pub(crate) async fn run_turn(
     .await;
 
     let otel_manager = turn_context.client.get_otel_manager();
-    let auth = match turn_context.client.get_auth_manager() {
-        Some(auth_manager) => auth_manager.auth().await,
-        None => None,
-    };
     let thread_id = sess.conversation_id.to_string();
-    let tracking = build_track_events_context(
-        auth,
-        turn_context.client.get_model(),
-        thread_id,
-        crate::default_client::originator().value,
-    );
-    sess.services
-        .analytics_events_client
-        .update_tracking(tracking.clone());
+    let tracking = build_track_events_context(turn_context.client.get_model(), thread_id);
     let SkillInjections {
         items: skill_items,
         warnings: skill_warnings,
     } = build_skill_injections(
         &mentioned_skills,
         Some(&otel_manager),
-        Some(&sess.services.analytics_events_client),
+        &sess.services.analytics_events_client,
+        tracking.clone(),
     )
     .await;
 
@@ -5374,8 +5362,8 @@ mod tests {
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
             analytics_events_client: AnalyticsEventsClient::new(
-                AnalyticsEventsQueue::new(),
                 Arc::clone(&config),
+                Arc::clone(&auth_manager),
             ),
             notifier: UserNotifier::new(None),
             rollout: Mutex::new(None),
@@ -5494,8 +5482,8 @@ mod tests {
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
             analytics_events_client: AnalyticsEventsClient::new(
-                AnalyticsEventsQueue::new(),
                 Arc::clone(&config),
+                Arc::clone(&auth_manager),
             ),
             notifier: UserNotifier::new(None),
             rollout: Mutex::new(None),

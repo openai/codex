@@ -1,4 +1,4 @@
-use crate::CodexAuth;
+use crate::AuthManager;
 use crate::config::Config;
 use crate::default_client::create_client;
 use crate::git_info::collect_git_info;
@@ -10,29 +10,22 @@ use sha1::Sha1;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
 #[derive(Clone)]
 pub(crate) struct TrackEventsContext {
-    pub(crate) auth: Option<CodexAuth>,
     pub(crate) model_slug: String,
     pub(crate) thread_id: String,
-    pub(crate) product_client_id: String,
 }
 
 pub(crate) fn build_track_events_context(
-    auth: Option<CodexAuth>,
     model_slug: String,
     thread_id: String,
-    product_client_id: String,
 ) -> TrackEventsContext {
     TrackEventsContext {
-        auth,
         model_slug,
         thread_id,
-        product_client_id,
     }
 }
 
@@ -49,16 +42,16 @@ pub(crate) struct AnalyticsEventsQueue {
 
 pub(crate) struct AnalyticsEventsClient {
     queue: AnalyticsEventsQueue,
+    auth_manager: Arc<AuthManager>,
     config: Arc<Config>,
-    tracking: Mutex<Option<TrackEventsContext>>,
 }
 
 impl AnalyticsEventsQueue {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(auth_manager: Arc<AuthManager>) -> Self {
         let (sender, mut receiver) = mpsc::channel(ANALYTICS_EVENTS_QUEUE_SIZE);
         tokio::spawn(async move {
             while let Some(job) = receiver.recv().await {
-                send_track_skill_invocations(job).await;
+                send_track_skill_invocations(&auth_manager, job).await;
             }
         });
         Self { sender }
@@ -73,25 +66,19 @@ impl AnalyticsEventsQueue {
 }
 
 impl AnalyticsEventsClient {
-    pub(crate) fn new(queue: AnalyticsEventsQueue, config: Arc<Config>) -> Self {
+    pub(crate) fn new(config: Arc<Config>, auth_manager: Arc<AuthManager>) -> Self {
         Self {
-            queue,
+            queue: AnalyticsEventsQueue::new(Arc::clone(&auth_manager)),
+            auth_manager,
             config,
-            tracking: Mutex::new(None),
         }
     }
 
-    pub(crate) fn update_tracking(&self, tracking: TrackEventsContext) {
-        if let Ok(mut guard) = self.tracking.lock() {
-            *guard = Some(tracking);
-        }
-    }
-
-    pub(crate) fn track_skill_invocations(&self, invocations: Vec<SkillInvocation>) {
-        let tracking = self.tracking.lock().ok().and_then(|guard| guard.clone());
-        let Some(tracking) = tracking else {
-            return;
-        };
+    pub(crate) fn track_skill_invocations(
+        &self,
+        tracking: TrackEventsContext,
+        invocations: Vec<SkillInvocation>,
+    ) {
         track_skill_invocations(
             &self.queue,
             Arc::clone(&self.config),
@@ -149,12 +136,6 @@ pub(crate) fn track_skill_invocations(
     if invocations.is_empty() {
         return;
     }
-    let Some(auth) = tracking.auth.as_ref() else {
-        return;
-    };
-    if !auth.is_chatgpt_auth() {
-        return;
-    }
     let job = TrackEventsJob {
         config,
         tracking,
@@ -163,13 +144,13 @@ pub(crate) fn track_skill_invocations(
     queue.try_send(job);
 }
 
-async fn send_track_skill_invocations(job: TrackEventsJob) {
+async fn send_track_skill_invocations(auth_manager: &AuthManager, job: TrackEventsJob) {
     let TrackEventsJob {
         config,
         tracking,
         invocations,
     } = job;
-    let Some(auth) = tracking.auth.as_ref() else {
+    let Some(auth) = auth_manager.auth().await else {
         return;
     };
     if !auth.is_chatgpt_auth() {
@@ -218,7 +199,7 @@ async fn send_track_skill_invocations(job: TrackEventsJob) {
                 thread_id: Some(tracking.thread_id.clone()),
                 invoke_type: Some("explicit".to_string()),
                 model_slug: Some(tracking.model_slug.clone()),
-                product_client_id: Some(tracking.product_client_id.clone()),
+                product_client_id: Some(crate::default_client::originator().value),
                 repo_url,
                 skill_scope: Some(skill_scope.to_string()),
                 skill_path: Some(skill_path),
