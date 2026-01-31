@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::analytics_client::SkillInvocation;
+use crate::analytics_client::TrackEventsContext;
 use crate::instructions::SkillInstructions;
 use crate::skills::SkillMetadata;
 use codex_otel::OtelManager;
