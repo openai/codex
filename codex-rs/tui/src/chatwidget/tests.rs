@@ -2992,7 +2992,7 @@ async fn experimental_features_toggle_saves_on_exit() {
     );
     chat.bottom_pane.show_view(Box::new(view));
 
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
 
     assert!(
         rx.try_recv().is_err(),
