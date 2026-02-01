@@ -36,7 +36,7 @@ pub async fn maybe_migrate_personality(
     let config_profile = config_toml
         .get_config_profile(None)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-    if config_toml.model_personality.is_some() || config_profile.model_personality.is_some() {
+    if config_toml.personality.is_some() || config_profile.personality.is_some() {
         create_marker(&marker_path).await?;
         return Ok(PersonalityMigrationStatus::SkippedExplicitPersonality);
     }
@@ -52,7 +52,7 @@ pub async fn maybe_migrate_personality(
     }
 
     ConfigEditsBuilder::new(codex_home)
-        .set_model_personality(Some(Personality::Pragmatic))
+        .set_personality(Some(Personality::Pragmatic))
         .apply()
         .await
         .map_err(|err| {
@@ -211,7 +211,7 @@ mod tests {
         assert!(temp.path().join(PERSONALITY_MIGRATION_FILENAME).exists());
 
         let persisted = read_config_toml(temp.path()).await?;
-        assert_eq!(persisted.model_personality, Some(Personality::Pragmatic));
+        assert_eq!(persisted.personality, Some(Personality::Pragmatic));
         Ok(())
     }
 
@@ -232,7 +232,7 @@ mod tests {
     async fn skips_when_personality_explicit() -> io::Result<()> {
         let temp = TempDir::new()?;
         ConfigEditsBuilder::new(temp.path())
-            .set_model_personality(Some(Personality::Friendly))
+            .set_personality(Some(Personality::Friendly))
             .apply()
             .await
             .map_err(|err| io::Error::other(format!("failed to write config: {err}")))?;
@@ -247,7 +247,7 @@ mod tests {
         assert!(temp.path().join(PERSONALITY_MIGRATION_FILENAME).exists());
 
         let persisted = read_config_toml(temp.path()).await?;
-        assert_eq!(persisted.model_personality, Some(Personality::Friendly));
+        assert_eq!(persisted.personality, Some(Personality::Friendly));
         Ok(())
     }
 

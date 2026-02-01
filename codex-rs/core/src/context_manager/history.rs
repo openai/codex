@@ -88,7 +88,7 @@ impl ContextManager {
         let model_info = turn_context.client.get_model_info();
         let personality = turn_context
             .personality
-            .or(turn_context.client.config().model_personality);
+            .or(turn_context.client.config().personality);
         let base_instructions = model_info.get_model_instructions(personality);
         let base_tokens = i64::try_from(approx_token_count(&base_instructions)).unwrap_or(i64::MAX);
 

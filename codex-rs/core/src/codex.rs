@@ -333,7 +333,7 @@ impl Codex {
             .base_instructions
             .clone()
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
-            .unwrap_or_else(|| model_info.get_model_instructions(config.model_personality));
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
         // Respect explicit thread-start tools; fall back to persisted tools when resuming a thread.
         let dynamic_tools = if dynamic_tools.is_empty() {
             conversation_history.get_dynamic_tools().unwrap_or_default()
@@ -357,7 +357,7 @@ impl Codex {
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions,
-            personality: config.model_personality,
+            personality: config.personality,
             base_instructions,
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
@@ -636,7 +636,7 @@ impl Session {
         per_turn_config.model_reasoning_effort =
             session_configuration.collaboration_mode.reasoning_effort();
         per_turn_config.model_reasoning_summary = session_configuration.model_reasoning_summary;
-        per_turn_config.model_personality = session_configuration.personality;
+        per_turn_config.personality = session_configuration.personality;
         per_turn_config.web_search_mode = Some(resolve_web_search_mode_for_turn(
             per_turn_config.web_search_mode,
             session_configuration.provider.is_azure_responses_endpoint(),
@@ -4980,11 +4980,11 @@ mod tests {
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
-            personality: config.model_personality,
+            personality: config.personality,
             base_instructions: config
                 .base_instructions
                 .clone()
-                .unwrap_or_else(|| model_info.get_model_instructions(config.model_personality)),
+                .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
@@ -5063,11 +5063,11 @@ mod tests {
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
-            personality: config.model_personality,
+            personality: config.personality,
             base_instructions: config
                 .base_instructions
                 .clone()
-                .unwrap_or_else(|| model_info.get_model_instructions(config.model_personality)),
+                .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
@@ -5330,11 +5330,11 @@ mod tests {
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
-            personality: config.model_personality,
+            personality: config.personality,
             base_instructions: config
                 .base_instructions
                 .clone()
-                .unwrap_or_else(|| model_info.get_model_instructions(config.model_personality)),
+                .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
@@ -5450,11 +5450,11 @@ mod tests {
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
-            personality: config.model_personality,
+            personality: config.personality,
             base_instructions: config
                 .base_instructions
                 .clone()
-                .unwrap_or_else(|| model_info.get_model_instructions(config.model_personality)),
+                .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),

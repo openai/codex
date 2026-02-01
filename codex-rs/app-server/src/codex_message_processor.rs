@@ -1770,7 +1770,7 @@ impl CodexMessageProcessor {
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
             base_instructions,
             developer_instructions,
-            model_personality: personality,
+            personality,
             ..Default::default()
         }
     }
