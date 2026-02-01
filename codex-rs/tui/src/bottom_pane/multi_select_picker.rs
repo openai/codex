@@ -38,6 +38,7 @@ enum Direction {
 pub type ChangeCallBack = Box<dyn Fn(&[MultiSelectItem], &AppEventSender) + Send + Sync>;
 pub type ConfirmCallback = Box<dyn Fn(&[String], &AppEventSender) + Send + Sync>;
 pub type CancelCallback = Box<dyn Fn(&AppEventSender) + Send + Sync>;
+pub type PreviewCallback = Box<dyn Fn(&[MultiSelectItem]) -> Option<Line<'static>> + Send + Sync>;
 
 #[derive(Default)]
 pub(crate) struct MultiSelectItem {
@@ -58,6 +59,8 @@ pub(crate) struct MultiSelectPicker {
     search_query: String,
     filtered_indices: Vec<usize>,
     ordering_enabled: bool,
+    preview_builder: Option<PreviewCallback>,
+    preview_line: Option<Line<'static>>,
     on_change: Option<ChangeCallBack>,
     on_confirm: Option<ConfirmCallback>,
     on_cancel: Option<CancelCallback>,
@@ -179,6 +182,7 @@ impl MultiSelectPicker {
         };
 
         item.enabled = !item.enabled;
+        self.update_preview_line();
         if let Some(on_change) = &self.on_change {
             on_change(&self.items, &self.app_event_tx);
         }
@@ -227,6 +231,7 @@ impl MultiSelectPicker {
         // move item in underlying list
         self.items.swap(actual_idx, new_idx);
 
+        self.update_preview_line();
         if let Some(on_change) = &self.on_change {
             on_change(&self.items, &self.app_event_tx);
         }
@@ -243,6 +248,13 @@ impl MultiSelectPicker {
         {
             self.state.selected_idx = Some(new_visible_idx);
         }
+    }
+
+    fn update_preview_line(&mut self) {
+        self.preview_line = self
+            .preview_builder
+            .as_ref()
+            .and_then(|builder| builder(&self.items));
     }
 
     pub fn close(&mut self) {
@@ -339,11 +351,12 @@ impl Renderable for MultiSelectPicker {
     fn desired_height(&self, width: u16) -> u16 {
         let rows = self.build_rows();
         let rows_height = self.rows_height(&rows);
+        let preview_height = if self.preview_line.is_some() { 1 } else { 0 };
 
         let mut height = self.header.desired_height(width.saturating_sub(4));
         height = height.saturating_add(rows_height + 3);
         height = height.saturating_add(2);
-        height.saturating_add(1)
+        height.saturating_add(1 + preview_height)
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
@@ -352,8 +365,10 @@ impl Renderable for MultiSelectPicker {
         }
 
         // Reserve the footer line for the key-hint row.
+        let preview_height = if self.preview_line.is_some() { 1 } else { 0 };
+        let footer_height = 1 + preview_height;
         let [content_area, footer_area] =
-            Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
+            Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_height)]).areas(area);
 
         Block::default()
             .style(user_message_style())
@@ -415,11 +430,25 @@ impl Renderable for MultiSelectPicker {
             );
         }
 
+        let hint_area = if let Some(preview_line) = &self.preview_line {
+            let [preview_area, hint_area] =
+                Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(footer_area);
+            let preview_area = Rect {
+                x: preview_area.x + 2,
+                y: preview_area.y,
+                width: preview_area.width.saturating_sub(2),
+                height: preview_area.height,
+            };
+            preview_line.clone().render(preview_area, buf);
+            hint_area
+        } else {
+            footer_area
+        };
         let hint_area = Rect {
-            x: footer_area.x + 2,
-            y: footer_area.y,
-            width: footer_area.width.saturating_sub(2),
-            height: footer_area.height,
+            x: hint_area.x + 2,
+            y: hint_area.y,
+            width: hint_area.width.saturating_sub(2),
+            height: hint_area.height,
         };
         self.footer_hint.clone().dim().render(hint_area, buf);
     }
@@ -432,6 +461,7 @@ pub(crate) struct MultiSelectPickerBuilder {
     items: Vec<MultiSelectItem>,
     ordering_enabled: bool,
     app_event_tx: AppEventSender,
+    preview_builder: Option<PreviewCallback>,
     on_change: Option<ChangeCallBack>,
     on_confirm: Option<ConfirmCallback>,
     on_cancel: Option<CancelCallback>,
@@ -446,6 +476,7 @@ impl MultiSelectPickerBuilder {
             items: Vec::new(),
             ordering_enabled: false,
             app_event_tx,
+            preview_builder: None,
             on_change: None,
             on_confirm: None,
             on_cancel: None,
@@ -469,6 +500,14 @@ impl MultiSelectPickerBuilder {
 
     pub fn enable_ordering(mut self) -> Self {
         self.ordering_enabled = true;
+        self
+    }
+
+    pub fn preview<F>(mut self, callback: F) -> Self
+    where
+        F: Fn(&[MultiSelectItem]) -> Option<Line<'static>> + Send + Sync + 'static,
+    {
+        self.preview_builder = Some(Box::new(callback));
         self
     }
 
@@ -528,11 +567,14 @@ impl MultiSelectPickerBuilder {
             ordering_enabled: self.ordering_enabled,
             search_query: String::new(),
             filtered_indices: Vec::new(),
+            preview_builder: self.preview_builder,
+            preview_line: None,
             on_change: self.on_change,
             on_confirm: self.on_confirm,
             on_cancel: self.on_cancel,
         };
         view.apply_filter();
+        view.update_preview_line();
         view
     }
 }

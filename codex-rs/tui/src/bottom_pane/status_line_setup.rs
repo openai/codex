@@ -1,5 +1,6 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::text::Line;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use strum_macros::EnumString;
@@ -47,6 +48,23 @@ impl StatusLineItem {
             StatusLineItem::SessionId => "Current session identifier",
         }
     }
+
+    pub(crate) fn short_label(&self) -> &'static str {
+        match self {
+            StatusLineItem::ModelName => "Model",
+            StatusLineItem::Cwd => "Cwd",
+            StatusLineItem::GitBranch => "Git",
+            StatusLineItem::ContextUsedPct => "Used",
+            StatusLineItem::ContextRemainingPct => "Remaining",
+            StatusLineItem::CodexVersion => "Version",
+            StatusLineItem::ContextWindowSize => "Ctx",
+            StatusLineItem::TotalInputTokens => "In",
+            StatusLineItem::TotalOutputTokens => "Out",
+            StatusLineItem::GitLinesAdded => "+Lines",
+            StatusLineItem::GitLinesRemoved => "-Lines",
+            StatusLineItem::SessionId => "Session",
+        }
+    }
 }
 
 pub(crate) struct StatusLineSetupView {
@@ -77,18 +95,35 @@ impl StatusLineSetupView {
             ])
             .items(items)
             .enable_ordering()
+            .preview(|items| {
+                let preview = items
+                    .iter()
+                    .filter(|item| item.enabled)
+                    .filter_map(|item| item.id.parse::<StatusLineItem>().ok())
+                    .map(|item| item.short_label())
+                    .collect::<Vec<_>>()
+                    .join(" · ");
+                if preview.is_empty() {
+                    None
+                } else {
+                    Some(Line::from(preview))
+                }
+            })
             .on_change(|items, app_event| {
                 let items = items
                     .iter()
+                    .filter(|multi_select_item| multi_select_item.enabled)
                     .filter_map(|multi_select_item| multi_select_item.id.parse().ok())
                     .collect();
                 app_event.send(AppEvent::StatusLinePreview { items });
             })
             .on_confirm(|items, app_event| {
+                app_event.send(AppEvent::StatusLinePreview { items: Vec::new() });
                 let items = items.into();
                 app_event.send(AppEvent::StatusLineSetup { items });
             })
             .on_cancel(|app_event| {
+                app_event.send(AppEvent::StatusLinePreview { items: Vec::new() });
                 app_event.send(AppEvent::StatusLineSetupCancelled);
             })
             .build(),
@@ -108,6 +143,9 @@ impl BottomPaneView for StatusLineSetupView {
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
         self.picker.close();
+        self.app_event_tx
+            .send(AppEvent::StatusLinePreview { items: Vec::new() });
+        self.app_event_tx.send(AppEvent::StatusLineSetupCancelled);
         CancellationEvent::Handled
     }
 }
