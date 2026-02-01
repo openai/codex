@@ -52,16 +52,21 @@ fn deserialize_initialize_request() {
     assert_eq!(
         init_params,
         InitializeRequestParams {
+            _meta: None,
             capabilities: ClientCapabilities {
                 experimental: None,
                 roots: None,
                 sampling: None,
                 elicitation: None,
+                tasks: None,
             },
             client_info: Implementation {
+                description: None,
+                icons: None,
                 name: "acme-client".into(),
                 title: Some("Acme".to_string()),
                 version: "1.2.3".into(),
+                website_url: None,
                 user_agent: None,
             },
             protocol_version: "2025-06-18".into(),

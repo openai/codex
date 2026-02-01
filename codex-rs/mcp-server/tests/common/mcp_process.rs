@@ -14,13 +14,14 @@ use codex_mcp_server::CodexToolCallParam;
 
 use mcp_types::CallToolRequestParams;
 use mcp_types::ClientCapabilities;
+use mcp_types::ClientCapabilitiesElicitation;
 use mcp_types::Implementation;
 use mcp_types::InitializeRequestParams;
 use mcp_types::JSONRPC_VERSION;
 use mcp_types::JSONRPCMessage;
 use mcp_types::JSONRPCNotification;
 use mcp_types::JSONRPCRequest;
-use mcp_types::JSONRPCResponse;
+use mcp_types::JSONRPCResultResponse;
 use mcp_types::ModelContextProtocolNotification;
 use mcp_types::ModelContextProtocolRequest;
 use mcp_types::RequestId;
@@ -111,16 +112,24 @@ impl McpProcess {
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
 
         let params = InitializeRequestParams {
+            _meta: None,
             capabilities: ClientCapabilities {
-                elicitation: Some(json!({})),
+                elicitation: Some(ClientCapabilitiesElicitation {
+                    form: None,
+                    url: None,
+                }),
                 experimental: None,
                 roots: None,
                 sampling: None,
+                tasks: None,
             },
             client_info: Implementation {
+                description: None,
+                icons: None,
                 name: "elicitation test".into(),
                 title: Some("Elicitation Test".into()),
                 version: "0.0.0".into(),
+                website_url: None,
                 user_agent: None,
             },
             protocol_version: mcp_types::MCP_SCHEMA_VERSION.into(),
@@ -147,7 +156,7 @@ impl McpProcess {
             codex_core::terminal::user_agent()
         );
         assert_eq!(
-            JSONRPCMessage::Response(JSONRPCResponse {
+            JSONRPCMessage::ResultResponse(JSONRPCResultResponse {
                 jsonrpc: JSONRPC_VERSION.into(),
                 id: RequestId::Integer(request_id),
                 result: json!({
@@ -186,8 +195,10 @@ impl McpProcess {
         params: CodexToolCallParam,
     ) -> anyhow::Result<i64> {
         let codex_tool_call_params = CallToolRequestParams {
+            _meta: None,
             name: "codex".to_string(),
             arguments: Some(serde_json::to_value(params)?),
+            task: None,
         };
         self.send_request(
             mcp_types::CallToolRequest::METHOD,
@@ -218,7 +229,7 @@ impl McpProcess {
         id: RequestId,
         result: serde_json::Value,
     ) -> anyhow::Result<()> {
-        self.send_jsonrpc_message(JSONRPCMessage::Response(JSONRPCResponse {
+        self.send_jsonrpc_message(JSONRPCMessage::ResultResponse(JSONRPCResultResponse {
             jsonrpc: JSONRPC_VERSION.into(),
             id,
             result,
@@ -256,11 +267,11 @@ impl McpProcess {
                 JSONRPCMessage::Request(jsonrpc_request) => {
                     return Ok(jsonrpc_request);
                 }
-                JSONRPCMessage::Error(_) => {
-                    anyhow::bail!("unexpected JSONRPCMessage::Error: {message:?}");
+                JSONRPCMessage::ErrorResponse(_) => {
+                    anyhow::bail!("unexpected JSONRPCMessage::ErrorResponse: {message:?}");
                 }
-                JSONRPCMessage::Response(_) => {
-                    anyhow::bail!("unexpected JSONRPCMessage::Response: {message:?}");
+                JSONRPCMessage::ResultResponse(_) => {
+                    anyhow::bail!("unexpected JSONRPCMessage::ResultResponse: {message:?}");
                 }
             }
         }
@@ -269,7 +280,7 @@ impl McpProcess {
     pub async fn read_stream_until_response_message(
         &mut self,
         request_id: RequestId,
-    ) -> anyhow::Result<JSONRPCResponse> {
+    ) -> anyhow::Result<JSONRPCResultResponse> {
         eprintln!("in read_stream_until_response_message({request_id:?})");
 
         loop {
@@ -281,10 +292,10 @@ impl McpProcess {
                 JSONRPCMessage::Request(_) => {
                     anyhow::bail!("unexpected JSONRPCMessage::Request: {message:?}");
                 }
-                JSONRPCMessage::Error(_) => {
-                    anyhow::bail!("unexpected JSONRPCMessage::Error: {message:?}");
+                JSONRPCMessage::ErrorResponse(_) => {
+                    anyhow::bail!("unexpected JSONRPCMessage::ErrorResponse: {message:?}");
                 }
-                JSONRPCMessage::Response(jsonrpc_response) => {
+                JSONRPCMessage::ResultResponse(jsonrpc_response) => {
                     if jsonrpc_response.id == request_id {
                         return Ok(jsonrpc_response);
                     }
@@ -327,11 +338,11 @@ impl McpProcess {
                 JSONRPCMessage::Request(_) => {
                     anyhow::bail!("unexpected JSONRPCMessage::Request: {message:?}");
                 }
-                JSONRPCMessage::Error(_) => {
-                    anyhow::bail!("unexpected JSONRPCMessage::Error: {message:?}");
+                JSONRPCMessage::ErrorResponse(_) => {
+                    anyhow::bail!("unexpected JSONRPCMessage::ErrorResponse: {message:?}");
                 }
-                JSONRPCMessage::Response(_) => {
-                    anyhow::bail!("unexpected JSONRPCMessage::Response: {message:?}");
+                JSONRPCMessage::ResultResponse(_) => {
+                    anyhow::bail!("unexpected JSONRPCMessage::ResultResponse: {message:?}");
                 }
             }
         }

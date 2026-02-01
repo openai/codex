@@ -8,6 +8,7 @@ use codex_rmcp_client::RmcpClient;
 use codex_utils_cargo_bin::CargoBinError;
 use futures::FutureExt as _;
 use mcp_types::ClientCapabilities;
+use mcp_types::ClientCapabilitiesElicitation;
 use mcp_types::Implementation;
 use mcp_types::InitializeRequestParams;
 use mcp_types::ListResourceTemplatesResult;
@@ -26,16 +27,24 @@ fn stdio_server_bin() -> Result<PathBuf, CargoBinError> {
 
 fn init_params() -> InitializeRequestParams {
     InitializeRequestParams {
+        _meta: None,
         capabilities: ClientCapabilities {
+            elicitation: Some(ClientCapabilitiesElicitation {
+                form: None,
+                url: None,
+            }),
             experimental: None,
             roots: None,
             sampling: None,
-            elicitation: Some(json!({})),
+            tasks: None,
         },
         client_info: Implementation {
+            description: None,
+            icons: None,
             name: "codex-test".into(),
             version: "0.0.0-test".into(),
             title: Some("Codex rmcp resource test".into()),
+            website_url: None,
             user_agent: None,
         },
         protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_string(),
@@ -80,8 +89,10 @@ async fn rmcp_client_can_list_and_read_resources() -> anyhow::Result<()> {
     assert_eq!(
         memo,
         &Resource {
+            _meta: None,
             annotations: None,
             description: Some("A sample MCP resource exposed for integration tests.".to_string()),
+            icons: None,
             mime_type: Some("text/plain".to_string()),
             name: "example-note".to_string(),
             size: None,
@@ -95,12 +106,15 @@ async fn rmcp_client_can_list_and_read_resources() -> anyhow::Result<()> {
     assert_eq!(
         templates,
         ListResourceTemplatesResult {
+            _meta: None,
             next_cursor: None,
             resource_templates: vec![ResourceTemplate {
+                _meta: None,
                 annotations: None,
                 description: Some(
                     "Template for memo://codex/{slug} resources used in tests.".to_string()
                 ),
+                icons: None,
                 mime_type: Some("text/plain".to_string()),
                 name: "codex-memo".to_string(),
                 title: Some("Codex Memo".to_string()),
@@ -112,6 +126,7 @@ async fn rmcp_client_can_list_and_read_resources() -> anyhow::Result<()> {
     let read = client
         .read_resource(
             ReadResourceRequestParams {
+                _meta: None,
                 uri: RESOURCE_URI.to_string(),
             },
             Some(Duration::from_secs(5)),
@@ -125,6 +140,7 @@ async fn rmcp_client_can_list_and_read_resources() -> anyhow::Result<()> {
     assert_eq!(
         text,
         &TextResourceContents {
+            _meta: None,
             text: "This is a sample MCP resource served by the rmcp test server.".to_string(),
             uri: RESOURCE_URI.to_string(),
             mime_type: Some("text/plain".to_string()),

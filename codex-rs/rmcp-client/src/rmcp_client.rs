@@ -14,12 +14,10 @@ use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
 use mcp_types::InitializeRequestParams;
 use mcp_types::InitializeResult;
-use mcp_types::ListResourceTemplatesRequestParams;
 use mcp_types::ListResourceTemplatesResult;
-use mcp_types::ListResourcesRequestParams;
 use mcp_types::ListResourcesResult;
-use mcp_types::ListToolsRequestParams;
 use mcp_types::ListToolsResult;
+use mcp_types::PaginatedRequestParams;
 use mcp_types::ReadResourceRequestParams;
 use mcp_types::ReadResourceResult;
 use mcp_types::RequestId;
@@ -296,11 +294,12 @@ impl RmcpClient {
 
     pub async fn list_tools(
         &self,
-        params: Option<ListToolsRequestParams>,
+        params: Option<PaginatedRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListToolsResult> {
         let result = self.list_tools_with_connector_ids(params, timeout).await?;
         Ok(ListToolsResult {
+            _meta: None,
             next_cursor: result.next_cursor,
             tools: result.tools.into_iter().map(|tool| tool.tool).collect(),
         })
@@ -308,7 +307,7 @@ impl RmcpClient {
 
     pub async fn list_tools_with_connector_ids(
         &self,
-        params: Option<ListToolsRequestParams>,
+        params: Option<PaginatedRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListToolsWithConnectorIdResult> {
         self.refresh_oauth_if_needed().await;
@@ -352,7 +351,7 @@ impl RmcpClient {
 
     pub async fn list_resources(
         &self,
-        params: Option<ListResourcesRequestParams>,
+        params: Option<PaginatedRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListResourcesResult> {
         self.refresh_oauth_if_needed().await;
@@ -370,7 +369,7 @@ impl RmcpClient {
 
     pub async fn list_resource_templates(
         &self,
-        params: Option<ListResourceTemplatesRequestParams>,
+        params: Option<PaginatedRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListResourceTemplatesResult> {
         self.refresh_oauth_if_needed().await;
@@ -409,7 +408,12 @@ impl RmcpClient {
     ) -> Result<CallToolResult> {
         self.refresh_oauth_if_needed().await;
         let service = self.service().await?;
-        let params = CallToolRequestParams { arguments, name };
+        let params = CallToolRequestParams {
+            _meta: None,
+            arguments,
+            name,
+            task: None,
+        };
         let rmcp_params: CallToolRequestParam = convert_to_rmcp(params)?;
         let fut = service.call_tool(rmcp_params);
         let rmcp_result = run_with_timeout(fut, timeout, "tools/call").await?;

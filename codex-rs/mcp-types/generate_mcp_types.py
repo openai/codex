@@ -18,7 +18,7 @@ from shutil import copy2
 from typing import Any, Literal
 
 
-SCHEMA_VERSION = "2025-06-18"
+SCHEMA_VERSION = "2025-11-25"
 JSONRPC_VERSION = "2.0"
 
 STANDARD_DERIVE = "#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]\n"
@@ -26,7 +26,8 @@ STANDARD_HASHABLE_DERIVE = (
     "#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Hash, Eq, JsonSchema, TS)]\n"
 )
 
-# Will be populated with the schema's `definitions` map in `main()` so that
+# Will be populated with the schema's definitions map (`definitions` in
+# draft-07, `$defs` in 2020-12) in `main()` so that
 # helper functions (for example `define_any_of`) can perform look-ups while
 # generating code.
 DEFINITIONS: dict[str, Any] = {}
@@ -85,7 +86,7 @@ def generate_lib_rs(schema_file: Path, lib_rs: Path, fmt: bool) -> None:
     with schema_file.open(encoding="utf-8") as f:
         schema_json = json.load(f)
 
-    DEFINITIONS = schema_json["definitions"]
+    DEFINITIONS = get_schema_definitions(schema_json)
 
     out = [
         f"""
@@ -124,7 +125,7 @@ fn default_jsonrpc() -> String {{ JSONRPC_VERSION.to_owned() }}
 
 """
     ]
-    definitions = schema_json["definitions"]
+    definitions = get_schema_definitions(schema_json)
     # Keep track of every *Request type so we can generate the TryFrom impl at
     # the end.
     # The concrete *Request types referenced by the ClientRequest enum will be
@@ -283,13 +284,25 @@ def add_definition(name: str, definition: dict[str, Any], out: list[str]) -> Non
 
         # Special carve-out for Result types:
         if name.endswith("Result"):
-            out.extend(f"impl From<{name}> for serde_json::Value {{\n")
-            out.append(f"    fn from(value: {name}) -> Self {{\n")
-            out.append("        // Leave this as it should never fail\n")
-            out.append("        #[expect(clippy::unwrap_used)]\n")
-            out.append("        serde_json::to_value(value).unwrap()\n")
-            out.append("    }\n")
-            out.append("}\n\n")
+            append_result_value_impl(name, out)
+        return
+
+    all_of = definition.get("allOf", [])
+    if all_of:
+        assert isinstance(all_of, list)
+        merged_properties: dict[str, Any] = {}
+        merged_required: set[str] = set()
+        for item in all_of:
+            if "$ref" in item:
+                ref_name = type_from_ref(item["$ref"])
+                item = DEFINITIONS[ref_name]
+            merged_properties.update(item.get("properties", {}))
+            merged_required.update(item.get("required", []))
+
+        out.extend(define_struct(name, merged_properties, merged_required, description))
+
+        if name.endswith("Result"):
+            append_result_value_impl(name, out)
         return
 
     enum_values = definition.get("enum", [])
@@ -331,6 +344,16 @@ def add_definition(name: str, definition: dict[str, Any], out: list[str]) -> Non
 
 
 extra_defs = []
+
+
+def append_result_value_impl(name: str, out: list[str]) -> None:
+    out.extend(f"impl From<{name}> for serde_json::Value {{\n")
+    out.append(f"    fn from(value: {name}) -> Self {{\n")
+    out.append("        // Leave this as it should never fail\n")
+    out.append("        #[expect(clippy::unwrap_used)]\n")
+    out.append("        serde_json::to_value(value).unwrap()\n")
+    out.append("    }\n")
+    out.append("}\n\n")
 
 
 @dataclass
@@ -384,10 +407,7 @@ def define_struct(
 
     fields: list[StructField] = []
     for prop_name, prop in properties.items():
-        if prop_name == "_meta":
-            # TODO?
-            continue
-        elif prop_name == "jsonrpc":
+        if prop_name == "jsonrpc":
             fields.append(
                 StructField(
                     "pub",
@@ -400,6 +420,10 @@ def define_struct(
 
         prop_type = map_type(prop, prop_name, name)
         is_optional = prop_name not in required_props
+        if is_optional and prop_type.startswith("&'static str"):
+            # Optional `const` schema properties cannot be represented as a Rust
+            # associated const, so store them as optional strings.
+            prop_type = "String"
         if is_optional:
             prop_type = f"Option<{prop_type}>"
         rs_prop = rust_prop_name(prop_name, is_optional)
@@ -539,8 +563,7 @@ def define_any_of(name: str, list_of_refs: list[Any], description: str | None = 
       full `…Request` struct from the schema definition.
     """
 
-    # Verify each item in list_of_refs is a dict with a $ref key.
-    refs = [item["$ref"] for item in list_of_refs if isinstance(item, dict)]
+    refs = [item["$ref"] for item in list_of_refs if isinstance(item, dict) and "$ref" in item]
 
     out: list[str] = []
     if description:
@@ -555,54 +578,67 @@ def define_any_of(name: str, list_of_refs: list[Any], description: str | None = 
     out.append(f"pub enum {name} {{\n")
 
     if name == "ClientRequest":
+        if len(refs) != len(list_of_refs):
+            raise ValueError("ClientRequest anyOf must contain only $ref items.")
         # Record the set of request type names so we can later generate a
         # `TryFrom<JSONRPCRequest>` implementation.
         global CLIENT_REQUEST_TYPE_NAMES
         CLIENT_REQUEST_TYPE_NAMES = [type_from_ref(r) for r in refs]
 
     if name == "ServerNotification":
+        if len(refs) != len(list_of_refs):
+            raise ValueError("ServerNotification anyOf must contain only $ref items.")
         global SERVER_NOTIFICATION_TYPE_NAMES
         SERVER_NOTIFICATION_TYPE_NAMES = [type_from_ref(r) for r in refs]
 
-    for ref in refs:
-        ref_name = type_from_ref(ref)
+    for idx, item in enumerate(list_of_refs):
+        if not isinstance(item, dict):
+            raise ValueError(f"Unexpected anyOf item for {name}: {item}")
 
-        # For JSONRPCMessage variants, drop the common "JSONRPC" prefix to
-        # make the enum easier to read (e.g. `Request` instead of
-        # `JSONRPCRequest`). The payload type remains unchanged.
-        variant_name = (
-            ref_name[len("JSONRPC") :]
-            if name == "JSONRPCMessage" and ref_name.startswith("JSONRPC")
-            else ref_name
-        )
+        ref = item.get("$ref")
+        if ref:
+            ref_name = type_from_ref(ref)
 
-        # Special-case for `ClientRequest` and `ServerNotification` so the enum
-        # variant's payload is the *Params type rather than the full *Request /
-        # *Notification marker type.
-        if name in ("ClientRequest", "ServerNotification"):
-            # Rely on the trait implementation to tell us the exact Rust type
-            # of the `params` payload. This guarantees we stay in sync with any
-            # special-case logic used elsewhere (e.g. objects with
-            # `additionalProperties` mapping to `serde_json::Value`).
-            if name == "ClientRequest":
-                payload_type = f"<{ref_name} as ModelContextProtocolRequest>::Params"
-            else:
-                payload_type = f"<{ref_name} as ModelContextProtocolNotification>::Params"
-
-            # Determine the wire value for `method` so we can annotate the
-            # variant appropriately. If for some reason the schema does not
-            # specify a constant we fall back to the type name, which will at
-            # least compile (although deserialization will likely fail).
-            request_def = DEFINITIONS.get(ref_name, {})
-            method_const = (
-                request_def.get("properties", {}).get("method", {}).get("const", ref_name)
+            # For JSONRPCMessage variants, drop the common "JSONRPC" prefix to
+            # make the enum easier to read (e.g. `Request` instead of
+            # `JSONRPCRequest`). The payload type remains unchanged.
+            variant_name = (
+                ref_name[len("JSONRPC") :]
+                if name == "JSONRPCMessage" and ref_name.startswith("JSONRPC")
+                else ref_name
             )
 
-            out.append(f'    #[serde(rename = "{method_const}")]\n')
-            out.append(f"    {variant_name}({payload_type}),\n")
-        else:
-            # The regular/straight-forward case.
-            out.append(f"    {variant_name}({ref_name}),\n")
+            # Special-case for `ClientRequest` and `ServerNotification` so the enum
+            # variant's payload is the *Params type rather than the full *Request /
+            # *Notification marker type.
+            if name in ("ClientRequest", "ServerNotification"):
+                # Rely on the trait implementation to tell us the exact Rust type
+                # of the `params` payload. This guarantees we stay in sync with any
+                # special-case logic used elsewhere (e.g. objects with
+                # `additionalProperties` mapping to `serde_json::Value`).
+                if name == "ClientRequest":
+                    payload_type = f"<{ref_name} as ModelContextProtocolRequest>::Params"
+                else:
+                    payload_type = f"<{ref_name} as ModelContextProtocolNotification>::Params"
+
+                # Determine the wire value for `method` so we can annotate the
+                # variant appropriately. If for some reason the schema does not
+                # specify a constant we fall back to the type name, which will at
+                # least compile (although deserialization will likely fail).
+                request_def = DEFINITIONS.get(ref_name, {})
+                method_const = (
+                    request_def.get("properties", {}).get("method", {}).get("const", ref_name)
+                )
+
+                out.append(f'    #[serde(rename = "{method_const}")]\n')
+                out.append(f"    {variant_name}({payload_type}),\n")
+            else:
+                # The regular/straight-forward case.
+                out.append(f"    {variant_name}({ref_name}),\n")
+            continue
+
+        inline_type = map_type(item, f"variant_{idx}", name)
+        out.append(f"    Variant{idx}({inline_type}),\n")
 
     out.append("}\n\n")
     return out
@@ -704,6 +740,11 @@ def rust_prop_name(name: str, is_optional: bool) -> RustProp:
     is_rename = False
     if name == "type":
         prop_name = "r#type"
+    elif name == "$schema":
+        prop_name = "schema"
+        is_rename = True
+    elif name == "const":
+        prop_name = "r#const"
     elif name == "ref":
         prop_name = "r#ref"
     elif name == "enum":
@@ -758,9 +799,20 @@ def check_string_list(value: Any) -> list[str] | None:
     return value
 
 
+def get_schema_definitions(schema_json: dict[str, Any]) -> dict[str, Any]:
+    """Return the schema definitions map across supported JSON Schema drafts."""
+    definitions = schema_json.get("definitions")
+    if definitions is None:
+        definitions = schema_json.get("$defs")
+    if isinstance(definitions, dict):
+        return definitions
+    raise KeyError("Schema is missing a definitions map (`definitions` or `$defs`).")
+
+
 def type_from_ref(ref: str) -> str:
     """Convert a JSON reference to a Rust type."""
-    assert ref.startswith("#/definitions/")
+    if not (ref.startswith("#/definitions/") or ref.startswith("#/$defs/")):
+        raise ValueError(f"Unsupported $ref format: {ref}")
     return ref.split("/")[-1]
 
 

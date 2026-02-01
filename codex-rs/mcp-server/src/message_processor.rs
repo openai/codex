@@ -20,11 +20,11 @@ use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
 use mcp_types::ClientRequest as McpClientRequest;
 use mcp_types::ContentBlock;
-use mcp_types::JSONRPCError;
-use mcp_types::JSONRPCErrorError;
+use mcp_types::Error;
+use mcp_types::JSONRPCErrorResponse;
 use mcp_types::JSONRPCNotification;
 use mcp_types::JSONRPCRequest;
-use mcp_types::JSONRPCResponse;
+use mcp_types::JSONRPCResultResponse;
 use mcp_types::ListToolsResult;
 use mcp_types::ModelContextProtocolRequest;
 use mcp_types::RequestId;
@@ -125,13 +125,29 @@ impl MessageProcessor {
             McpClientRequest::CompleteRequest(params) => {
                 self.handle_complete(params);
             }
+            McpClientRequest::GetTaskRequest(_) => {
+                self.handle_unsupported_request(request_id, "tasks/get")
+                    .await;
+            }
+            McpClientRequest::GetTaskPayloadRequest(_) => {
+                self.handle_unsupported_request(request_id, "tasks/result")
+                    .await;
+            }
+            McpClientRequest::CancelTaskRequest(_) => {
+                self.handle_unsupported_request(request_id, "tasks/cancel")
+                    .await;
+            }
+            McpClientRequest::ListTasksRequest(_) => {
+                self.handle_unsupported_request(request_id, "tasks/list")
+                    .await;
+            }
         }
     }
 
     /// Handle a standalone JSON-RPC response originating from the peer.
-    pub(crate) async fn process_response(&mut self, response: JSONRPCResponse) {
+    pub(crate) async fn process_response(&mut self, response: JSONRPCResultResponse) {
         tracing::info!("<- response: {:?}", response);
-        let JSONRPCResponse { id, result, .. } = response;
+        let JSONRPCResultResponse { id, result, .. } = response;
         self.outgoing.notify_client_response(id, result).await
     }
 
@@ -169,11 +185,17 @@ impl MessageProcessor {
             ServerNotification::LoggingMessageNotification(params) => {
                 self.handle_logging_message(params);
             }
+            ServerNotification::TaskStatusNotification(params) => {
+                self.handle_task_status_notification(params);
+            }
+            ServerNotification::ElicitationCompleteNotification(params) => {
+                self.handle_elicitation_complete_notification(params);
+            }
         }
     }
 
     /// Handle an error object received from the peer.
-    pub(crate) fn process_error(&mut self, err: JSONRPCError) {
+    pub(crate) fn process_error(&mut self, err: JSONRPCErrorResponse) {
         tracing::error!("<- error: {:?}", err);
     }
 
@@ -186,7 +208,7 @@ impl MessageProcessor {
 
         if self.initialized {
             // Already initialised: send JSON-RPC error response.
-            let error = JSONRPCErrorError {
+            let error = Error {
                 code: INVALID_REQUEST_ERROR_CODE,
                 message: "initialize called more than once".to_string(),
                 data: None,
@@ -207,12 +229,14 @@ impl MessageProcessor {
 
         // Build a minimal InitializeResult. Fill with placeholders.
         let result = mcp_types::InitializeResult {
+            _meta: None,
             capabilities: mcp_types::ServerCapabilities {
                 completions: None,
                 experimental: None,
                 logging: None,
                 prompts: None,
                 resources: None,
+                tasks: None,
                 tools: Some(ServerCapabilitiesTools {
                     list_changed: Some(true),
                 }),
@@ -220,9 +244,12 @@ impl MessageProcessor {
             instructions: None,
             protocol_version: params.protocol_version.clone(),
             server_info: mcp_types::Implementation {
+                description: None,
+                icons: None,
                 name: "codex-mcp-server".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 title: Some("Codex".to_string()),
+                website_url: None,
                 user_agent: Some(get_codex_user_agent()),
             },
         };
@@ -236,6 +263,19 @@ impl MessageProcessor {
         T: ModelContextProtocolRequest,
     {
         self.outgoing.send_response(id, result).await;
+    }
+
+    async fn handle_unsupported_request(&self, id: RequestId, method: &str) {
+        self.outgoing
+            .send_error(
+                id,
+                Error {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("method `{method}` is not supported"),
+                    data: None,
+                },
+            )
+            .await;
     }
 
     async fn handle_ping(
@@ -306,6 +346,7 @@ impl MessageProcessor {
     ) {
         tracing::trace!("tools/list -> {params:?}");
         let result = ListToolsResult {
+            _meta: None,
             tools: vec![
                 create_tool_for_codex_tool_call_param(),
                 create_tool_for_codex_tool_call_reply_param(),
@@ -323,7 +364,9 @@ impl MessageProcessor {
         params: <mcp_types::CallToolRequest as mcp_types::ModelContextProtocolRequest>::Params,
     ) {
         tracing::info!("tools/call -> params: {:?}", params);
-        let CallToolRequestParams { name, arguments } = params;
+        let CallToolRequestParams {
+            name, arguments, ..
+        } = params;
 
         match name.as_str() {
             "codex" => self.handle_tool_call_codex(id, arguments).await,
@@ -333,7 +376,9 @@ impl MessageProcessor {
             }
             _ => {
                 let result = CallToolResult {
+                    _meta: None,
                     content: vec![ContentBlock::TextContent(TextContent {
+                        _meta: None,
                         r#type: "text".to_string(),
                         text: format!("Unknown tool '{name}'"),
                         annotations: None,
@@ -356,7 +401,9 @@ impl MessageProcessor {
                     Ok(cfg) => cfg,
                     Err(e) => {
                         let result = CallToolResult {
+                            _meta: None,
                             content: vec![ContentBlock::TextContent(TextContent {
+                                _meta: None,
                                 r#type: "text".to_owned(),
                                 text: format!(
                                     "Failed to load Codex configuration from overrides: {e}"
@@ -373,7 +420,9 @@ impl MessageProcessor {
                 },
                 Err(e) => {
                     let result = CallToolResult {
+                        _meta: None,
                         content: vec![ContentBlock::TextContent(TextContent {
+                            _meta: None,
                             r#type: "text".to_owned(),
                             text: format!("Failed to parse configuration for Codex tool: {e}"),
                             annotations: None,
@@ -388,7 +437,9 @@ impl MessageProcessor {
             },
             None => {
                 let result = CallToolResult {
+                    _meta: None,
                     content: vec![ContentBlock::TextContent(TextContent {
+                        _meta: None,
                         r#type: "text".to_string(),
                         text:
                             "Missing arguments for codex tool-call; the `prompt` field is required."
@@ -439,7 +490,9 @@ impl MessageProcessor {
                 Err(e) => {
                     tracing::error!("Failed to parse Codex tool call reply parameters: {e}");
                     let result = CallToolResult {
+                        _meta: None,
                         content: vec![ContentBlock::TextContent(TextContent {
+                            _meta: None,
                             r#type: "text".to_owned(),
                             text: format!("Failed to parse configuration for Codex tool: {e}"),
                             annotations: None,
@@ -457,7 +510,9 @@ impl MessageProcessor {
                     "Missing arguments for codex-reply tool-call; the `thread_id` and `prompt` fields are required."
                 );
                 let result = CallToolResult {
+                    _meta: None,
                     content: vec![ContentBlock::TextContent(TextContent {
+                        _meta: None,
                         r#type: "text".to_owned(),
                         text: "Missing arguments for codex-reply tool-call; the `thread_id` and `prompt` fields are required.".to_owned(),
                         annotations: None,
@@ -476,7 +531,9 @@ impl MessageProcessor {
             Err(e) => {
                 tracing::error!("Failed to parse thread_id: {e}");
                 let result = CallToolResult {
+                    _meta: None,
                     content: vec![ContentBlock::TextContent(TextContent {
+                        _meta: None,
                         r#type: "text".to_owned(),
                         text: format!("Failed to parse thread_id: {e}"),
                         annotations: None,
@@ -550,7 +607,10 @@ impl MessageProcessor {
         &self,
         params: <mcp_types::CancelledNotification as mcp_types::ModelContextProtocolNotification>::Params,
     ) {
-        let request_id = params.request_id;
+        let Some(request_id) = params.request_id else {
+            tracing::warn!("notifications/cancelled received without requestId");
+            return;
+        };
         // Create a stable string form early for logging and submission id.
         let request_id_string = match &request_id {
             RequestId::String(s) => s.clone(),
@@ -640,5 +700,19 @@ impl MessageProcessor {
         params: <mcp_types::LoggingMessageNotification as mcp_types::ModelContextProtocolNotification>::Params,
     ) {
         tracing::info!("notifications/message -> params: {:?}", params);
+    }
+
+    fn handle_task_status_notification(
+        &self,
+        params: <mcp_types::TaskStatusNotification as mcp_types::ModelContextProtocolNotification>::Params,
+    ) {
+        tracing::info!("notifications/tasks/status -> params: {:?}", params);
+    }
+
+    fn handle_elicitation_complete_notification(
+        &self,
+        params: <mcp_types::ElicitationCompleteNotification as mcp_types::ModelContextProtocolNotification>::Params,
+    ) {
+        tracing::info!("notifications/elicitation/complete -> params: {:?}", params);
     }
 }

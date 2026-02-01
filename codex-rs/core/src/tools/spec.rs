@@ -2027,8 +2027,12 @@ mod tests {
             Some(HashMap::from([(
                 "test_server/do_something_cool".to_string(),
                 mcp_types::Tool {
+                    _meta: None,
                     name: "do_something_cool".to_string(),
+                    execution: None,
+                    icons: None,
                     input_schema: ToolInputSchema {
+                        schema: None,
                         properties: Some(serde_json::json!({
                             "string_argument": {
                                 "type": "string",
@@ -2124,8 +2128,12 @@ mod tests {
             (
                 "test_server/do".to_string(),
                 mcp_types::Tool {
+                    _meta: None,
                     name: "a".to_string(),
+                    execution: None,
+                    icons: None,
                     input_schema: ToolInputSchema {
+                        schema: None,
                         properties: Some(serde_json::json!({})),
                         required: None,
                         r#type: "object".to_string(),
@@ -2139,8 +2147,12 @@ mod tests {
             (
                 "test_server/something".to_string(),
                 mcp_types::Tool {
+                    _meta: None,
                     name: "b".to_string(),
+                    execution: None,
+                    icons: None,
                     input_schema: ToolInputSchema {
+                        schema: None,
                         properties: Some(serde_json::json!({})),
                         required: None,
                         r#type: "object".to_string(),
@@ -2154,8 +2166,12 @@ mod tests {
             (
                 "test_server/cool".to_string(),
                 mcp_types::Tool {
+                    _meta: None,
                     name: "c".to_string(),
+                    execution: None,
+                    icons: None,
                     input_schema: ToolInputSchema {
+                        schema: None,
                         properties: Some(serde_json::json!({})),
                         required: None,
                         r#type: "object".to_string(),
@@ -2201,8 +2217,12 @@ mod tests {
             Some(HashMap::from([(
                 "dash/search".to_string(),
                 mcp_types::Tool {
+                    _meta: None,
                     name: "search".to_string(),
+                    execution: None,
+                    icons: None,
                     input_schema: ToolInputSchema {
+                        schema: None,
                         properties: Some(serde_json::json!({
                             "query": {
                                 "description": "search query"
@@ -2259,8 +2279,12 @@ mod tests {
             Some(HashMap::from([(
                 "dash/paginate".to_string(),
                 mcp_types::Tool {
+                    _meta: None,
                     name: "paginate".to_string(),
+                    execution: None,
+                    icons: None,
                     input_schema: ToolInputSchema {
+                        schema: None,
                         properties: Some(serde_json::json!({
                             "page": { "type": "integer" }
                         })),
@@ -2314,8 +2338,12 @@ mod tests {
             Some(HashMap::from([(
                 "dash/tags".to_string(),
                 mcp_types::Tool {
+                    _meta: None,
                     name: "tags".to_string(),
+                    execution: None,
+                    icons: None,
                     input_schema: ToolInputSchema {
+                        schema: None,
                         properties: Some(serde_json::json!({
                             "tags": { "type": "array" }
                         })),
@@ -2371,8 +2399,12 @@ mod tests {
             Some(HashMap::from([(
                 "dash/value".to_string(),
                 mcp_types::Tool {
+                    _meta: None,
                     name: "value".to_string(),
+                    execution: None,
+                    icons: None,
                     input_schema: ToolInputSchema {
+                        schema: None,
                         properties: Some(serde_json::json!({
                             "value": { "anyOf": [ { "type": "string" }, { "type": "number" } ] }
                         })),
@@ -2483,8 +2515,12 @@ Examples of valid command strings:
             Some(HashMap::from([(
                 "test_server/do_something_cool".to_string(),
                 mcp_types::Tool {
+                    _meta: None,
                     name: "do_something_cool".to_string(),
+                    execution: None,
+                    icons: None,
                     input_schema: ToolInputSchema {
+                        schema: None,
                         properties: Some(serde_json::json!({
                             "string_argument": {
                                 "type": "string",

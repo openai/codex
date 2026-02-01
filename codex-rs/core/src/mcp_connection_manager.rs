@@ -38,11 +38,11 @@ use futures::future::BoxFuture;
 use futures::future::FutureExt;
 use futures::future::Shared;
 use mcp_types::ClientCapabilities;
+use mcp_types::ClientCapabilitiesElicitation;
 use mcp_types::Implementation;
-use mcp_types::ListResourceTemplatesRequestParams;
 use mcp_types::ListResourceTemplatesResult;
-use mcp_types::ListResourcesRequestParams;
 use mcp_types::ListResourcesResult;
+use mcp_types::PaginatedRequestParams;
 use mcp_types::ReadResourceRequestParams;
 use mcp_types::ReadResourceResult;
 use mcp_types::RequestId;
@@ -52,7 +52,6 @@ use mcp_types::Tool;
 
 use serde::Deserialize;
 use serde::Serialize;
-use serde_json::json;
 use sha1::Digest;
 use sha1::Sha1;
 use tokio::sync::Mutex;
@@ -493,7 +492,8 @@ impl McpConnectionManager {
                 let mut cursor: Option<String> = None;
 
                 loop {
-                    let params = cursor.as_ref().map(|next| ListResourcesRequestParams {
+                    let params = cursor.as_ref().map(|next| PaginatedRequestParams {
+                        _meta: None,
                         cursor: Some(next.clone()),
                     });
                     let response = match client.list_resources(params, timeout).await {
@@ -558,11 +558,10 @@ impl McpConnectionManager {
                 let mut cursor: Option<String> = None;
 
                 loop {
-                    let params = cursor
-                        .as_ref()
-                        .map(|next| ListResourceTemplatesRequestParams {
-                            cursor: Some(next.clone()),
-                        });
+                    let params = cursor.as_ref().map(|next| PaginatedRequestParams {
+                        _meta: None,
+                        cursor: Some(next.clone()),
+                    });
                     let response = match client.list_resource_templates(params, timeout).await {
                         Ok(result) => result,
                         Err(err) => return (server_name_cloned, Err(err)),
@@ -634,7 +633,7 @@ impl McpConnectionManager {
     pub async fn list_resources(
         &self,
         server: &str,
-        params: Option<ListResourcesRequestParams>,
+        params: Option<PaginatedRequestParams>,
     ) -> Result<ListResourcesResult> {
         let managed = self.client_by_name(server).await?;
         let timeout = managed.tool_timeout;
@@ -650,7 +649,7 @@ impl McpConnectionManager {
     pub async fn list_resource_templates(
         &self,
         server: &str,
-        params: Option<ListResourceTemplatesRequestParams>,
+        params: Option<PaginatedRequestParams>,
     ) -> Result<ListResourceTemplatesResult> {
         let managed = self.client_by_name(server).await?;
         let client = managed.client.clone();
@@ -850,18 +849,24 @@ async fn start_server_task(
     elicitation_requests: ElicitationRequestManager,
 ) -> Result<ManagedClient, StartupOutcomeError> {
     let params = mcp_types::InitializeRequestParams {
+        _meta: None,
         capabilities: ClientCapabilities {
+            elicitation: Some(ClientCapabilitiesElicitation {
+                form: None,
+                url: None,
+            }),
             experimental: None,
             roots: None,
             sampling: None,
-            // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
-            // indicates this should be an empty object.
-            elicitation: Some(json!({})),
+            tasks: None,
         },
         client_info: Implementation {
+            description: None,
+            icons: None,
             name: "codex-mcp-client".to_owned(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
             title: Some("Codex".into()),
+            website_url: None,
             // This field is used by Codex when it is an MCP
             // server: it should not be used when Codex is
             // an MCP client.
@@ -1055,9 +1060,13 @@ mod tests {
             server_name: server_name.to_string(),
             tool_name: tool_name.to_string(),
             tool: Tool {
+                _meta: None,
                 annotations: None,
                 description: Some(format!("Test tool: {tool_name}")),
+                execution: None,
+                icons: None,
                 input_schema: ToolInputSchema {
+                    schema: None,
                     properties: None,
                     required: None,
                     r#type: "object".to_string(),

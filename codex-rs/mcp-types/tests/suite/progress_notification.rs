@@ -33,6 +33,7 @@ fn deserialize_progress_notification() {
     };
 
     let expected_params = ProgressNotificationParams {
+        _meta: None,
         message: Some("Half way there".into()),
         progress: 0.5,
         progress_token: ProgressToken::Integer(99),

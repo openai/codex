@@ -1,0 +1,4055 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$defs": {
+        "Annotations": {
+            "description": "Optional annotations for the client. The client can use annotations to inform how objects are used or displayed",
+            "properties": {
+                "audience": {
+                    "description": "Describes who the intended audience of this object or data is.\n\nIt can include multiple entries to indicate content useful for multiple audiences (e.g., `[\"user\", \"assistant\"]`).",
+                    "items": {
+                        "$ref": "#/$defs/Role"
+                    },
+                    "type": "array"
+                },
+                "lastModified": {
+                    "description": "The moment the resource was last modified, as an ISO 8601 formatted string.\n\nShould be an ISO 8601 formatted string (e.g., \"2025-01-12T15:00:58Z\").\n\nExamples: last activity timestamp in an open file, timestamp when the resource\nwas attached, etc.",
+                    "type": "string"
+                },
+                "priority": {
+                    "description": "Describes how important this data is for operating the server.\n\nA value of 1 means \"most important,\" and indicates that the data is\neffectively required, while 0 means \"least important,\" and indicates that\nthe data is entirely optional.",
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                }
+            },
+            "type": "object"
+        },
+        "AudioContent": {
+            "description": "Audio provided to or from an LLM.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "annotations": {
+                    "$ref": "#/$defs/Annotations",
+                    "description": "Optional annotations for the client."
+                },
+                "data": {
+                    "description": "The base64-encoded audio data.",
+                    "format": "byte",
+                    "type": "string"
+                },
+                "mimeType": {
+                    "description": "The MIME type of the audio. Different providers may support different audio types.",
+                    "type": "string"
+                },
+                "type": {
+                    "const": "audio",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "data",
+                "mimeType",
+                "type"
+            ],
+            "type": "object"
+        },
+        "BaseMetadata": {
+            "description": "Base interface for metadata with name (identifier) and title (display name) properties.",
+            "properties": {
+                "name": {
+                    "description": "Intended for programmatic or logical use, but used as a display name in past specs or fallback (if title isn't present).",
+                    "type": "string"
+                },
+                "title": {
+                    "description": "Intended for UI and end-user contexts — optimized to be human-readable and easily understood,\neven by those unfamiliar with domain-specific terminology.\n\nIf not provided, the name should be used for display (except for Tool,\nwhere `annotations.title` should be given precedence over using `name`,\nif present).",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "name"
+            ],
+            "type": "object"
+        },
+        "BlobResourceContents": {
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "blob": {
+                    "description": "A base64-encoded string representing the binary data of the item.",
+                    "format": "byte",
+                    "type": "string"
+                },
+                "mimeType": {
+                    "description": "The MIME type of this resource, if known.",
+                    "type": "string"
+                },
+                "uri": {
+                    "description": "The URI of this resource.",
+                    "format": "uri",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "blob",
+                "uri"
+            ],
+            "type": "object"
+        },
+        "BooleanSchema": {
+            "properties": {
+                "default": {
+                    "type": "boolean"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "type": {
+                    "const": "boolean",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "type"
+            ],
+            "type": "object"
+        },
+        "CallToolRequest": {
+            "description": "Used by the client to invoke a tool provided by the server.",
+            "properties": {
+                "id": {
+                    "$ref": "#/$defs/RequestId"
+                },
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "tools/call",
+                    "type": "string"
+                },
+                "params": {
+                    "$ref": "#/$defs/CallToolRequestParams"
+                }
+            },
+            "required": [
+                "id",
+                "jsonrpc",
+                "method",
+                "params"
+            ],
+            "type": "object"
+        },
+        "CallToolRequestParams": {
+            "description": "Parameters for a `tools/call` request.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "properties": {
+                        "progressToken": {
+                            "$ref": "#/$defs/ProgressToken",
+                            "description": "If specified, the caller is requesting out-of-band progress notifications for this request (as represented by notifications/progress). The value of this parameter is an opaque token that will be attached to any subsequent notifications. The receiver is not obligated to provide these notifications."
+                        }
+                    },
+                    "type": "object"
+                },
+                "arguments": {
+                    "additionalProperties": {},
+                    "description": "Arguments to use for the tool call.",
+                    "type": "object"
+                },
+                "name": {
+                    "description": "The name of the tool.",
+                    "type": "string"
+                },
+                "task": {
+                    "$ref": "#/$defs/TaskMetadata",
+                    "description": "If specified, the caller is requesting task-augmented execution for this request.\nThe request will return a CreateTaskResult immediately, and the actual result can be\nretrieved later via tasks/result.\n\nTask augmentation is subject to capability negotiation - receivers MUST declare support\nfor task augmentation of specific request types in their capabilities."
+                }
+            },
+            "required": [
+                "name"
+            ],
+            "type": "object"
+        },
+        "CallToolResult": {
+            "description": "The server's response to a tool call.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "content": {
+                    "description": "A list of content objects that represent the unstructured result of the tool call.",
+                    "items": {
+                        "$ref": "#/$defs/ContentBlock"
+                    },
+                    "type": "array"
+                },
+                "isError": {
+                    "description": "Whether the tool call ended in an error.\n\nIf not set, this is assumed to be false (the call was successful).\n\nAny errors that originate from the tool SHOULD be reported inside the result\nobject, with `isError` set to true, _not_ as an MCP protocol-level error\nresponse. Otherwise, the LLM would not be able to see that an error occurred\nand self-correct.\n\nHowever, any errors in _finding_ the tool, an error indicating that the\nserver does not support tool calls, or any other exceptional conditions,\nshould be reported as an MCP error response.",
+                    "type": "boolean"
+                },
+                "structuredContent": {
+                    "additionalProperties": {},
+                    "description": "An optional JSON object that represents the structured result of the tool call.",
+                    "type": "object"
+                }
+            },
+            "required": [
+                "content"
+            ],
+            "type": "object"
+        },
+        "CancelTaskRequest": {
+            "description": "A request to cancel a task.",
+            "properties": {
+                "id": {
+                    "$ref": "#/$defs/RequestId"
+                },
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "tasks/cancel",
+                    "type": "string"
+                },
+                "params": {
+                    "properties": {
+                        "taskId": {
+                            "description": "The task identifier to cancel.",
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "taskId"
+                    ],
+                    "type": "object"
+                }
+            },
+            "required": [
+                "id",
+                "jsonrpc",
+                "method",
+                "params"
+            ],
+            "type": "object"
+        },
+        "CancelTaskResult": {
+            "allOf": [
+                {
+                    "$ref": "#/$defs/Result"
+                },
+                {
+                    "$ref": "#/$defs/Task"
+                }
+            ],
+            "description": "The response to a tasks/cancel request."
+        },
+        "CancelledNotification": {
+            "description": "This notification can be sent by either side to indicate that it is cancelling a previously-issued request.\n\nThe request SHOULD still be in-flight, but due to communication latency, it is always possible that this notification MAY arrive after the request has already finished.\n\nThis notification indicates that the result will be unused, so any associated processing SHOULD cease.\n\nA client MUST NOT attempt to cancel its `initialize` request.\n\nFor task cancellation, use the `tasks/cancel` request instead of this notification.",
+            "properties": {
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "notifications/cancelled",
+                    "type": "string"
+                },
+                "params": {
+                    "$ref": "#/$defs/CancelledNotificationParams"
+                }
+            },
+            "required": [
+                "jsonrpc",
+                "method",
+                "params"
+            ],
+            "type": "object"
+        },
+        "CancelledNotificationParams": {
+            "description": "Parameters for a `notifications/cancelled` notification.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "reason": {
+                    "description": "An optional string describing the reason for the cancellation. This MAY be logged or presented to the user.",
+                    "type": "string"
+                },
+                "requestId": {
+                    "$ref": "#/$defs/RequestId",
+                    "description": "The ID of the request to cancel.\n\nThis MUST correspond to the ID of a request previously issued in the same direction.\nThis MUST be provided for cancelling non-task requests.\nThis MUST NOT be used for cancelling tasks (use the `tasks/cancel` request instead)."
+                }
+            },
+            "type": "object"
+        },
+        "ClientCapabilities": {
+            "description": "Capabilities a client may support. Known capabilities are defined here, in this schema, but this is not a closed set: any client can define its own, additional capabilities.",
+            "properties": {
+                "elicitation": {
+                    "description": "Present if the client supports elicitation from the server.",
+                    "properties": {
+                        "form": {
+                            "additionalProperties": true,
+                            "properties": {},
+                            "type": "object"
+                        },
+                        "url": {
+                            "additionalProperties": true,
+                            "properties": {},
+                            "type": "object"
+                        }
+                    },
+                    "type": "object"
+                },
+                "experimental": {
+                    "additionalProperties": {
+                        "additionalProperties": true,
+                        "properties": {},
+                        "type": "object"
+                    },
+                    "description": "Experimental, non-standard capabilities that the client supports.",
+                    "type": "object"
+                },
+                "roots": {
+                    "description": "Present if the client supports listing roots.",
+                    "properties": {
+                        "listChanged": {
+                            "description": "Whether the client supports notifications for changes to the roots list.",
+                            "type": "boolean"
+                        }
+                    },
+                    "type": "object"
+                },
+                "sampling": {
+                    "description": "Present if the client supports sampling from an LLM.",
+                    "properties": {
+                        "context": {
+                            "additionalProperties": true,
+                            "description": "Whether the client supports context inclusion via includeContext parameter.\nIf not declared, servers SHOULD only use `includeContext: \"none\"` (or omit it).",
+                            "properties": {},
+                            "type": "object"
+                        },
+                        "tools": {
+                            "additionalProperties": true,
+                            "description": "Whether the client supports tool use via tools and toolChoice parameters.",
+                            "properties": {},
+                            "type": "object"
+                        }
+                    },
+                    "type": "object"
+                },
+                "tasks": {
+                    "description": "Present if the client supports task-augmented requests.",
+                    "properties": {
+                        "cancel": {
+                            "additionalProperties": true,
+                            "description": "Whether this client supports tasks/cancel.",
+                            "properties": {},
+                            "type": "object"
+                        },
+                        "list": {
+                            "additionalProperties": true,
+                            "description": "Whether this client supports tasks/list.",
+                            "properties": {},
+                            "type": "object"
+                        },
+                        "requests": {
+                            "description": "Specifies which request types can be augmented with tasks.",
+                            "properties": {
+                                "elicitation": {
+                                    "description": "Task support for elicitation-related requests.",
+                                    "properties": {
+                                        "create": {
+                                            "additionalProperties": true,
+                                            "description": "Whether the client supports task-augmented elicitation/create requests.",
+                                            "properties": {},
+                                            "type": "object"
+                                        }
+                                    },
+                                    "type": "object"
+                                },
+                                "sampling": {
+                                    "description": "Task support for sampling-related requests.",
+                                    "properties": {
+                                        "createMessage": {
+                                            "additionalProperties": true,
+                                            "description": "Whether the client supports task-augmented sampling/createMessage requests.",
+                                            "properties": {},
+                                            "type": "object"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            },
+                            "type": "object"
+                        }
+                    },
+                    "type": "object"
+                }
+            },
+            "type": "object"
+        },
+        "ClientNotification": {
+            "anyOf": [
+                {
+                    "$ref": "#/$defs/CancelledNotification"
+                },
+                {
+                    "$ref": "#/$defs/InitializedNotification"
+                },
+                {
+                    "$ref": "#/$defs/ProgressNotification"
+                },
+                {
+                    "$ref": "#/$defs/TaskStatusNotification"
+                },
+                {
+                    "$ref": "#/$defs/RootsListChangedNotification"
+                }
+            ]
+        },
+        "ClientRequest": {
+            "anyOf": [
+                {
+                    "$ref": "#/$defs/InitializeRequest"
+                },
+                {
+                    "$ref": "#/$defs/PingRequest"
+                },
+                {
+                    "$ref": "#/$defs/ListResourcesRequest"
+                },
+                {
+                    "$ref": "#/$defs/ListResourceTemplatesRequest"
+                },
+                {
+                    "$ref": "#/$defs/ReadResourceRequest"
+                },
+                {
+                    "$ref": "#/$defs/SubscribeRequest"
+                },
+                {
+                    "$ref": "#/$defs/UnsubscribeRequest"
+                },
+                {
+                    "$ref": "#/$defs/ListPromptsRequest"
+                },
+                {
+                    "$ref": "#/$defs/GetPromptRequest"
+                },
+                {
+                    "$ref": "#/$defs/ListToolsRequest"
+                },
+                {
+                    "$ref": "#/$defs/CallToolRequest"
+                },
+                {
+                    "$ref": "#/$defs/GetTaskRequest"
+                },
+                {
+                    "$ref": "#/$defs/GetTaskPayloadRequest"
+                },
+                {
+                    "$ref": "#/$defs/CancelTaskRequest"
+                },
+                {
+                    "$ref": "#/$defs/ListTasksRequest"
+                },
+                {
+                    "$ref": "#/$defs/SetLevelRequest"
+                },
+                {
+                    "$ref": "#/$defs/CompleteRequest"
+                }
+            ]
+        },
+        "ClientResult": {
+            "anyOf": [
+                {
+                    "$ref": "#/$defs/Result"
+                },
+                {
+                    "$ref": "#/$defs/GetTaskResult",
+                    "description": "The response to a tasks/get request."
+                },
+                {
+                    "$ref": "#/$defs/GetTaskPayloadResult"
+                },
+                {
+                    "$ref": "#/$defs/CancelTaskResult",
+                    "description": "The response to a tasks/cancel request."
+                },
+                {
+                    "$ref": "#/$defs/ListTasksResult"
+                },
+                {
+                    "$ref": "#/$defs/CreateMessageResult"
+                },
+                {
+                    "$ref": "#/$defs/ListRootsResult"
+                },
+                {
+                    "$ref": "#/$defs/ElicitResult"
+                }
+            ]
+        },
+        "CompleteRequest": {
+            "description": "A request from the client to the server, to ask for completion options.",
+            "properties": {
+                "id": {
+                    "$ref": "#/$defs/RequestId"
+                },
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "completion/complete",
+                    "type": "string"
+                },
+                "params": {
+                    "$ref": "#/$defs/CompleteRequestParams"
+                }
+            },
+            "required": [
+                "id",
+                "jsonrpc",
+                "method",
+                "params"
+            ],
+            "type": "object"
+        },
+        "CompleteRequestParams": {
+            "description": "Parameters for a `completion/complete` request.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "properties": {
+                        "progressToken": {
+                            "$ref": "#/$defs/ProgressToken",
+                            "description": "If specified, the caller is requesting out-of-band progress notifications for this request (as represented by notifications/progress). The value of this parameter is an opaque token that will be attached to any subsequent notifications. The receiver is not obligated to provide these notifications."
+                        }
+                    },
+                    "type": "object"
+                },
+                "argument": {
+                    "description": "The argument's information",
+                    "properties": {
+                        "name": {
+                            "description": "The name of the argument",
+                            "type": "string"
+                        },
+                        "value": {
+                            "description": "The value of the argument to use for completion matching.",
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "name",
+                        "value"
+                    ],
+                    "type": "object"
+                },
+                "context": {
+                    "description": "Additional, optional context for completions",
+                    "properties": {
+                        "arguments": {
+                            "additionalProperties": {
+                                "type": "string"
+                            },
+                            "description": "Previously-resolved variables in a URI template or prompt.",
+                            "type": "object"
+                        }
+                    },
+                    "type": "object"
+                },
+                "ref": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/$defs/PromptReference"
+                        },
+                        {
+                            "$ref": "#/$defs/ResourceTemplateReference"
+                        }
+                    ]
+                }
+            },
+            "required": [
+                "argument",
+                "ref"
+            ],
+            "type": "object"
+        },
+        "CompleteResult": {
+            "description": "The server's response to a completion/complete request",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "completion": {
+                    "properties": {
+                        "hasMore": {
+                            "description": "Indicates whether there are additional completion options beyond those provided in the current response, even if the exact total is unknown.",
+                            "type": "boolean"
+                        },
+                        "total": {
+                            "description": "The total number of completion options available. This can exceed the number of values actually sent in the response.",
+                            "type": "integer"
+                        },
+                        "values": {
+                            "description": "An array of completion values. Must not exceed 100 items.",
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        }
+                    },
+                    "required": [
+                        "values"
+                    ],
+                    "type": "object"
+                }
+            },
+            "required": [
+                "completion"
+            ],
+            "type": "object"
+        },
+        "ContentBlock": {
+            "anyOf": [
+                {
+                    "$ref": "#/$defs/TextContent"
+                },
+                {
+                    "$ref": "#/$defs/ImageContent"
+                },
+                {
+                    "$ref": "#/$defs/AudioContent"
+                },
+                {
+                    "$ref": "#/$defs/ResourceLink"
+                },
+                {
+                    "$ref": "#/$defs/EmbeddedResource"
+                }
+            ]
+        },
+        "CreateMessageRequest": {
+            "description": "A request from the server to sample an LLM via the client. The client has full discretion over which model to select. The client should also inform the user before beginning sampling, to allow them to inspect the request (human in the loop) and decide whether to approve it.",
+            "properties": {
+                "id": {
+                    "$ref": "#/$defs/RequestId"
+                },
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "sampling/createMessage",
+                    "type": "string"
+                },
+                "params": {
+                    "$ref": "#/$defs/CreateMessageRequestParams"
+                }
+            },
+            "required": [
+                "id",
+                "jsonrpc",
+                "method",
+                "params"
+            ],
+            "type": "object"
+        },
+        "CreateMessageRequestParams": {
+            "description": "Parameters for a `sampling/createMessage` request.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "properties": {
+                        "progressToken": {
+                            "$ref": "#/$defs/ProgressToken",
+                            "description": "If specified, the caller is requesting out-of-band progress notifications for this request (as represented by notifications/progress). The value of this parameter is an opaque token that will be attached to any subsequent notifications. The receiver is not obligated to provide these notifications."
+                        }
+                    },
+                    "type": "object"
+                },
+                "includeContext": {
+                    "description": "A request to include context from one or more MCP servers (including the caller), to be attached to the prompt.\nThe client MAY ignore this request.\n\nDefault is \"none\". Values \"thisServer\" and \"allServers\" are soft-deprecated. Servers SHOULD only use these values if the client\ndeclares ClientCapabilities.sampling.context. These values may be removed in future spec releases.",
+                    "enum": [
+                        "allServers",
+                        "none",
+                        "thisServer"
+                    ],
+                    "type": "string"
+                },
+                "maxTokens": {
+                    "description": "The requested maximum number of tokens to sample (to prevent runaway completions).\n\nThe client MAY choose to sample fewer tokens than the requested maximum.",
+                    "type": "integer"
+                },
+                "messages": {
+                    "items": {
+                        "$ref": "#/$defs/SamplingMessage"
+                    },
+                    "type": "array"
+                },
+                "metadata": {
+                    "additionalProperties": true,
+                    "description": "Optional metadata to pass through to the LLM provider. The format of this metadata is provider-specific.",
+                    "properties": {},
+                    "type": "object"
+                },
+                "modelPreferences": {
+                    "$ref": "#/$defs/ModelPreferences",
+                    "description": "The server's preferences for which model to select. The client MAY ignore these preferences."
+                },
+                "stopSequences": {
+                    "items": {
+                        "type": "string"
+                    },
+                    "type": "array"
+                },
+                "systemPrompt": {
+                    "description": "An optional system prompt the server wants to use for sampling. The client MAY modify or omit this prompt.",
+                    "type": "string"
+                },
+                "task": {
+                    "$ref": "#/$defs/TaskMetadata",
+                    "description": "If specified, the caller is requesting task-augmented execution for this request.\nThe request will return a CreateTaskResult immediately, and the actual result can be\nretrieved later via tasks/result.\n\nTask augmentation is subject to capability negotiation - receivers MUST declare support\nfor task augmentation of specific request types in their capabilities."
+                },
+                "temperature": {
+                    "type": "number"
+                },
+                "toolChoice": {
+                    "$ref": "#/$defs/ToolChoice",
+                    "description": "Controls how the model uses tools.\nThe client MUST return an error if this field is provided but ClientCapabilities.sampling.tools is not declared.\nDefault is `{ mode: \"auto\" }`."
+                },
+                "tools": {
+                    "description": "Tools that the model may use during generation.\nThe client MUST return an error if this field is provided but ClientCapabilities.sampling.tools is not declared.",
+                    "items": {
+                        "$ref": "#/$defs/Tool"
+                    },
+                    "type": "array"
+                }
+            },
+            "required": [
+                "maxTokens",
+                "messages"
+            ],
+            "type": "object"
+        },
+        "CreateMessageResult": {
+            "description": "The client's response to a sampling/createMessage request from the server.\nThe client should inform the user before returning the sampled message, to allow them\nto inspect the response (human in the loop) and decide whether to allow the server to see it.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "content": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/$defs/TextContent"
+                        },
+                        {
+                            "$ref": "#/$defs/ImageContent"
+                        },
+                        {
+                            "$ref": "#/$defs/AudioContent"
+                        },
+                        {
+                            "$ref": "#/$defs/ToolUseContent"
+                        },
+                        {
+                            "$ref": "#/$defs/ToolResultContent"
+                        },
+                        {
+                            "items": {
+                                "$ref": "#/$defs/SamplingMessageContentBlock"
+                            },
+                            "type": "array"
+                        }
+                    ]
+                },
+                "model": {
+                    "description": "The name of the model that generated the message.",
+                    "type": "string"
+                },
+                "role": {
+                    "$ref": "#/$defs/Role"
+                },
+                "stopReason": {
+                    "description": "The reason why sampling stopped, if known.\n\nStandard values:\n- \"endTurn\": Natural end of the assistant's turn\n- \"stopSequence\": A stop sequence was encountered\n- \"maxTokens\": Maximum token limit was reached\n- \"toolUse\": The model wants to use one or more tools\n\nThis field is an open string to allow for provider-specific stop reasons.",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "content",
+                "model",
+                "role"
+            ],
+            "type": "object"
+        },
+        "CreateTaskResult": {
+            "description": "A response to a task-augmented request.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "task": {
+                    "$ref": "#/$defs/Task"
+                }
+            },
+            "required": [
+                "task"
+            ],
+            "type": "object"
+        },
+        "Cursor": {
+            "description": "An opaque token used to represent a cursor for pagination.",
+            "type": "string"
+        },
+        "ElicitRequest": {
+            "description": "A request from the server to elicit additional information from the user via the client.",
+            "properties": {
+                "id": {
+                    "$ref": "#/$defs/RequestId"
+                },
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "elicitation/create",
+                    "type": "string"
+                },
+                "params": {
+                    "$ref": "#/$defs/ElicitRequestParams"
+                }
+            },
+            "required": [
+                "id",
+                "jsonrpc",
+                "method",
+                "params"
+            ],
+            "type": "object"
+        },
+        "ElicitRequestFormParams": {
+            "description": "The parameters for a request to elicit non-sensitive information from the user via a form in the client.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "properties": {
+                        "progressToken": {
+                            "$ref": "#/$defs/ProgressToken",
+                            "description": "If specified, the caller is requesting out-of-band progress notifications for this request (as represented by notifications/progress). The value of this parameter is an opaque token that will be attached to any subsequent notifications. The receiver is not obligated to provide these notifications."
+                        }
+                    },
+                    "type": "object"
+                },
+                "message": {
+                    "description": "The message to present to the user describing what information is being requested.",
+                    "type": "string"
+                },
+                "mode": {
+                    "const": "form",
+                    "description": "The elicitation mode.",
+                    "type": "string"
+                },
+                "requestedSchema": {
+                    "description": "A restricted subset of JSON Schema.\nOnly top-level properties are allowed, without nesting.",
+                    "properties": {
+                        "$schema": {
+                            "type": "string"
+                        },
+                        "properties": {
+                            "additionalProperties": {
+                                "$ref": "#/$defs/PrimitiveSchemaDefinition"
+                            },
+                            "type": "object"
+                        },
+                        "required": {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        "type": {
+                            "const": "object",
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "properties",
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                "task": {
+                    "$ref": "#/$defs/TaskMetadata",
+                    "description": "If specified, the caller is requesting task-augmented execution for this request.\nThe request will return a CreateTaskResult immediately, and the actual result can be\nretrieved later via tasks/result.\n\nTask augmentation is subject to capability negotiation - receivers MUST declare support\nfor task augmentation of specific request types in their capabilities."
+                }
+            },
+            "required": [
+                "message",
+                "requestedSchema"
+            ],
+            "type": "object"
+        },
+        "ElicitRequestParams": {
+            "anyOf": [
+                {
+                    "$ref": "#/$defs/ElicitRequestURLParams"
+                },
+                {
+                    "$ref": "#/$defs/ElicitRequestFormParams"
+                }
+            ],
+            "description": "The parameters for a request to elicit additional information from the user via the client."
+        },
+        "ElicitRequestURLParams": {
+            "description": "The parameters for a request to elicit information from the user via a URL in the client.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "properties": {
+                        "progressToken": {
+                            "$ref": "#/$defs/ProgressToken",
+                            "description": "If specified, the caller is requesting out-of-band progress notifications for this request (as represented by notifications/progress). The value of this parameter is an opaque token that will be attached to any subsequent notifications. The receiver is not obligated to provide these notifications."
+                        }
+                    },
+                    "type": "object"
+                },
+                "elicitationId": {
+                    "description": "The ID of the elicitation, which must be unique within the context of the server.\nThe client MUST treat this ID as an opaque value.",
+                    "type": "string"
+                },
+                "message": {
+                    "description": "The message to present to the user explaining why the interaction is needed.",
+                    "type": "string"
+                },
+                "mode": {
+                    "const": "url",
+                    "description": "The elicitation mode.",
+                    "type": "string"
+                },
+                "task": {
+                    "$ref": "#/$defs/TaskMetadata",
+                    "description": "If specified, the caller is requesting task-augmented execution for this request.\nThe request will return a CreateTaskResult immediately, and the actual result can be\nretrieved later via tasks/result.\n\nTask augmentation is subject to capability negotiation - receivers MUST declare support\nfor task augmentation of specific request types in their capabilities."
+                },
+                "url": {
+                    "description": "The URL that the user should navigate to.",
+                    "format": "uri",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "elicitationId",
+                "message",
+                "mode",
+                "url"
+            ],
+            "type": "object"
+        },
+        "ElicitResult": {
+            "description": "The client's response to an elicitation request.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "action": {
+                    "description": "The user action in response to the elicitation.\n- \"accept\": User submitted the form/confirmed the action\n- \"decline\": User explicitly decline the action\n- \"cancel\": User dismissed without making an explicit choice",
+                    "enum": [
+                        "accept",
+                        "cancel",
+                        "decline"
+                    ],
+                    "type": "string"
+                },
+                "content": {
+                    "additionalProperties": {
+                        "anyOf": [
+                            {
+                                "items": {
+                                    "type": "string"
+                                },
+                                "type": "array"
+                            },
+                            {
+                                "type": [
+                                    "string",
+                                    "integer",
+                                    "boolean"
+                                ]
+                            }
+                        ]
+                    },
+                    "description": "The submitted form data, only present when action is \"accept\" and mode was \"form\".\nContains values matching the requested schema.\nOmitted for out-of-band mode responses.",
+                    "type": "object"
+                }
+            },
+            "required": [
+                "action"
+            ],
+            "type": "object"
+        },
+        "ElicitationCompleteNotification": {
+            "description": "An optional notification from the server to the client, informing it of a completion of a out-of-band elicitation request.",
+            "properties": {
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "notifications/elicitation/complete",
+                    "type": "string"
+                },
+                "params": {
+                    "properties": {
+                        "elicitationId": {
+                            "description": "The ID of the elicitation that completed.",
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "elicitationId"
+                    ],
+                    "type": "object"
+                }
+            },
+            "required": [
+                "jsonrpc",
+                "method",
+                "params"
+            ],
+            "type": "object"
+        },
+        "EmbeddedResource": {
+            "description": "The contents of a resource, embedded into a prompt or tool call result.\n\nIt is up to the client how best to render embedded resources for the benefit\nof the LLM and/or the user.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "annotations": {
+                    "$ref": "#/$defs/Annotations",
+                    "description": "Optional annotations for the client."
+                },
+                "resource": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/$defs/TextResourceContents"
+                        },
+                        {
+                            "$ref": "#/$defs/BlobResourceContents"
+                        }
+                    ]
+                },
+                "type": {
+                    "const": "resource",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "resource",
+                "type"
+            ],
+            "type": "object"
+        },
+        "EmptyResult": {
+            "$ref": "#/$defs/Result"
+        },
+        "EnumSchema": {
+            "anyOf": [
+                {
+                    "$ref": "#/$defs/UntitledSingleSelectEnumSchema"
+                },
+                {
+                    "$ref": "#/$defs/TitledSingleSelectEnumSchema"
+                },
+                {
+                    "$ref": "#/$defs/UntitledMultiSelectEnumSchema"
+                },
+                {
+                    "$ref": "#/$defs/TitledMultiSelectEnumSchema"
+                },
+                {
+                    "$ref": "#/$defs/LegacyTitledEnumSchema"
+                }
+            ]
+        },
+        "Error": {
+            "properties": {
+                "code": {
+                    "description": "The error type that occurred.",
+                    "type": "integer"
+                },
+                "data": {
+                    "description": "Additional information about the error. The value of this member is defined by the sender (e.g. detailed error information, nested errors etc.)."
+                },
+                "message": {
+                    "description": "A short description of the error. The message SHOULD be limited to a concise single sentence.",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "code",
+                "message"
+            ],
+            "type": "object"
+        },
+        "GetPromptRequest": {
+            "description": "Used by the client to get a prompt provided by the server.",
+            "properties": {
+                "id": {
+                    "$ref": "#/$defs/RequestId"
+                },
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "prompts/get",
+                    "type": "string"
+                },
+                "params": {
+                    "$ref": "#/$defs/GetPromptRequestParams"
+                }
+            },
+            "required": [
+                "id",
+                "jsonrpc",
+                "method",
+                "params"
+            ],
+            "type": "object"
+        },
+        "GetPromptRequestParams": {
+            "description": "Parameters for a `prompts/get` request.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "properties": {
+                        "progressToken": {
+                            "$ref": "#/$defs/ProgressToken",
+                            "description": "If specified, the caller is requesting out-of-band progress notifications for this request (as represented by notifications/progress). The value of this parameter is an opaque token that will be attached to any subsequent notifications. The receiver is not obligated to provide these notifications."
+                        }
+                    },
+                    "type": "object"
+                },
+                "arguments": {
+                    "additionalProperties": {
+                        "type": "string"
+                    },
+                    "description": "Arguments to use for templating the prompt.",
+                    "type": "object"
+                },
+                "name": {
+                    "description": "The name of the prompt or prompt template.",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "name"
+            ],
+            "type": "object"
+        },
+        "GetPromptResult": {
+            "description": "The server's response to a prompts/get request from the client.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "description": {
+                    "description": "An optional description for the prompt.",
+                    "type": "string"
+                },
+                "messages": {
+                    "items": {
+                        "$ref": "#/$defs/PromptMessage"
+                    },
+                    "type": "array"
+                }
+            },
+            "required": [
+                "messages"
+            ],
+            "type": "object"
+        },
+        "GetTaskPayloadRequest": {
+            "description": "A request to retrieve the result of a completed task.",
+            "properties": {
+                "id": {
+                    "$ref": "#/$defs/RequestId"
+                },
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "tasks/result",
+                    "type": "string"
+                },
+                "params": {
+                    "properties": {
+                        "taskId": {
+                            "description": "The task identifier to retrieve results for.",
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "taskId"
+                    ],
+                    "type": "object"
+                }
+            },
+            "required": [
+                "id",
+                "jsonrpc",
+                "method",
+                "params"
+            ],
+            "type": "object"
+        },
+        "GetTaskPayloadResult": {
+            "additionalProperties": {},
+            "description": "The response to a tasks/result request.\nThe structure matches the result type of the original request.\nFor example, a tools/call task would return the CallToolResult structure.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                }
+            },
+            "type": "object"
+        },
+        "GetTaskRequest": {
+            "description": "A request to retrieve the state of a task.",
+            "properties": {
+                "id": {
+                    "$ref": "#/$defs/RequestId"
+                },
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "tasks/get",
+                    "type": "string"
+                },
+                "params": {
+                    "properties": {
+                        "taskId": {
+                            "description": "The task identifier to query.",
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "taskId"
+                    ],
+                    "type": "object"
+                }
+            },
+            "required": [
+                "id",
+                "jsonrpc",
+                "method",
+                "params"
+            ],
+            "type": "object"
+        },
+        "GetTaskResult": {
+            "allOf": [
+                {
+                    "$ref": "#/$defs/Result"
+                },
+                {
+                    "$ref": "#/$defs/Task"
+                }
+            ],
+            "description": "The response to a tasks/get request."
+        },
+        "Icon": {
+            "description": "An optionally-sized icon that can be displayed in a user interface.",
+            "properties": {
+                "mimeType": {
+                    "description": "Optional MIME type override if the source MIME type is missing or generic.\nFor example: `\"image/png\"`, `\"image/jpeg\"`, or `\"image/svg+xml\"`.",
+                    "type": "string"
+                },
+                "sizes": {
+                    "description": "Optional array of strings that specify sizes at which the icon can be used.\nEach string should be in WxH format (e.g., `\"48x48\"`, `\"96x96\"`) or `\"any\"` for scalable formats like SVG.\n\nIf not provided, the client should assume that the icon can be used at any size.",
+                    "items": {
+                        "type": "string"
+                    },
+                    "type": "array"
+                },
+                "src": {
+                    "description": "A standard URI pointing to an icon resource. May be an HTTP/HTTPS URL or a\n`data:` URI with Base64-encoded image data.\n\nConsumers SHOULD takes steps to ensure URLs serving icons are from the\nsame domain as the client/server or a trusted domain.\n\nConsumers SHOULD take appropriate precautions when consuming SVGs as they can contain\nexecutable JavaScript.",
+                    "format": "uri",
+                    "type": "string"
+                },
+                "theme": {
+                    "description": "Optional specifier for the theme this icon is designed for. `light` indicates\nthe icon is designed to be used with a light background, and `dark` indicates\nthe icon is designed to be used with a dark background.\n\nIf not provided, the client should assume the icon can be used with any theme.",
+                    "enum": [
+                        "dark",
+                        "light"
+                    ],
+                    "type": "string"
+                }
+            },
+            "required": [
+                "src"
+            ],
+            "type": "object"
+        },
+        "Icons": {
+            "description": "Base interface to add `icons` property.",
+            "properties": {
+                "icons": {
+                    "description": "Optional set of sized icons that the client can display in a user interface.\n\nClients that support rendering icons MUST support at least the following MIME types:\n- `image/png` - PNG images (safe, universal compatibility)\n- `image/jpeg` (and `image/jpg`) - JPEG images (safe, universal compatibility)\n\nClients that support rendering icons SHOULD also support:\n- `image/svg+xml` - SVG images (scalable but requires security precautions)\n- `image/webp` - WebP images (modern, efficient format)",
+                    "items": {
+                        "$ref": "#/$defs/Icon"
+                    },
+                    "type": "array"
+                }
+            },
+            "type": "object"
+        },
+        "ImageContent": {
+            "description": "An image provided to or from an LLM.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "annotations": {
+                    "$ref": "#/$defs/Annotations",
+                    "description": "Optional annotations for the client."
+                },
+                "data": {
+                    "description": "The base64-encoded image data.",
+                    "format": "byte",
+                    "type": "string"
+                },
+                "mimeType": {
+                    "description": "The MIME type of the image. Different providers may support different image types.",
+                    "type": "string"
+                },
+                "type": {
+                    "const": "image",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "data",
+                "mimeType",
+                "type"
+            ],
+            "type": "object"
+        },
+        "Implementation": {
+            "description": "Describes the MCP implementation.",
+            "properties": {
+                "description": {
+                    "description": "An optional human-readable description of what this implementation does.\n\nThis can be used by clients or servers to provide context about their purpose\nand capabilities. For example, a server might describe the types of resources\nor tools it provides, while a client might describe its intended use case.",
+                    "type": "string"
+                },
+                "icons": {
+                    "description": "Optional set of sized icons that the client can display in a user interface.\n\nClients that support rendering icons MUST support at least the following MIME types:\n- `image/png` - PNG images (safe, universal compatibility)\n- `image/jpeg` (and `image/jpg`) - JPEG images (safe, universal compatibility)\n\nClients that support rendering icons SHOULD also support:\n- `image/svg+xml` - SVG images (scalable but requires security precautions)\n- `image/webp` - WebP images (modern, efficient format)",
+                    "items": {
+                        "$ref": "#/$defs/Icon"
+                    },
+                    "type": "array"
+                },
+                "name": {
+                    "description": "Intended for programmatic or logical use, but used as a display name in past specs or fallback (if title isn't present).",
+                    "type": "string"
+                },
+                "title": {
+                    "description": "Intended for UI and end-user contexts — optimized to be human-readable and easily understood,\neven by those unfamiliar with domain-specific terminology.\n\nIf not provided, the name should be used for display (except for Tool,\nwhere `annotations.title` should be given precedence over using `name`,\nif present).",
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                },
+                "websiteUrl": {
+                    "description": "An optional URL of the website for this implementation.",
+                    "format": "uri",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "name",
+                "version"
+            ],
+            "type": "object"
+        },
+        "InitializeRequest": {
+            "description": "This request is sent from the client to the server when it first connects, asking it to begin initialization.",
+            "properties": {
+                "id": {
+                    "$ref": "#/$defs/RequestId"
+                },
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "initialize",
+                    "type": "string"
+                },
+                "params": {
+                    "$ref": "#/$defs/InitializeRequestParams"
+                }
+            },
+            "required": [
+                "id",
+                "jsonrpc",
+                "method",
+                "params"
+            ],
+            "type": "object"
+        },
+        "InitializeRequestParams": {
+            "description": "Parameters for an `initialize` request.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "properties": {
+                        "progressToken": {
+                            "$ref": "#/$defs/ProgressToken",
+                            "description": "If specified, the caller is requesting out-of-band progress notifications for this request (as represented by notifications/progress). The value of this parameter is an opaque token that will be attached to any subsequent notifications. The receiver is not obligated to provide these notifications."
+                        }
+                    },
+                    "type": "object"
+                },
+                "capabilities": {
+                    "$ref": "#/$defs/ClientCapabilities"
+                },
+                "clientInfo": {
+                    "$ref": "#/$defs/Implementation"
+                },
+                "protocolVersion": {
+                    "description": "The latest version of the Model Context Protocol that the client supports. The client MAY decide to support older versions as well.",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "capabilities",
+                "clientInfo",
+                "protocolVersion"
+            ],
+            "type": "object"
+        },
+        "InitializeResult": {
+            "description": "After receiving an initialize request from the client, the server sends this response.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "capabilities": {
+                    "$ref": "#/$defs/ServerCapabilities"
+                },
+                "instructions": {
+                    "description": "Instructions describing how to use the server and its features.\n\nThis can be used by clients to improve the LLM's understanding of available tools, resources, etc. It can be thought of like a \"hint\" to the model. For example, this information MAY be added to the system prompt.",
+                    "type": "string"
+                },
+                "protocolVersion": {
+                    "description": "The version of the Model Context Protocol that the server wants to use. This may not match the version that the client requested. If the client cannot support this version, it MUST disconnect.",
+                    "type": "string"
+                },
+                "serverInfo": {
+                    "$ref": "#/$defs/Implementation"
+                }
+            },
+            "required": [
+                "capabilities",
+                "protocolVersion",
+                "serverInfo"
+            ],
+            "type": "object"
+        },
+        "InitializedNotification": {
+            "description": "This notification is sent from the client to the server after initialization has finished.",
+            "properties": {
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "notifications/initialized",
+                    "type": "string"
+                },
+                "params": {
+                    "$ref": "#/$defs/NotificationParams"
+                }
+            },
+            "required": [
+                "jsonrpc",
+                "method"
+            ],
+            "type": "object"
+        },
+        "JSONRPCErrorResponse": {
+            "description": "A response to a request that indicates an error occurred.",
+            "properties": {
+                "error": {
+                    "$ref": "#/$defs/Error"
+                },
+                "id": {
+                    "$ref": "#/$defs/RequestId"
+                },
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "error",
+                "jsonrpc"
+            ],
+            "type": "object"
+        },
+        "JSONRPCMessage": {
+            "anyOf": [
+                {
+                    "$ref": "#/$defs/JSONRPCRequest"
+                },
+                {
+                    "$ref": "#/$defs/JSONRPCNotification"
+                },
+                {
+                    "$ref": "#/$defs/JSONRPCResultResponse"
+                },
+                {
+                    "$ref": "#/$defs/JSONRPCErrorResponse"
+                }
+            ],
+            "description": "Refers to any valid JSON-RPC object that can be decoded off the wire, or encoded to be sent."
+        },
+        "JSONRPCNotification": {
+            "description": "A notification which does not expect a response.",
+            "properties": {
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "type": "string"
+                },
+                "params": {
+                    "additionalProperties": {},
+                    "type": "object"
+                }
+            },
+            "required": [
+                "jsonrpc",
+                "method"
+            ],
+            "type": "object"
+        },
+        "JSONRPCRequest": {
+            "description": "A request that expects a response.",
+            "properties": {
+                "id": {
+                    "$ref": "#/$defs/RequestId"
+                },
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "type": "string"
+                },
+                "params": {
+                    "additionalProperties": {},
+                    "type": "object"
+                }
+            },
+            "required": [
+                "id",
+                "jsonrpc",
+                "method"
+            ],
+            "type": "object"
+        },
+        "JSONRPCResponse": {
+            "anyOf": [
+                {
+                    "$ref": "#/$defs/JSONRPCResultResponse"
+                },
+                {
+                    "$ref": "#/$defs/JSONRPCErrorResponse"
+                }
+            ],
+            "description": "A response to a request, containing either the result or error."
+        },
+        "JSONRPCResultResponse": {
+            "description": "A successful (non-error) response to a request.",
+            "properties": {
+                "id": {
+                    "$ref": "#/$defs/RequestId"
+                },
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "result": {
+                    "$ref": "#/$defs/Result"
+                }
+            },
+            "required": [
+                "id",
+                "jsonrpc",
+                "result"
+            ],
+            "type": "object"
+        },
+        "LegacyTitledEnumSchema": {
+            "description": "Use TitledSingleSelectEnumSchema instead.\nThis interface will be removed in a future version.",
+            "properties": {
+                "default": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "enum": {
+                    "items": {
+                        "type": "string"
+                    },
+                    "type": "array"
+                },
+                "enumNames": {
+                    "description": "(Legacy) Display names for enum values.\nNon-standard according to JSON schema 2020-12.",
+                    "items": {
+                        "type": "string"
+                    },
+                    "type": "array"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "type": {
+                    "const": "string",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "enum",
+                "type"
+            ],
+            "type": "object"
+        },
+        "ListPromptsRequest": {
+            "description": "Sent from the client to request a list of prompts and prompt templates the server has.",
+            "properties": {
+                "id": {
+                    "$ref": "#/$defs/RequestId"
+                },
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "prompts/list",
+                    "type": "string"
+                },
+                "params": {
+                    "$ref": "#/$defs/PaginatedRequestParams"
+                }
+            },
+            "required": [
+                "id",
+                "jsonrpc",
+                "method"
+            ],
+            "type": "object"
+        },
+        "ListPromptsResult": {
+            "description": "The server's response to a prompts/list request from the client.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "nextCursor": {
+                    "description": "An opaque token representing the pagination position after the last returned result.\nIf present, there may be more results available.",
+                    "type": "string"
+                },
+                "prompts": {
+                    "items": {
+                        "$ref": "#/$defs/Prompt"
+                    },
+                    "type": "array"
+                }
+            },
+            "required": [
+                "prompts"
+            ],
+            "type": "object"
+        },
+        "ListResourceTemplatesRequest": {
+            "description": "Sent from the client to request a list of resource templates the server has.",
+            "properties": {
+                "id": {
+                    "$ref": "#/$defs/RequestId"
+                },
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "resources/templates/list",
+                    "type": "string"
+                },
+                "params": {
+                    "$ref": "#/$defs/PaginatedRequestParams"
+                }
+            },
+            "required": [
+                "id",
+                "jsonrpc",
+                "method"
+            ],
+            "type": "object"
+        },
+        "ListResourceTemplatesResult": {
+            "description": "The server's response to a resources/templates/list request from the client.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "nextCursor": {
+                    "description": "An opaque token representing the pagination position after the last returned result.\nIf present, there may be more results available.",
+                    "type": "string"
+                },
+                "resourceTemplates": {
+                    "items": {
+                        "$ref": "#/$defs/ResourceTemplate"
+                    },
+                    "type": "array"
+                }
+            },
+            "required": [
+                "resourceTemplates"
+            ],
+            "type": "object"
+        },
+        "ListResourcesRequest": {
+            "description": "Sent from the client to request a list of resources the server has.",
+            "properties": {
+                "id": {
+                    "$ref": "#/$defs/RequestId"
+                },
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "resources/list",
+                    "type": "string"
+                },
+                "params": {
+                    "$ref": "#/$defs/PaginatedRequestParams"
+                }
+            },
+            "required": [
+                "id",
+                "jsonrpc",
+                "method"
+            ],
+            "type": "object"
+        },
+        "ListResourcesResult": {
+            "description": "The server's response to a resources/list request from the client.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "nextCursor": {
+                    "description": "An opaque token representing the pagination position after the last returned result.\nIf present, there may be more results available.",
+                    "type": "string"
+                },
+                "resources": {
+                    "items": {
+                        "$ref": "#/$defs/Resource"
+                    },
+                    "type": "array"
+                }
+            },
+            "required": [
+                "resources"
+            ],
+            "type": "object"
+        },
+        "ListRootsRequest": {
+            "description": "Sent from the server to request a list of root URIs from the client. Roots allow\nservers to ask for specific directories or files to operate on. A common example\nfor roots is providing a set of repositories or directories a server should operate\non.\n\nThis request is typically used when the server needs to understand the file system\nstructure or access specific locations that the client has permission to read from.",
+            "properties": {
+                "id": {
+                    "$ref": "#/$defs/RequestId"
+                },
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "roots/list",
+                    "type": "string"
+                },
+                "params": {
+                    "$ref": "#/$defs/RequestParams"
+                }
+            },
+            "required": [
+                "id",
+                "jsonrpc",
+                "method"
+            ],
+            "type": "object"
+        },
+        "ListRootsResult": {
+            "description": "The client's response to a roots/list request from the server.\nThis result contains an array of Root objects, each representing a root directory\nor file that the server can operate on.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "roots": {
+                    "items": {
+                        "$ref": "#/$defs/Root"
+                    },
+                    "type": "array"
+                }
+            },
+            "required": [
+                "roots"
+            ],
+            "type": "object"
+        },
+        "ListTasksRequest": {
+            "description": "A request to retrieve a list of tasks.",
+            "properties": {
+                "id": {
+                    "$ref": "#/$defs/RequestId"
+                },
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "tasks/list",
+                    "type": "string"
+                },
+                "params": {
+                    "$ref": "#/$defs/PaginatedRequestParams"
+                }
+            },
+            "required": [
+                "id",
+                "jsonrpc",
+                "method"
+            ],
+            "type": "object"
+        },
+        "ListTasksResult": {
+            "description": "The response to a tasks/list request.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "nextCursor": {
+                    "description": "An opaque token representing the pagination position after the last returned result.\nIf present, there may be more results available.",
+                    "type": "string"
+                },
+                "tasks": {
+                    "items": {
+                        "$ref": "#/$defs/Task"
+                    },
+                    "type": "array"
+                }
+            },
+            "required": [
+                "tasks"
+            ],
+            "type": "object"
+        },
+        "ListToolsRequest": {
+            "description": "Sent from the client to request a list of tools the server has.",
+            "properties": {
+                "id": {
+                    "$ref": "#/$defs/RequestId"
+                },
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "tools/list",
+                    "type": "string"
+                },
+                "params": {
+                    "$ref": "#/$defs/PaginatedRequestParams"
+                }
+            },
+            "required": [
+                "id",
+                "jsonrpc",
+                "method"
+            ],
+            "type": "object"
+        },
+        "ListToolsResult": {
+            "description": "The server's response to a tools/list request from the client.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "nextCursor": {
+                    "description": "An opaque token representing the pagination position after the last returned result.\nIf present, there may be more results available.",
+                    "type": "string"
+                },
+                "tools": {
+                    "items": {
+                        "$ref": "#/$defs/Tool"
+                    },
+                    "type": "array"
+                }
+            },
+            "required": [
+                "tools"
+            ],
+            "type": "object"
+        },
+        "LoggingLevel": {
+            "description": "The severity of a log message.\n\nThese map to syslog message severities, as specified in RFC-5424:\nhttps://datatracker.ietf.org/doc/html/rfc5424#section-6.2.1",
+            "enum": [
+                "alert",
+                "critical",
+                "debug",
+                "emergency",
+                "error",
+                "info",
+                "notice",
+                "warning"
+            ],
+            "type": "string"
+        },
+        "LoggingMessageNotification": {
+            "description": "JSONRPCNotification of a log message passed from server to client. If no logging/setLevel request has been sent from the client, the server MAY decide which messages to send automatically.",
+            "properties": {
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "notifications/message",
+                    "type": "string"
+                },
+                "params": {
+                    "$ref": "#/$defs/LoggingMessageNotificationParams"
+                }
+            },
+            "required": [
+                "jsonrpc",
+                "method",
+                "params"
+            ],
+            "type": "object"
+        },
+        "LoggingMessageNotificationParams": {
+            "description": "Parameters for a `notifications/message` notification.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "data": {
+                    "description": "The data to be logged, such as a string message or an object. Any JSON serializable type is allowed here."
+                },
+                "level": {
+                    "$ref": "#/$defs/LoggingLevel",
+                    "description": "The severity of this log message."
+                },
+                "logger": {
+                    "description": "An optional name of the logger issuing this message.",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "data",
+                "level"
+            ],
+            "type": "object"
+        },
+        "ModelHint": {
+            "description": "Hints to use for model selection.\n\nKeys not declared here are currently left unspecified by the spec and are up\nto the client to interpret.",
+            "properties": {
+                "name": {
+                    "description": "A hint for a model name.\n\nThe client SHOULD treat this as a substring of a model name; for example:\n - `claude-3-5-sonnet` should match `claude-3-5-sonnet-20241022`\n - `sonnet` should match `claude-3-5-sonnet-20241022`, `claude-3-sonnet-20240229`, etc.\n - `claude` should match any Claude model\n\nThe client MAY also map the string to a different provider's model name or a different model family, as long as it fills a similar niche; for example:\n - `gemini-1.5-flash` could match `claude-3-haiku-20240307`",
+                    "type": "string"
+                }
+            },
+            "type": "object"
+        },
+        "ModelPreferences": {
+            "description": "The server's preferences for model selection, requested of the client during sampling.\n\nBecause LLMs can vary along multiple dimensions, choosing the \"best\" model is\nrarely straightforward.  Different models excel in different areas—some are\nfaster but less capable, others are more capable but more expensive, and so\non. This interface allows servers to express their priorities across multiple\ndimensions to help clients make an appropriate selection for their use case.\n\nThese preferences are always advisory. The client MAY ignore them. It is also\nup to the client to decide how to interpret these preferences and how to\nbalance them against other considerations.",
+            "properties": {
+                "costPriority": {
+                    "description": "How much to prioritize cost when selecting a model. A value of 0 means cost\nis not important, while a value of 1 means cost is the most important\nfactor.",
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                },
+                "hints": {
+                    "description": "Optional hints to use for model selection.\n\nIf multiple hints are specified, the client MUST evaluate them in order\n(such that the first match is taken).\n\nThe client SHOULD prioritize these hints over the numeric priorities, but\nMAY still use the priorities to select from ambiguous matches.",
+                    "items": {
+                        "$ref": "#/$defs/ModelHint"
+                    },
+                    "type": "array"
+                },
+                "intelligencePriority": {
+                    "description": "How much to prioritize intelligence and capabilities when selecting a\nmodel. A value of 0 means intelligence is not important, while a value of 1\nmeans intelligence is the most important factor.",
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                },
+                "speedPriority": {
+                    "description": "How much to prioritize sampling speed (latency) when selecting a model. A\nvalue of 0 means speed is not important, while a value of 1 means speed is\nthe most important factor.",
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                }
+            },
+            "type": "object"
+        },
+        "MultiSelectEnumSchema": {
+            "anyOf": [
+                {
+                    "$ref": "#/$defs/UntitledMultiSelectEnumSchema"
+                },
+                {
+                    "$ref": "#/$defs/TitledMultiSelectEnumSchema"
+                }
+            ]
+        },
+        "Notification": {
+            "properties": {
+                "method": {
+                    "type": "string"
+                },
+                "params": {
+                    "additionalProperties": {},
+                    "type": "object"
+                }
+            },
+            "required": [
+                "method"
+            ],
+            "type": "object"
+        },
+        "NotificationParams": {
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                }
+            },
+            "type": "object"
+        },
+        "NumberSchema": {
+            "properties": {
+                "default": {
+                    "type": "integer"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "maximum": {
+                    "type": "integer"
+                },
+                "minimum": {
+                    "type": "integer"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "type": {
+                    "enum": [
+                        "integer",
+                        "number"
+                    ],
+                    "type": "string"
+                }
+            },
+            "required": [
+                "type"
+            ],
+            "type": "object"
+        },
+        "PaginatedRequest": {
+            "properties": {
+                "id": {
+                    "$ref": "#/$defs/RequestId"
+                },
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "type": "string"
+                },
+                "params": {
+                    "$ref": "#/$defs/PaginatedRequestParams"
+                }
+            },
+            "required": [
+                "id",
+                "jsonrpc",
+                "method"
+            ],
+            "type": "object"
+        },
+        "PaginatedRequestParams": {
+            "description": "Common parameters for paginated requests.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "properties": {
+                        "progressToken": {
+                            "$ref": "#/$defs/ProgressToken",
+                            "description": "If specified, the caller is requesting out-of-band progress notifications for this request (as represented by notifications/progress). The value of this parameter is an opaque token that will be attached to any subsequent notifications. The receiver is not obligated to provide these notifications."
+                        }
+                    },
+                    "type": "object"
+                },
+                "cursor": {
+                    "description": "An opaque token representing the current pagination position.\nIf provided, the server should return results starting after this cursor.",
+                    "type": "string"
+                }
+            },
+            "type": "object"
+        },
+        "PaginatedResult": {
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "nextCursor": {
+                    "description": "An opaque token representing the pagination position after the last returned result.\nIf present, there may be more results available.",
+                    "type": "string"
+                }
+            },
+            "type": "object"
+        },
+        "PingRequest": {
+            "description": "A ping, issued by either the server or the client, to check that the other party is still alive. The receiver must promptly respond, or else may be disconnected.",
+            "properties": {
+                "id": {
+                    "$ref": "#/$defs/RequestId"
+                },
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "ping",
+                    "type": "string"
+                },
+                "params": {
+                    "$ref": "#/$defs/RequestParams"
+                }
+            },
+            "required": [
+                "id",
+                "jsonrpc",
+                "method"
+            ],
+            "type": "object"
+        },
+        "PrimitiveSchemaDefinition": {
+            "anyOf": [
+                {
+                    "$ref": "#/$defs/StringSchema"
+                },
+                {
+                    "$ref": "#/$defs/NumberSchema"
+                },
+                {
+                    "$ref": "#/$defs/BooleanSchema"
+                },
+                {
+                    "$ref": "#/$defs/UntitledSingleSelectEnumSchema"
+                },
+                {
+                    "$ref": "#/$defs/TitledSingleSelectEnumSchema"
+                },
+                {
+                    "$ref": "#/$defs/UntitledMultiSelectEnumSchema"
+                },
+                {
+                    "$ref": "#/$defs/TitledMultiSelectEnumSchema"
+                },
+                {
+                    "$ref": "#/$defs/LegacyTitledEnumSchema"
+                }
+            ],
+            "description": "Restricted schema definitions that only allow primitive types\nwithout nested objects or arrays."
+        },
+        "ProgressNotification": {
+            "description": "An out-of-band notification used to inform the receiver of a progress update for a long-running request.",
+            "properties": {
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "notifications/progress",
+                    "type": "string"
+                },
+                "params": {
+                    "$ref": "#/$defs/ProgressNotificationParams"
+                }
+            },
+            "required": [
+                "jsonrpc",
+                "method",
+                "params"
+            ],
+            "type": "object"
+        },
+        "ProgressNotificationParams": {
+            "description": "Parameters for a `notifications/progress` notification.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "message": {
+                    "description": "An optional message describing the current progress.",
+                    "type": "string"
+                },
+                "progress": {
+                    "description": "The progress thus far. This should increase every time progress is made, even if the total is unknown.",
+                    "type": "number"
+                },
+                "progressToken": {
+                    "$ref": "#/$defs/ProgressToken",
+                    "description": "The progress token which was given in the initial request, used to associate this notification with the request that is proceeding."
+                },
+                "total": {
+                    "description": "Total number of items to process (or total progress required), if known.",
+                    "type": "number"
+                }
+            },
+            "required": [
+                "progress",
+                "progressToken"
+            ],
+            "type": "object"
+        },
+        "ProgressToken": {
+            "description": "A progress token, used to associate progress notifications with the original request.",
+            "type": [
+                "string",
+                "integer"
+            ]
+        },
+        "Prompt": {
+            "description": "A prompt or prompt template that the server offers.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "arguments": {
+                    "description": "A list of arguments to use for templating the prompt.",
+                    "items": {
+                        "$ref": "#/$defs/PromptArgument"
+                    },
+                    "type": "array"
+                },
+                "description": {
+                    "description": "An optional description of what this prompt provides",
+                    "type": "string"
+                },
+                "icons": {
+                    "description": "Optional set of sized icons that the client can display in a user interface.\n\nClients that support rendering icons MUST support at least the following MIME types:\n- `image/png` - PNG images (safe, universal compatibility)\n- `image/jpeg` (and `image/jpg`) - JPEG images (safe, universal compatibility)\n\nClients that support rendering icons SHOULD also support:\n- `image/svg+xml` - SVG images (scalable but requires security precautions)\n- `image/webp` - WebP images (modern, efficient format)",
+                    "items": {
+                        "$ref": "#/$defs/Icon"
+                    },
+                    "type": "array"
+                },
+                "name": {
+                    "description": "Intended for programmatic or logical use, but used as a display name in past specs or fallback (if title isn't present).",
+                    "type": "string"
+                },
+                "title": {
+                    "description": "Intended for UI and end-user contexts — optimized to be human-readable and easily understood,\neven by those unfamiliar with domain-specific terminology.\n\nIf not provided, the name should be used for display (except for Tool,\nwhere `annotations.title` should be given precedence over using `name`,\nif present).",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "name"
+            ],
+            "type": "object"
+        },
+        "PromptArgument": {
+            "description": "Describes an argument that a prompt can accept.",
+            "properties": {
+                "description": {
+                    "description": "A human-readable description of the argument.",
+                    "type": "string"
+                },
+                "name": {
+                    "description": "Intended for programmatic or logical use, but used as a display name in past specs or fallback (if title isn't present).",
+                    "type": "string"
+                },
+                "required": {
+                    "description": "Whether this argument must be provided.",
+                    "type": "boolean"
+                },
+                "title": {
+                    "description": "Intended for UI and end-user contexts — optimized to be human-readable and easily understood,\neven by those unfamiliar with domain-specific terminology.\n\nIf not provided, the name should be used for display (except for Tool,\nwhere `annotations.title` should be given precedence over using `name`,\nif present).",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "name"
+            ],
+            "type": "object"
+        },
+        "PromptListChangedNotification": {
+            "description": "An optional notification from the server to the client, informing it that the list of prompts it offers has changed. This may be issued by servers without any previous subscription from the client.",
+            "properties": {
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "notifications/prompts/list_changed",
+                    "type": "string"
+                },
+                "params": {
+                    "$ref": "#/$defs/NotificationParams"
+                }
+            },
+            "required": [
+                "jsonrpc",
+                "method"
+            ],
+            "type": "object"
+        },
+        "PromptMessage": {
+            "description": "Describes a message returned as part of a prompt.\n\nThis is similar to `SamplingMessage`, but also supports the embedding of\nresources from the MCP server.",
+            "properties": {
+                "content": {
+                    "$ref": "#/$defs/ContentBlock"
+                },
+                "role": {
+                    "$ref": "#/$defs/Role"
+                }
+            },
+            "required": [
+                "content",
+                "role"
+            ],
+            "type": "object"
+        },
+        "PromptReference": {
+            "description": "Identifies a prompt.",
+            "properties": {
+                "name": {
+                    "description": "Intended for programmatic or logical use, but used as a display name in past specs or fallback (if title isn't present).",
+                    "type": "string"
+                },
+                "title": {
+                    "description": "Intended for UI and end-user contexts — optimized to be human-readable and easily understood,\neven by those unfamiliar with domain-specific terminology.\n\nIf not provided, the name should be used for display (except for Tool,\nwhere `annotations.title` should be given precedence over using `name`,\nif present).",
+                    "type": "string"
+                },
+                "type": {
+                    "const": "ref/prompt",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "name",
+                "type"
+            ],
+            "type": "object"
+        },
+        "ReadResourceRequest": {
+            "description": "Sent from the client to the server, to read a specific resource URI.",
+            "properties": {
+                "id": {
+                    "$ref": "#/$defs/RequestId"
+                },
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "resources/read",
+                    "type": "string"
+                },
+                "params": {
+                    "$ref": "#/$defs/ReadResourceRequestParams"
+                }
+            },
+            "required": [
+                "id",
+                "jsonrpc",
+                "method",
+                "params"
+            ],
+            "type": "object"
+        },
+        "ReadResourceRequestParams": {
+            "description": "Parameters for a `resources/read` request.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "properties": {
+                        "progressToken": {
+                            "$ref": "#/$defs/ProgressToken",
+                            "description": "If specified, the caller is requesting out-of-band progress notifications for this request (as represented by notifications/progress). The value of this parameter is an opaque token that will be attached to any subsequent notifications. The receiver is not obligated to provide these notifications."
+                        }
+                    },
+                    "type": "object"
+                },
+                "uri": {
+                    "description": "The URI of the resource. The URI can use any protocol; it is up to the server how to interpret it.",
+                    "format": "uri",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "uri"
+            ],
+            "type": "object"
+        },
+        "ReadResourceResult": {
+            "description": "The server's response to a resources/read request from the client.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "contents": {
+                    "items": {
+                        "anyOf": [
+                            {
+                                "$ref": "#/$defs/TextResourceContents"
+                            },
+                            {
+                                "$ref": "#/$defs/BlobResourceContents"
+                            }
+                        ]
+                    },
+                    "type": "array"
+                }
+            },
+            "required": [
+                "contents"
+            ],
+            "type": "object"
+        },
+        "RelatedTaskMetadata": {
+            "description": "Metadata for associating messages with a task.\nInclude this in the `_meta` field under the key `io.modelcontextprotocol/related-task`.",
+            "properties": {
+                "taskId": {
+                    "description": "The task identifier this message is associated with.",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "taskId"
+            ],
+            "type": "object"
+        },
+        "Request": {
+            "properties": {
+                "method": {
+                    "type": "string"
+                },
+                "params": {
+                    "additionalProperties": {},
+                    "type": "object"
+                }
+            },
+            "required": [
+                "method"
+            ],
+            "type": "object"
+        },
+        "RequestId": {
+            "description": "A uniquely identifying ID for a request in JSON-RPC.",
+            "type": [
+                "string",
+                "integer"
+            ]
+        },
+        "RequestParams": {
+            "description": "Common params for any request.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "properties": {
+                        "progressToken": {
+                            "$ref": "#/$defs/ProgressToken",
+                            "description": "If specified, the caller is requesting out-of-band progress notifications for this request (as represented by notifications/progress). The value of this parameter is an opaque token that will be attached to any subsequent notifications. The receiver is not obligated to provide these notifications."
+                        }
+                    },
+                    "type": "object"
+                }
+            },
+            "type": "object"
+        },
+        "Resource": {
+            "description": "A known resource that the server is capable of reading.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "annotations": {
+                    "$ref": "#/$defs/Annotations",
+                    "description": "Optional annotations for the client."
+                },
+                "description": {
+                    "description": "A description of what this resource represents.\n\nThis can be used by clients to improve the LLM's understanding of available resources. It can be thought of like a \"hint\" to the model.",
+                    "type": "string"
+                },
+                "icons": {
+                    "description": "Optional set of sized icons that the client can display in a user interface.\n\nClients that support rendering icons MUST support at least the following MIME types:\n- `image/png` - PNG images (safe, universal compatibility)\n- `image/jpeg` (and `image/jpg`) - JPEG images (safe, universal compatibility)\n\nClients that support rendering icons SHOULD also support:\n- `image/svg+xml` - SVG images (scalable but requires security precautions)\n- `image/webp` - WebP images (modern, efficient format)",
+                    "items": {
+                        "$ref": "#/$defs/Icon"
+                    },
+                    "type": "array"
+                },
+                "mimeType": {
+                    "description": "The MIME type of this resource, if known.",
+                    "type": "string"
+                },
+                "name": {
+                    "description": "Intended for programmatic or logical use, but used as a display name in past specs or fallback (if title isn't present).",
+                    "type": "string"
+                },
+                "size": {
+                    "description": "The size of the raw resource content, in bytes (i.e., before base64 encoding or any tokenization), if known.\n\nThis can be used by Hosts to display file sizes and estimate context window usage.",
+                    "type": "integer"
+                },
+                "title": {
+                    "description": "Intended for UI and end-user contexts — optimized to be human-readable and easily understood,\neven by those unfamiliar with domain-specific terminology.\n\nIf not provided, the name should be used for display (except for Tool,\nwhere `annotations.title` should be given precedence over using `name`,\nif present).",
+                    "type": "string"
+                },
+                "uri": {
+                    "description": "The URI of this resource.",
+                    "format": "uri",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "name",
+                "uri"
+            ],
+            "type": "object"
+        },
+        "ResourceContents": {
+            "description": "The contents of a specific resource or sub-resource.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "mimeType": {
+                    "description": "The MIME type of this resource, if known.",
+                    "type": "string"
+                },
+                "uri": {
+                    "description": "The URI of this resource.",
+                    "format": "uri",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "uri"
+            ],
+            "type": "object"
+        },
+        "ResourceLink": {
+            "description": "A resource that the server is capable of reading, included in a prompt or tool call result.\n\nNote: resource links returned by tools are not guaranteed to appear in the results of `resources/list` requests.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "annotations": {
+                    "$ref": "#/$defs/Annotations",
+                    "description": "Optional annotations for the client."
+                },
+                "description": {
+                    "description": "A description of what this resource represents.\n\nThis can be used by clients to improve the LLM's understanding of available resources. It can be thought of like a \"hint\" to the model.",
+                    "type": "string"
+                },
+                "icons": {
+                    "description": "Optional set of sized icons that the client can display in a user interface.\n\nClients that support rendering icons MUST support at least the following MIME types:\n- `image/png` - PNG images (safe, universal compatibility)\n- `image/jpeg` (and `image/jpg`) - JPEG images (safe, universal compatibility)\n\nClients that support rendering icons SHOULD also support:\n- `image/svg+xml` - SVG images (scalable but requires security precautions)\n- `image/webp` - WebP images (modern, efficient format)",
+                    "items": {
+                        "$ref": "#/$defs/Icon"
+                    },
+                    "type": "array"
+                },
+                "mimeType": {
+                    "description": "The MIME type of this resource, if known.",
+                    "type": "string"
+                },
+                "name": {
+                    "description": "Intended for programmatic or logical use, but used as a display name in past specs or fallback (if title isn't present).",
+                    "type": "string"
+                },
+                "size": {
+                    "description": "The size of the raw resource content, in bytes (i.e., before base64 encoding or any tokenization), if known.\n\nThis can be used by Hosts to display file sizes and estimate context window usage.",
+                    "type": "integer"
+                },
+                "title": {
+                    "description": "Intended for UI and end-user contexts — optimized to be human-readable and easily understood,\neven by those unfamiliar with domain-specific terminology.\n\nIf not provided, the name should be used for display (except for Tool,\nwhere `annotations.title` should be given precedence over using `name`,\nif present).",
+                    "type": "string"
+                },
+                "type": {
+                    "const": "resource_link",
+                    "type": "string"
+                },
+                "uri": {
+                    "description": "The URI of this resource.",
+                    "format": "uri",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "name",
+                "type",
+                "uri"
+            ],
+            "type": "object"
+        },
+        "ResourceListChangedNotification": {
+            "description": "An optional notification from the server to the client, informing it that the list of resources it can read from has changed. This may be issued by servers without any previous subscription from the client.",
+            "properties": {
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "notifications/resources/list_changed",
+                    "type": "string"
+                },
+                "params": {
+                    "$ref": "#/$defs/NotificationParams"
+                }
+            },
+            "required": [
+                "jsonrpc",
+                "method"
+            ],
+            "type": "object"
+        },
+        "ResourceRequestParams": {
+            "description": "Common parameters when working with resources.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "properties": {
+                        "progressToken": {
+                            "$ref": "#/$defs/ProgressToken",
+                            "description": "If specified, the caller is requesting out-of-band progress notifications for this request (as represented by notifications/progress). The value of this parameter is an opaque token that will be attached to any subsequent notifications. The receiver is not obligated to provide these notifications."
+                        }
+                    },
+                    "type": "object"
+                },
+                "uri": {
+                    "description": "The URI of the resource. The URI can use any protocol; it is up to the server how to interpret it.",
+                    "format": "uri",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "uri"
+            ],
+            "type": "object"
+        },
+        "ResourceTemplate": {
+            "description": "A template description for resources available on the server.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "annotations": {
+                    "$ref": "#/$defs/Annotations",
+                    "description": "Optional annotations for the client."
+                },
+                "description": {
+                    "description": "A description of what this template is for.\n\nThis can be used by clients to improve the LLM's understanding of available resources. It can be thought of like a \"hint\" to the model.",
+                    "type": "string"
+                },
+                "icons": {
+                    "description": "Optional set of sized icons that the client can display in a user interface.\n\nClients that support rendering icons MUST support at least the following MIME types:\n- `image/png` - PNG images (safe, universal compatibility)\n- `image/jpeg` (and `image/jpg`) - JPEG images (safe, universal compatibility)\n\nClients that support rendering icons SHOULD also support:\n- `image/svg+xml` - SVG images (scalable but requires security precautions)\n- `image/webp` - WebP images (modern, efficient format)",
+                    "items": {
+                        "$ref": "#/$defs/Icon"
+                    },
+                    "type": "array"
+                },
+                "mimeType": {
+                    "description": "The MIME type for all resources that match this template. This should only be included if all resources matching this template have the same type.",
+                    "type": "string"
+                },
+                "name": {
+                    "description": "Intended for programmatic or logical use, but used as a display name in past specs or fallback (if title isn't present).",
+                    "type": "string"
+                },
+                "title": {
+                    "description": "Intended for UI and end-user contexts — optimized to be human-readable and easily understood,\neven by those unfamiliar with domain-specific terminology.\n\nIf not provided, the name should be used for display (except for Tool,\nwhere `annotations.title` should be given precedence over using `name`,\nif present).",
+                    "type": "string"
+                },
+                "uriTemplate": {
+                    "description": "A URI template (according to RFC 6570) that can be used to construct resource URIs.",
+                    "format": "uri-template",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "name",
+                "uriTemplate"
+            ],
+            "type": "object"
+        },
+        "ResourceTemplateReference": {
+            "description": "A reference to a resource or resource template definition.",
+            "properties": {
+                "type": {
+                    "const": "ref/resource",
+                    "type": "string"
+                },
+                "uri": {
+                    "description": "The URI or URI template of the resource.",
+                    "format": "uri-template",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "type",
+                "uri"
+            ],
+            "type": "object"
+        },
+        "ResourceUpdatedNotification": {
+            "description": "A notification from the server to the client, informing it that a resource has changed and may need to be read again. This should only be sent if the client previously sent a resources/subscribe request.",
+            "properties": {
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "notifications/resources/updated",
+                    "type": "string"
+                },
+                "params": {
+                    "$ref": "#/$defs/ResourceUpdatedNotificationParams"
+                }
+            },
+            "required": [
+                "jsonrpc",
+                "method",
+                "params"
+            ],
+            "type": "object"
+        },
+        "ResourceUpdatedNotificationParams": {
+            "description": "Parameters for a `notifications/resources/updated` notification.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "uri": {
+                    "description": "The URI of the resource that has been updated. This might be a sub-resource of the one that the client actually subscribed to.",
+                    "format": "uri",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "uri"
+            ],
+            "type": "object"
+        },
+        "Result": {
+            "additionalProperties": {},
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                }
+            },
+            "type": "object"
+        },
+        "Role": {
+            "description": "The sender or recipient of messages and data in a conversation.",
+            "enum": [
+                "assistant",
+                "user"
+            ],
+            "type": "string"
+        },
+        "Root": {
+            "description": "Represents a root directory or file that the server can operate on.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "name": {
+                    "description": "An optional name for the root. This can be used to provide a human-readable\nidentifier for the root, which may be useful for display purposes or for\nreferencing the root in other parts of the application.",
+                    "type": "string"
+                },
+                "uri": {
+                    "description": "The URI identifying the root. This *must* start with file:// for now.\nThis restriction may be relaxed in future versions of the protocol to allow\nother URI schemes.",
+                    "format": "uri",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "uri"
+            ],
+            "type": "object"
+        },
+        "RootsListChangedNotification": {
+            "description": "A notification from the client to the server, informing it that the list of roots has changed.\nThis notification should be sent whenever the client adds, removes, or modifies any root.\nThe server should then request an updated list of roots using the ListRootsRequest.",
+            "properties": {
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "notifications/roots/list_changed",
+                    "type": "string"
+                },
+                "params": {
+                    "$ref": "#/$defs/NotificationParams"
+                }
+            },
+            "required": [
+                "jsonrpc",
+                "method"
+            ],
+            "type": "object"
+        },
+        "SamplingMessage": {
+            "description": "Describes a message issued to or received from an LLM API.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "content": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/$defs/TextContent"
+                        },
+                        {
+                            "$ref": "#/$defs/ImageContent"
+                        },
+                        {
+                            "$ref": "#/$defs/AudioContent"
+                        },
+                        {
+                            "$ref": "#/$defs/ToolUseContent"
+                        },
+                        {
+                            "$ref": "#/$defs/ToolResultContent"
+                        },
+                        {
+                            "items": {
+                                "$ref": "#/$defs/SamplingMessageContentBlock"
+                            },
+                            "type": "array"
+                        }
+                    ]
+                },
+                "role": {
+                    "$ref": "#/$defs/Role"
+                }
+            },
+            "required": [
+                "content",
+                "role"
+            ],
+            "type": "object"
+        },
+        "SamplingMessageContentBlock": {
+            "anyOf": [
+                {
+                    "$ref": "#/$defs/TextContent"
+                },
+                {
+                    "$ref": "#/$defs/ImageContent"
+                },
+                {
+                    "$ref": "#/$defs/AudioContent"
+                },
+                {
+                    "$ref": "#/$defs/ToolUseContent"
+                },
+                {
+                    "$ref": "#/$defs/ToolResultContent"
+                }
+            ]
+        },
+        "ServerCapabilities": {
+            "description": "Capabilities that a server may support. Known capabilities are defined here, in this schema, but this is not a closed set: any server can define its own, additional capabilities.",
+            "properties": {
+                "completions": {
+                    "additionalProperties": true,
+                    "description": "Present if the server supports argument autocompletion suggestions.",
+                    "properties": {},
+                    "type": "object"
+                },
+                "experimental": {
+                    "additionalProperties": {
+                        "additionalProperties": true,
+                        "properties": {},
+                        "type": "object"
+                    },
+                    "description": "Experimental, non-standard capabilities that the server supports.",
+                    "type": "object"
+                },
+                "logging": {
+                    "additionalProperties": true,
+                    "description": "Present if the server supports sending log messages to the client.",
+                    "properties": {},
+                    "type": "object"
+                },
+                "prompts": {
+                    "description": "Present if the server offers any prompt templates.",
+                    "properties": {
+                        "listChanged": {
+                            "description": "Whether this server supports notifications for changes to the prompt list.",
+                            "type": "boolean"
+                        }
+                    },
+                    "type": "object"
+                },
+                "resources": {
+                    "description": "Present if the server offers any resources to read.",
+                    "properties": {
+                        "listChanged": {
+                            "description": "Whether this server supports notifications for changes to the resource list.",
+                            "type": "boolean"
+                        },
+                        "subscribe": {
+                            "description": "Whether this server supports subscribing to resource updates.",
+                            "type": "boolean"
+                        }
+                    },
+                    "type": "object"
+                },
+                "tasks": {
+                    "description": "Present if the server supports task-augmented requests.",
+                    "properties": {
+                        "cancel": {
+                            "additionalProperties": true,
+                            "description": "Whether this server supports tasks/cancel.",
+                            "properties": {},
+                            "type": "object"
+                        },
+                        "list": {
+                            "additionalProperties": true,
+                            "description": "Whether this server supports tasks/list.",
+                            "properties": {},
+                            "type": "object"
+                        },
+                        "requests": {
+                            "description": "Specifies which request types can be augmented with tasks.",
+                            "properties": {
+                                "tools": {
+                                    "description": "Task support for tool-related requests.",
+                                    "properties": {
+                                        "call": {
+                                            "additionalProperties": true,
+                                            "description": "Whether the server supports task-augmented tools/call requests.",
+                                            "properties": {},
+                                            "type": "object"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            },
+                            "type": "object"
+                        }
+                    },
+                    "type": "object"
+                },
+                "tools": {
+                    "description": "Present if the server offers any tools to call.",
+                    "properties": {
+                        "listChanged": {
+                            "description": "Whether this server supports notifications for changes to the tool list.",
+                            "type": "boolean"
+                        }
+                    },
+                    "type": "object"
+                }
+            },
+            "type": "object"
+        },
+        "ServerNotification": {
+            "anyOf": [
+                {
+                    "$ref": "#/$defs/CancelledNotification"
+                },
+                {
+                    "$ref": "#/$defs/ProgressNotification"
+                },
+                {
+                    "$ref": "#/$defs/ResourceListChangedNotification"
+                },
+                {
+                    "$ref": "#/$defs/ResourceUpdatedNotification"
+                },
+                {
+                    "$ref": "#/$defs/PromptListChangedNotification"
+                },
+                {
+                    "$ref": "#/$defs/ToolListChangedNotification"
+                },
+                {
+                    "$ref": "#/$defs/TaskStatusNotification"
+                },
+                {
+                    "$ref": "#/$defs/LoggingMessageNotification"
+                },
+                {
+                    "$ref": "#/$defs/ElicitationCompleteNotification"
+                }
+            ]
+        },
+        "ServerRequest": {
+            "anyOf": [
+                {
+                    "$ref": "#/$defs/PingRequest"
+                },
+                {
+                    "$ref": "#/$defs/GetTaskRequest"
+                },
+                {
+                    "$ref": "#/$defs/GetTaskPayloadRequest"
+                },
+                {
+                    "$ref": "#/$defs/CancelTaskRequest"
+                },
+                {
+                    "$ref": "#/$defs/ListTasksRequest"
+                },
+                {
+                    "$ref": "#/$defs/CreateMessageRequest"
+                },
+                {
+                    "$ref": "#/$defs/ListRootsRequest"
+                },
+                {
+                    "$ref": "#/$defs/ElicitRequest"
+                }
+            ]
+        },
+        "ServerResult": {
+            "anyOf": [
+                {
+                    "$ref": "#/$defs/Result"
+                },
+                {
+                    "$ref": "#/$defs/InitializeResult"
+                },
+                {
+                    "$ref": "#/$defs/ListResourcesResult"
+                },
+                {
+                    "$ref": "#/$defs/ListResourceTemplatesResult"
+                },
+                {
+                    "$ref": "#/$defs/ReadResourceResult"
+                },
+                {
+                    "$ref": "#/$defs/ListPromptsResult"
+                },
+                {
+                    "$ref": "#/$defs/GetPromptResult"
+                },
+                {
+                    "$ref": "#/$defs/ListToolsResult"
+                },
+                {
+                    "$ref": "#/$defs/CallToolResult"
+                },
+                {
+                    "$ref": "#/$defs/GetTaskResult",
+                    "description": "The response to a tasks/get request."
+                },
+                {
+                    "$ref": "#/$defs/GetTaskPayloadResult"
+                },
+                {
+                    "$ref": "#/$defs/CancelTaskResult",
+                    "description": "The response to a tasks/cancel request."
+                },
+                {
+                    "$ref": "#/$defs/ListTasksResult"
+                },
+                {
+                    "$ref": "#/$defs/CompleteResult"
+                }
+            ]
+        },
+        "SetLevelRequest": {
+            "description": "A request from the client to the server, to enable or adjust logging.",
+            "properties": {
+                "id": {
+                    "$ref": "#/$defs/RequestId"
+                },
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "logging/setLevel",
+                    "type": "string"
+                },
+                "params": {
+                    "$ref": "#/$defs/SetLevelRequestParams"
+                }
+            },
+            "required": [
+                "id",
+                "jsonrpc",
+                "method",
+                "params"
+            ],
+            "type": "object"
+        },
+        "SetLevelRequestParams": {
+            "description": "Parameters for a `logging/setLevel` request.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "properties": {
+                        "progressToken": {
+                            "$ref": "#/$defs/ProgressToken",
+                            "description": "If specified, the caller is requesting out-of-band progress notifications for this request (as represented by notifications/progress). The value of this parameter is an opaque token that will be attached to any subsequent notifications. The receiver is not obligated to provide these notifications."
+                        }
+                    },
+                    "type": "object"
+                },
+                "level": {
+                    "$ref": "#/$defs/LoggingLevel",
+                    "description": "The level of logging that the client wants to receive from the server. The server should send all logs at this level and higher (i.e., more severe) to the client as notifications/message."
+                }
+            },
+            "required": [
+                "level"
+            ],
+            "type": "object"
+        },
+        "SingleSelectEnumSchema": {
+            "anyOf": [
+                {
+                    "$ref": "#/$defs/UntitledSingleSelectEnumSchema"
+                },
+                {
+                    "$ref": "#/$defs/TitledSingleSelectEnumSchema"
+                }
+            ]
+        },
+        "StringSchema": {
+            "properties": {
+                "default": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "format": {
+                    "enum": [
+                        "date",
+                        "date-time",
+                        "email",
+                        "uri"
+                    ],
+                    "type": "string"
+                },
+                "maxLength": {
+                    "type": "integer"
+                },
+                "minLength": {
+                    "type": "integer"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "type": {
+                    "const": "string",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "type"
+            ],
+            "type": "object"
+        },
+        "SubscribeRequest": {
+            "description": "Sent from the client to request resources/updated notifications from the server whenever a particular resource changes.",
+            "properties": {
+                "id": {
+                    "$ref": "#/$defs/RequestId"
+                },
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "resources/subscribe",
+                    "type": "string"
+                },
+                "params": {
+                    "$ref": "#/$defs/SubscribeRequestParams"
+                }
+            },
+            "required": [
+                "id",
+                "jsonrpc",
+                "method",
+                "params"
+            ],
+            "type": "object"
+        },
+        "SubscribeRequestParams": {
+            "description": "Parameters for a `resources/subscribe` request.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "properties": {
+                        "progressToken": {
+                            "$ref": "#/$defs/ProgressToken",
+                            "description": "If specified, the caller is requesting out-of-band progress notifications for this request (as represented by notifications/progress). The value of this parameter is an opaque token that will be attached to any subsequent notifications. The receiver is not obligated to provide these notifications."
+                        }
+                    },
+                    "type": "object"
+                },
+                "uri": {
+                    "description": "The URI of the resource. The URI can use any protocol; it is up to the server how to interpret it.",
+                    "format": "uri",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "uri"
+            ],
+            "type": "object"
+        },
+        "Task": {
+            "description": "Data associated with a task.",
+            "properties": {
+                "createdAt": {
+                    "description": "ISO 8601 timestamp when the task was created.",
+                    "type": "string"
+                },
+                "lastUpdatedAt": {
+                    "description": "ISO 8601 timestamp when the task was last updated.",
+                    "type": "string"
+                },
+                "pollInterval": {
+                    "description": "Suggested polling interval in milliseconds.",
+                    "type": "integer"
+                },
+                "status": {
+                    "$ref": "#/$defs/TaskStatus",
+                    "description": "Current task state."
+                },
+                "statusMessage": {
+                    "description": "Optional human-readable message describing the current task state.\nThis can provide context for any status, including:\n- Reasons for \"cancelled\" status\n- Summaries for \"completed\" status\n- Diagnostic information for \"failed\" status (e.g., error details, what went wrong)",
+                    "type": "string"
+                },
+                "taskId": {
+                    "description": "The task identifier.",
+                    "type": "string"
+                },
+                "ttl": {
+                    "description": "Actual retention duration from creation in milliseconds, null for unlimited.",
+                    "type": "integer"
+                }
+            },
+            "required": [
+                "createdAt",
+                "lastUpdatedAt",
+                "status",
+                "taskId",
+                "ttl"
+            ],
+            "type": "object"
+        },
+        "TaskAugmentedRequestParams": {
+            "description": "Common params for any task-augmented request.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "properties": {
+                        "progressToken": {
+                            "$ref": "#/$defs/ProgressToken",
+                            "description": "If specified, the caller is requesting out-of-band progress notifications for this request (as represented by notifications/progress). The value of this parameter is an opaque token that will be attached to any subsequent notifications. The receiver is not obligated to provide these notifications."
+                        }
+                    },
+                    "type": "object"
+                },
+                "task": {
+                    "$ref": "#/$defs/TaskMetadata",
+                    "description": "If specified, the caller is requesting task-augmented execution for this request.\nThe request will return a CreateTaskResult immediately, and the actual result can be\nretrieved later via tasks/result.\n\nTask augmentation is subject to capability negotiation - receivers MUST declare support\nfor task augmentation of specific request types in their capabilities."
+                }
+            },
+            "type": "object"
+        },
+        "TaskMetadata": {
+            "description": "Metadata for augmenting a request with task execution.\nInclude this in the `task` field of the request parameters.",
+            "properties": {
+                "ttl": {
+                    "description": "Requested duration in milliseconds to retain task from creation.",
+                    "type": "integer"
+                }
+            },
+            "type": "object"
+        },
+        "TaskStatus": {
+            "description": "The status of a task.",
+            "enum": [
+                "cancelled",
+                "completed",
+                "failed",
+                "input_required",
+                "working"
+            ],
+            "type": "string"
+        },
+        "TaskStatusNotification": {
+            "description": "An optional notification from the receiver to the requestor, informing them that a task's status has changed. Receivers are not required to send these notifications.",
+            "properties": {
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "notifications/tasks/status",
+                    "type": "string"
+                },
+                "params": {
+                    "$ref": "#/$defs/TaskStatusNotificationParams"
+                }
+            },
+            "required": [
+                "jsonrpc",
+                "method",
+                "params"
+            ],
+            "type": "object"
+        },
+        "TaskStatusNotificationParams": {
+            "allOf": [
+                {
+                    "$ref": "#/$defs/NotificationParams"
+                },
+                {
+                    "$ref": "#/$defs/Task"
+                }
+            ],
+            "description": "Parameters for a `notifications/tasks/status` notification."
+        },
+        "TextContent": {
+            "description": "Text provided to or from an LLM.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "annotations": {
+                    "$ref": "#/$defs/Annotations",
+                    "description": "Optional annotations for the client."
+                },
+                "text": {
+                    "description": "The text content of the message.",
+                    "type": "string"
+                },
+                "type": {
+                    "const": "text",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "text",
+                "type"
+            ],
+            "type": "object"
+        },
+        "TextResourceContents": {
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "mimeType": {
+                    "description": "The MIME type of this resource, if known.",
+                    "type": "string"
+                },
+                "text": {
+                    "description": "The text of the item. This must only be set if the item can actually be represented as text (not binary data).",
+                    "type": "string"
+                },
+                "uri": {
+                    "description": "The URI of this resource.",
+                    "format": "uri",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "text",
+                "uri"
+            ],
+            "type": "object"
+        },
+        "TitledMultiSelectEnumSchema": {
+            "description": "Schema for multiple-selection enumeration with display titles for each option.",
+            "properties": {
+                "default": {
+                    "description": "Optional default value.",
+                    "items": {
+                        "type": "string"
+                    },
+                    "type": "array"
+                },
+                "description": {
+                    "description": "Optional description for the enum field.",
+                    "type": "string"
+                },
+                "items": {
+                    "description": "Schema for array items with enum options and display labels.",
+                    "properties": {
+                        "anyOf": {
+                            "description": "Array of enum options with values and display labels.",
+                            "items": {
+                                "properties": {
+                                    "const": {
+                                        "description": "The constant enum value.",
+                                        "type": "string"
+                                    },
+                                    "title": {
+                                        "description": "Display title for this option.",
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "const",
+                                    "title"
+                                ],
+                                "type": "object"
+                            },
+                            "type": "array"
+                        }
+                    },
+                    "required": [
+                        "anyOf"
+                    ],
+                    "type": "object"
+                },
+                "maxItems": {
+                    "description": "Maximum number of items to select.",
+                    "type": "integer"
+                },
+                "minItems": {
+                    "description": "Minimum number of items to select.",
+                    "type": "integer"
+                },
+                "title": {
+                    "description": "Optional title for the enum field.",
+                    "type": "string"
+                },
+                "type": {
+                    "const": "array",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "items",
+                "type"
+            ],
+            "type": "object"
+        },
+        "TitledSingleSelectEnumSchema": {
+            "description": "Schema for single-selection enumeration with display titles for each option.",
+            "properties": {
+                "default": {
+                    "description": "Optional default value.",
+                    "type": "string"
+                },
+                "description": {
+                    "description": "Optional description for the enum field.",
+                    "type": "string"
+                },
+                "oneOf": {
+                    "description": "Array of enum options with values and display labels.",
+                    "items": {
+                        "properties": {
+                            "const": {
+                                "description": "The enum value.",
+                                "type": "string"
+                            },
+                            "title": {
+                                "description": "Display label for this option.",
+                                "type": "string"
+                            }
+                        },
+                        "required": [
+                            "const",
+                            "title"
+                        ],
+                        "type": "object"
+                    },
+                    "type": "array"
+                },
+                "title": {
+                    "description": "Optional title for the enum field.",
+                    "type": "string"
+                },
+                "type": {
+                    "const": "string",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "oneOf",
+                "type"
+            ],
+            "type": "object"
+        },
+        "Tool": {
+            "description": "Definition for a tool the client can call.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "annotations": {
+                    "$ref": "#/$defs/ToolAnnotations",
+                    "description": "Optional additional tool information.\n\nDisplay name precedence order is: title, annotations.title, then name."
+                },
+                "description": {
+                    "description": "A human-readable description of the tool.\n\nThis can be used by clients to improve the LLM's understanding of available tools. It can be thought of like a \"hint\" to the model.",
+                    "type": "string"
+                },
+                "execution": {
+                    "$ref": "#/$defs/ToolExecution",
+                    "description": "Execution-related properties for this tool."
+                },
+                "icons": {
+                    "description": "Optional set of sized icons that the client can display in a user interface.\n\nClients that support rendering icons MUST support at least the following MIME types:\n- `image/png` - PNG images (safe, universal compatibility)\n- `image/jpeg` (and `image/jpg`) - JPEG images (safe, universal compatibility)\n\nClients that support rendering icons SHOULD also support:\n- `image/svg+xml` - SVG images (scalable but requires security precautions)\n- `image/webp` - WebP images (modern, efficient format)",
+                    "items": {
+                        "$ref": "#/$defs/Icon"
+                    },
+                    "type": "array"
+                },
+                "inputSchema": {
+                    "description": "A JSON Schema object defining the expected parameters for the tool.",
+                    "properties": {
+                        "$schema": {
+                            "type": "string"
+                        },
+                        "properties": {
+                            "additionalProperties": {
+                                "additionalProperties": true,
+                                "properties": {},
+                                "type": "object"
+                            },
+                            "type": "object"
+                        },
+                        "required": {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        "type": {
+                            "const": "object",
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                "name": {
+                    "description": "Intended for programmatic or logical use, but used as a display name in past specs or fallback (if title isn't present).",
+                    "type": "string"
+                },
+                "outputSchema": {
+                    "description": "An optional JSON Schema object defining the structure of the tool's output returned in\nthe structuredContent field of a CallToolResult.\n\nDefaults to JSON Schema 2020-12 when no explicit $schema is provided.\nCurrently restricted to type: \"object\" at the root level.",
+                    "properties": {
+                        "$schema": {
+                            "type": "string"
+                        },
+                        "properties": {
+                            "additionalProperties": {
+                                "additionalProperties": true,
+                                "properties": {},
+                                "type": "object"
+                            },
+                            "type": "object"
+                        },
+                        "required": {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        "type": {
+                            "const": "object",
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                "title": {
+                    "description": "Intended for UI and end-user contexts — optimized to be human-readable and easily understood,\neven by those unfamiliar with domain-specific terminology.\n\nIf not provided, the name should be used for display (except for Tool,\nwhere `annotations.title` should be given precedence over using `name`,\nif present).",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "inputSchema",
+                "name"
+            ],
+            "type": "object"
+        },
+        "ToolAnnotations": {
+            "description": "Additional properties describing a Tool to clients.\n\nNOTE: all properties in ToolAnnotations are **hints**.\nThey are not guaranteed to provide a faithful description of\ntool behavior (including descriptive properties like `title`).\n\nClients should never make tool use decisions based on ToolAnnotations\nreceived from untrusted servers.",
+            "properties": {
+                "destructiveHint": {
+                    "description": "If true, the tool may perform destructive updates to its environment.\nIf false, the tool performs only additive updates.\n\n(This property is meaningful only when `readOnlyHint == false`)\n\nDefault: true",
+                    "type": "boolean"
+                },
+                "idempotentHint": {
+                    "description": "If true, calling the tool repeatedly with the same arguments\nwill have no additional effect on its environment.\n\n(This property is meaningful only when `readOnlyHint == false`)\n\nDefault: false",
+                    "type": "boolean"
+                },
+                "openWorldHint": {
+                    "description": "If true, this tool may interact with an \"open world\" of external\nentities. If false, the tool's domain of interaction is closed.\nFor example, the world of a web search tool is open, whereas that\nof a memory tool is not.\n\nDefault: true",
+                    "type": "boolean"
+                },
+                "readOnlyHint": {
+                    "description": "If true, the tool does not modify its environment.\n\nDefault: false",
+                    "type": "boolean"
+                },
+                "title": {
+                    "description": "A human-readable title for the tool.",
+                    "type": "string"
+                }
+            },
+            "type": "object"
+        },
+        "ToolChoice": {
+            "description": "Controls tool selection behavior for sampling requests.",
+            "properties": {
+                "mode": {
+                    "description": "Controls the tool use ability of the model:\n- \"auto\": Model decides whether to use tools (default)\n- \"required\": Model MUST use at least one tool before completing\n- \"none\": Model MUST NOT use any tools",
+                    "enum": [
+                        "auto",
+                        "none",
+                        "required"
+                    ],
+                    "type": "string"
+                }
+            },
+            "type": "object"
+        },
+        "ToolExecution": {
+            "description": "Execution-related properties for a tool.",
+            "properties": {
+                "taskSupport": {
+                    "description": "Indicates whether this tool supports task-augmented execution.\nThis allows clients to handle long-running operations through polling\nthe task system.\n\n- \"forbidden\": Tool does not support task-augmented execution (default when absent)\n- \"optional\": Tool may support task-augmented execution\n- \"required\": Tool requires task-augmented execution\n\nDefault: \"forbidden\"",
+                    "enum": [
+                        "forbidden",
+                        "optional",
+                        "required"
+                    ],
+                    "type": "string"
+                }
+            },
+            "type": "object"
+        },
+        "ToolListChangedNotification": {
+            "description": "An optional notification from the server to the client, informing it that the list of tools it offers has changed. This may be issued by servers without any previous subscription from the client.",
+            "properties": {
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "notifications/tools/list_changed",
+                    "type": "string"
+                },
+                "params": {
+                    "$ref": "#/$defs/NotificationParams"
+                }
+            },
+            "required": [
+                "jsonrpc",
+                "method"
+            ],
+            "type": "object"
+        },
+        "ToolResultContent": {
+            "description": "The result of a tool use, provided by the user back to the assistant.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "Optional metadata about the tool result. Clients SHOULD preserve this field when\nincluding tool results in subsequent sampling requests to enable caching optimizations.\n\nSee [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "content": {
+                    "description": "The unstructured result content of the tool use.\n\nThis has the same format as CallToolResult.content and can include text, images,\naudio, resource links, and embedded resources.",
+                    "items": {
+                        "$ref": "#/$defs/ContentBlock"
+                    },
+                    "type": "array"
+                },
+                "isError": {
+                    "description": "Whether the tool use resulted in an error.\n\nIf true, the content typically describes the error that occurred.\nDefault: false",
+                    "type": "boolean"
+                },
+                "structuredContent": {
+                    "additionalProperties": {},
+                    "description": "An optional structured result object.\n\nIf the tool defined an outputSchema, this SHOULD conform to that schema.",
+                    "type": "object"
+                },
+                "toolUseId": {
+                    "description": "The ID of the tool use this result corresponds to.\n\nThis MUST match the ID from a previous ToolUseContent.",
+                    "type": "string"
+                },
+                "type": {
+                    "const": "tool_result",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "content",
+                "toolUseId",
+                "type"
+            ],
+            "type": "object"
+        },
+        "ToolUseContent": {
+            "description": "A request from the assistant to call a tool.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "Optional metadata about the tool use. Clients SHOULD preserve this field when\nincluding tool uses in subsequent sampling requests to enable caching optimizations.\n\nSee [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "type": "object"
+                },
+                "id": {
+                    "description": "A unique identifier for this tool use.\n\nThis ID is used to match tool results to their corresponding tool uses.",
+                    "type": "string"
+                },
+                "input": {
+                    "additionalProperties": {},
+                    "description": "The arguments to pass to the tool, conforming to the tool's input schema.",
+                    "type": "object"
+                },
+                "name": {
+                    "description": "The name of the tool to call.",
+                    "type": "string"
+                },
+                "type": {
+                    "const": "tool_use",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "id",
+                "input",
+                "name",
+                "type"
+            ],
+            "type": "object"
+        },
+        "URLElicitationRequiredError": {
+            "description": "An error response that indicates that the server requires the client to provide additional information via an elicitation request.",
+            "properties": {
+                "error": {
+                    "allOf": [
+                        {
+                            "$ref": "#/$defs/Error"
+                        },
+                        {
+                            "properties": {
+                                "code": {
+                                    "const": -32042,
+                                    "type": "integer"
+                                },
+                                "data": {
+                                    "additionalProperties": {},
+                                    "properties": {
+                                        "elicitations": {
+                                            "items": {
+                                                "$ref": "#/$defs/ElicitRequestURLParams"
+                                            },
+                                            "type": "array"
+                                        }
+                                    },
+                                    "required": [
+                                        "elicitations"
+                                    ],
+                                    "type": "object"
+                                }
+                            },
+                            "required": [
+                                "code",
+                                "data"
+                            ],
+                            "type": "object"
+                        }
+                    ]
+                },
+                "id": {
+                    "$ref": "#/$defs/RequestId"
+                },
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "error",
+                "jsonrpc"
+            ],
+            "type": "object"
+        },
+        "UnsubscribeRequest": {
+            "description": "Sent from the client to request cancellation of resources/updated notifications from the server. This should follow a previous resources/subscribe request.",
+            "properties": {
+                "id": {
+                    "$ref": "#/$defs/RequestId"
+                },
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "resources/unsubscribe",
+                    "type": "string"
+                },
+                "params": {
+                    "$ref": "#/$defs/UnsubscribeRequestParams"
+                }
+            },
+            "required": [
+                "id",
+                "jsonrpc",
+                "method",
+                "params"
+            ],
+            "type": "object"
+        },
+        "UnsubscribeRequestParams": {
+            "description": "Parameters for a `resources/unsubscribe` request.",
+            "properties": {
+                "_meta": {
+                    "additionalProperties": {},
+                    "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+                    "properties": {
+                        "progressToken": {
+                            "$ref": "#/$defs/ProgressToken",
+                            "description": "If specified, the caller is requesting out-of-band progress notifications for this request (as represented by notifications/progress). The value of this parameter is an opaque token that will be attached to any subsequent notifications. The receiver is not obligated to provide these notifications."
+                        }
+                    },
+                    "type": "object"
+                },
+                "uri": {
+                    "description": "The URI of the resource. The URI can use any protocol; it is up to the server how to interpret it.",
+                    "format": "uri",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "uri"
+            ],
+            "type": "object"
+        },
+        "UntitledMultiSelectEnumSchema": {
+            "description": "Schema for multiple-selection enumeration without display titles for options.",
+            "properties": {
+                "default": {
+                    "description": "Optional default value.",
+                    "items": {
+                        "type": "string"
+                    },
+                    "type": "array"
+                },
+                "description": {
+                    "description": "Optional description for the enum field.",
+                    "type": "string"
+                },
+                "items": {
+                    "description": "Schema for the array items.",
+                    "properties": {
+                        "enum": {
+                            "description": "Array of enum values to choose from.",
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        "type": {
+                            "const": "string",
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "enum",
+                        "type"
+                    ],
+                    "type": "object"
+                },
+                "maxItems": {
+                    "description": "Maximum number of items to select.",
+                    "type": "integer"
+                },
+                "minItems": {
+                    "description": "Minimum number of items to select.",
+                    "type": "integer"
+                },
+                "title": {
+                    "description": "Optional title for the enum field.",
+                    "type": "string"
+                },
+                "type": {
+                    "const": "array",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "items",
+                "type"
+            ],
+            "type": "object"
+        },
+        "UntitledSingleSelectEnumSchema": {
+            "description": "Schema for single-selection enumeration without display titles for options.",
+            "properties": {
+                "default": {
+                    "description": "Optional default value.",
+                    "type": "string"
+                },
+                "description": {
+                    "description": "Optional description for the enum field.",
+                    "type": "string"
+                },
+                "enum": {
+                    "description": "Array of enum values to choose from.",
+                    "items": {
+                        "type": "string"
+                    },
+                    "type": "array"
+                },
+                "title": {
+                    "description": "Optional title for the enum field.",
+                    "type": "string"
+                },
+                "type": {
+                    "const": "string",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "enum",
+                "type"
+            ],
+            "type": "object"
+        }
+    }
+}
+

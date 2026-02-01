@@ -70,10 +70,9 @@ use futures::future::BoxFuture;
 use futures::prelude::*;
 use futures::stream::FuturesOrdered;
 use mcp_types::CallToolResult;
-use mcp_types::ListResourceTemplatesRequestParams;
 use mcp_types::ListResourceTemplatesResult;
-use mcp_types::ListResourcesRequestParams;
 use mcp_types::ListResourcesResult;
+use mcp_types::PaginatedRequestParams;
 use mcp_types::ReadResourceRequestParams;
 use mcp_types::ReadResourceResult;
 use mcp_types::RequestId;
@@ -2196,7 +2195,7 @@ impl Session {
     pub async fn list_resources(
         &self,
         server: &str,
-        params: Option<ListResourcesRequestParams>,
+        params: Option<PaginatedRequestParams>,
     ) -> anyhow::Result<ListResourcesResult> {
         self.services
             .mcp_connection_manager
@@ -2209,7 +2208,7 @@ impl Session {
     pub async fn list_resource_templates(
         &self,
         server: &str,
-        params: Option<ListResourceTemplatesRequestParams>,
+        params: Option<PaginatedRequestParams>,
     ) -> anyhow::Result<ListResourceTemplatesResult> {
         self.services
             .mcp_connection_manager
@@ -5108,6 +5107,7 @@ mod tests {
     #[test]
     fn prefers_structured_content_when_present() {
         let ctr = CallToolResult {
+            _meta: None,
             // Content present but should be ignored because structured_content is set.
             content: vec![text_block("ignored")],
             is_error: None,
@@ -5154,6 +5154,7 @@ mod tests {
     #[test]
     fn falls_back_to_content_when_structured_is_null() {
         let ctr = CallToolResult {
+            _meta: None,
             content: vec![text_block("hello"), text_block("world")],
             is_error: None,
             structured_content: Some(serde_json::Value::Null),
@@ -5173,6 +5174,7 @@ mod tests {
     #[test]
     fn success_flag_reflects_is_error_true() {
         let ctr = CallToolResult {
+            _meta: None,
             content: vec![text_block("unused")],
             is_error: Some(true),
             structured_content: Some(json!({ "message": "bad" })),
@@ -5191,6 +5193,7 @@ mod tests {
     #[test]
     fn success_flag_true_with_no_error_and_content_used() {
         let ctr = CallToolResult {
+            _meta: None,
             content: vec![text_block("alpha")],
             is_error: Some(false),
             structured_content: None,
@@ -5246,6 +5249,7 @@ mod tests {
 
     fn text_block(s: &str) -> ContentBlock {
         ContentBlock::TextContent(TextContent {
+            _meta: None,
             annotations: None,
             text: s.to_string(),
             r#type: "text".to_string(),

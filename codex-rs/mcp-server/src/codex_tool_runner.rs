@@ -43,6 +43,7 @@ pub(crate) fn create_call_tool_result_with_thread_id(
 ) -> CallToolResult {
     let content_text = text;
     let content = vec![ContentBlock::TextContent(TextContent {
+        _meta: None,
         r#type: "text".to_string(),
         text: content_text.clone(),
         annotations: None,
@@ -52,6 +53,7 @@ pub(crate) fn create_call_tool_result_with_thread_id(
         "content": content_text,
     });
     CallToolResult {
+        _meta: None,
         content,
         is_error,
         structured_content: Some(structured_content),
@@ -78,7 +80,9 @@ pub async fn run_codex_tool_session(
         Ok(res) => res,
         Err(e) => {
             let result = CallToolResult {
+                _meta: None,
                 content: vec![ContentBlock::TextContent(TextContent {
+                    _meta: None,
                     r#type: "text".to_string(),
                     text: format!("Failed to start Codex session: {e}"),
                     annotations: None,

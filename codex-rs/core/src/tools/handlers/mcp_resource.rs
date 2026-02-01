@@ -6,10 +6,9 @@ use std::time::Instant;
 use async_trait::async_trait;
 use mcp_types::CallToolResult;
 use mcp_types::ContentBlock;
-use mcp_types::ListResourceTemplatesRequestParams;
 use mcp_types::ListResourceTemplatesResult;
-use mcp_types::ListResourcesRequestParams;
 use mcp_types::ListResourcesResult;
+use mcp_types::PaginatedRequestParams;
 use mcp_types::ReadResourceRequestParams;
 use mcp_types::ReadResourceResult;
 use mcp_types::Resource;
@@ -264,7 +263,8 @@ async fn handle_list_resources(
 
     let payload_result: Result<ListResourcesPayload, FunctionCallError> = async {
         if let Some(server_name) = server.clone() {
-            let params = cursor.clone().map(|value| ListResourcesRequestParams {
+            let params = cursor.clone().map(|value| PaginatedRequestParams {
+                _meta: None,
                 cursor: Some(value),
             });
             let result = session
@@ -371,11 +371,10 @@ async fn handle_list_resource_templates(
 
     let payload_result: Result<ListResourceTemplatesPayload, FunctionCallError> = async {
         if let Some(server_name) = server.clone() {
-            let params = cursor
-                .clone()
-                .map(|value| ListResourceTemplatesRequestParams {
-                    cursor: Some(value),
-                });
+            let params = cursor.clone().map(|value| PaginatedRequestParams {
+                _meta: None,
+                cursor: Some(value),
+            });
             let result = session
                 .list_resource_templates(&server_name, params)
                 .await
@@ -482,7 +481,13 @@ async fn handle_read_resource(
 
     let payload_result: Result<ReadResourcePayload, FunctionCallError> = async {
         let result = session
-            .read_resource(&server, ReadResourceRequestParams { uri: uri.clone() })
+            .read_resource(
+                &server,
+                ReadResourceRequestParams {
+                    _meta: None,
+                    uri: uri.clone(),
+                },
+            )
             .await
             .map_err(|err| {
                 FunctionCallError::RespondToModel(format!("resources/read failed: {err:#}"))
@@ -551,7 +556,9 @@ async fn handle_read_resource(
 
 fn call_tool_result_from_content(content: &str, success: Option<bool>) -> CallToolResult {
     CallToolResult {
+        _meta: None,
         content: vec![ContentBlock::TextContent(TextContent {
+            _meta: None,
             annotations: None,
             text: content.to_string(),
             r#type: "text".to_string(),
@@ -685,8 +692,10 @@ mod tests {
 
     fn resource(uri: &str, name: &str) -> Resource {
         Resource {
+            _meta: None,
             annotations: None,
             description: None,
+            icons: None,
             mime_type: None,
             name: name.to_string(),
             size: None,
@@ -697,8 +706,10 @@ mod tests {
 
     fn template(uri_template: &str, name: &str) -> ResourceTemplate {
         ResourceTemplate {
+            _meta: None,
             annotations: None,
             description: None,
+            icons: None,
             mime_type: None,
             name: name.to_string(),
             title: None,
@@ -719,6 +730,7 @@ mod tests {
     #[test]
     fn list_resources_payload_from_single_server_copies_next_cursor() {
         let result = ListResourcesResult {
+            _meta: None,
             next_cursor: Some("cursor-1".to_string()),
             resources: vec![resource("memo://id", "memo")],
         };

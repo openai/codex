@@ -4,13 +4,13 @@ use std::sync::atomic::Ordering;
 
 use codex_core::protocol::Event;
 use codex_protocol::ThreadId;
+use mcp_types::Error;
 use mcp_types::JSONRPC_VERSION;
-use mcp_types::JSONRPCError;
-use mcp_types::JSONRPCErrorError;
+use mcp_types::JSONRPCErrorResponse;
 use mcp_types::JSONRPCMessage;
 use mcp_types::JSONRPCNotification;
 use mcp_types::JSONRPCRequest;
-use mcp_types::JSONRPCResponse;
+use mcp_types::JSONRPCResultResponse;
 use mcp_types::RequestId;
 use mcp_types::Result;
 use serde::Serialize;
@@ -86,7 +86,7 @@ impl OutgoingMessageSender {
             Err(err) => {
                 self.send_error(
                     id,
-                    JSONRPCErrorError {
+                    Error {
                         code: INTERNAL_ERROR_CODE,
                         message: format!("failed to serialize response: {err}"),
                         data: None,
@@ -130,7 +130,7 @@ impl OutgoingMessageSender {
         let _ = self.sender.send(outgoing_message);
     }
 
-    pub(crate) async fn send_error(&self, id: RequestId, error: JSONRPCErrorError) {
+    pub(crate) async fn send_error(&self, id: RequestId, error: Error) {
         let outgoing_message = OutgoingMessage::Error(OutgoingError { id, error });
         let _ = self.sender.send(outgoing_message);
     }
@@ -164,17 +164,19 @@ impl From<OutgoingMessage> for JSONRPCMessage {
                 })
             }
             Response(OutgoingResponse { id, result }) => {
-                JSONRPCMessage::Response(JSONRPCResponse {
+                JSONRPCMessage::ResultResponse(JSONRPCResultResponse {
                     jsonrpc: JSONRPC_VERSION.into(),
                     id,
                     result,
                 })
             }
-            Error(OutgoingError { id, error }) => JSONRPCMessage::Error(JSONRPCError {
-                jsonrpc: JSONRPC_VERSION.into(),
-                id,
-                error,
-            }),
+            Error(OutgoingError { id, error }) => {
+                JSONRPCMessage::ErrorResponse(JSONRPCErrorResponse {
+                    jsonrpc: JSONRPC_VERSION.into(),
+                    id: Some(id),
+                    error,
+                })
+            }
         }
     }
 }
@@ -225,7 +227,7 @@ pub(crate) struct OutgoingResponse {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct OutgoingError {
-    pub error: JSONRPCErrorError,
+    pub error: Error,
     pub id: RequestId,
 }
 

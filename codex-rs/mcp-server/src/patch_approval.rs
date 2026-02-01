@@ -8,8 +8,8 @@ use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
 use codex_protocol::ThreadId;
 use mcp_types::ElicitRequest;
-use mcp_types::ElicitRequestParamsRequestedSchema;
-use mcp_types::JSONRPCErrorError;
+use mcp_types::ElicitRequestFormParamsRequestedSchema;
+use mcp_types::Error;
 use mcp_types::ModelContextProtocolRequest;
 use mcp_types::RequestId;
 use serde::Deserialize;
@@ -24,7 +24,7 @@ use crate::outgoing_message::OutgoingMessageSender;
 pub struct PatchApprovalElicitRequestParams {
     pub message: String,
     #[serde(rename = "requestedSchema")]
-    pub requested_schema: ElicitRequestParamsRequestedSchema,
+    pub requested_schema: ElicitRequestFormParamsRequestedSchema,
     #[serde(rename = "threadId")]
     pub thread_id: ThreadId,
     pub codex_elicitation: String,
@@ -64,7 +64,8 @@ pub(crate) async fn handle_patch_approval_request(
 
     let params = PatchApprovalElicitRequestParams {
         message: message_lines.join("\n"),
-        requested_schema: ElicitRequestParamsRequestedSchema {
+        requested_schema: ElicitRequestFormParamsRequestedSchema {
+            schema: None,
             r#type: "object".to_string(),
             properties: json!({}),
             required: None,
@@ -87,7 +88,7 @@ pub(crate) async fn handle_patch_approval_request(
             outgoing
                 .send_error(
                     request_id.clone(),
-                    JSONRPCErrorError {
+                    Error {
                         code: INVALID_PARAMS_ERROR_CODE,
                         message,
                         data: None,

@@ -13,10 +13,10 @@ use codex_mcp_server::ExecApprovalResponse;
 use codex_mcp_server::PatchApprovalElicitRequestParams;
 use codex_mcp_server::PatchApprovalResponse;
 use mcp_types::ElicitRequest;
-use mcp_types::ElicitRequestParamsRequestedSchema;
+use mcp_types::ElicitRequestFormParamsRequestedSchema;
 use mcp_types::JSONRPC_VERSION;
 use mcp_types::JSONRPCRequest;
-use mcp_types::JSONRPCResponse;
+use mcp_types::JSONRPCResultResponse;
 use mcp_types::ModelContextProtocolRequest;
 use mcp_types::RequestId;
 use pretty_assertions::assert_eq;
@@ -150,7 +150,7 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
     )
     .await??;
     assert_eq!(
-        JSONRPCResponse {
+        JSONRPCResultResponse {
             jsonrpc: JSONRPC_VERSION.into(),
             id: RequestId::Integer(codex_request_id),
             result: json!({
@@ -194,7 +194,8 @@ fn create_expected_elicitation_request(
         method: ElicitRequest::METHOD.to_string(),
         params: Some(serde_json::to_value(&ExecApprovalElicitRequestParams {
             message: expected_message,
-            requested_schema: ElicitRequestParamsRequestedSchema {
+            requested_schema: ElicitRequestFormParamsRequestedSchema {
+                schema: None,
                 r#type: "object".to_string(),
                 properties: json!({}),
                 required: None,
@@ -312,7 +313,7 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
     )
     .await??;
     assert_eq!(
-        JSONRPCResponse {
+        JSONRPCResultResponse {
             jsonrpc: JSONRPC_VERSION.into(),
             id: RequestId::Integer(codex_request_id),
             result: json!({
@@ -451,7 +452,8 @@ fn create_expected_patch_approval_elicitation_request(
         method: ElicitRequest::METHOD.to_string(),
         params: Some(serde_json::to_value(&PatchApprovalElicitRequestParams {
             message: message_lines.join("\n"),
-            requested_schema: ElicitRequestParamsRequestedSchema {
+            requested_schema: ElicitRequestFormParamsRequestedSchema {
+                schema: None,
                 r#type: "object".to_string(),
                 properties: json!({}),
                 required: None,

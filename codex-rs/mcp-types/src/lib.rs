@@ -13,7 +13,7 @@ use std::convert::TryFrom;
 use schemars::JsonSchema;
 use ts_rs::TS;
 
-pub const MCP_SCHEMA_VERSION: &str = "2025-06-18";
+pub const MCP_SCHEMA_VERSION: &str = "2025-11-25";
 pub const JSONRPC_VERSION: &str = "2.0";
 
 /// Paired request/response types for the Model Context Protocol (MCP).
@@ -56,6 +56,9 @@ pub struct Annotations {
 pub struct AudioContent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub annotations: Option<Annotations>,
     pub data: String,
     #[serde(rename = "mimeType")]
@@ -74,6 +77,9 @@ pub struct BaseMetadata {
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct BlobResourceContents {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     pub blob: String,
     #[serde(rename = "mimeType", default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -104,17 +110,27 @@ impl ModelContextProtocolRequest for CallToolRequest {
     type Result = CallToolResult;
 }
 
+/// Parameters for a `tools/call` request.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct CallToolRequestParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub arguments: Option<serde_json::Value>,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub task: Option<TaskMetadata>,
 }
 
 /// The server's response to a tool call.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct CallToolResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     pub content: Vec<ContentBlock>,
     #[serde(rename = "isError", default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -137,6 +153,59 @@ impl From<CallToolResult> for serde_json::Value {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub enum CancelTaskRequest {}
+
+impl ModelContextProtocolRequest for CancelTaskRequest {
+    const METHOD: &'static str = "tasks/cancel";
+    type Params = CancelTaskRequestParams;
+    type Result = CancelTaskResult;
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct CancelTaskRequestParams {
+    #[serde(rename = "taskId")]
+    pub task_id: String,
+}
+
+/// The response to a tasks/cancel request.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct CancelTaskResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
+    #[serde(rename = "createdAt")]
+    pub created_at: String,
+    #[serde(rename = "lastUpdatedAt")]
+    pub last_updated_at: String,
+    #[serde(
+        rename = "pollInterval",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional)]
+    pub poll_interval: Option<i64>,
+    pub status: TaskStatus,
+    #[serde(
+        rename = "statusMessage",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional)]
+    pub status_message: Option<String>,
+    #[serde(rename = "taskId")]
+    pub task_id: String,
+    pub ttl: i64,
+}
+
+impl From<CancelTaskResult> for serde_json::Value {
+    fn from(value: CancelTaskResult) -> Self {
+        // Leave this as it should never fail
+        #[expect(clippy::unwrap_used)]
+        serde_json::to_value(value).unwrap()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub enum CancelledNotification {}
 
 impl ModelContextProtocolNotification for CancelledNotification {
@@ -144,13 +213,18 @@ impl ModelContextProtocolNotification for CancelledNotification {
     type Params = CancelledNotificationParams;
 }
 
+/// Parameters for a `notifications/cancelled` notification.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct CancelledNotificationParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub reason: Option<String>,
-    #[serde(rename = "requestId")]
-    pub request_id: RequestId,
+    #[serde(rename = "requestId", default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub request_id: Option<RequestId>,
 }
 
 /// Capabilities a client may support. Known capabilities are defined here, in this schema, but this is not a closed set: any client can define its own, additional capabilities.
@@ -158,7 +232,7 @@ pub struct CancelledNotificationParams {
 pub struct ClientCapabilities {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub elicitation: Option<serde_json::Value>,
+    pub elicitation: Option<ClientCapabilitiesElicitation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub experimental: Option<serde_json::Value>,
@@ -167,7 +241,66 @@ pub struct ClientCapabilities {
     pub roots: Option<ClientCapabilitiesRoots>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub sampling: Option<serde_json::Value>,
+    pub sampling: Option<ClientCapabilitiesSampling>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tasks: Option<ClientCapabilitiesTasks>,
+}
+
+/// Present if the client supports task-augmented requests.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ClientCapabilitiesTasks {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cancel: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub list: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub requests: Option<ClientCapabilitiesTasksRequests>,
+}
+
+/// Specifies which request types can be augmented with tasks.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ClientCapabilitiesTasksRequests {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub elicitation: Option<ClientCapabilitiesTasksRequestsElicitation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub sampling: Option<ClientCapabilitiesTasksRequestsSampling>,
+}
+
+/// Task support for sampling-related requests.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ClientCapabilitiesTasksRequestsSampling {
+    #[serde(
+        rename = "createMessage",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional)]
+    pub create_message: Option<serde_json::Value>,
+}
+
+/// Task support for elicitation-related requests.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ClientCapabilitiesTasksRequestsElicitation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub create: Option<serde_json::Value>,
+}
+
+/// Present if the client supports sampling from an LLM.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ClientCapabilitiesSampling {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub context: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tools: Option<serde_json::Value>,
 }
 
 /// Present if the client supports listing roots.
@@ -182,12 +315,24 @@ pub struct ClientCapabilitiesRoots {
     pub list_changed: Option<bool>,
 }
 
+/// Present if the client supports elicitation from the server.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ClientCapabilitiesElicitation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub form: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub url: Option<serde_json::Value>,
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 #[serde(untagged)]
 pub enum ClientNotification {
     CancelledNotification(CancelledNotification),
     InitializedNotification(InitializedNotification),
     ProgressNotification(ProgressNotification),
+    TaskStatusNotification(TaskStatusNotification),
     RootsListChangedNotification(RootsListChangedNotification),
 }
 
@@ -218,6 +363,14 @@ pub enum ClientRequest {
     ListToolsRequest(<ListToolsRequest as ModelContextProtocolRequest>::Params),
     #[serde(rename = "tools/call")]
     CallToolRequest(<CallToolRequest as ModelContextProtocolRequest>::Params),
+    #[serde(rename = "tasks/get")]
+    GetTaskRequest(<GetTaskRequest as ModelContextProtocolRequest>::Params),
+    #[serde(rename = "tasks/result")]
+    GetTaskPayloadRequest(<GetTaskPayloadRequest as ModelContextProtocolRequest>::Params),
+    #[serde(rename = "tasks/cancel")]
+    CancelTaskRequest(<CancelTaskRequest as ModelContextProtocolRequest>::Params),
+    #[serde(rename = "tasks/list")]
+    ListTasksRequest(<ListTasksRequest as ModelContextProtocolRequest>::Params),
     #[serde(rename = "logging/setLevel")]
     SetLevelRequest(<SetLevelRequest as ModelContextProtocolRequest>::Params),
     #[serde(rename = "completion/complete")]
@@ -228,6 +381,10 @@ pub enum ClientRequest {
 #[serde(untagged)]
 pub enum ClientResult {
     Result(Result),
+    GetTaskResult(GetTaskResult),
+    GetTaskPayloadResult(GetTaskPayloadResult),
+    CancelTaskResult(CancelTaskResult),
+    ListTasksResult(ListTasksResult),
     CreateMessageResult(CreateMessageResult),
     ListRootsResult(ListRootsResult),
     ElicitResult(ElicitResult),
@@ -242,8 +399,12 @@ impl ModelContextProtocolRequest for CompleteRequest {
     type Result = CompleteResult;
 }
 
+/// Parameters for a `completion/complete` request.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct CompleteRequestParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     pub argument: CompleteRequestParamsArgument,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -276,6 +437,9 @@ pub enum CompleteRequestParamsRef {
 /// The server's response to a completion/complete request
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct CompleteResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     pub completion: CompleteResultCompletion,
 }
 
@@ -317,8 +481,12 @@ impl ModelContextProtocolRequest for CreateMessageRequest {
     type Result = CreateMessageResult;
 }
 
+/// Parameters for a `sampling/createMessage` request.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct CreateMessageRequestParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     #[serde(
         rename = "includeContext",
         default,
@@ -355,12 +523,30 @@ pub struct CreateMessageRequestParams {
     pub system_prompt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
+    pub task: Option<TaskMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub temperature: Option<f64>,
+    #[serde(
+        rename = "toolChoice",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional)]
+    pub tool_choice: Option<ToolChoice>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tools: Option<Vec<Tool>>,
 }
 
-/// The client's response to a sampling/create_message request from the server. The client should inform the user before returning the sampled message, to allow them to inspect the response (human in the loop) and decide whether to allow the server to see it.
+/// The client's response to a sampling/createMessage request from the server.
+/// The client should inform the user before returning the sampled message, to allow them
+/// to inspect the response (human in the loop) and decide whether to allow the server to see it.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct CreateMessageResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     pub content: CreateMessageResultContent,
     pub model: String,
     pub role: Role,
@@ -379,10 +565,30 @@ pub enum CreateMessageResultContent {
     TextContent(TextContent),
     ImageContent(ImageContent),
     AudioContent(AudioContent),
+    ToolUseContent(ToolUseContent),
+    ToolResultContent(ToolResultContent),
+    Variant5(Vec<SamplingMessageContentBlock>),
 }
 
 impl From<CreateMessageResult> for serde_json::Value {
     fn from(value: CreateMessageResult) -> Self {
+        // Leave this as it should never fail
+        #[expect(clippy::unwrap_used)]
+        serde_json::to_value(value).unwrap()
+    }
+}
+
+/// A response to a task-augmented request.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct CreateTaskResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
+    pub task: Task,
+}
+
+impl From<CreateTaskResult> for serde_json::Value {
+    fn from(value: CreateTaskResult) -> Self {
         // Leave this as it should never fail
         #[expect(clippy::unwrap_used)]
         serde_json::to_value(value).unwrap()
@@ -401,17 +607,30 @@ impl ModelContextProtocolRequest for ElicitRequest {
     type Result = ElicitResult;
 }
 
+/// The parameters for a request to elicit non-sensitive information from the user via a form in the client.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
-pub struct ElicitRequestParams {
+pub struct ElicitRequestFormParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub mode: Option<String>,
     #[serde(rename = "requestedSchema")]
-    pub requested_schema: ElicitRequestParamsRequestedSchema,
+    pub requested_schema: ElicitRequestFormParamsRequestedSchema,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub task: Option<TaskMetadata>,
 }
 
 /// A restricted subset of JSON Schema.
 /// Only top-level properties are allowed, without nesting.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
-pub struct ElicitRequestParamsRequestedSchema {
+pub struct ElicitRequestFormParamsRequestedSchema {
+    #[serde(rename = "$schema", default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub schema: Option<String>,
     pub properties: serde_json::Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -419,9 +638,36 @@ pub struct ElicitRequestParamsRequestedSchema {
     pub r#type: String, // &'static str = "object"
 }
 
+/// The parameters for a request to elicit additional information from the user via the client.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+#[serde(untagged)]
+pub enum ElicitRequestParams {
+    ElicitRequestURLParams(ElicitRequestURLParams),
+    ElicitRequestFormParams(ElicitRequestFormParams),
+}
+
+/// The parameters for a request to elicit information from the user via a URL in the client.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ElicitRequestURLParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
+    #[serde(rename = "elicitationId")]
+    pub elicitation_id: String,
+    pub message: String,
+    pub mode: String, // &'static str = "url"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub task: Option<TaskMetadata>,
+    pub url: String,
+}
+
 /// The client's response to an elicitation request.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ElicitResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     pub action: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -436,12 +682,29 @@ impl From<ElicitResult> for serde_json::Value {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub enum ElicitationCompleteNotification {}
+
+impl ModelContextProtocolNotification for ElicitationCompleteNotification {
+    const METHOD: &'static str = "notifications/elicitation/complete";
+    type Params = ElicitationCompleteNotificationParams;
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ElicitationCompleteNotificationParams {
+    #[serde(rename = "elicitationId")]
+    pub elicitation_id: String,
+}
+
 /// The contents of a resource, embedded into a prompt or tool call result.
 ///
 /// It is up to the client how best to render embedded resources for the benefit
 /// of the LLM and/or the user.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct EmbeddedResource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub annotations: Option<Annotations>,
@@ -459,18 +722,22 @@ pub enum EmbeddedResourceResource {
 pub type EmptyResult = Result;
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
-pub struct EnumSchema {
+#[serde(untagged)]
+pub enum EnumSchema {
+    UntitledSingleSelectEnumSchema(UntitledSingleSelectEnumSchema),
+    TitledSingleSelectEnumSchema(TitledSingleSelectEnumSchema),
+    UntitledMultiSelectEnumSchema(UntitledMultiSelectEnumSchema),
+    TitledMultiSelectEnumSchema(TitledMultiSelectEnumSchema),
+    LegacyTitledEnumSchema(LegacyTitledEnumSchema),
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct Error {
+    pub code: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub description: Option<String>,
-    pub r#enum: Vec<String>,
-    #[serde(rename = "enumNames", default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub enum_names: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub title: Option<String>,
-    pub r#type: String, // &'static str = "string"
+    pub data: Option<serde_json::Value>,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
@@ -482,8 +749,12 @@ impl ModelContextProtocolRequest for GetPromptRequest {
     type Result = GetPromptResult;
 }
 
+/// Parameters for a `prompts/get` request.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct GetPromptRequestParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub arguments: Option<serde_json::Value>,
@@ -493,6 +764,9 @@ pub struct GetPromptRequestParams {
 /// The server's response to a prompts/get request from the client.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct GetPromptResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub description: Option<String>,
@@ -507,9 +781,121 @@ impl From<GetPromptResult> for serde_json::Value {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub enum GetTaskPayloadRequest {}
+
+impl ModelContextProtocolRequest for GetTaskPayloadRequest {
+    const METHOD: &'static str = "tasks/result";
+    type Params = GetTaskPayloadRequestParams;
+    type Result = GetTaskPayloadResult;
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct GetTaskPayloadRequestParams {
+    #[serde(rename = "taskId")]
+    pub task_id: String,
+}
+
+/// The response to a tasks/result request.
+/// The structure matches the result type of the original request.
+/// For example, a tools/call task would return the CallToolResult structure.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct GetTaskPayloadResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
+}
+
+impl From<GetTaskPayloadResult> for serde_json::Value {
+    fn from(value: GetTaskPayloadResult) -> Self {
+        // Leave this as it should never fail
+        #[expect(clippy::unwrap_used)]
+        serde_json::to_value(value).unwrap()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub enum GetTaskRequest {}
+
+impl ModelContextProtocolRequest for GetTaskRequest {
+    const METHOD: &'static str = "tasks/get";
+    type Params = GetTaskRequestParams;
+    type Result = GetTaskResult;
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct GetTaskRequestParams {
+    #[serde(rename = "taskId")]
+    pub task_id: String,
+}
+
+/// The response to a tasks/get request.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct GetTaskResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
+    #[serde(rename = "createdAt")]
+    pub created_at: String,
+    #[serde(rename = "lastUpdatedAt")]
+    pub last_updated_at: String,
+    #[serde(
+        rename = "pollInterval",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional)]
+    pub poll_interval: Option<i64>,
+    pub status: TaskStatus,
+    #[serde(
+        rename = "statusMessage",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional)]
+    pub status_message: Option<String>,
+    #[serde(rename = "taskId")]
+    pub task_id: String,
+    pub ttl: i64,
+}
+
+impl From<GetTaskResult> for serde_json::Value {
+    fn from(value: GetTaskResult) -> Self {
+        // Leave this as it should never fail
+        #[expect(clippy::unwrap_used)]
+        serde_json::to_value(value).unwrap()
+    }
+}
+
+/// An optionally-sized icon that can be displayed in a user interface.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct Icon {
+    #[serde(rename = "mimeType", default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub mime_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub sizes: Option<Vec<String>>,
+    pub src: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub theme: Option<String>,
+}
+
+/// Base interface to add `icons` property.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct Icons {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub icons: Option<Vec<Icon>>,
+}
+
 /// An image provided to or from an LLM.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ImageContent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub annotations: Option<Annotations>,
@@ -519,14 +905,27 @@ pub struct ImageContent {
     pub r#type: String, // &'static str = "image"
 }
 
-/// Describes the name and version of an MCP implementation, with an optional title for UI representation.
+/// Describes the MCP implementation.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct Implementation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub icons: Option<Vec<Icon>>,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub title: Option<String>,
     pub version: String,
+    #[serde(
+        rename = "websiteUrl",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional)]
+    pub website_url: Option<String>,
     // This is an extra field that the Codex MCP server sends as part of InitializeResult.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -542,8 +941,12 @@ impl ModelContextProtocolRequest for InitializeRequest {
     type Result = InitializeResult;
 }
 
+/// Parameters for an `initialize` request.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct InitializeRequestParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     pub capabilities: ClientCapabilities,
     #[serde(rename = "clientInfo")]
     pub client_info: Implementation,
@@ -554,6 +957,9 @@ pub struct InitializeRequestParams {
 /// After receiving an initialize request from the client, the server sends this response.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct InitializeResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     pub capabilities: ServerCapabilities,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -577,25 +983,18 @@ pub enum InitializedNotification {}
 
 impl ModelContextProtocolNotification for InitializedNotification {
     const METHOD: &'static str = "notifications/initialized";
-    type Params = Option<serde_json::Value>;
+    type Params = Option<NotificationParams>;
 }
 
 /// A response to a request that indicates an error occurred.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
-pub struct JSONRPCError {
-    pub error: JSONRPCErrorError,
-    pub id: RequestId,
-    #[serde(rename = "jsonrpc", default = "default_jsonrpc")]
-    pub jsonrpc: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
-pub struct JSONRPCErrorError {
-    pub code: i64,
+pub struct JSONRPCErrorResponse {
+    pub error: Error,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub data: Option<serde_json::Value>,
-    pub message: String,
+    pub id: Option<RequestId>,
+    #[serde(rename = "jsonrpc", default = "default_jsonrpc")]
+    pub jsonrpc: String,
 }
 
 /// Refers to any valid JSON-RPC object that can be decoded off the wire, or encoded to be sent.
@@ -604,8 +1003,8 @@ pub struct JSONRPCErrorError {
 pub enum JSONRPCMessage {
     Request(JSONRPCRequest),
     Notification(JSONRPCNotification),
-    Response(JSONRPCResponse),
-    Error(JSONRPCError),
+    ResultResponse(JSONRPCResultResponse),
+    ErrorResponse(JSONRPCErrorResponse),
 }
 
 /// A notification which does not expect a response.
@@ -631,13 +1030,41 @@ pub struct JSONRPCRequest {
     pub params: Option<serde_json::Value>,
 }
 
+/// A response to a request, containing either the result or error.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+#[serde(untagged)]
+pub enum JSONRPCResponse {
+    JSONRPCResultResponse(JSONRPCResultResponse),
+    JSONRPCErrorResponse(JSONRPCErrorResponse),
+}
+
 /// A successful (non-error) response to a request.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
-pub struct JSONRPCResponse {
+pub struct JSONRPCResultResponse {
     pub id: RequestId,
     #[serde(rename = "jsonrpc", default = "default_jsonrpc")]
     pub jsonrpc: String,
     pub result: Result,
+}
+
+/// Use TitledSingleSelectEnumSchema instead.
+/// This interface will be removed in a future version.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct LegacyTitledEnumSchema {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub default: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description: Option<String>,
+    pub r#enum: Vec<String>,
+    #[serde(rename = "enumNames", default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub enum_names: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    pub r#type: String, // &'static str = "string"
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
@@ -645,20 +1072,16 @@ pub enum ListPromptsRequest {}
 
 impl ModelContextProtocolRequest for ListPromptsRequest {
     const METHOD: &'static str = "prompts/list";
-    type Params = Option<ListPromptsRequestParams>;
+    type Params = Option<PaginatedRequestParams>;
     type Result = ListPromptsResult;
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
-pub struct ListPromptsRequestParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub cursor: Option<String>,
 }
 
 /// The server's response to a prompts/list request from the client.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ListPromptsResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     #[serde(
         rename = "nextCursor",
         default,
@@ -682,20 +1105,16 @@ pub enum ListResourceTemplatesRequest {}
 
 impl ModelContextProtocolRequest for ListResourceTemplatesRequest {
     const METHOD: &'static str = "resources/templates/list";
-    type Params = Option<ListResourceTemplatesRequestParams>;
+    type Params = Option<PaginatedRequestParams>;
     type Result = ListResourceTemplatesResult;
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
-pub struct ListResourceTemplatesRequestParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub cursor: Option<String>,
 }
 
 /// The server's response to a resources/templates/list request from the client.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ListResourceTemplatesResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     #[serde(
         rename = "nextCursor",
         default,
@@ -720,20 +1139,16 @@ pub enum ListResourcesRequest {}
 
 impl ModelContextProtocolRequest for ListResourcesRequest {
     const METHOD: &'static str = "resources/list";
-    type Params = Option<ListResourcesRequestParams>;
+    type Params = Option<PaginatedRequestParams>;
     type Result = ListResourcesResult;
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
-pub struct ListResourcesRequestParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub cursor: Option<String>,
 }
 
 /// The server's response to a resources/list request from the client.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ListResourcesResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     #[serde(
         rename = "nextCursor",
         default,
@@ -757,7 +1172,7 @@ pub enum ListRootsRequest {}
 
 impl ModelContextProtocolRequest for ListRootsRequest {
     const METHOD: &'static str = "roots/list";
-    type Params = Option<serde_json::Value>;
+    type Params = Option<RequestParams>;
     type Result = ListRootsResult;
 }
 
@@ -766,6 +1181,9 @@ impl ModelContextProtocolRequest for ListRootsRequest {
 /// or file that the server can operate on.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ListRootsResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     pub roots: Vec<Root>,
 }
 
@@ -778,24 +1196,53 @@ impl From<ListRootsResult> for serde_json::Value {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub enum ListTasksRequest {}
+
+impl ModelContextProtocolRequest for ListTasksRequest {
+    const METHOD: &'static str = "tasks/list";
+    type Params = Option<PaginatedRequestParams>;
+    type Result = ListTasksResult;
+}
+
+/// The response to a tasks/list request.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ListTasksResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
+    #[serde(
+        rename = "nextCursor",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional)]
+    pub next_cursor: Option<String>,
+    pub tasks: Vec<Task>,
+}
+
+impl From<ListTasksResult> for serde_json::Value {
+    fn from(value: ListTasksResult) -> Self {
+        // Leave this as it should never fail
+        #[expect(clippy::unwrap_used)]
+        serde_json::to_value(value).unwrap()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub enum ListToolsRequest {}
 
 impl ModelContextProtocolRequest for ListToolsRequest {
     const METHOD: &'static str = "tools/list";
-    type Params = Option<ListToolsRequestParams>;
+    type Params = Option<PaginatedRequestParams>;
     type Result = ListToolsResult;
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
-pub struct ListToolsRequestParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub cursor: Option<String>,
 }
 
 /// The server's response to a tools/list request from the client.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ListToolsResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     #[serde(
         rename = "nextCursor",
         default,
@@ -846,8 +1293,12 @@ impl ModelContextProtocolNotification for LoggingMessageNotification {
     type Params = LoggingMessageNotificationParams;
 }
 
+/// Parameters for a `notifications/message` notification.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct LoggingMessageNotificationParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     pub data: serde_json::Value,
     pub level: LoggingLevel,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -906,6 +1357,13 @@ pub struct ModelPreferences {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+#[serde(untagged)]
+pub enum MultiSelectEnumSchema {
+    UntitledMultiSelectEnumSchema(UntitledMultiSelectEnumSchema),
+    TitledMultiSelectEnumSchema(TitledMultiSelectEnumSchema),
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct Notification {
     pub method: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -914,7 +1372,17 @@ pub struct Notification {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct NotificationParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct NumberSchema {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub default: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub description: Option<String>,
@@ -932,14 +1400,21 @@ pub struct NumberSchema {
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct PaginatedRequest {
+    pub id: RequestId,
+    #[serde(rename = "jsonrpc", default = "default_jsonrpc")]
+    pub jsonrpc: String,
     pub method: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub params: Option<PaginatedRequestParams>,
 }
 
+/// Common parameters for paginated requests.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct PaginatedRequestParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub cursor: Option<String>,
@@ -947,6 +1422,9 @@ pub struct PaginatedRequestParams {
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct PaginatedResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     #[serde(
         rename = "nextCursor",
         default,
@@ -969,7 +1447,7 @@ pub enum PingRequest {}
 
 impl ModelContextProtocolRequest for PingRequest {
     const METHOD: &'static str = "ping";
-    type Params = Option<serde_json::Value>;
+    type Params = Option<RequestParams>;
     type Result = Result;
 }
 
@@ -981,7 +1459,11 @@ pub enum PrimitiveSchemaDefinition {
     StringSchema(StringSchema),
     NumberSchema(NumberSchema),
     BooleanSchema(BooleanSchema),
-    EnumSchema(EnumSchema),
+    UntitledSingleSelectEnumSchema(UntitledSingleSelectEnumSchema),
+    TitledSingleSelectEnumSchema(TitledSingleSelectEnumSchema),
+    UntitledMultiSelectEnumSchema(UntitledMultiSelectEnumSchema),
+    TitledMultiSelectEnumSchema(TitledMultiSelectEnumSchema),
+    LegacyTitledEnumSchema(LegacyTitledEnumSchema),
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
@@ -992,8 +1474,12 @@ impl ModelContextProtocolNotification for ProgressNotification {
     type Params = ProgressNotificationParams;
 }
 
+/// Parameters for a `notifications/progress` notification.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ProgressNotificationParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub message: Option<String>,
@@ -1017,10 +1503,16 @@ pub enum ProgressToken {
 pub struct Prompt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub arguments: Option<Vec<PromptArgument>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub icons: Option<Vec<Icon>>,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -1047,7 +1539,7 @@ pub enum PromptListChangedNotification {}
 
 impl ModelContextProtocolNotification for PromptListChangedNotification {
     const METHOD: &'static str = "notifications/prompts/list_changed";
-    type Params = Option<serde_json::Value>;
+    type Params = Option<NotificationParams>;
 }
 
 /// Describes a message returned as part of a prompt.
@@ -1079,14 +1571,21 @@ impl ModelContextProtocolRequest for ReadResourceRequest {
     type Result = ReadResourceResult;
 }
 
+/// Parameters for a `resources/read` request.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ReadResourceRequestParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     pub uri: String,
 }
 
 /// The server's response to a resources/read request from the client.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ReadResourceResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     pub contents: Vec<ReadResourceResultContents>,
 }
 
@@ -1105,6 +1604,14 @@ impl From<ReadResourceResult> for serde_json::Value {
     }
 }
 
+/// Metadata for associating messages with a task.
+/// Include this in the `_meta` field under the key `io.modelcontextprotocol/related-task`.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct RelatedTaskMetadata {
+    #[serde(rename = "taskId")]
+    pub task_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct Request {
     pub method: String,
@@ -1120,15 +1627,29 @@ pub enum RequestId {
     Integer(i64),
 }
 
+/// Common params for any request.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct RequestParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
+}
+
 /// A known resource that the server is capable of reading.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct Resource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub annotations: Option<Annotations>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub icons: Option<Vec<Icon>>,
     #[serde(rename = "mimeType", default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub mime_type: Option<String>,
@@ -1145,6 +1666,9 @@ pub struct Resource {
 /// The contents of a specific resource or sub-resource.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ResourceContents {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     #[serde(rename = "mimeType", default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub mime_type: Option<String>,
@@ -1158,10 +1682,16 @@ pub struct ResourceContents {
 pub struct ResourceLink {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub annotations: Option<Annotations>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub icons: Option<Vec<Icon>>,
     #[serde(rename = "mimeType", default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub mime_type: Option<String>,
@@ -1181,7 +1711,16 @@ pub enum ResourceListChangedNotification {}
 
 impl ModelContextProtocolNotification for ResourceListChangedNotification {
     const METHOD: &'static str = "notifications/resources/list_changed";
-    type Params = Option<serde_json::Value>;
+    type Params = Option<NotificationParams>;
+}
+
+/// Common parameters when working with resources.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ResourceRequestParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
+    pub uri: String,
 }
 
 /// A template description for resources available on the server.
@@ -1189,10 +1728,16 @@ impl ModelContextProtocolNotification for ResourceListChangedNotification {
 pub struct ResourceTemplate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub annotations: Option<Annotations>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub icons: Option<Vec<Icon>>,
     #[serde(rename = "mimeType", default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub mime_type: Option<String>,
@@ -1219,8 +1764,12 @@ impl ModelContextProtocolNotification for ResourceUpdatedNotification {
     type Params = ResourceUpdatedNotificationParams;
 }
 
+/// Parameters for a `notifications/resources/updated` notification.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ResourceUpdatedNotificationParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     pub uri: String,
 }
 
@@ -1240,6 +1789,9 @@ pub enum Role {
 pub struct Root {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub name: Option<String>,
     pub uri: String,
 }
@@ -1249,12 +1801,15 @@ pub enum RootsListChangedNotification {}
 
 impl ModelContextProtocolNotification for RootsListChangedNotification {
     const METHOD: &'static str = "notifications/roots/list_changed";
-    type Params = Option<serde_json::Value>;
+    type Params = Option<NotificationParams>;
 }
 
 /// Describes a message issued to or received from an LLM API.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct SamplingMessage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     pub content: SamplingMessageContent,
     pub role: Role,
 }
@@ -1265,6 +1820,19 @@ pub enum SamplingMessageContent {
     TextContent(TextContent),
     ImageContent(ImageContent),
     AudioContent(AudioContent),
+    ToolUseContent(ToolUseContent),
+    ToolResultContent(ToolResultContent),
+    Variant5(Vec<SamplingMessageContentBlock>),
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+#[serde(untagged)]
+pub enum SamplingMessageContentBlock {
+    TextContent(TextContent),
+    ImageContent(ImageContent),
+    AudioContent(AudioContent),
+    ToolUseContent(ToolUseContent),
+    ToolResultContent(ToolResultContent),
 }
 
 /// Capabilities that a server may support. Known capabilities are defined here, in this schema, but this is not a closed set: any server can define its own, additional capabilities.
@@ -1287,6 +1855,9 @@ pub struct ServerCapabilities {
     pub resources: Option<ServerCapabilitiesResources>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
+    pub tasks: Option<ServerCapabilitiesTasks>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub tools: Option<ServerCapabilitiesTools>,
 }
 
@@ -1300,6 +1871,36 @@ pub struct ServerCapabilitiesTools {
     )]
     #[ts(optional)]
     pub list_changed: Option<bool>,
+}
+
+/// Present if the server supports task-augmented requests.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ServerCapabilitiesTasks {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cancel: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub list: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub requests: Option<ServerCapabilitiesTasksRequests>,
+}
+
+/// Specifies which request types can be augmented with tasks.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ServerCapabilitiesTasksRequests {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tools: Option<ServerCapabilitiesTasksRequestsTools>,
+}
+
+/// Task support for tool-related requests.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ServerCapabilitiesTasksRequestsTools {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub call: Option<serde_json::Value>,
 }
 
 /// Present if the server offers any resources to read.
@@ -1352,9 +1953,15 @@ pub enum ServerNotification {
     ToolListChangedNotification(
         <ToolListChangedNotification as ModelContextProtocolNotification>::Params,
     ),
+    #[serde(rename = "notifications/tasks/status")]
+    TaskStatusNotification(<TaskStatusNotification as ModelContextProtocolNotification>::Params),
     #[serde(rename = "notifications/message")]
     LoggingMessageNotification(
         <LoggingMessageNotification as ModelContextProtocolNotification>::Params,
+    ),
+    #[serde(rename = "notifications/elicitation/complete")]
+    ElicitationCompleteNotification(
+        <ElicitationCompleteNotification as ModelContextProtocolNotification>::Params,
     ),
 }
 
@@ -1362,6 +1969,10 @@ pub enum ServerNotification {
 #[serde(untagged)]
 pub enum ServerRequest {
     PingRequest(PingRequest),
+    GetTaskRequest(GetTaskRequest),
+    GetTaskPayloadRequest(GetTaskPayloadRequest),
+    CancelTaskRequest(CancelTaskRequest),
+    ListTasksRequest(ListTasksRequest),
     CreateMessageRequest(CreateMessageRequest),
     ListRootsRequest(ListRootsRequest),
     ElicitRequest(ElicitRequest),
@@ -1380,6 +1991,10 @@ pub enum ServerResult {
     GetPromptResult(GetPromptResult),
     ListToolsResult(ListToolsResult),
     CallToolResult(CallToolResult),
+    GetTaskResult(GetTaskResult),
+    GetTaskPayloadResult(GetTaskPayloadResult),
+    CancelTaskResult(CancelTaskResult),
+    ListTasksResult(ListTasksResult),
     CompleteResult(CompleteResult),
 }
 
@@ -1392,13 +2007,27 @@ impl ModelContextProtocolRequest for SetLevelRequest {
     type Result = Result;
 }
 
+/// Parameters for a `logging/setLevel` request.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct SetLevelRequestParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     pub level: LoggingLevel,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+#[serde(untagged)]
+pub enum SingleSelectEnumSchema {
+    UntitledSingleSelectEnumSchema(UntitledSingleSelectEnumSchema),
+    TitledSingleSelectEnumSchema(TitledSingleSelectEnumSchema),
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct StringSchema {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub default: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub description: Option<String>,
@@ -1426,14 +2055,121 @@ impl ModelContextProtocolRequest for SubscribeRequest {
     type Result = Result;
 }
 
+/// Parameters for a `resources/subscribe` request.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct SubscribeRequestParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     pub uri: String,
+}
+
+/// Data associated with a task.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct Task {
+    #[serde(rename = "createdAt")]
+    pub created_at: String,
+    #[serde(rename = "lastUpdatedAt")]
+    pub last_updated_at: String,
+    #[serde(
+        rename = "pollInterval",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional)]
+    pub poll_interval: Option<i64>,
+    pub status: TaskStatus,
+    #[serde(
+        rename = "statusMessage",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional)]
+    pub status_message: Option<String>,
+    #[serde(rename = "taskId")]
+    pub task_id: String,
+    pub ttl: i64,
+}
+
+/// Common params for any task-augmented request.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct TaskAugmentedRequestParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub task: Option<TaskMetadata>,
+}
+
+/// Metadata for augmenting a request with task execution.
+/// Include this in the `task` field of the request parameters.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct TaskMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub ttl: Option<i64>,
+}
+
+/// The status of a task.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub enum TaskStatus {
+    #[serde(rename = "cancelled")]
+    Cancelled,
+    #[serde(rename = "completed")]
+    Completed,
+    #[serde(rename = "failed")]
+    Failed,
+    #[serde(rename = "input_required")]
+    Input_required,
+    #[serde(rename = "working")]
+    Working,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub enum TaskStatusNotification {}
+
+impl ModelContextProtocolNotification for TaskStatusNotification {
+    const METHOD: &'static str = "notifications/tasks/status";
+    type Params = TaskStatusNotificationParams;
+}
+
+/// Parameters for a `notifications/tasks/status` notification.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct TaskStatusNotificationParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
+    #[serde(rename = "createdAt")]
+    pub created_at: String,
+    #[serde(rename = "lastUpdatedAt")]
+    pub last_updated_at: String,
+    #[serde(
+        rename = "pollInterval",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional)]
+    pub poll_interval: Option<i64>,
+    pub status: TaskStatus,
+    #[serde(
+        rename = "statusMessage",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional)]
+    pub status_message: Option<String>,
+    #[serde(rename = "taskId")]
+    pub task_id: String,
+    pub ttl: i64,
 }
 
 /// Text provided to or from an LLM.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TextContent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub annotations: Option<Annotations>,
@@ -1443,6 +2179,9 @@ pub struct TextContent {
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TextResourceContents {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     #[serde(rename = "mimeType", default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub mime_type: Option<String>,
@@ -1450,15 +2189,82 @@ pub struct TextResourceContents {
     pub uri: String,
 }
 
+/// Schema for multiple-selection enumeration with display titles for each option.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct TitledMultiSelectEnumSchema {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub default: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description: Option<String>,
+    pub items: TitledMultiSelectEnumSchemaItems,
+    #[serde(rename = "maxItems", default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub max_items: Option<i64>,
+    #[serde(rename = "minItems", default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub min_items: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    pub r#type: String, // &'static str = "array"
+}
+
+/// Schema for array items with enum options and display labels.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct TitledMultiSelectEnumSchemaItems {
+    #[serde(rename = "anyOf")]
+    pub any_of: Vec<TitledMultiSelectEnumSchemaItemsAnyOf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct TitledMultiSelectEnumSchemaItemsAnyOf {
+    pub r#const: String,
+    pub title: String,
+}
+
+/// Schema for single-selection enumeration with display titles for each option.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct TitledSingleSelectEnumSchema {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub default: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description: Option<String>,
+    #[serde(rename = "oneOf")]
+    pub one_of: Vec<TitledSingleSelectEnumSchemaOneOf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    pub r#type: String, // &'static str = "string"
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct TitledSingleSelectEnumSchemaOneOf {
+    pub r#const: String,
+    pub title: String,
+}
+
 /// Definition for a tool the client can call.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct Tool {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub annotations: Option<ToolAnnotations>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub execution: Option<ToolExecution>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub icons: Option<Vec<Icon>>,
     #[serde(rename = "inputSchema")]
     pub input_schema: ToolInputSchema,
     pub name: String,
@@ -1480,8 +2286,14 @@ fn tool_output_schema_type_default_str() -> String {
 
 /// An optional JSON Schema object defining the structure of the tool's output returned in
 /// the structuredContent field of a CallToolResult.
+///
+/// Defaults to JSON Schema 2020-12 when no explicit $schema is provided.
+/// Currently restricted to type: "object" at the root level.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ToolOutputSchema {
+    #[serde(rename = "$schema", default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub schema: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub properties: Option<serde_json::Value>,
@@ -1499,6 +2311,9 @@ fn tool_input_schema_type_default_str() -> String {
 /// A JSON Schema object defining the expected parameters for the tool.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ToolInputSchema {
+    #[serde(rename = "$schema", default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub schema: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub properties: Option<serde_json::Value>,
@@ -1552,12 +2367,77 @@ pub struct ToolAnnotations {
     pub title: Option<String>,
 }
 
+/// Controls tool selection behavior for sampling requests.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ToolChoice {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub mode: Option<String>,
+}
+
+/// Execution-related properties for a tool.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ToolExecution {
+    #[serde(
+        rename = "taskSupport",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional)]
+    pub task_support: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub enum ToolListChangedNotification {}
 
 impl ModelContextProtocolNotification for ToolListChangedNotification {
     const METHOD: &'static str = "notifications/tools/list_changed";
-    type Params = Option<serde_json::Value>;
+    type Params = Option<NotificationParams>;
+}
+
+/// The result of a tool use, provided by the user back to the assistant.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ToolResultContent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
+    pub content: Vec<ContentBlock>,
+    #[serde(rename = "isError", default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub is_error: Option<bool>,
+    #[serde(
+        rename = "structuredContent",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional)]
+    pub structured_content: Option<serde_json::Value>,
+    #[serde(rename = "toolUseId")]
+    pub tool_use_id: String,
+    pub r#type: String, // &'static str = "tool_result"
+}
+
+/// A request from the assistant to call a tool.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ToolUseContent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
+    pub id: String,
+    pub input: serde_json::Value,
+    pub name: String,
+    pub r#type: String, // &'static str = "tool_use"
+}
+
+/// An error response that indicates that the server requires the client to provide additional information via an elicitation request.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct URLElicitationRequiredError {
+    pub error: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub id: Option<RequestId>,
+    #[serde(rename = "jsonrpc", default = "default_jsonrpc")]
+    pub jsonrpc: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
@@ -1569,9 +2449,58 @@ impl ModelContextProtocolRequest for UnsubscribeRequest {
     type Result = Result;
 }
 
+/// Parameters for a `resources/unsubscribe` request.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct UnsubscribeRequestParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub _meta: Option<serde_json::Value>,
     pub uri: String,
+}
+
+/// Schema for multiple-selection enumeration without display titles for options.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct UntitledMultiSelectEnumSchema {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub default: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description: Option<String>,
+    pub items: UntitledMultiSelectEnumSchemaItems,
+    #[serde(rename = "maxItems", default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub max_items: Option<i64>,
+    #[serde(rename = "minItems", default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub min_items: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    pub r#type: String, // &'static str = "array"
+}
+
+/// Schema for the array items.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct UntitledMultiSelectEnumSchemaItems {
+    pub r#enum: Vec<String>,
+    pub r#type: String, // &'static str = "string"
+}
+
+/// Schema for single-selection enumeration without display titles for options.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct UntitledSingleSelectEnumSchema {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub default: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description: Option<String>,
+    pub r#enum: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    pub r#type: String, // &'static str = "string"
 }
 
 impl TryFrom<JSONRPCRequest> for ClientRequest {
@@ -1644,6 +2573,30 @@ impl TryFrom<JSONRPCRequest> for ClientRequest {
                     serde_json::from_value(params_json)?;
                 Ok(ClientRequest::CallToolRequest(params))
             }
+            "tasks/get" => {
+                let params_json = req.params.unwrap_or(serde_json::Value::Null);
+                let params: <GetTaskRequest as ModelContextProtocolRequest>::Params =
+                    serde_json::from_value(params_json)?;
+                Ok(ClientRequest::GetTaskRequest(params))
+            }
+            "tasks/result" => {
+                let params_json = req.params.unwrap_or(serde_json::Value::Null);
+                let params: <GetTaskPayloadRequest as ModelContextProtocolRequest>::Params =
+                    serde_json::from_value(params_json)?;
+                Ok(ClientRequest::GetTaskPayloadRequest(params))
+            }
+            "tasks/cancel" => {
+                let params_json = req.params.unwrap_or(serde_json::Value::Null);
+                let params: <CancelTaskRequest as ModelContextProtocolRequest>::Params =
+                    serde_json::from_value(params_json)?;
+                Ok(ClientRequest::CancelTaskRequest(params))
+            }
+            "tasks/list" => {
+                let params_json = req.params.unwrap_or(serde_json::Value::Null);
+                let params: <ListTasksRequest as ModelContextProtocolRequest>::Params =
+                    serde_json::from_value(params_json)?;
+                Ok(ClientRequest::ListTasksRequest(params))
+            }
             "logging/setLevel" => {
                 let params_json = req.params.unwrap_or(serde_json::Value::Null);
                 let params: <SetLevelRequest as ModelContextProtocolRequest>::Params =
@@ -1700,10 +2653,21 @@ impl TryFrom<JSONRPCNotification> for ServerNotification {
                 let params: <ToolListChangedNotification as ModelContextProtocolNotification>::Params = serde_json::from_value(params_json)?;
                 Ok(ServerNotification::ToolListChangedNotification(params))
             }
+            "notifications/tasks/status" => {
+                let params_json = n.params.unwrap_or(serde_json::Value::Null);
+                let params: <TaskStatusNotification as ModelContextProtocolNotification>::Params =
+                    serde_json::from_value(params_json)?;
+                Ok(ServerNotification::TaskStatusNotification(params))
+            }
             "notifications/message" => {
                 let params_json = n.params.unwrap_or(serde_json::Value::Null);
                 let params: <LoggingMessageNotification as ModelContextProtocolNotification>::Params = serde_json::from_value(params_json)?;
                 Ok(ServerNotification::LoggingMessageNotification(params))
+            }
+            "notifications/elicitation/complete" => {
+                let params_json = n.params.unwrap_or(serde_json::Value::Null);
+                let params: <ElicitationCompleteNotification as ModelContextProtocolNotification>::Params = serde_json::from_value(params_json)?;
+                Ok(ServerNotification::ElicitationCompleteNotification(params))
             }
             _ => Err(serde_json::Error::io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,

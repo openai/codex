@@ -249,9 +249,13 @@ mod tests {
 
     fn make_tool(name: &str) -> McpTool {
         McpTool {
+            _meta: None,
             annotations: None,
             description: None,
+            execution: None,
+            icons: None,
             input_schema: ToolInputSchema {
+                schema: None,
                 properties: None,
                 required: None,
                 r#type: "object".to_string(),

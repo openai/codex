@@ -805,6 +805,7 @@ impl From<&CallToolResult> for FunctionCallOutputPayload {
             content,
             structured_content,
             is_error,
+            ..
         } = call_tool_result;
 
         let is_success = is_error != &Some(true);
@@ -1039,13 +1040,16 @@ mod tests {
     #[test]
     fn serializes_image_outputs_as_array() -> Result<()> {
         let call_tool_result = CallToolResult {
+            _meta: None,
             content: vec![
                 ContentBlock::TextContent(TextContent {
+                    _meta: None,
                     annotations: None,
                     text: "caption".into(),
                     r#type: "text".into(),
                 }),
                 ContentBlock::ImageContent(ImageContent {
+                    _meta: None,
                     annotations: None,
                     data: "BASE64".into(),
                     mime_type: "image/png".into(),
