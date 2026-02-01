@@ -114,7 +114,7 @@ fn is_dangerous_to_call_with_exec(command: &[String]) -> bool {
             match subcommand {
                 "reset" | "rm" => true,
                 "branch" => git_branch_is_delete(&command[subcommand_idx + 1..]),
-                "push" => git_push_is_force(&command[subcommand_idx + 1..]),
+                "push" => git_push_is_dangerous(&command[subcommand_idx + 1..]),
                 "clean" => git_clean_is_force(&command[subcommand_idx + 1..]),
                 other => {
                     debug_assert!(false, "unexpected git subcommand from matcher: {other}");
@@ -148,15 +148,23 @@ fn short_flag_group_contains(arg: &str, target: char) -> bool {
     arg.starts_with('-') && !arg.starts_with("--") && arg.chars().skip(1).any(|c| c == target)
 }
 
-fn git_push_is_force(push_args: &[String]) -> bool {
+fn git_push_is_dangerous(push_args: &[String]) -> bool {
     push_args.iter().map(String::as_str).any(|arg| {
         matches!(
             arg,
-            "--force" | "--force-with-lease" | "--force-if-includes" | "-f"
+            "--force" | "--force-with-lease" | "--force-if-includes" | "--delete" | "-f" | "-d"
         ) || arg.starts_with("--force-with-lease=")
             || arg.starts_with("--force-if-includes=")
+            || arg.starts_with("--delete=")
             || short_flag_group_contains(arg, 'f')
+            || short_flag_group_contains(arg, 'd')
+            || git_push_refspec_is_dangerous(arg)
     })
+}
+
+fn git_push_refspec_is_dangerous(arg: &str) -> bool {
+    // `+<refspec>` forces updates and `:<dst>` deletes remote refs.
+    (arg.starts_with('+') || arg.starts_with(':')) && arg.len() > 1
 }
 
 fn git_clean_is_force(clean_args: &[String]) -> bool {
@@ -304,6 +312,41 @@ mod tests {
             "--force-with-lease",
             "origin",
             "main",
+        ])));
+    }
+
+    #[test]
+    fn git_push_plus_refspec_is_dangerous() {
+        assert!(command_might_be_dangerous(&vec_str(&[
+            "git", "push", "origin", "+main",
+        ])));
+        assert!(command_might_be_dangerous(&vec_str(&[
+            "git",
+            "push",
+            "origin",
+            "+refs/heads/main:refs/heads/main",
+        ])));
+    }
+
+    #[test]
+    fn git_push_delete_flag_is_dangerous() {
+        assert!(command_might_be_dangerous(&vec_str(&[
+            "git", "push", "--delete", "origin", "feature",
+        ])));
+        assert!(command_might_be_dangerous(&vec_str(&[
+            "git", "push", "-d", "origin", "feature",
+        ])));
+    }
+
+    #[test]
+    fn git_push_delete_refspec_is_dangerous() {
+        assert!(command_might_be_dangerous(&vec_str(&[
+            "git", "push", "origin", ":feature",
+        ])));
+        assert!(command_might_be_dangerous(&vec_str(&[
+            "bash",
+            "-lc",
+            "git push origin :feature",
         ])));
     }
 
