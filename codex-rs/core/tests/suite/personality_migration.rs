@@ -131,7 +131,7 @@ async fn no_marker_sessions_sets_personality() -> io::Result<()> {
     );
 
     let persisted = read_config_toml(temp.path()).await?;
-    assert_eq!(persisted.model_personality, Some(Personality::Pragmatic));
+    assert_eq!(persisted.personality, Some(Personality::Pragmatic));
     Ok(())
 }
 
@@ -149,6 +149,6 @@ async fn no_marker_archived_sessions_sets_personality() -> io::Result<()> {
     );
 
     let persisted = read_config_toml(temp.path()).await?;
-    assert_eq!(persisted.model_personality, Some(Personality::Pragmatic));
+    assert_eq!(persisted.personality, Some(Personality::Pragmatic));
     Ok(())
 }

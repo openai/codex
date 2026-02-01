@@ -46,15 +46,15 @@ fn sse_completed(id: &str) -> String {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn model_personality_does_not_mutate_base_instructions_without_template() {
+async fn personality_does_not_mutate_base_instructions_without_template() {
     let codex_home = TempDir::new().expect("create temp dir");
     let mut config = load_default_config_for_test(&codex_home).await;
     config.features.enable(Feature::Personality);
-    config.model_personality = Some(Personality::Friendly);
+    config.personality = Some(Personality::Friendly);
 
     let model_info = ModelsManager::construct_model_info_offline("gpt-5.1", &config);
     assert_eq!(
-        model_info.get_model_instructions(config.model_personality),
+        model_info.get_model_instructions(config.personality),
         model_info.base_instructions
     );
 }
@@ -64,14 +64,14 @@ async fn base_instructions_override_disables_personality_template() {
     let codex_home = TempDir::new().expect("create temp dir");
     let mut config = load_default_config_for_test(&codex_home).await;
     config.features.enable(Feature::Personality);
-    config.model_personality = Some(Personality::Friendly);
+    config.personality = Some(Personality::Friendly);
     config.base_instructions = Some("override instructions".to_string());
 
     let model_info = ModelsManager::construct_model_info_offline("gpt-5.2-codex", &config);
 
     assert_eq!(model_info.base_instructions, "override instructions");
     assert_eq!(
-        model_info.get_model_instructions(config.model_personality),
+        model_info.get_model_instructions(config.personality),
         "override instructions"
     );
 }
@@ -133,7 +133,7 @@ async fn config_personality_some_sets_instructions_template() -> anyhow::Result<
         .with_config(|config| {
             config.features.disable(Feature::RemoteModels);
             config.features.enable(Feature::Personality);
-            config.model_personality = Some(Personality::Friendly);
+            config.personality = Some(Personality::Friendly);
         });
     let test = builder.build(&server).await?;
 
@@ -277,11 +277,11 @@ async fn instructions_uses_base_if_feature_disabled() -> anyhow::Result<()> {
     let codex_home = TempDir::new().expect("create temp dir");
     let mut config = load_default_config_for_test(&codex_home).await;
     config.features.disable(Feature::Personality);
-    config.model_personality = Some(Personality::Friendly);
+    config.personality = Some(Personality::Friendly);
 
     let model_info = ModelsManager::construct_model_info_offline("gpt-5.2-codex", &config);
     assert_eq!(
-        model_info.get_model_instructions(config.model_personality),
+        model_info.get_model_instructions(config.personality),
         model_info.base_instructions
     );
 
@@ -378,7 +378,7 @@ async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()>
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn ignores_remote_model_personality_if_remote_models_disabled() -> anyhow::Result<()> {
+async fn ignores_remote_personality_if_remote_models_disabled() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = MockServer::builder()
@@ -439,7 +439,7 @@ async fn ignores_remote_model_personality_if_remote_models_disabled() -> anyhow:
             config.features.disable(Feature::RemoteModels);
             config.features.enable(Feature::Personality);
             config.model = Some(remote_slug.to_string());
-            config.model_personality = Some(Personality::Friendly);
+            config.personality = Some(Personality::Friendly);
         });
     let test = builder.build(&server).await?;
 
@@ -554,7 +554,7 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
             config.features.enable(Feature::RemoteModels);
             config.features.enable(Feature::Personality);
             config.model = Some(remote_slug.to_string());
-            config.model_personality = Some(Personality::Friendly);
+            config.personality = Some(Personality::Friendly);
         });
     let test = builder.build(&server).await?;
 

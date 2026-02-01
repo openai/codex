@@ -278,7 +278,7 @@ impl ConfigDocument {
                 mutated
             }),
             ConfigEdit::SetModelPersonality { personality } => Ok(self.write_profile_value(
-                &["model_personality"],
+                &["personality"],
                 personality.map(|personality| value(personality.to_string())),
             )),
             ConfigEdit::SetNoticeHideFullAccessWarning(acknowledged) => Ok(self.write_value(
@@ -724,7 +724,7 @@ impl ConfigEditsBuilder {
         self
     }
 
-    pub fn set_model_personality(mut self, personality: Option<Personality>) -> Self {
+    pub fn set_personality(mut self, personality: Option<Personality>) -> Self {
         self.edits
             .push(ConfigEdit::SetModelPersonality { personality });
         self
