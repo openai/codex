@@ -4,9 +4,14 @@ use crate::metrics::names::SSE_EVENT_COUNT_METRIC;
 use crate::metrics::names::SSE_EVENT_DURATION_METRIC;
 use crate::metrics::names::TOOL_CALL_COUNT_METRIC;
 use crate::metrics::names::TOOL_CALL_DURATION_METRIC;
+use crate::metrics::names::WEBSOCKET_EVENT_COUNT_METRIC;
+use crate::metrics::names::WEBSOCKET_EVENT_DURATION_METRIC;
+use crate::metrics::names::WEBSOCKET_REQUEST_COUNT_METRIC;
+use crate::metrics::names::WEBSOCKET_REQUEST_DURATION_METRIC;
 use crate::otel_provider::traceparent_context_from_env;
 use chrono::SecondsFormat;
 use chrono::Utc;
+use codex_api::ApiError;
 use codex_api::ResponseEvent;
 use codex_app_server_protocol::AuthMode;
 use codex_protocol::ThreadId;
@@ -36,6 +41,7 @@ pub use crate::OtelManager;
 pub use crate::ToolDecisionSource;
 
 const SSE_UNKNOWN_KIND: &str = "unknown";
+const WEBSOCKET_UNKNOWN_KIND: &str = "unknown";
 
 impl OtelManager {
     #[allow(clippy::too_many_arguments)]
@@ -187,6 +193,134 @@ impl OtelManager {
             http.response.status_code = status,
             error.message = error,
             attempt = attempt,
+        );
+    }
+
+    pub fn record_websocket_request(&self, duration: Duration, error: Option<&str>) {
+        let success_str = if error.is_none() { "true" } else { "false" };
+        self.counter(
+            WEBSOCKET_REQUEST_COUNT_METRIC,
+            1,
+            &[("success", success_str)],
+        );
+        self.record_duration(
+            WEBSOCKET_REQUEST_DURATION_METRIC,
+            duration,
+            &[("success", success_str)],
+        );
+        tracing::event!(
+            tracing::Level::INFO,
+            event.name = "codex.websocket_request",
+            event.timestamp = %timestamp(),
+            conversation.id = %self.metadata.conversation_id,
+            app.version = %self.metadata.app_version,
+            auth_mode = self.metadata.auth_mode,
+            user.account_id = self.metadata.account_id,
+            user.email = self.metadata.account_email,
+            terminal.type = %self.metadata.terminal_type,
+            model = %self.metadata.model,
+            slug = %self.metadata.slug,
+            duration_ms = %duration.as_millis(),
+            success = success_str,
+            error.message = error,
+        );
+    }
+
+    pub fn record_websocket_event(
+        &self,
+        result: &Result<
+            Option<
+                Result<
+                    tokio_tungstenite::tungstenite::Message,
+                    tokio_tungstenite::tungstenite::Error,
+                >,
+            >,
+            ApiError,
+        >,
+        duration: Duration,
+    ) {
+        let mut kind = None;
+        let mut error_message = None;
+        let mut success = true;
+
+        match result {
+            Ok(Some(Ok(message))) => match message {
+                tokio_tungstenite::tungstenite::Message::Text(text) => {
+                    match serde_json::from_str::<serde_json::Value>(text) {
+                        Ok(value) => {
+                            kind = value
+                                .get("type")
+                                .and_then(|value| value.as_str())
+                                .map(std::string::ToString::to_string);
+                            if kind.as_deref() == Some("response.failed") {
+                                success = false;
+                                error_message = value
+                                    .get("response")
+                                    .and_then(|value| value.get("error"))
+                                    .map(serde_json::Value::to_string)
+                                    .or_else(|| Some("response.failed event received".to_string()));
+                            }
+                        }
+                        Err(err) => {
+                            kind = Some("parse_error".to_string());
+                            error_message = Some(err.to_string());
+                            success = false;
+                        }
+                    }
+                }
+                tokio_tungstenite::tungstenite::Message::Binary(_) => {
+                    success = false;
+                    error_message = Some("unexpected binary websocket event".to_string());
+                }
+                tokio_tungstenite::tungstenite::Message::Ping(_)
+                | tokio_tungstenite::tungstenite::Message::Pong(_) => {
+                    return;
+                }
+                tokio_tungstenite::tungstenite::Message::Close(_) => {
+                    success = false;
+                    error_message =
+                        Some("websocket closed by server before response.completed".to_string());
+                }
+                tokio_tungstenite::tungstenite::Message::Frame(_) => {
+                    success = false;
+                    error_message = Some("unexpected websocket frame".to_string());
+                }
+            },
+            Ok(Some(Err(err))) => {
+                success = false;
+                error_message = Some(err.to_string());
+            }
+            Ok(None) => {
+                success = false;
+                error_message = Some("stream closed before response.completed".to_string());
+            }
+            Err(err) => {
+                success = false;
+                error_message = Some(err.to_string());
+            }
+        }
+
+        let kind_str = kind.as_deref().unwrap_or(WEBSOCKET_UNKNOWN_KIND);
+        let success_str = if success { "true" } else { "false" };
+        let tags = [("kind", kind_str), ("success", success_str)];
+        self.counter(WEBSOCKET_EVENT_COUNT_METRIC, 1, &tags);
+        self.record_duration(WEBSOCKET_EVENT_DURATION_METRIC, duration, &tags);
+        tracing::event!(
+            tracing::Level::INFO,
+            event.name = "codex.websocket_event",
+            event.timestamp = %timestamp(),
+            event.kind = %kind_str,
+            conversation.id = %self.metadata.conversation_id,
+            app.version = %self.metadata.app_version,
+            auth_mode = self.metadata.auth_mode,
+            user.account_id = self.metadata.account_id,
+            user.email = self.metadata.account_email,
+            terminal.type = %self.metadata.terminal_type,
+            model = %self.metadata.model,
+            slug = %self.metadata.slug,
+            duration_ms = %duration.as_millis(),
+            success = success_str,
+            error.message = error_message.as_deref(),
         );
     }
 

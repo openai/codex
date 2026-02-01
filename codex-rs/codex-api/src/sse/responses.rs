@@ -157,7 +157,7 @@ struct ResponseCompletedOutputTokensDetails {
 #[derive(Deserialize, Debug)]
 pub struct ResponsesStreamEvent {
     #[serde(rename = "type")]
-    kind: String,
+    pub(crate) kind: String,
     response: Option<Value>,
     item: Option<Value>,
     delta: Option<String>,
