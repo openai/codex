@@ -1764,25 +1764,12 @@ pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     PlainHistoryCell { lines }
 }
 
-/// Build a history cell that renders request_user_input questions and answers.
-pub(crate) fn new_request_user_input_result(
-    questions: Vec<RequestUserInputQuestion>,
-    answers: HashMap<String, RequestUserInputAnswer>,
-    interrupted: bool,
-) -> RequestUserInputResultCell {
-    RequestUserInputResultCell {
-        questions,
-        answers,
-        interrupted,
-    }
-}
-
 /// Renders a completed (or interrupted) request_user_input exchange in history.
 #[derive(Debug)]
 pub(crate) struct RequestUserInputResultCell {
-    questions: Vec<RequestUserInputQuestion>,
-    answers: HashMap<String, RequestUserInputAnswer>,
-    interrupted: bool,
+    pub(crate) questions: Vec<RequestUserInputQuestion>,
+    pub(crate) answers: HashMap<String, RequestUserInputAnswer>,
+    pub(crate) interrupted: bool,
 }
 
 impl HistoryCell for RequestUserInputResultCell {

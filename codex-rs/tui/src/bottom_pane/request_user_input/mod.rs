@@ -727,11 +727,11 @@ impl RequestUserInputOverlay {
                 },
             }));
         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-            history_cell::new_request_user_input_result(
-                self.request.questions.clone(),
-                history_answers,
+            history_cell::RequestUserInputResultCell {
+                questions: self.request.questions.clone(),
+                answers: history_answers,
                 interrupted,
-            ),
+            },
         )));
     }
 
@@ -795,11 +795,11 @@ impl RequestUserInputOverlay {
                 },
             }));
         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-            history_cell::new_request_user_input_result(
-                self.request.questions.clone(),
-                history_answers,
-                false,
-            ),
+            history_cell::RequestUserInputResultCell {
+                questions: self.request.questions.clone(),
+                answers: history_answers,
+                interrupted: false,
+            },
         )));
         if let Some(next) = self.queue.pop_front() {
             self.request = next;
@@ -1856,8 +1856,7 @@ mod tests {
             panic!("expected UserInputAnswer");
         };
         assert!(response.interrupted, "expected interrupted flag");
-        let answer = response.answers.get("q1").expect("answer missing");
-        assert_eq!(answer.answers, vec!["Option 1".to_string()]);
+        assert!(response.answers.is_empty(), "expected no committed answers");
 
         let event = rx.try_recv().expect("expected history cell");
         assert!(matches!(event, AppEvent::InsertHistoryCell(_)));
