@@ -31,9 +31,9 @@ codex-rmcp-client = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-json-to-toml = { workspace = true }
 chrono = { workspace = true }
+mcp-types = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-mcp-types = { workspace = true }
 tempfile = { workspace = true }
 time = { workspace = true }
 toml = { workspace = true }
@@ -57,7 +57,6 @@ axum = { workspace = true, default-features = false, features = [
 ] }
 base64 = { workspace = true }
 core_test_support = { workspace = true }
-mcp-types = { workspace = true }
 os_info = { workspace = true }
 pretty_assertions = { workspace = true }
 rmcp = { workspace = true, default-features = false, features = [
