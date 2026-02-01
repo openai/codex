@@ -37,6 +37,7 @@ use codex_core::protocol::CodexErrorInfo;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
+use codex_core::protocol::ThreadRolledBackEvent;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::user_input::TextElement;
@@ -97,6 +98,7 @@ pub(crate) struct BacktrackSelection {
 pub(crate) struct PendingBacktrackRollback {
     pub(crate) selection: BacktrackSelection,
     pub(crate) thread_id: Option<ThreadId>,
+    /// Active mask before optimistic rollback preview mode changes.
     pub(crate) previous_collaboration_mask: Option<CollaborationModeMask>,
 }
 
@@ -207,11 +209,14 @@ impl App {
             return;
         }
 
-        // Optimistically apply the target mode for the rollback preview, but remember the
-        // prior mode so we can restore it if core rejects the rollback.
-        let previous_collaboration_mask = self
-            .chat_widget
-            .replace_collaboration_mask(selection.collaboration_mode.clone());
+        // Optimistically apply the target mode for rollback preview when available.
+        // If the selected history item has no mode data (legacy/replayed entries), preserve the
+        // current mode until core returns authoritative rollback state.
+        let previous_collaboration_mask = self.chat_widget.active_collaboration_mask();
+        if let Some(collaboration_mode) = selection.collaboration_mode.clone() {
+            self.chat_widget
+                .replace_collaboration_mask(Some(collaboration_mode));
+        }
         let prefill = selection.prefill.clone();
         let text_elements = selection.text_elements.clone();
         let local_image_paths = selection.local_image_paths.clone();
@@ -463,7 +468,7 @@ impl App {
 
     pub(crate) fn handle_backtrack_event(&mut self, event: &EventMsg) {
         match event {
-            EventMsg::ThreadRolledBack(_) => self.finish_pending_backtrack(),
+            EventMsg::ThreadRolledBack(rollback) => self.finish_pending_backtrack(rollback),
             EventMsg::Error(ErrorEvent {
                 codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
                 ..
@@ -486,7 +491,7 @@ impl App {
     ///
     /// We ignore events that do not correspond to the currently active thread to avoid applying
     /// stale updates after a session switch.
-    fn finish_pending_backtrack(&mut self) {
+    fn finish_pending_backtrack(&mut self, rollback: &ThreadRolledBackEvent) {
         let Some(pending) = self.backtrack.pending_rollback.take() else {
             return;
         };
@@ -494,6 +499,15 @@ impl App {
             // Ignore rollbacks targeting a prior thread.
             return;
         }
+
+        if let Some(model_visible_state) = rollback.model_visible_state.as_ref() {
+            self.chat_widget
+                .apply_model_visible_state(model_visible_state);
+        } else {
+            self.chat_widget
+                .replace_collaboration_mask(pending.previous_collaboration_mask.clone());
+        }
+
         self.trim_transcript_for_backtrack(pending.selection.nth_user_message);
         self.backtrack_render_pending = true;
     }

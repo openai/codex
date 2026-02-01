@@ -1,6 +1,7 @@
 //! Session-wide mutable state.
 
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::ModelVisibleState;
 use codex_protocol::protocol::TurnContextItem;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -12,17 +13,25 @@ use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 use crate::truncate::TruncationPolicy;
 
+/// One-shot synchronization state for model-visible settings after rollback/backtrack.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) enum PendingModelVisibleStateSync {
+    /// No synchronization is pending.
+    #[default]
+    None,
+    /// Compare the next submitted model-visible state against this rollback snapshot.
+    Snapshot(ModelVisibleState),
+    /// Snapshot is missing/unreliable, so emit all tracked model-visible updates once.
+    ForceEmitAll,
+}
+
 /// Persistent, session-scoped state previously stored directly on `Session`.
 pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
     pub(crate) history: ContextManager,
     pub(crate) turn_context_history: Vec<Option<TurnContextItem>>,
-    /// Force a developer-instruction update for collaboration mode on the next turn.
-    ///
-    /// This is set when rollback/backtrack lacks a reliable turn context for the latest user turn,
-    /// so core should re-emit the collaboration developer instructions even if the mode is
-    /// unchanged.
-    pub(crate) force_inject_collaboration_instructions: bool,
+    /// Pending one-shot sync for model-visible state after rollback/backtrack.
+    pub(crate) pending_model_visible_state_sync: PendingModelVisibleStateSync,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
     pub(crate) server_reasoning_included: bool,
     pub(crate) dependency_env: HashMap<String, String>,
@@ -42,7 +51,7 @@ impl SessionState {
             session_configuration,
             history,
             turn_context_history: Vec::new(),
-            force_inject_collaboration_instructions: false,
+            pending_model_visible_state_sync: PendingModelVisibleStateSync::None,
             latest_rate_limits: None,
             server_reasoning_included: false,
             dependency_env: HashMap::new(),
@@ -106,6 +115,21 @@ impl SessionState {
         turn_context_history: Vec<Option<TurnContextItem>>,
     ) {
         self.turn_context_history = turn_context_history;
+    }
+
+    /// Consume pending model-visible state sync only when a collaboration update is being built.
+    ///
+    /// If the next operation does not carry a collaboration update (for example, model-only
+    /// overrides), keep the pending sync for a later turn that does.
+    pub(crate) fn take_pending_model_visible_state_sync(
+        &mut self,
+        has_collaboration_update: bool,
+    ) -> PendingModelVisibleStateSync {
+        if has_collaboration_update {
+            std::mem::take(&mut self.pending_model_visible_state_sync)
+        } else {
+            PendingModelVisibleStateSync::None
+        }
     }
 
     pub(crate) fn clone_history(&self) -> ContextManager {

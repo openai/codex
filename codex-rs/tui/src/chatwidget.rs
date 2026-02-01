@@ -69,6 +69,7 @@ use codex_core::protocol::McpStartupStatus;
 use codex_core::protocol::McpStartupUpdateEvent;
 use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
+use codex_core::protocol::ModelVisibleState;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::RateLimitSnapshot;
@@ -5371,6 +5372,10 @@ impl ChatWidget {
         self.active_mode_kind()
     }
 
+    pub(crate) fn active_collaboration_mask(&self) -> Option<CollaborationModeMask> {
+        self.active_collaboration_mask.clone()
+    }
+
     fn is_session_configured(&self) -> bool {
         self.thread_id.is_some()
     }
@@ -5528,6 +5533,57 @@ impl ChatWidget {
         self.refresh_model_display();
         self.request_redraw();
         previous
+    }
+
+    /// Synchronize collaboration-mode UI state from core's model-visible snapshot.
+    ///
+    /// This is primarily used after rollback/backtrack so the composer mode and model display
+    /// reflect core's authoritative session state.
+    pub(crate) fn apply_model_visible_state(&mut self, state: &ModelVisibleState) {
+        let Some(collaboration_mode) = state.collaboration_mode.clone() else {
+            return;
+        };
+        self.current_collaboration_mode = collaboration_mode.clone();
+        if self.collaboration_modes_enabled() {
+            self.active_collaboration_mask = self.collaboration_mask_from_mode(&collaboration_mode);
+            self.update_collaboration_mode_indicator();
+        }
+        self.refresh_model_display();
+        self.request_redraw();
+    }
+
+    fn collaboration_mask_from_mode(
+        &self,
+        collaboration_mode: &CollaborationMode,
+    ) -> Option<CollaborationModeMask> {
+        if collaboration_mode.mode == ModeKind::Custom {
+            return None;
+        }
+
+        let mut mask = collaboration_modes::mask_for_kind(
+            self.models_manager.as_ref(),
+            collaboration_mode.mode,
+        )
+        .unwrap_or_else(|| CollaborationModeMask {
+            name: match collaboration_mode.mode {
+                ModeKind::Plan => "Plan",
+                ModeKind::Code => "Code",
+                ModeKind::PairProgramming => "Pair Programming",
+                ModeKind::Execute => "Execute",
+                ModeKind::Custom => "Custom",
+            }
+            .to_string(),
+            mode: Some(collaboration_mode.mode),
+            model: None,
+            reasoning_effort: None,
+            developer_instructions: None,
+        });
+        mask.mode = Some(collaboration_mode.mode);
+        mask.model = Some(collaboration_mode.settings.model.clone());
+        mask.reasoning_effort = Some(collaboration_mode.settings.reasoning_effort);
+        mask.developer_instructions =
+            Some(collaboration_mode.settings.developer_instructions.clone());
+        Some(mask)
     }
 
     fn connectors_enabled(&self) -> bool {

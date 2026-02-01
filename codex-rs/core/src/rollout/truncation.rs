@@ -173,6 +173,7 @@ mod tests {
             RolloutItem::ResponseItem(assistant_msg("a2")),
             RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
                 num_turns: 1,
+                model_visible_state: None,
             })),
             RolloutItem::ResponseItem(user_msg("u3")),
             RolloutItem::ResponseItem(assistant_msg("a3")),

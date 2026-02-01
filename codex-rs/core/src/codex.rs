@@ -185,6 +185,7 @@ use crate::skills::injection::app_id_from_path;
 use crate::skills::injection::tool_kind_for_path;
 use crate::skills::resolve_skill_dependencies_for_turn;
 use crate::state::ActiveTurn;
+use crate::state::PendingModelVisibleStateSync;
 use crate::state::SessionServices;
 use crate::state::SessionState;
 use crate::state_db;
@@ -1405,19 +1406,23 @@ impl Session {
         &self,
         previous_collaboration_mode: &CollaborationMode,
         next_collaboration_mode: Option<&CollaborationMode>,
-        force_inject_collaboration_instructions: bool,
+        pending_model_visible_state_sync: &PendingModelVisibleStateSync,
     ) -> Option<ResponseItem> {
-        if let Some(next_mode) = next_collaboration_mode {
-            if !force_inject_collaboration_instructions && previous_collaboration_mode == next_mode
-            {
-                return None;
+        let next_mode = next_collaboration_mode?;
+        let should_emit = match pending_model_visible_state_sync {
+            PendingModelVisibleStateSync::None => previous_collaboration_mode != next_mode,
+            PendingModelVisibleStateSync::Snapshot(snapshot) => {
+                snapshot.collaboration_mode.as_ref() != Some(next_mode)
             }
-            // If the next mode has empty developer instructions, this returns None and we emit no
-            // update, so prior collaboration instructions remain in the prompt history.
-            Some(DeveloperInstructions::from_collaboration_mode(&next.collaboration_mode)?.into())
-        } else {
-            None
+            PendingModelVisibleStateSync::ForceEmitAll => true,
+        };
+        if !should_emit {
+            return None;
         }
+
+        // If the next mode has empty developer instructions, this returns None and we emit no
+        // update, so prior collaboration instructions remain in the prompt history.
+        Some(DeveloperInstructions::from_collaboration_mode(next_mode)?.into())
     }
 
     fn build_settings_update_items(
@@ -1426,7 +1431,7 @@ impl Session {
         current_context: &TurnContext,
         previous_collaboration_mode: &CollaborationMode,
         next_collaboration_mode: Option<&CollaborationMode>,
-        force_inject_collaboration_instructions: bool,
+        pending_model_visible_state_sync: &PendingModelVisibleStateSync,
     ) -> Vec<ResponseItem> {
         let mut update_items = Vec::new();
         if let Some(env_item) =
@@ -1442,7 +1447,7 @@ impl Session {
         if let Some(collaboration_mode_item) = self.build_collaboration_mode_update_item(
             previous_collaboration_mode,
             next_collaboration_mode,
-            force_inject_collaboration_instructions,
+            pending_model_visible_state_sync,
         ) {
             update_items.push(collaboration_mode_item);
         }
@@ -2731,6 +2736,7 @@ mod handlers {
     use codex_protocol::protocol::ListCustomPromptsResponseEvent;
     use codex_protocol::protocol::ListSkillsResponseEvent;
     use codex_protocol::protocol::McpServerRefreshConfig;
+    use codex_protocol::protocol::ModelVisibleState;
     use codex_protocol::protocol::Op;
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
@@ -2756,6 +2762,7 @@ mod handlers {
     use tracing::info;
     use tracing::warn;
 
+    use crate::state::PendingModelVisibleStateSync;
     use crate::state::SessionState;
 
     pub async fn interrupt(sess: &Arc<Session>) {
@@ -2785,20 +2792,16 @@ mod handlers {
         }
 
         let current_context = sess.new_default_turn_with_sub_id(sub_id).await;
-        let force_inject_collaboration_instructions = {
+        let pending_model_visible_state_sync = {
             let mut state = sess.state.lock().await;
-            let force = state.force_inject_collaboration_instructions;
-            if next_collaboration_mode.is_some() {
-                state.force_inject_collaboration_instructions = false;
-            }
-            force
+            state.take_pending_model_visible_state_sync(next_collaboration_mode.is_some())
         };
         let update_items = sess.build_settings_update_items(
             Some(&previous_context),
             &current_context,
             &previous_collaboration_mode,
             next_collaboration_mode.as_ref(),
-            force_inject_collaboration_instructions,
+            &pending_model_visible_state_sync,
         );
         if !update_items.is_empty() {
             sess.record_conversation_items(&current_context, &update_items)
@@ -2874,18 +2877,16 @@ mod handlers {
         // Attempt to inject input into current task
         if let Err(items) = sess.inject_input(items).await {
             sess.seed_initial_context_if_needed(&current_context).await;
-            let force_inject_collaboration_instructions = {
+            let pending_model_visible_state_sync = {
                 let mut state = sess.state.lock().await;
-                let force = state.force_inject_collaboration_instructions;
-                state.force_inject_collaboration_instructions = false;
-                force
+                state.take_pending_model_visible_state_sync(next_collaboration_mode.is_some())
             };
             let update_items = sess.build_settings_update_items(
                 previous_context.as_ref(),
                 &current_context,
                 &previous_collaboration_mode,
                 next_collaboration_mode.as_ref(),
-                force_inject_collaboration_instructions,
+                &pending_model_visible_state_sync,
             );
             if !update_items.is_empty() {
                 sess.record_conversation_items(&current_context, &update_items)
@@ -3191,20 +3192,23 @@ mod handlers {
         // version of the history.
         let user_turns = Session::user_turn_count(history.raw_items());
         sess.replace_history(history.raw_items().to_vec()).await;
-        {
+        let model_visible_state = {
             let mut state = sess.state.lock().await;
             apply_rollback_turn_context_history(
                 &mut state,
                 existing_turn_context_history,
                 num_turns,
                 user_turns,
-            );
-        }
+            )
+        };
         sess.recompute_token_usage(turn_context.as_ref()).await;
 
         sess.send_event_raw_flushed(Event {
             id: turn_context.sub_id.clone(),
-            msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns }),
+            msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+                num_turns,
+                model_visible_state: Some(model_visible_state),
+            }),
         })
         .await;
     }
@@ -3278,13 +3282,14 @@ mod handlers {
     /// Apply turn-context history updates after rollback.
     ///
     /// Truncates the stored history by the requested rollback depth, then pads to match the
-    /// surviving user-turn count.
+    /// surviving user-turn count. Also updates rollback sync state for model-visible settings
+    /// and returns the authoritative model-visible state after rollback.
     fn apply_rollback_turn_context_history(
         state: &mut SessionState,
         existing_turn_context_history: Vec<Option<TurnContextItem>>,
         num_turns: u32,
         user_turns: usize,
-    ) {
+    ) -> ModelVisibleState {
         let mut updated_turn_context_history = existing_turn_context_history;
         let truncated_len = updated_turn_context_history
             .len()
@@ -3294,18 +3299,41 @@ mod handlers {
             updated_turn_context_history.resize_with(user_turns, || None);
         }
         state.set_turn_context_history(updated_turn_context_history);
-        if state.turn_context_history.len() == user_turns
-            && let Some(collaboration_mode) = state
+
+        let rollback_snapshot = if state.turn_context_history.len() == user_turns {
+            state
                 .turn_context_history
                 .last()
                 .and_then(Option::as_ref)
-                .and_then(|turn_context| turn_context.collaboration_mode.clone())
+                .and_then(model_visible_state_from_turn_context)
+        } else {
+            None
+        };
+
+        if let Some(model_visible_state) = rollback_snapshot
+            && let Some(collaboration_mode) = model_visible_state.collaboration_mode.clone()
         {
             state.session_configuration.collaboration_mode = collaboration_mode;
-            state.force_inject_collaboration_instructions = false;
+            state.pending_model_visible_state_sync =
+                PendingModelVisibleStateSync::Snapshot(model_visible_state);
         } else {
-            state.force_inject_collaboration_instructions = true;
+            state.pending_model_visible_state_sync = PendingModelVisibleStateSync::ForceEmitAll;
         }
+
+        ModelVisibleState {
+            collaboration_mode: Some(state.session_configuration.collaboration_mode.clone()),
+        }
+    }
+
+    fn model_visible_state_from_turn_context(
+        turn_context: &TurnContextItem,
+    ) -> Option<ModelVisibleState> {
+        turn_context
+            .collaboration_mode
+            .clone()
+            .map(|collaboration_mode| ModelVisibleState {
+                collaboration_mode: Some(collaboration_mode),
+            })
     }
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
@@ -4769,12 +4797,14 @@ mod tests {
     use crate::protocol::CompactedItem;
     use crate::protocol::CreditsSnapshot;
     use crate::protocol::InitialHistory;
+    use crate::protocol::ModelVisibleState;
     use crate::protocol::RateLimitSnapshot;
     use crate::protocol::RateLimitWindow;
     use crate::protocol::ResumedHistory;
     use crate::protocol::TokenCountEvent;
     use crate::protocol::TokenUsage;
     use crate::protocol::TokenUsageInfo;
+    use crate::state::PendingModelVisibleStateSync;
     use crate::state::TaskKind;
     use crate::tasks::SessionTask;
     use crate::tasks::SessionTaskContext;
@@ -5192,9 +5222,26 @@ mod tests {
         handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
         let rollback_event = wait_for_thread_rolled_back(&rx).await;
         assert_eq!(rollback_event.num_turns, 1);
+        assert_eq!(
+            rollback_event.model_visible_state,
+            Some(ModelVisibleState {
+                collaboration_mode: Some(plan_mode.clone()),
+            })
+        );
 
         let current_mode = sess.current_collaboration_mode().await;
         assert_eq!(current_mode.mode, ModeKind::Plan);
+
+        let pending_model_visible_state_sync = {
+            let mut state = sess.state.lock().await;
+            state.take_pending_model_visible_state_sync(true)
+        };
+        assert_eq!(
+            pending_model_visible_state_sync,
+            PendingModelVisibleStateSync::Snapshot(ModelVisibleState {
+                collaboration_mode: Some(plan_mode),
+            })
+        );
     }
 
     #[tokio::test]
@@ -5232,14 +5279,21 @@ mod tests {
         handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
         let rollback_event = wait_for_thread_rolled_back(&rx).await;
         assert_eq!(rollback_event.num_turns, 1);
+        assert_eq!(
+            rollback_event.model_visible_state,
+            Some(ModelVisibleState {
+                collaboration_mode: Some(collaboration_mode.clone()),
+            })
+        );
 
-        let force_inject_collaboration_instructions = {
+        let pending_model_visible_state_sync = {
             let mut state = sess.state.lock().await;
-            let force = state.force_inject_collaboration_instructions;
-            state.force_inject_collaboration_instructions = false;
-            force
+            state.take_pending_model_visible_state_sync(true)
         };
-        assert!(force_inject_collaboration_instructions);
+        assert_eq!(
+            pending_model_visible_state_sync,
+            PendingModelVisibleStateSync::ForceEmitAll
+        );
 
         let current_context = sess.new_default_turn_with_sub_id("sub-2".to_string()).await;
         let previous_collaboration_mode = {
@@ -5251,7 +5305,7 @@ mod tests {
             &current_context,
             &previous_collaboration_mode,
             Some(&previous_collaboration_mode),
-            force_inject_collaboration_instructions,
+            &pending_model_visible_state_sync,
         );
         let expected_item: ResponseItem =
             DeveloperInstructions::from_collaboration_mode(&previous_collaboration_mode)
@@ -5376,19 +5430,27 @@ mod tests {
         handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
         let rollback_event = wait_for_thread_rolled_back(&rx).await;
         pretty_assertions::assert_eq!(rollback_event.num_turns, 1);
+        assert_eq!(
+            rollback_event.model_visible_state,
+            Some(ModelVisibleState {
+                collaboration_mode: Some(code_mode.clone()),
+            })
+        );
 
-        let (collaboration_mode, force_inject_collaboration_instructions) = {
+        let (collaboration_mode, pending_model_visible_state_sync) = {
             let mut state = sess.state.lock().await;
-            let force = state.force_inject_collaboration_instructions;
-            state.force_inject_collaboration_instructions = false;
+            let pending = state.take_pending_model_visible_state_sync(true);
             (
                 state.session_configuration.collaboration_mode.clone(),
-                force,
+                pending,
             )
         };
 
         pretty_assertions::assert_eq!(collaboration_mode, code_mode);
-        assert!(force_inject_collaboration_instructions);
+        assert_eq!(
+            pending_model_visible_state_sync,
+            PendingModelVisibleStateSync::ForceEmitAll
+        );
     }
 
     #[tokio::test]
