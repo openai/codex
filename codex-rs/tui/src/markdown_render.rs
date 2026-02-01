@@ -118,25 +118,35 @@ fn termimad_skin() -> &'static MadSkin {
     })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FenceKind {
+    Markdown,
+    Other,
+}
+
 fn unwrap_markdown_fences(input: &str) -> std::borrow::Cow<'_, str> {
     let mut out = String::with_capacity(input.len());
-    let mut in_fence: Option<(u8, usize)> = None;
+    let mut in_fence: Option<(u8, usize, FenceKind)> = None;
     let mut changed = false;
 
     for line in input.split_inclusive('\n') {
         let line_trimmed = line.strip_suffix('\n').unwrap_or(line);
         let trimmed_start = line_trimmed.trim_start();
         if let Some((fence_char, fence_len, rest)) = parse_fence_line(trimmed_start) {
-            if let Some((open_char, open_len)) = in_fence {
+            if let Some((open_char, open_len, kind)) = in_fence {
                 if fence_char == open_char && fence_len >= open_len && rest.trim().is_empty() {
                     in_fence = None;
-                    changed = true;
-                    continue;
+                    if kind == FenceKind::Markdown {
+                        changed = true;
+                        continue;
+                    }
                 }
             } else if is_markdown_fence_info(rest) {
-                in_fence = Some((fence_char, fence_len));
+                in_fence = Some((fence_char, fence_len, FenceKind::Markdown));
                 changed = true;
                 continue;
+            } else {
+                in_fence = Some((fence_char, fence_len, FenceKind::Other));
             }
         }
         out.push_str(line);
@@ -952,6 +962,15 @@ mod tests {
             .expect("expected code span");
         assert_eq!(is_cyan(code_span.style.fg), true);
         assert_eq!(code_span.style.add_modifier.contains(Modifier::BOLD), false);
+    }
+
+    #[test]
+    fn unwrap_markdown_fences_preserves_nested_fences() {
+        let src = "```text\n```markdown\n**bold**\n```\n```\n";
+        let unwrapped = unwrap_markdown_fences(src);
+        assert_eq!(unwrapped.contains("```text"), true);
+        assert_eq!(unwrapped.contains("```markdown"), true);
+        assert_eq!(unwrapped.contains("**bold**"), true);
     }
 
     #[test]
