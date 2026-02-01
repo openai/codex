@@ -112,7 +112,6 @@ struct TrackEvent {
 struct TrackEventParams {
     product_client_id: Option<String>,
     skill_scope: Option<String>,
-    skill_path: Option<String>,
     repo_url: Option<String>,
     thread_id: Option<String>,
     invoke_type: Option<String>,
@@ -178,11 +177,6 @@ async fn send_track_skill_invocations(auth_manager: &AuthManager, job: TrackEven
         } else {
             None
         };
-        let skill_path = normalize_path_for_skill_id(
-            repo_url.as_deref(),
-            repo_root.as_deref(),
-            invocation.skill_path.as_path(),
-        );
         let skill_id = skill_id_for_local_skill(
             repo_url.as_deref(),
             repo_root.as_deref(),
@@ -200,7 +194,6 @@ async fn send_track_skill_invocations(auth_manager: &AuthManager, job: TrackEven
                 product_client_id: Some(crate::default_client::originator().value),
                 repo_url,
                 skill_scope: Some(skill_scope.to_string()),
-                skill_path: Some(skill_path),
             },
         });
     }
