@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Allison Van Cura — Annotation Pilot Offer</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap');
+  :root{
+    --accent:#9B4DFF; /* violet accent */
+    --muted:#6b7280;
+    --paper:#ffffff;
+    --bg:#f7f7fb;
+    --pad:28px;
+  }
+  html,body{margin:0;padding:0;background:var(--bg);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;}
+  .container{max-width:820px;margin:42px auto;padding:36px;background:var(--paper);box-shadow:0 10px 30px rgba(20,20,50,0.06);border-radius:12px;}
+  header{display:flex;align-items:center;gap:18px;margin-bottom:18px}
+  .logo{
+    width:72px;height:72px;border-radius:10px;background:linear-gradient(135deg,var(--accent),#FF6B9A);
+    display:flex;align-items:center;justify-content:center;color:white;font-weight:800;font-size:22px;
+    box-shadow:0 6px 18px rgba(155,77,255,0.18);
+  }
+  h1{margin:0;font-size:20px}
+  h2{margin:4px 0 0;font-size:12px;color:var(--muted);font-weight:600}
+  .accent-line{height:6px;background:linear-gradient(90deg,var(--accent),#FF6B9A);border-radius:4px;margin:18px 0}
+  .grid{display:grid;grid-template-columns:1fr 340px;gap:20px}
+  .box{background:#fff;padding:18px;border-radius:10px;border:1px solid rgba(15,18,30,0.03)}
+  .deliverables li{margin:8px 0}
+  .price{font-weight:800;font-size:20px;color:#111827}
+  .muted{color:var(--muted);font-size:13px}
+  .cta{display:flex;flex-direction:column;gap:8px;margin-top:14px}
+  .btn{background:var(--accent);color:white;padding:10px 14px;border-radius:8px;text-decoration:none;font-weight:700;width:100%;text-align:center}
+  .small{font-size:12px;color:var(--muted)}
+  footer{margin-top:18px;display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:12px}
+  @media(print){ .container{box-shadow:none;border:0;max-width:100%;margin:0} .grid{grid-template-columns:1fr 360px} }
+</style>
+</head>
+<body>
+  <div class="container" role="main">
+    <header>
+      <div class="logo">AVC</div>
+      <div>
+        <h1>Allison Van Cura — Senior Annotation Architect</h1>
+        <h2>One-Week Pilot: Taxonomy + Gold Standard + Label Studio Setup</h2>
+      </div>
+    </header>
+
+    <div class="accent-line" aria-hidden="true"></div>
+
+    <div class="grid">
+      <div>
+        <div class="box">
+          <strong class="muted">Price</strong>
+          <div class="price">$1,500 <span class="small">• 30% deposit to start</span></div>
+
+          <hr style="border:none;height:1px;background:linear-gradient(to right, rgba(15,18,30,0.03), rgba(15,18,30,0.06));margin:12px 0">
+
+          <strong>Deliverables (7 days)</strong>
+          <ul class="deliverables muted" style="padding-left:18px;margin-top:8px">
+            <li><strong>2-page taxonomy & edge rules</strong> — clear label definitions & conflict rules.</li>
+            <li><strong>500 labeled examples</strong> (or 300 + 200 gold) — production quality.</li>
+            <li><strong>200-example gold set</strong> with line-by-line rationales (audit ready).</li>
+            <li><strong>Label Studio project export</strong> + keyboard shortcuts & import instructions.</li>
+            <li><strong>QA snapshot</strong> showing IAB, error types, throughput.</li>
+            <li><strong>60–90m onboarding</strong> + 30m handoff call.</li>
+          </ul>
+
+          <div style="margin-top:12px" class="muted">
+            <strong>Typical outcomes:</strong><br>
+            • ≥3× effective labeling speed with pre-labeling + human correction.<br>
+            • IAB ≥ 0.80 on the gold set after training and QA.
+          </div>
+        </div>
+
+        <div style="height:12px"></div>
+
+        <div class="box">
+          <strong>Guarantee</strong>
+          <p class="muted" style="margin-top:8px">If the gold set does not meet the acceptance criteria defined at kickoff, I will revise the taxonomy & gold set until it does — no extra charge.</p>
+
+          <div style="height:12px"></div>
+
+          <strong>Why hire me</strong>
+          <p class="muted" style="margin-top:8px">Senior, systems-level thinking that turns ambiguous labeling into repeatable ops. I make datasets ship-ready quickly and reduce relabeling cycles through clear rules, audit-ready gold, and tooling.</p>
+        </div>
+      </div>
+
+      <aside>
+        <div class="box">
+          <strong>Simple process</strong>
+          <ol class="muted" style="padding-left:18px;margin-top:8px">
+            <li>30-minute discovery call — define acceptance criteria.</li>
+            <li>30% deposit → kickoff.</li>
+            <li>Deliverables at day 7 → acceptance review.</li>
+          </ol>
+
+          <div class="cta">
+            <a class="btn" href="https://calendly.com/your-link">Book discovery call</a>
+            <div class="small muted">Or email: <strong>acfwrites@gmail.com</strong></div>
+          </div>
+        </div>
+
+        <div style="height:12px"></div>
+
+        <div class="box muted">
+          <strong>Contact</strong>
+          <div style="margin-top:8px">Allison Van Cura<br>
+          Senior Annotation Architect<br>
+          acfwrites@gmail.com</div>
+        </div>
+      </aside>
+    </div>
+
+    <footer>
+      <div class="muted">Pilot: Taxonomy • Gold set • Label Studio • QA</div>
+      <div class="muted">Allison Van Cura — Senior Annotation Architect</div>
+    </footer>
+  </div>
+</body>
+</html>
