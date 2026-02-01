@@ -73,6 +73,7 @@ impl Default for NetworkProxySettings {
 pub enum NetworkMode {
     /// Limited (read-only) access: only GET/HEAD/OPTIONS are allowed for HTTP. HTTPS CONNECT is
     /// blocked unless MITM is enabled so the proxy can enforce method policy on inner requests.
+    /// SOCKS5 remains blocked in limited mode.
     Limited,
     /// Full network access: all HTTP methods are allowed, and HTTPS CONNECTs are tunneled without
     /// MITM interception.

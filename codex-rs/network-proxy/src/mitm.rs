@@ -5,6 +5,7 @@ use crate::reasons::REASON_METHOD_NOT_ALLOWED;
 use crate::responses::blocked_text_response;
 use crate::responses::text_response;
 use crate::state::BlockedRequest;
+use crate::state::BlockedRequestArgs;
 use crate::state::NetworkProxyState;
 use crate::upstream::UpstreamClient;
 use anyhow::Context as _;
@@ -239,14 +240,14 @@ async fn forward_request(req: Request) -> Result<Response> {
 
     if !mode.allows_method(&method) {
         let _ = app_state
-            .record_blocked(BlockedRequest::new(
-                target_host.clone(),
-                REASON_METHOD_NOT_ALLOWED.to_string(),
-                client.clone(),
-                Some(method.clone()),
-                Some(mode),
-                "https".to_string(),
-            ))
+            .record_blocked(BlockedRequest::new(BlockedRequestArgs {
+                host: target_host.clone(),
+                reason: REASON_METHOD_NOT_ALLOWED.to_string(),
+                client: client.clone(),
+                method: Some(method.clone()),
+                mode: Some(mode),
+                protocol: "https".to_string(),
+            }))
             .await;
         warn!(
             "MITM blocked by method policy (host={target_host}, method={method}, path={path}, mode={mode:?}, allowed_methods=GET, HEAD, OPTIONS)"
