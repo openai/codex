@@ -218,7 +218,7 @@ impl BottomPane {
         self.composer.take_mention_paths()
     }
 
-    /// Clear pending attachments and mention paths when a command doesn't submit text.
+    /// Clear pending attachments and mention paths e.g. when a slash command doesn't submit text.
     pub(crate) fn drain_pending_submission_state(&mut self) {
         let _ = self.take_recent_submission_images_with_placeholders();
         let _ = self.take_mention_paths();
