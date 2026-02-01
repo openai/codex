@@ -2625,21 +2625,19 @@ impl ChatComposer {
         let first_line_end = text.find('\n').unwrap_or(text.len());
         let first_line = &text[..first_line_end];
         let desired_range = self.slash_command_element_range(first_line);
+        // Slash commands are only valid at byte 0 of the first line.
+        // Any slash-shaped element not matching the current desired prefix is stale.
         let mut has_desired = false;
         let mut stale_ranges = Vec::new();
-
         for elem in self.textarea.text_elements() {
             let Some(payload) = elem.placeholder(text) else {
                 continue;
             };
-            if !self.is_known_slash_payload(payload) {
+            if payload.strip_prefix('/').is_none() {
                 continue;
             }
             let range = elem.byte_range.start..elem.byte_range.end;
-            if desired_range
-                .as_ref()
-                .is_some_and(|desired| desired.start == range.start && desired.end == range.end)
-            {
+            if desired_range.as_ref() == Some(&range) {
                 has_desired = true;
             } else {
                 stale_ranges.push(range);
@@ -2675,16 +2673,6 @@ impl ChatComposer {
         } else {
             None
         }
-    }
-
-    fn is_known_slash_payload(&self, payload: &str) -> bool {
-        let Some(name) = payload.strip_prefix('/') else {
-            return false;
-        };
-        if name.is_empty() || name.contains('/') || name.chars().any(char::is_whitespace) {
-            return false;
-        }
-        self.is_known_slash_name(name)
     }
 
     fn is_known_slash_name(&self, name: &str) -> bool {
