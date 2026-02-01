@@ -1499,7 +1499,12 @@ impl Config {
         let developer_instructions = developer_instructions.or(cfg.developer_instructions);
         let model_personality = model_personality
             .or(config_profile.model_personality)
-            .or(cfg.model_personality);
+            .or(cfg.model_personality)
+            .or_else(|| {
+                features
+                    .enabled(Feature::Personality)
+                    .then_some(Personality::Friendly)
+            });
 
         let experimental_compact_prompt_path = config_profile
             .experimental_compact_prompt_file
