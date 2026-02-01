@@ -215,6 +215,23 @@ pub async fn run_main(
         .await
     {
         Ok(config) => {
+            let effective_toml = config.config_layer_stack.effective_config();
+            match effective_toml.try_into() {
+                Ok(config_toml) => {
+                    if let Err(err) = codex_core::personality_migration::maybe_migrate_personality(
+                        &config.codex_home,
+                        &config_toml,
+                    )
+                    .await
+                    {
+                        warn!(error = %err, "Failed to run personality migration");
+                    }
+                }
+                Err(err) => {
+                    warn!(error = %err, "Failed to deserialize config for personality migration");
+                }
+            }
+
             let auth_manager = AuthManager::shared(
                 config.codex_home.clone(),
                 false,
