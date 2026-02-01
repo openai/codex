@@ -66,6 +66,7 @@ impl OllamaClient {
         let host_root = base_url_to_host_root(base_url);
         let client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(5))
+            .no_proxy()
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
         let client = Self {
@@ -250,6 +251,7 @@ impl OllamaClient {
     fn from_host_root(host_root: impl Into<String>) -> Self {
         let client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(5))
+            .no_proxy()
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
         Self {

@@ -166,10 +166,17 @@ fn parse_fence_line(line: &str) -> Option<(u8, usize, &str)> {
 }
 
 fn is_markdown_fence_info(info: &str) -> bool {
-    match info.trim().to_ascii_lowercase().as_str() {
-        "markdown" | "md" => true,
-        _ => false,
+    for part in info.trim().split_whitespace() {
+        let lower = part.to_ascii_lowercase();
+        if matches!(lower.as_str(), "markdown" | "md")
+            || lower.ends_with(".md")
+            || lower.ends_with(".markdown")
+            || lower.ends_with(".mdx")
+        {
+            return true;
+        }
     }
+    false
 }
 
 pub fn render_markdown_text(input: &str) -> Text<'static> {
@@ -186,7 +193,15 @@ pub(crate) fn render_markdown_text_with_width(input: &str, width: Option<usize>)
 fn render_markdown_text_with_width_termimad(input: &str, width: Option<usize>) -> Text<'static> {
     let unwrapped = unwrap_markdown_fences(input);
     let rendered = termimad_skin().text(unwrapped.as_ref(), width).to_string();
+    let rendered = reset_ansi_on_newlines(&rendered);
     ansi_escape(&rendered)
+}
+
+fn reset_ansi_on_newlines(input: &str) -> std::borrow::Cow<'_, str> {
+    if !input.contains('\n') {
+        return std::borrow::Cow::Borrowed(input);
+    }
+    std::borrow::Cow::Owned(input.replace('\n', "\u{1b}[0m\n"))
 }
 
 fn render_markdown_text_with_width_pulldown(input: &str, width: Option<usize>) -> Text<'static> {
@@ -832,6 +847,27 @@ mod tests {
     }
 
     #[test]
+    fn termimad_inline_code_does_not_color_whole_line() {
+        let rendered = render_termimad("Use `code` here.");
+        let mut saw_plain_prefix = false;
+        let mut saw_plain_suffix = false;
+        for line in &rendered.lines {
+            for span in &line.spans {
+                if span.content == "Use " {
+                    saw_plain_prefix = true;
+                    assert_eq!(is_default_color(span.style.fg), true);
+                }
+                if span.content == " here." {
+                    saw_plain_suffix = true;
+                    assert_eq!(is_default_color(span.style.fg), true);
+                }
+            }
+        }
+        assert_eq!(saw_plain_prefix, true);
+        assert_eq!(saw_plain_suffix, true);
+    }
+
+    #[test]
     fn termimad_headers_are_bold() {
         let rendered = render_termimad("# Heading");
         let has_bold = rendered
@@ -868,6 +904,44 @@ mod tests {
     }
 
     #[test]
+    fn termimad_unwraps_markdown_fence_with_filename() {
+        let rendered = render_termimad("```markdown README.md\n**bold**\n```\n");
+        let bold_span = rendered
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .find(|span| span.content == "bold")
+            .expect("expected bold span");
+        assert_eq!(bold_span.style.add_modifier.contains(Modifier::BOLD), true);
+        assert_eq!(is_default_color(bold_span.style.fg), true);
+    }
+
+    #[test]
+    fn termimad_unwraps_markdown_fence_with_md_filename_only() {
+        let rendered = render_termimad("```README.md\n**bold**\n```\n");
+        let bold_span = rendered
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .find(|span| span.content == "bold")
+            .expect("expected bold span");
+        assert_eq!(bold_span.style.add_modifier.contains(Modifier::BOLD), true);
+        assert_eq!(is_default_color(bold_span.style.fg), true);
+    }
+
+    #[test]
+    fn termimad_style_does_not_bleed_across_lines() {
+        let rendered = render_termimad("`code`\nplain\n");
+        let plain_span = rendered
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .find(|span| span.content == "plain")
+            .expect("expected plain span");
+        assert_eq!(is_default_color(plain_span.style.fg), true);
+    }
+
+    #[test]
     fn termimad_keeps_non_markdown_fence_as_code() {
         let rendered = render_termimad("```text\nbold\n```\n");
         let code_span = rendered
@@ -878,5 +952,49 @@ mod tests {
             .expect("expected code span");
         assert_eq!(is_cyan(code_span.style.fg), true);
         assert_eq!(code_span.style.add_modifier.contains(Modifier::BOLD), false);
+    }
+
+    #[test]
+    fn termimad_readme_like_snippet_colors_code_only() {
+        let markdown = "## Installing Codex\n\nToday, the easiest way to install Codex is via `npm`:\n\n```shell\nnpm i -g @openai/codex\ncodex\n```\n\nYou can also install via Homebrew (`brew install --cask codex`) or download a platform-specific release.\n";
+        let rendered = render_termimad(markdown);
+
+        let header_span = rendered
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .find(|span| span.content.contains("Installing Codex"))
+            .expect("expected header span");
+        assert_eq!(is_default_color(header_span.style.fg), true);
+
+        let npm_span = rendered
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .find(|span| span.content == "npm")
+            .expect("expected inline code span for npm");
+        assert_eq!(is_cyan(npm_span.style.fg), true);
+
+        let code_line = rendered
+            .lines
+            .iter()
+            .find(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.clone())
+                    .collect::<String>()
+                    .contains("npm i -g @openai/codex")
+            })
+            .expect("expected code block line");
+        let code_line_is_cyan = code_line.spans.iter().all(|span| is_cyan(span.style.fg));
+        assert_eq!(code_line_is_cyan, true);
+
+        let after_code_span = rendered
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .find(|span| span.content.contains("You can also install via Homebrew"))
+            .expect("expected paragraph span after code block");
+        assert_eq!(is_default_color(after_code_span.style.fg), true);
     }
 }
