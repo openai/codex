@@ -11,7 +11,11 @@ use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnarchiveResponse;
 use codex_core::find_archived_thread_path_by_id_str;
 use codex_core::find_thread_path_by_id_str;
+use std::fs::FileTimes;
+use std::fs::OpenOptions;
 use std::path::Path;
+use std::time::Duration;
+use std::time::SystemTime;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -62,6 +66,16 @@ async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result
         archived_path.exists(),
         "expected {archived_path_display} to exist"
     );
+    let old_time = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
+    let old_timestamp = old_time
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .expect("old timestamp")
+        .as_secs() as i64;
+    let times = FileTimes::new().set_modified(old_time);
+    OpenOptions::new()
+        .append(true)
+        .open(&archived_path)?
+        .set_times(times)?;
 
     let unarchive_id = mcp
         .send_thread_unarchive_request(ThreadUnarchiveParams {
@@ -73,7 +87,13 @@ async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result
         mcp.read_stream_until_response_message(RequestId::Integer(unarchive_id)),
     )
     .await??;
-    let _: ThreadUnarchiveResponse = to_response::<ThreadUnarchiveResponse>(unarchive_resp)?;
+    let ThreadUnarchiveResponse {
+        thread: unarchived_thread,
+    } = to_response::<ThreadUnarchiveResponse>(unarchive_resp)?;
+    assert!(
+        unarchived_thread.updated_at > old_timestamp,
+        "expected updated_at to be bumped on unarchive"
+    );
 
     let rollout_path_display = rollout_path.display();
     assert!(
