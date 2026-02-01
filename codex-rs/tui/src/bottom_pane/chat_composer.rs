@@ -4,6 +4,7 @@
 //!
 //! - Editing the input buffer (a [`TextArea`]), including placeholder "elements" for attachments.
 //! - Routing keys to the active popup (slash commands, file search, skill/apps mentions).
+//! - Promoting typed slash commands into atomic elements when the command name is completed.
 //! - Handling submit vs newline on Enter.
 //! - Turning raw key streams into explicit paste operations on platforms where terminals
 //!   don't provide reliable bracketed paste (notably Windows).
@@ -36,6 +37,8 @@
 //!
 //! The numeric auto-submit path used by the slash popup performs the same pending-paste expansion
 //! and attachment pruning, and clears pending paste state on success.
+//! Slash commands with arguments (like `/plan` and `/review`) reuse the same preparation path so
+//! pasted content and text elements are preserved when extracting args.
 //!
 //! # Non-bracketed Paste Bursts
 //!
@@ -184,7 +187,7 @@ pub enum InputResult {
         text_elements: Vec<TextElement>,
     },
     Command(SlashCommand),
-    CommandWithArgs(SlashCommand, String),
+    CommandWithArgs(SlashCommand, String, Vec<TextElement>),
     None,
 }
 
@@ -1235,6 +1238,18 @@ impl ChatComposer {
             self.handle_paste(pasted);
         }
         self.textarea.input(input);
+
+        if let KeyEvent {
+            code: KeyCode::Char(' '),
+            modifiers,
+            kind: KeyEventKind::Press,
+            ..
+        } = input
+        {
+            if !has_ctrl_or_alt(modifiers) {
+                self.mark_slash_command_element_on_space();
+            }
+        }
         let text_after = self.textarea.text();
         self.pending_pastes
             .retain(|(placeholder, _)| text_after.contains(placeholder));
@@ -1798,7 +1813,12 @@ impl ChatComposer {
 
     /// Prepare text for submission/queuing. Returns None if submission should be suppressed.
     /// On success, clears pending paste payloads because placeholders have been expanded.
-    fn prepare_submission_text(&mut self) -> Option<(String, Vec<TextElement>)> {
+    ///
+    /// When `record_history` is true, the final submission is stored for ↑/↓ recall.
+    fn prepare_submission_text(
+        &mut self,
+        record_history: bool,
+    ) -> Option<(String, Vec<TextElement>)> {
         let mut text = self.textarea.text().to_string();
         let original_input = text.clone();
         let original_text_elements = self.textarea.text_elements();
@@ -1896,7 +1916,7 @@ impl ChatComposer {
         if text.is_empty() && self.attached_images.is_empty() {
             return None;
         }
-        if !text.is_empty() || !self.attached_images.is_empty() {
+        if record_history && (!text.is_empty() || !self.attached_images.is_empty()) {
             let local_image_paths = self
                 .attached_images
                 .iter()
@@ -1978,7 +1998,7 @@ impl ChatComposer {
             return (result, true);
         }
 
-        if let Some((text, text_elements)) = self.prepare_submission_text() {
+        if let Some((text, text_elements)) = self.prepare_submission_text(true) {
             if should_queue {
                 (
                     InputResult::Queued {
@@ -2039,11 +2059,10 @@ impl ChatComposer {
         if !self.slash_commands_enabled() {
             return None;
         }
-        let original_input = self.textarea.text().to_string();
-        let input_starts_with_space = original_input.starts_with(' ');
+        let text = self.textarea.text().to_string();
+        let input_starts_with_space = text.starts_with(' ');
 
         if !input_starts_with_space {
-            let text = self.textarea.text().to_string();
             if let Some((name, rest, _rest_offset)) = parse_slash_name(&text)
                 && !rest.is_empty()
                 && !name.contains('/')
@@ -2054,13 +2073,63 @@ impl ChatComposer {
                     self.personality_command_enabled,
                     self.windows_degraded_sandbox_active,
                 )
-                && matches!(cmd, SlashCommand::Review | SlashCommand::Rename)
+                && matches!(
+                    cmd,
+                    SlashCommand::Review | SlashCommand::Rename | SlashCommand::Plan
+                )
             {
-                self.textarea.set_text_clearing_elements("");
-                return Some(InputResult::CommandWithArgs(cmd, rest.to_string()));
+                let record_history = matches!(cmd, SlashCommand::Plan);
+                let (prepared_text, prepared_elements) =
+                    self.prepare_submission_text(record_history)?;
+                let Some((_, prepared_rest, prepared_rest_offset)) =
+                    parse_slash_name(&prepared_text)
+                else {
+                    return None;
+                };
+                let mut args_elements = Self::slash_command_args_elements(
+                    prepared_rest,
+                    prepared_rest_offset,
+                    &prepared_elements,
+                );
+                let trimmed_rest = prepared_rest.trim();
+                args_elements =
+                    Self::trim_text_elements(prepared_rest, trimmed_rest, args_elements);
+                return Some(InputResult::CommandWithArgs(
+                    cmd,
+                    trimmed_rest.to_string(),
+                    args_elements,
+                ));
             }
         }
         None
+    }
+
+    /// Translate full-text element ranges into command-argument ranges.
+    ///
+    /// `rest_offset` is the byte offset where `rest` begins in the full text.
+    fn slash_command_args_elements(
+        rest: &str,
+        rest_offset: usize,
+        text_elements: &[TextElement],
+    ) -> Vec<TextElement> {
+        if rest.is_empty() || text_elements.is_empty() {
+            return Vec::new();
+        }
+        text_elements
+            .iter()
+            .filter_map(|elem| {
+                if elem.byte_range.end <= rest_offset {
+                    return None;
+                }
+                let start = elem.byte_range.start.saturating_sub(rest_offset);
+                let mut end = elem.byte_range.end.saturating_sub(rest_offset);
+                if start >= rest.len() {
+                    return None;
+                }
+                end = end.min(rest.len());
+                (start < end).then_some(elem.map_range(|_| ByteRange { start, end }))
+            })
+            .collect()
     }
 
     /// Handle key event when no popup is visible.
@@ -2159,6 +2228,9 @@ impl ChatComposer {
                 // pending fast char flushes as normal typed input.
                 self.textarea.insert_str(ch.to_string().as_str());
                 self.sync_popups();
+                if ch == ' ' {
+                    self.mark_slash_command_element_on_space();
+                }
                 true
             }
             FlushResult::None => false,
@@ -2504,6 +2576,56 @@ impl ChatComposer {
             ActivePopup::File(_) | ActivePopup::Skill(_)
         ) {
             self.active_popup = ActivePopup::None;
+        }
+    }
+
+    /// Convert a completed `/command` token on the first line into a text element.
+    ///
+    /// This keeps typed commands visually distinct and edits atomic once the
+    /// user finishes the command name and hits space.
+    fn mark_slash_command_element_on_space(&mut self) {
+        if !self.slash_commands_enabled() {
+            return;
+        }
+        let text = self.textarea.text();
+        let first_line_end = text.find('\n').unwrap_or(text.len());
+        let first_line = &text[..first_line_end];
+        let Some((name, _rest, _rest_offset)) = parse_slash_name(first_line) else {
+            return;
+        };
+        if name.contains('/') {
+            return;
+        }
+        let element_end = 1 + name.len();
+        let has_space_after = first_line
+            .get(element_end..)
+            .and_then(|tail| tail.chars().next())
+            .is_some_and(|c| c.is_whitespace());
+        if !has_space_after {
+            return;
+        }
+        let is_builtin = slash_commands::find_builtin_command(
+            name,
+            self.collaboration_modes_enabled,
+            self.connectors_enabled,
+            self.personality_command_enabled,
+            self.windows_degraded_sandbox_active,
+        )
+        .is_some();
+        let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
+        let is_prompt = name
+            .strip_prefix(&prompt_prefix)
+            .map(|prompt_name| {
+                self.custom_prompts
+                    .iter()
+                    .any(|prompt| prompt.name == prompt_name)
+            })
+            .unwrap_or(false);
+        if !is_builtin && !is_prompt {
+            return;
+        }
+        if element_end <= first_line.len() {
+            self.textarea.add_element_range(0..element_end);
         }
     }
 
@@ -4582,7 +4704,7 @@ mod tests {
             InputResult::Command(cmd) => {
                 assert_eq!(cmd.command(), "init");
             }
-            InputResult::CommandWithArgs(_, _) => {
+            InputResult::CommandWithArgs(_, _, _) => {
                 panic!("expected command dispatch without args for '/init'")
             }
             InputResult::Submitted { text, .. } => {
@@ -4683,7 +4805,7 @@ mod tests {
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match result {
             InputResult::Command(cmd) => assert_eq!(cmd.command(), "diff"),
-            InputResult::CommandWithArgs(_, _) => {
+            InputResult::CommandWithArgs(_, _, _) => {
                 panic!("expected command dispatch without args for '/diff'")
             }
             InputResult::Submitted { text, .. } => {
@@ -4695,6 +4817,49 @@ mod tests {
             InputResult::None => panic!("expected Command result for '/diff'"),
         }
         assert!(composer.textarea.is_empty());
+    }
+
+    #[test]
+    fn slash_command_elementizes_on_space() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_collaboration_modes_enabled(true);
+
+        type_chars_humanlike(&mut composer, &['/', 'p', 'l', 'a', 'n', ' ']);
+
+        let text = composer.textarea.text().to_string();
+        let elements = composer.textarea.text_elements();
+        assert_eq!(text, "/plan ");
+        assert_eq!(elements.len(), 1);
+        assert_eq!(elements[0].placeholder(&text), Some("/plan"));
+    }
+
+    #[test]
+    fn slash_command_elementizes_only_known_commands() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_collaboration_modes_enabled(true);
+
+        type_chars_humanlike(&mut composer, &['/', 'U', 's', 'e', 'r', 's', ' ']);
+
+        let text = composer.textarea.text().to_string();
+        let elements = composer.textarea.text_elements();
+        assert_eq!(text, "/Users ");
+        assert!(elements.is_empty());
     }
 
     #[test]
@@ -4722,7 +4887,7 @@ mod tests {
             InputResult::Command(cmd) => {
                 assert_eq!(cmd.command(), "mention");
             }
-            InputResult::CommandWithArgs(_, _) => {
+            InputResult::CommandWithArgs(_, _, _) => {
                 panic!("expected command dispatch without args for '/mention'")
             }
             InputResult::Submitted { text, .. } => {
@@ -4736,6 +4901,44 @@ mod tests {
         assert!(composer.textarea.is_empty(), "composer should be cleared");
         composer.insert_str("@");
         assert_eq!(composer.textarea.text(), "@");
+    }
+
+    #[test]
+    fn slash_plan_args_preserve_text_elements() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_collaboration_modes_enabled(true);
+
+        type_chars_humanlike(&mut composer, &['/', 'p', 'l', 'a', 'n', ' ']);
+        let placeholder = local_image_label_text(1);
+        composer.attach_image(PathBuf::from("/tmp/plan.png"));
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        match result {
+            InputResult::CommandWithArgs(cmd, args, text_elements) => {
+                assert_eq!(cmd.command(), "plan");
+                assert_eq!(args, placeholder);
+                assert_eq!(text_elements.len(), 1);
+                assert_eq!(
+                    text_elements[0].placeholder(&args),
+                    Some(placeholder.as_str())
+                );
+            }
+            _ => panic!("expected CommandWithArgs for /plan with args"),
+        }
     }
 
     /// Behavior: multiple paste operations can coexist; placeholders should be expanded to their

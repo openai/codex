@@ -844,6 +844,34 @@ impl TextArea {
         self.set_cursor(end);
     }
 
+    /// Mark an existing text range as an atomic element without changing the text.
+    ///
+    /// This is used to convert already-typed tokens (like `/plan`) into elements
+    /// so they render and edit atomically. Overlapping or duplicate ranges are ignored.
+    pub fn add_element_range(&mut self, range: Range<usize>) {
+        let start = self.clamp_pos_to_char_boundary(range.start.min(self.text.len()));
+        let end = self.clamp_pos_to_char_boundary(range.end.min(self.text.len()));
+        if start >= end {
+            return;
+        }
+        if self
+            .elements
+            .iter()
+            .any(|e| e.range.start == start && e.range.end == end)
+        {
+            return;
+        }
+        if self
+            .elements
+            .iter()
+            .any(|e| start < e.range.end && end > e.range.start)
+        {
+            return;
+        }
+        self.elements.push(TextElement { range: start..end });
+        self.elements.sort_by_key(|e| e.range.start);
+    }
+
     fn add_element(&mut self, range: Range<usize>) {
         let elem = TextElement { range };
         self.elements.push(elem);

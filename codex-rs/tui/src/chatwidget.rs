@@ -2732,8 +2732,8 @@ impl ChatWidget {
                 InputResult::Command(cmd) => {
                     self.dispatch_command(cmd);
                 }
-                InputResult::CommandWithArgs(cmd, args) => {
-                    self.dispatch_command_with_args(cmd, args);
+                InputResult::CommandWithArgs(cmd, args, text_elements) => {
+                    self.dispatch_command_with_args(cmd, args, text_elements);
                 }
                 InputResult::None => {}
             },
@@ -2783,6 +2783,10 @@ impl ChatWidget {
                 cmd.command()
             );
             self.add_to_history(history_cell::new_error_event(message));
+            let _ = self
+                .bottom_pane
+                .take_recent_submission_images_with_placeholders();
+            let _ = self.bottom_pane.take_mention_paths();
             self.request_redraw();
             return;
         }
@@ -3019,21 +3023,30 @@ impl ChatWidget {
         }
     }
 
-    fn dispatch_command_with_args(&mut self, cmd: SlashCommand, args: String) {
+    fn dispatch_command_with_args(
+        &mut self,
+        cmd: SlashCommand,
+        args: String,
+        text_elements: Vec<TextElement>,
+    ) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
                 cmd.command()
             );
             self.add_to_history(history_cell::new_error_event(message));
+            let _ = self
+                .bottom_pane
+                .take_recent_submission_images_with_placeholders();
+            let _ = self.bottom_pane.take_mention_paths();
             self.request_redraw();
             return;
         }
 
-        let trimmed = args.trim();
+        let trimmed = args.trim().to_string();
         match cmd {
             SlashCommand::Rename if !trimmed.is_empty() => {
-                let Some(name) = codex_core::util::normalize_thread_name(trimmed) else {
+                let Some(name) = codex_core::util::normalize_thread_name(&trimmed) else {
                     self.add_error_message("Thread name cannot be empty.".to_string());
                     return;
                 };
@@ -3042,20 +3055,50 @@ impl ChatWidget {
                 self.request_redraw();
                 self.app_event_tx
                     .send(AppEvent::CodexOp(Op::SetThreadName { name }));
+                let _ = self
+                    .bottom_pane
+                    .take_recent_submission_images_with_placeholders();
+                let _ = self.bottom_pane.take_mention_paths();
             }
-            SlashCommand::Collab | SlashCommand::Plan => {
-                let _ = trimmed;
+            SlashCommand::Plan if !trimmed.is_empty() => {
                 self.dispatch_command(cmd);
+                if self.active_mode_kind() != ModeKind::Plan {
+                    let _ = self
+                        .bottom_pane
+                        .take_recent_submission_images_with_placeholders();
+                    let _ = self.bottom_pane.take_mention_paths();
+                    return;
+                }
+                let user_message = UserMessage {
+                    text: args,
+                    local_images: self
+                        .bottom_pane
+                        .take_recent_submission_images_with_placeholders(),
+                    text_elements,
+                    mention_paths: self.bottom_pane.take_mention_paths(),
+                };
+                if self.is_session_configured() {
+                    self.reasoning_buffer.clear();
+                    self.full_reasoning_buffer.clear();
+                    self.set_status_header(String::from("Working"));
+                    self.submit_user_message(user_message);
+                } else {
+                    self.queue_user_message(user_message);
+                }
             }
             SlashCommand::Review if !trimmed.is_empty() => {
                 self.submit_op(Op::Review {
                     review_request: ReviewRequest {
                         target: ReviewTarget::Custom {
-                            instructions: trimmed.to_string(),
+                            instructions: trimmed.clone(),
                         },
                         user_facing_hint: None,
                     },
                 });
+                let _ = self
+                    .bottom_pane
+                    .take_recent_submission_images_with_placeholders();
+                let _ = self.bottom_pane.take_mention_paths();
             }
             _ => self.dispatch_command(cmd),
         }

@@ -48,6 +48,8 @@ The solution is to detect paste-like _bursts_ and buffer them into a single expl
   history navigation, etc).
 - After handling the key, `sync_popups()` runs so popup visibility/filters stay consistent with the
   latest text + cursor.
+- When a slash command name is completed and the user types a space, the `/command` token is
+  promoted into a text element so it renders distinctly and edits atomically.
 
 ### History navigation (↑/↓)
 
@@ -104,6 +106,9 @@ There are multiple submission paths, but they share the same core rules:
 4. Prunes attachments so only placeholders that survive expansion are sent.
 5. Clears pending pastes on success and suppresses submission if the final text is empty and there
    are no attachments.
+
+The same preparation path is reused for slash commands with arguments (for example `/plan` and
+`/review`) so pasted content and text elements are preserved when extracting args.
 
 ### Numeric auto-submit path
 
