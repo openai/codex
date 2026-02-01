@@ -2783,10 +2783,7 @@ impl ChatWidget {
                 cmd.command()
             );
             self.add_to_history(history_cell::new_error_event(message));
-            let _ = self
-                .bottom_pane
-                .take_recent_submission_images_with_placeholders();
-            let _ = self.bottom_pane.take_mention_paths();
+            self.bottom_pane.drain_pending_submission_state();
             self.request_redraw();
             return;
         }
@@ -3035,10 +3032,7 @@ impl ChatWidget {
                 cmd.command()
             );
             self.add_to_history(history_cell::new_error_event(message));
-            let _ = self
-                .bottom_pane
-                .take_recent_submission_images_with_placeholders();
-            let _ = self.bottom_pane.take_mention_paths();
+            self.bottom_pane.drain_pending_submission_state();
             self.request_redraw();
             return;
         }
@@ -3055,18 +3049,12 @@ impl ChatWidget {
                 self.request_redraw();
                 self.app_event_tx
                     .send(AppEvent::CodexOp(Op::SetThreadName { name }));
-                let _ = self
-                    .bottom_pane
-                    .take_recent_submission_images_with_placeholders();
-                let _ = self.bottom_pane.take_mention_paths();
+                self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::Plan if !trimmed.is_empty() => {
                 self.dispatch_command(cmd);
                 if self.active_mode_kind() != ModeKind::Plan {
-                    let _ = self
-                        .bottom_pane
-                        .take_recent_submission_images_with_placeholders();
-                    let _ = self.bottom_pane.take_mention_paths();
+                    self.bottom_pane.drain_pending_submission_state();
                     return;
                 }
                 let user_message = UserMessage {
@@ -3095,10 +3083,7 @@ impl ChatWidget {
                         user_facing_hint: None,
                     },
                 });
-                let _ = self
-                    .bottom_pane
-                    .take_recent_submission_images_with_placeholders();
-                let _ = self.bottom_pane.take_mention_paths();
+                self.bottom_pane.drain_pending_submission_state();
             }
             _ => self.dispatch_command(cmd),
         }
