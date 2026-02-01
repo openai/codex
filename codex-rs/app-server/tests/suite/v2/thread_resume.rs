@@ -437,6 +437,14 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
 
     let request = response_mock.single_request();
     let developer_texts = request.message_input_texts("developer");
+    let personality_update_count = developer_texts
+        .iter()
+        .filter(|text| text.contains("<personality_spec>"))
+        .count();
+    assert_eq!(
+        personality_update_count, 1,
+        "expected exactly one personality update message in developer input, got {developer_texts:?}"
+    );
     assert!(
         developer_texts
             .iter()

@@ -474,6 +474,14 @@ async fn turn_start_accepts_personality_override_v2() -> Result<()> {
         eprintln!("request body: {}", request.body_json());
     }
 
+    let personality_update_count = developer_texts
+        .iter()
+        .filter(|text| text.contains("<personality_spec>"))
+        .count();
+    assert_eq!(
+        personality_update_count, 1,
+        "expected exactly one personality update message in developer input, got {developer_texts:?}"
+    );
     assert!(
         developer_texts
             .iter()
@@ -585,6 +593,14 @@ async fn turn_start_change_personality_mid_thread_v2() -> Result<()> {
     );
 
     let second_developer_texts = requests[1].message_input_texts("developer");
+    let personality_update_count = second_developer_texts
+        .iter()
+        .filter(|text| text.contains("<personality_spec>"))
+        .count();
+    assert_eq!(
+        personality_update_count, 1,
+        "expected exactly one personality update message in second request, got {second_developer_texts:?}"
+    );
     assert!(
         second_developer_texts
             .iter()

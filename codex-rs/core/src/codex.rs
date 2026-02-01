@@ -2434,6 +2434,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                         personality,
                         ..Default::default()
                     },
+                    &mut previous_context,
                 )
                 .await;
             }
@@ -2572,6 +2573,7 @@ mod handlers {
         sess: &Session,
         sub_id: String,
         updates: SessionSettingsUpdate,
+        previous_turn_context: &mut Option<Arc<TurnContext>>,
     ) {
         let previous_context = sess
             .new_default_turn_with_sub_id(sess.next_internal_sub_id())
@@ -2597,12 +2599,13 @@ mod handlers {
             return;
         }
 
+        let current_context = sess.new_default_turn_with_sub_id(sub_id).await;
         let initial_context_seeded = sess.state.lock().await.initial_context_seeded;
         if !initial_context_seeded {
+            *previous_turn_context = Some(current_context);
             return;
         }
 
-        let current_context = sess.new_default_turn_with_sub_id(sub_id).await;
         let update_items = sess.build_settings_update_items(
             Some(&previous_context),
             &current_context,
@@ -2613,6 +2616,7 @@ mod handlers {
             sess.record_conversation_items(&current_context, &update_items)
                 .await;
         }
+        *previous_turn_context = Some(current_context);
     }
 
     pub async fn user_input_or_turn(

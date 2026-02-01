@@ -255,6 +255,14 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
         .expect("expected personality update request");
 
     let developer_texts = request.message_input_texts("developer");
+    let personality_update_count = developer_texts
+        .iter()
+        .filter(|text| text.contains("<personality_spec>"))
+        .count();
+    assert_eq!(
+        personality_update_count, 1,
+        "expected exactly one personality update message in developer input, got {developer_texts:?}"
+    );
     let personality_text = developer_texts
         .iter()
         .find(|text| text.contains("<personality_spec>"))
@@ -738,6 +746,14 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
         .last()
         .expect("expected personality update request");
     let developer_texts = request.message_input_texts("developer");
+    let personality_update_count = developer_texts
+        .iter()
+        .filter(|text| text.contains("<personality_spec>"))
+        .count();
+    assert_eq!(
+        personality_update_count, 1,
+        "expected exactly one personality update message in developer input, got {developer_texts:?}"
+    );
     let personality_text = developer_texts
         .iter()
         .find(|text| text.contains("<personality_spec>"))
