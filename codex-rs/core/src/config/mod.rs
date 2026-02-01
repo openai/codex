@@ -417,7 +417,7 @@ impl ConfigBuilder {
             fallback_cwd,
         } = self;
         let codex_home = codex_home.map_or_else(find_codex_home, std::io::Result::Ok)?;
-        let cli_overrides = cli_overrides.unwrap_or_default();
+        let mut cli_overrides = cli_overrides.unwrap_or_default();
         let mut harness_overrides = harness_overrides.unwrap_or_default();
         let loader_overrides = loader_overrides.unwrap_or_default();
         let cwd_override = harness_overrides.cwd.as_deref().or(fallback_cwd.as_deref());
@@ -426,6 +426,36 @@ impl ConfigBuilder {
             None => AbsolutePathBuf::current_dir()?,
         };
         harness_overrides.cwd = Some(cwd.to_path_buf());
+
+        // Support `-c model_instructions_file=...` by eagerly reading the file
+        // and translating it into a `base_instructions` override. This keeps
+        // the behavior consistent across all entrypoints that use
+        // `ConfigBuilder`.
+        if harness_overrides.base_instructions.is_none() {
+            let mut model_instructions_file_override = None;
+            for (key, value) in &cli_overrides {
+                if key == "model_instructions_file" {
+                    model_instructions_file_override = Some(value.clone());
+                }
+            }
+
+            if let Some(value) = model_instructions_file_override {
+                cli_overrides.retain(|(key, _)| key != "model_instructions_file");
+                let TomlValue::String(path) = value else {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "model_instructions_file override must be a string",
+                    ));
+                };
+
+                let path = AbsolutePathBuf::resolve_path_against_base(path, cwd.as_path())?;
+                if let Some(contents) =
+                    Config::try_read_non_empty_file(Some(&path), "model instructions file")?
+                {
+                    harness_overrides.base_instructions = Some(contents);
+                }
+            }
+        }
         let config_layer_stack = load_config_layers_state(
             &codex_home,
             Some(cwd),
