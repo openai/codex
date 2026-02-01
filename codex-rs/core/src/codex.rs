@@ -2677,7 +2677,7 @@ mod handlers {
     use tracing::info;
     use tracing::warn;
 
-    use crate::state::session::SessionState;
+    use crate::state::SessionState;
 
     pub async fn interrupt(sess: &Arc<Session>) {
         sess.interrupt_task().await;
