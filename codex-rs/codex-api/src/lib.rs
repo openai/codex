@@ -40,3 +40,4 @@ pub use crate::requests::ResponsesRequest;
 pub use crate::requests::ResponsesRequestBuilder;
 pub use crate::sse::stream_from_fixture;
 pub use crate::telemetry::SseTelemetry;
+pub use crate::telemetry::WebsocketTelemetry;
