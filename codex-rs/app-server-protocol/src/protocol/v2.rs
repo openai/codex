@@ -1163,6 +1163,35 @@ pub struct CommandExecResponse {
     pub stderr: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExecRunParams {
+    pub input: Vec<UserInput>,
+    pub model: Option<String>,
+    pub model_provider: Option<String>,
+    pub cwd: Option<String>,
+    pub effort: Option<ReasoningEffort>,
+    pub summary: Option<ReasoningSummary>,
+    pub collaboration_mode: Option<CollaborationMode>,
+    pub personality: Option<Personality>,
+    pub config: Option<HashMap<String, JsonValue>>,
+    pub base_instructions: Option<String>,
+    pub developer_instructions: Option<String>,
+    pub output_schema: Option<JsonValue>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExecRunResponse {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub status: TurnStatus,
+    pub last_agent_message: Option<String>,
+    pub error: Option<TurnError>,
+}
+
 // === Threads, Turns, and Items ===
 // Thread APIs
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
