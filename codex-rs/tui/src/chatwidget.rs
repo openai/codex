@@ -72,7 +72,6 @@ use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::RateLimitSnapshot;
-use codex_core::protocol::RawResponseItemEvent;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::SkillMetadata as ProtocolSkillMetadata;
@@ -104,12 +103,9 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Settings;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::request_user_input::RequestUserInputEvent;
-use codex_protocol::request_user_input::RequestUserInputQuestion;
-use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
 use crossterm::event::KeyCode;
@@ -533,8 +529,6 @@ pub(crate) struct ChatWidget {
     suppress_session_configured_redraw: bool,
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
-    // Replayed request_user_input questions keyed by call_id to render answers on resume.
-    replay_request_user_input_questions: HashMap<String, Vec<RequestUserInputQuestion>>,
     // Pending notification to show when unfocused on next Draw
     pending_notification: Option<Notification>,
     /// When `Some`, the user has pressed a quit shortcut and the second press
@@ -802,7 +796,6 @@ impl ChatWidget {
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.set_skills(None);
         self.bottom_pane.set_connectors_snapshot(None);
-        self.replay_request_user_input_questions.clear();
         self.thread_id = Some(event.session_id);
         self.thread_name = event.thread_name.clone();
         self.forked_from = event.forked_from_id;
@@ -1514,37 +1507,6 @@ impl ChatWidget {
             |q| q.push_user_input(ev),
             |s| s.handle_request_user_input_now(ev2),
         );
-    }
-
-    /// Cache replayed request_user_input questions so answers can render once the
-    /// corresponding tool output is replayed.
-    fn cache_request_user_input_for_replay(&mut self, ev: RequestUserInputEvent) {
-        self.replay_request_user_input_questions
-            .insert(ev.call_id, ev.questions);
-    }
-
-    /// Replay handler for request_user_input tool outputs, rendering them into history.
-    fn on_raw_response_item_replay(&mut self, event: RawResponseItemEvent) {
-        let ResponseItem::FunctionCallOutput { call_id, output } = event.item else {
-            return;
-        };
-        let Some(questions) = self.replay_request_user_input_questions.remove(&call_id) else {
-            return;
-        };
-        let response: RequestUserInputResponse = match serde_json::from_str(&output.content) {
-            Ok(response) => response,
-            Err(err) => {
-                tracing::warn!(
-                    "failed to parse request_user_input response for call_id {call_id}: {err}"
-                );
-                return;
-            }
-        };
-        self.add_to_history(history_cell::new_request_user_input_result(
-            questions,
-            response.answers,
-            response.interrupted,
-        ));
     }
 
     fn on_exec_command_begin(&mut self, ev: ExecCommandBeginEvent) {
@@ -2319,7 +2281,6 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
-            replay_request_user_input_questions: HashMap::new(),
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
@@ -2469,7 +2430,6 @@ impl ChatWidget {
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             queued_user_messages: VecDeque::new(),
-            replay_request_user_input_questions: HashMap::new(),
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
@@ -2600,7 +2560,6 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
-            replay_request_user_input_questions: HashMap::new(),
             show_welcome_banner: false,
             suppress_session_configured_redraw: true,
             pending_notification: None,
@@ -3499,16 +3458,7 @@ impl ChatWidget {
             EventMsg::ElicitationRequest(ev) => {
                 self.on_elicitation_request(ev);
             }
-            EventMsg::RequestUserInput(ev) => {
-                if from_replay {
-                    // During replay, avoid reopening the questions UI and instead cache
-                    // questions until we see the matching tool output.
-                    // TODO: support replaying unanswered questions as a UI flow.
-                    self.cache_request_user_input_for_replay(ev);
-                } else {
-                    self.on_request_user_input(ev);
-                }
-            }
+            EventMsg::RequestUserInput(ev) => self.on_request_user_input(ev),
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::TerminalInteraction(delta) => self.on_terminal_interaction(delta),
             EventMsg::ExecCommandOutputDelta(delta) => self.on_exec_command_output_delta(delta),
@@ -3564,11 +3514,7 @@ impl ChatWidget {
             EventMsg::CollabCloseBegin(_) => {}
             EventMsg::CollabCloseEnd(ev) => self.on_collab_event(collab::close_end(ev)),
             EventMsg::ThreadRolledBack(_) => {}
-            EventMsg::RawResponseItem(event) => {
-                if from_replay {
-                    self.on_raw_response_item_replay(event);
-                }
-            }
+            EventMsg::RawResponseItem(_) => {}
             EventMsg::ItemStarted(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
