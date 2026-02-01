@@ -372,7 +372,15 @@ fn parse_shell_lc_commands_for_execpolicy(command: &[String]) -> Option<Vec<Vec<
     }
 
     let (_, script) = extract_bash_command(command)?;
-    let tokens = shlex_split(script)?;
+    let tokens = if let Some(tokens) = shlex_split(script) {
+        tokens
+    } else {
+        let first_line = script.lines().next().unwrap_or_default();
+        if first_line.is_empty() || contains_shell_substitution(first_line) {
+            return None;
+        }
+        shlex_split(first_line)?
+    };
     let mut commands = Vec::new();
     let mut current = Vec::new();
 
@@ -407,7 +415,13 @@ fn finalize_shell_tokens(tokens: &mut Vec<String>) -> Option<Vec<String>> {
         index += 1;
     }
 
-    let command_tokens = tokens[index..].to_vec();
+    let mut command_tokens = Vec::new();
+    for token in &tokens[index..] {
+        if is_redirection_token(token) {
+            break;
+        }
+        command_tokens.push(token.clone());
+    }
     tokens.clear();
     if command_tokens.is_empty() {
         None
@@ -432,6 +446,14 @@ fn is_env_assignment(token: &str) -> bool {
         return false;
     }
     chars.all(|c| matches!(c, 'A'..='Z' | 'a'..='z' | '0'..='9' | '_'))
+}
+
+fn is_redirection_token(token: &str) -> bool {
+    token.contains('<') || token.contains('>')
+}
+
+fn contains_shell_substitution(line: &str) -> bool {
+    line.chars().any(|c| matches!(c, '$' | '`' | '(' | ')'))
 }
 
 /// Derive a proposed execpolicy amendment when a command requires user approval
@@ -900,6 +922,17 @@ prefix_rule(pattern=["rm"], decision="forbidden")
                 reason: "`bash -lc 'rm -rf /some/important/folder'` rejected: policy forbids commands starting with `rm`".to_string()
             }
         );
+    }
+
+    #[test]
+    fn parse_shell_lc_fallback_rejects_substitution_chars() {
+        let command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "python3 $(echo hi) <<'PY'\nprint('hi)\nPY".to_string(),
+        ];
+
+        assert!(parse_shell_lc_commands_for_execpolicy(&command).is_none());
     }
 
     #[tokio::test]
