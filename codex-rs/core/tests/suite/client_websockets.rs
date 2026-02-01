@@ -16,6 +16,7 @@ use codex_core::protocol::SessionSource;
 use codex_otel::OtelManager;
 use codex_otel::metrics::MetricsClient;
 use codex_otel::metrics::MetricsConfig;
+use codex_protocol::account::PlanType;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use core_test_support::load_default_config_for_test;
@@ -138,25 +139,42 @@ async fn responses_websocket_emits_reasoning_included_event() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_websocket_emits_metadata_events() {
+async fn responses_websocket_emits_rate_limit_events() {
     skip_if_no_network!();
 
-    let metadata_headers = json!({
-        "X-Codex-Primary-Used-Percent": "42",
-        "X-Codex-Primary-Window-Minutes": "60",
-        "X-Codex-Primary-Reset-At": "1700000000",
-        "X-Codex-Credits-Has-Credits": "true",
-        "X-Codex-Credits-Unlimited": "false",
-        "X-Codex-Credits-Balance": "123",
-        "X-Models-Etag": "etag-123",
-        "X-Reasoning-Included": "true",
+    let rate_limit_event = json!({
+        "type": "codex.rate_limits",
+        "plan_type": "plus",
+        "rate_limits": {
+            "allowed": true,
+            "limit_reached": false,
+            "primary": {
+                "used_percent": 42,
+                "window_minutes": 60,
+                "reset_at": 1700000000
+            },
+            "secondary": null
+        },
+        "code_review_rate_limits": null,
+        "credits": {
+            "has_credits": true,
+            "unlimited": false,
+            "balance": "123"
+        },
+        "promo": null
     });
 
-    let server = start_websocket_server(vec![vec![vec![
-        json!({"type": "codex.metadata", "headers": metadata_headers}),
-        ev_response_created("resp-1"),
-        ev_completed("resp-1"),
-    ]]])
+    let server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
+        requests: vec![vec![
+            rate_limit_event,
+            ev_response_created("resp-1"),
+            ev_completed("resp-1"),
+        ]],
+        response_headers: vec![
+            ("X-Models-Etag".to_string(), "etag-123".to_string()),
+            ("X-Reasoning-Included".to_string(), "true".to_string()),
+        ],
+    }])
     .await;
 
     let harness = websocket_harness(&server).await;
@@ -193,6 +211,7 @@ async fn responses_websocket_emits_metadata_events() {
     assert_eq!(primary.used_percent, 42.0);
     assert_eq!(primary.window_minutes, Some(60));
     assert_eq!(primary.resets_at, Some(1_700_000_000));
+    assert_eq!(rate_limits.plan_type, Some(PlanType::Plus));
     let credits = rate_limits.credits.expect("missing credits");
     assert!(credits.has_credits);
     assert!(!credits.unlimited);

@@ -163,16 +163,11 @@ pub struct ResponsesStreamEvent {
     delta: Option<String>,
     summary_index: Option<i64>,
     content_index: Option<i64>,
-    headers: Option<Value>,
 }
 
 impl ResponsesStreamEvent {
     pub fn kind(&self) -> &str {
         &self.kind
-    }
-
-    pub fn headers(&self) -> Option<&Value> {
-        self.headers.as_ref()
     }
 }
 
