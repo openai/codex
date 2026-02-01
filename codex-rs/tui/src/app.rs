@@ -22,6 +22,7 @@ use crate::history_cell;
 use crate::history_cell::HistoryCell;
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
+use crate::markdown_render::MarkdownRenderer;
 use crate::model_migration::ModelMigrationOutcome;
 use crate::model_migration::migration_copy_for_models;
 use crate::model_migration::run_model_migration_prompt;
@@ -934,6 +935,13 @@ impl App {
         emit_deprecation_notice(&app_event_tx, ollama_chat_support_notice);
         emit_project_config_warnings(&app_event_tx, &config);
         tui.set_notification_method(config.tui_notification_method);
+        crate::markdown_render::set_markdown_renderer(
+            if config.features.enabled(Feature::MarkdownRendering) {
+                MarkdownRenderer::Termimad
+            } else {
+                MarkdownRenderer::Pulldown
+            },
+        );
 
         let harness_overrides =
             normalize_harness_overrides_for_cwd(harness_overrides, &config.cwd)?;

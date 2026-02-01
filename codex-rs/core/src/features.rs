@@ -121,6 +121,8 @@ pub enum Feature {
     SkillEnvVarDependencyPrompt,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     Steer,
+    /// Use the experimental markdown renderer in the TUI.
+    MarkdownRendering,
     /// Enable collaboration modes (Plan, Code, Pair Programming, Execute).
     CollaborationModes,
     /// Enable personality selection in the TUI.
@@ -552,6 +554,16 @@ pub const FEATURES: &[FeatureSpec] = &[
             name: "Steer conversation",
             menu_description: "Enter submits immediately; Tab queues messages when a task is running.",
             announcement: "NEW! Try Steer mode: Enter submits immediately, Tab queues. Enable in /experimental!",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::MarkdownRendering,
+        key: "markdown_rendering",
+        stage: Stage::Experimental {
+            name: "Markdown Rendering",
+            menu_description: "Render markdown using the experimental renderer in the TUI.",
+            announcement: "NEW! Try the experimental markdown renderer in /experimental.",
         },
         default_enabled: false,
     },

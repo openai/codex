@@ -1,6 +1,7 @@
 use crate::render::line_utils::line_to_static;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
+use codex_ansi_escape::ansi_escape;
 use pulldown_cmark::CodeBlockKind;
 use pulldown_cmark::CowStr;
 use pulldown_cmark::Event;
@@ -13,6 +14,12 @@ use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::text::Text;
+use std::sync::OnceLock;
+use std::sync::atomic::AtomicU8;
+use std::sync::atomic::Ordering;
+use termimad::MadSkin;
+use termimad::crossterm::style::Attribute;
+use termimad::crossterm::style::Color as TermColor;
 
 struct MarkdownStyles {
     h1: Style,
@@ -71,11 +78,118 @@ impl IndentContext {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum MarkdownRenderer {
+    Pulldown = 0,
+    Termimad = 1,
+}
+
+static MARKDOWN_RENDERER: AtomicU8 = AtomicU8::new(MarkdownRenderer::Pulldown as u8);
+
+pub(crate) fn set_markdown_renderer(renderer: MarkdownRenderer) {
+    MARKDOWN_RENDERER.store(renderer as u8, Ordering::Relaxed);
+}
+
+fn markdown_renderer() -> MarkdownRenderer {
+    match MARKDOWN_RENDERER.load(Ordering::Relaxed) {
+        1 => MarkdownRenderer::Termimad,
+        _ => MarkdownRenderer::Pulldown,
+    }
+}
+
+fn termimad_skin() -> &'static MadSkin {
+    static SKIN: OnceLock<MadSkin> = OnceLock::new();
+    SKIN.get_or_init(|| {
+        let mut skin = MadSkin::no_style();
+        skin.bold.add_attr(Attribute::Bold);
+        skin.italic.add_attr(Attribute::Italic);
+        skin.strikeout.add_attr(Attribute::CrossedOut);
+        skin.inline_code.set_fg(TermColor::Cyan);
+        skin.code_block.set_fg(TermColor::Cyan);
+        for header in &mut skin.headers {
+            header.compound_style.add_attr(Attribute::Bold);
+        }
+        skin.quote_mark.set_char('>');
+        skin.quote_mark.set_fg(TermColor::Green);
+        skin.bullet.set_char('-');
+        skin.horizontal_rule.set_char('-');
+        skin
+    })
+}
+
+fn unwrap_markdown_fences(input: &str) -> std::borrow::Cow<'_, str> {
+    let mut out = String::with_capacity(input.len());
+    let mut in_fence: Option<(u8, usize)> = None;
+    let mut changed = false;
+
+    for line in input.split_inclusive('\n') {
+        let line_trimmed = line.strip_suffix('\n').unwrap_or(line);
+        let trimmed_start = line_trimmed.trim_start();
+        if let Some((fence_char, fence_len, rest)) = parse_fence_line(trimmed_start) {
+            if let Some((open_char, open_len)) = in_fence {
+                if fence_char == open_char && fence_len >= open_len && rest.trim().is_empty() {
+                    in_fence = None;
+                    changed = true;
+                    continue;
+                }
+            } else if is_markdown_fence_info(rest) {
+                in_fence = Some((fence_char, fence_len));
+                changed = true;
+                continue;
+            }
+        }
+        out.push_str(line);
+    }
+
+    if changed {
+        std::borrow::Cow::Owned(out)
+    } else {
+        std::borrow::Cow::Borrowed(input)
+    }
+}
+
+fn parse_fence_line(line: &str) -> Option<(u8, usize, &str)> {
+    let bytes = line.as_bytes();
+    let first = *bytes.first()?;
+    if first != b'`' && first != b'~' {
+        return None;
+    }
+    let mut len = 1;
+    while len < bytes.len() && bytes[len] == first {
+        len += 1;
+    }
+    if len < 3 {
+        return None;
+    }
+    Some((first, len, &line[len..]))
+}
+
+fn is_markdown_fence_info(info: &str) -> bool {
+    match info.trim().to_ascii_lowercase().as_str() {
+        "markdown" | "md" => true,
+        _ => false,
+    }
+}
+
 pub fn render_markdown_text(input: &str) -> Text<'static> {
     render_markdown_text_with_width(input, None)
 }
 
 pub(crate) fn render_markdown_text_with_width(input: &str, width: Option<usize>) -> Text<'static> {
+    match markdown_renderer() {
+        MarkdownRenderer::Pulldown => render_markdown_text_with_width_pulldown(input, width),
+        MarkdownRenderer::Termimad => render_markdown_text_with_width_termimad(input, width),
+    }
+}
+
+fn render_markdown_text_with_width_termimad(input: &str, width: Option<usize>) -> Text<'static> {
+    let unwrapped = unwrap_markdown_fences(input);
+    let rendered = termimad_skin().text(unwrapped.as_ref(), width).to_string();
+    ansi_escape(&rendered)
+}
+
+fn render_markdown_text_with_width_pulldown(input: &str, width: Option<usize>) -> Text<'static> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
     let parser = Parser::new_ext(input, options);
@@ -545,6 +659,8 @@ mod markdown_render_tests {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use ratatui::style::Color;
+    use ratatui::style::Modifier;
     use ratatui::text::Text;
 
     fn lines_to_strings(text: &Text<'_>) -> Vec<String> {
@@ -674,5 +790,93 @@ mod tests {
             lines,
             vec!["fn main() { println!(\"hi from a long line\"); }".to_string(),]
         );
+    }
+
+    fn render_termimad(input: &str) -> Text<'static> {
+        render_markdown_text_with_width_termimad(input, None)
+    }
+
+    fn is_default_color(color: Option<Color>) -> bool {
+        matches!(color, None | Some(Color::Reset))
+    }
+
+    fn is_cyan(color: Option<Color>) -> bool {
+        matches!(color, Some(Color::Cyan) | Some(Color::Indexed(14)))
+    }
+
+    fn is_green(color: Option<Color>) -> bool {
+        matches!(color, Some(Color::Green) | Some(Color::Indexed(10)))
+    }
+
+    #[test]
+    fn termimad_plain_text_uses_default_color() {
+        let rendered = render_termimad("Just plain text.");
+        let has_non_default = rendered
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .any(|s| !is_default_color(s.style.fg) || !is_default_color(s.style.bg));
+        assert_eq!(has_non_default, false);
+    }
+
+    #[test]
+    fn termimad_inline_code_is_cyan() {
+        let rendered = render_termimad("Use `code` here.");
+        let code_span = rendered
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .find(|span| span.content == "code")
+            .expect("expected inline code span");
+        assert_eq!(is_cyan(code_span.style.fg), true);
+    }
+
+    #[test]
+    fn termimad_headers_are_bold() {
+        let rendered = render_termimad("# Heading");
+        let has_bold = rendered
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .any(|span| span.style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(has_bold, true);
+    }
+
+    #[test]
+    fn termimad_quote_mark_is_green() {
+        let rendered = render_termimad("> quoted");
+        let quote_span = rendered
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .find(|span| span.content.contains('>'))
+            .expect("expected quote marker span");
+        assert_eq!(is_green(quote_span.style.fg), true);
+    }
+
+    #[test]
+    fn termimad_unwraps_markdown_fence() {
+        let rendered = render_termimad("```markdown\n**bold**\n```\n");
+        let bold_span = rendered
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .find(|span| span.content == "bold")
+            .expect("expected bold span");
+        assert_eq!(bold_span.style.add_modifier.contains(Modifier::BOLD), true);
+        assert_eq!(is_default_color(bold_span.style.fg), true);
+    }
+
+    #[test]
+    fn termimad_keeps_non_markdown_fence_as_code() {
+        let rendered = render_termimad("```text\nbold\n```\n");
+        let code_span = rendered
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .find(|span| span.content.trim() == "bold")
+            .expect("expected code span");
+        assert_eq!(is_cyan(code_span.style.fg), true);
+        assert_eq!(code_span.style.add_modifier.contains(Modifier::BOLD), false);
     }
 }

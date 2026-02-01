@@ -174,6 +174,7 @@ use crate::history_cell::WebSearchCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::markdown::append_markdown;
+use crate::markdown_render::MarkdownRenderer;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::FlexRenderable;
@@ -2307,6 +2308,7 @@ impl ChatWidget {
             widget.config.features.enabled(Feature::CollaborationModes),
         );
         widget.sync_personality_command_enabled();
+        widget.sync_markdown_renderer();
         #[cfg(target_os = "windows")]
         widget.bottom_pane.set_windows_degraded_sandbox_active(
             codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
@@ -2586,6 +2588,7 @@ impl ChatWidget {
             widget.config.features.enabled(Feature::CollaborationModes),
         );
         widget.sync_personality_command_enabled();
+        widget.sync_markdown_renderer();
         #[cfg(target_os = "windows")]
         widget.bottom_pane.set_windows_degraded_sandbox_active(
             codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
@@ -5129,6 +5132,9 @@ impl ChatWidget {
         if feature == Feature::Personality {
             self.sync_personality_command_enabled();
         }
+        if feature == Feature::MarkdownRendering {
+            self.sync_markdown_renderer();
+        }
         #[cfg(target_os = "windows")]
         if matches!(
             feature,
@@ -5210,6 +5216,15 @@ impl ChatWidget {
     fn sync_personality_command_enabled(&mut self) {
         self.bottom_pane
             .set_personality_command_enabled(self.config.features.enabled(Feature::Personality));
+    }
+
+    fn sync_markdown_renderer(&self) {
+        let renderer = if self.config.features.enabled(Feature::MarkdownRendering) {
+            MarkdownRenderer::Termimad
+        } else {
+            MarkdownRenderer::Pulldown
+        };
+        crate::markdown_render::set_markdown_renderer(renderer);
     }
 
     fn current_model_supports_personality(&self) -> bool {
