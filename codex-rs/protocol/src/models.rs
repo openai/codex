@@ -2,8 +2,6 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use codex_utils_image::load_and_resize_to_fit;
-use mcp_types::CallToolResult;
-use mcp_types::ContentBlock;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -23,6 +21,8 @@ use codex_execpolicy::Policy;
 use codex_git::GhostCommit;
 use codex_utils_image::error::ImageProcessingError;
 use schemars::JsonSchema;
+
+use crate::mcp::CallToolResult;
 
 /// Controls whether a command should use the session sandbox or bypass it.
 #[derive(
@@ -805,6 +805,7 @@ impl From<&CallToolResult> for FunctionCallOutputPayload {
             content,
             structured_content,
             is_error,
+            meta: _,
         } = call_tool_result;
 
         let is_success = is_error != &Some(true);
@@ -841,7 +842,7 @@ impl From<&CallToolResult> for FunctionCallOutputPayload {
             }
         };
 
-        let content_items = convert_content_blocks_to_items(content);
+        let content_items = convert_mcp_content_to_items(content);
 
         FunctionCallOutputPayload {
             content: serialized_content,
@@ -851,32 +852,44 @@ impl From<&CallToolResult> for FunctionCallOutputPayload {
     }
 }
 
-fn convert_content_blocks_to_items(
-    blocks: &[ContentBlock],
+fn convert_mcp_content_to_items(
+    contents: &[serde_json::Value],
 ) -> Option<Vec<FunctionCallOutputContentItem>> {
     let mut saw_image = false;
-    let mut items = Vec::with_capacity(blocks.len());
-    tracing::warn!("Blocks: {:?}", blocks);
-    for block in blocks {
-        match block {
-            ContentBlock::TextContent(text) => {
-                items.push(FunctionCallOutputContentItem::InputText {
-                    text: text.text.clone(),
-                });
-            }
-            ContentBlock::ImageContent(image) => {
+    let mut items = Vec::with_capacity(contents.len());
+
+    for content in contents {
+        let item = match content.get("type").and_then(serde_json::Value::as_str) {
+            Some("text") => FunctionCallOutputContentItem::InputText {
+                text: content
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            },
+            Some("image") => {
                 saw_image = true;
-                // Just in case the content doesn't include a data URL, add it.
-                let image_url = if image.data.starts_with("data:") {
-                    image.data.clone()
+                let mime_type = content
+                    .get("mimeType")
+                    .or_else(|| content.get("mime_type"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("application/octet-stream");
+                let data = content
+                    .get("data")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                let image_url = if data.starts_with("data:") {
+                    data.to_string()
                 } else {
-                    format!("data:{};base64,{}", image.mime_type, image.data)
+                    format!("data:{mime_type};base64,{data}")
                 };
-                items.push(FunctionCallOutputContentItem::InputImage { image_url });
+                FunctionCallOutputContentItem::InputImage { image_url }
             }
-            // TODO: render audio, resource, and embedded resource content to the model.
-            _ => return None,
-        }
+            _ => FunctionCallOutputContentItem::InputText {
+                text: serde_json::to_string(content).unwrap_or_else(|_| "<content>".to_string()),
+            },
+        };
+        items.push(item);
     }
 
     if saw_image { Some(items) } else { None }
@@ -908,8 +921,6 @@ mod tests {
     use crate::protocol::AskForApproval;
     use anyhow::Result;
     use codex_execpolicy::Policy;
-    use mcp_types::ImageContent;
-    use mcp_types::TextContent;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
     use tempfile::tempdir;
@@ -1040,20 +1051,12 @@ mod tests {
     fn serializes_image_outputs_as_array() -> Result<()> {
         let call_tool_result = CallToolResult {
             content: vec![
-                ContentBlock::TextContent(TextContent {
-                    annotations: None,
-                    text: "caption".into(),
-                    r#type: "text".into(),
-                }),
-                ContentBlock::ImageContent(ImageContent {
-                    annotations: None,
-                    data: "BASE64".into(),
-                    mime_type: "image/png".into(),
-                    r#type: "image".into(),
-                }),
+                serde_json::json!({"type":"text","text":"caption"}),
+                serde_json::json!({"type":"image","data":"BASE64","mimeType":"image/png"}),
             ],
-            is_error: None,
             structured_content: None,
+            is_error: Some(false),
+            meta: None,
         };
 
         let payload = FunctionCallOutputPayload::from(&call_tool_result);
