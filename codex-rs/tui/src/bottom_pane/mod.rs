@@ -404,6 +404,7 @@ impl BottomPane {
     ) {
         self.composer
             .set_text_content(text, text_elements, local_image_paths);
+        self.composer.move_cursor_to_end();
         self.request_redraw();
     }
 

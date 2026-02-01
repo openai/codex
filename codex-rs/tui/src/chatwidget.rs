@@ -3090,7 +3090,7 @@ impl ChatWidget {
                 self.submit_op(Op::Review {
                     review_request: ReviewRequest {
                         target: ReviewTarget::Custom {
-                            instructions: trimmed.clone(),
+                            instructions: trimmed,
                         },
                         user_facing_hint: None,
                     },

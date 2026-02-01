@@ -750,6 +750,7 @@ impl ChatComposer {
     /// Move the cursor to the end of the current text buffer.
     pub(crate) fn move_cursor_to_end(&mut self) {
         self.textarea.set_cursor(self.textarea.text().len());
+        self.sync_popups();
     }
 
     pub(crate) fn clear_for_ctrl_c(&mut self) -> Option<String> {
@@ -1245,10 +1246,9 @@ impl ChatComposer {
             kind: KeyEventKind::Press,
             ..
         } = input
+            && !has_ctrl_or_alt(modifiers)
         {
-            if !has_ctrl_or_alt(modifiers) {
-                self.mark_slash_command_element_on_space();
-            }
+            self.mark_slash_command_element_on_space();
         }
         let text_after = self.textarea.text();
         self.pending_pastes
@@ -2060,48 +2060,45 @@ impl ChatComposer {
             return None;
         }
         let text = self.textarea.text().to_string();
-        let input_starts_with_space = text.starts_with(' ');
-
-        if !input_starts_with_space {
-            if let Some((name, rest, _rest_offset)) = parse_slash_name(&text)
-                && !rest.is_empty()
-                && !name.contains('/')
-                && let Some(cmd) = slash_commands::find_builtin_command(
-                    name,
-                    self.collaboration_modes_enabled,
-                    self.connectors_enabled,
-                    self.personality_command_enabled,
-                    self.windows_degraded_sandbox_active,
-                )
-                && matches!(
-                    cmd,
-                    SlashCommand::Review | SlashCommand::Rename | SlashCommand::Plan
-                )
-            {
-                let record_history = matches!(cmd, SlashCommand::Plan);
-                let (prepared_text, prepared_elements) =
-                    self.prepare_submission_text(record_history)?;
-                let Some((_, prepared_rest, prepared_rest_offset)) =
-                    parse_slash_name(&prepared_text)
-                else {
-                    return None;
-                };
-                let mut args_elements = Self::slash_command_args_elements(
-                    prepared_rest,
-                    prepared_rest_offset,
-                    &prepared_elements,
-                );
-                let trimmed_rest = prepared_rest.trim();
-                args_elements =
-                    Self::trim_text_elements(prepared_rest, trimmed_rest, args_elements);
-                return Some(InputResult::CommandWithArgs(
-                    cmd,
-                    trimmed_rest.to_string(),
-                    args_elements,
-                ));
-            }
+        if text.starts_with(' ') {
+            return None;
         }
-        None
+
+        let (name, rest, _rest_offset) = parse_slash_name(&text)?;
+        if rest.is_empty() || name.contains('/') {
+            return None;
+        }
+
+        let cmd = slash_commands::find_builtin_command(
+            name,
+            self.collaboration_modes_enabled,
+            self.connectors_enabled,
+            self.personality_command_enabled,
+            self.windows_degraded_sandbox_active,
+        )?;
+
+        if !matches!(
+            cmd,
+            SlashCommand::Review | SlashCommand::Rename | SlashCommand::Plan
+        ) {
+            return None;
+        }
+
+        let record_history = matches!(cmd, SlashCommand::Plan);
+        let (prepared_text, prepared_elements) = self.prepare_submission_text(record_history)?;
+        let (_, prepared_rest, prepared_rest_offset) = parse_slash_name(&prepared_text)?;
+        let mut args_elements = Self::slash_command_args_elements(
+            prepared_rest,
+            prepared_rest_offset,
+            &prepared_elements,
+        );
+        let trimmed_rest = prepared_rest.trim();
+        args_elements = Self::trim_text_elements(prepared_rest, trimmed_rest, args_elements);
+        Some(InputResult::CommandWithArgs(
+            cmd,
+            trimmed_rest.to_string(),
+            args_elements,
+        ))
     }
 
     /// Translate full-text element ranges into command-argument ranges.
@@ -2600,7 +2597,7 @@ impl ChatComposer {
         let has_space_after = first_line
             .get(element_end..)
             .and_then(|tail| tail.chars().next())
-            .is_some_and(|c| c.is_whitespace());
+            .is_some_and(char::is_whitespace);
         if !has_space_after {
             return;
         }
