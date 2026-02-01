@@ -872,6 +872,18 @@ impl TextArea {
         self.elements.sort_by_key(|e| e.range.start);
     }
 
+    pub fn remove_element_range(&mut self, range: Range<usize>) -> bool {
+        let start = self.clamp_pos_to_char_boundary(range.start.min(self.text.len()));
+        let end = self.clamp_pos_to_char_boundary(range.end.min(self.text.len()));
+        if start >= end {
+            return false;
+        }
+        let len_before = self.elements.len();
+        self.elements
+            .retain(|elem| elem.range.start != start || elem.range.end != end);
+        len_before != self.elements.len()
+    }
+
     fn add_element(&mut self, range: Range<usize>) {
         let elem = TextElement { range };
         self.elements.push(elem);

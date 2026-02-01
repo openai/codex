@@ -167,6 +167,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::ops::Range;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
@@ -1240,16 +1241,6 @@ impl ChatComposer {
         }
         self.textarea.input(input);
 
-        if let KeyEvent {
-            code: KeyCode::Char(' '),
-            modifiers,
-            kind: KeyEventKind::Press,
-            ..
-        } = input
-            && !has_ctrl_or_alt(modifiers)
-        {
-            self.mark_slash_command_element_on_space();
-        }
         let text_after = self.textarea.text();
         self.pending_pastes
             .retain(|(placeholder, _)| text_after.contains(placeholder));
@@ -2245,9 +2236,6 @@ impl ChatComposer {
                 // pending fast char flushes as normal typed input.
                 self.textarea.insert_str(ch.to_string().as_str());
                 self.sync_popups();
-                if ch == ' ' {
-                    self.mark_slash_command_element_on_space();
-                }
                 true
             }
             FlushResult::None => false,
@@ -2530,6 +2518,7 @@ impl ChatComposer {
     }
 
     fn sync_popups(&mut self) {
+        self.sync_slash_command_elements();
         if !self.popups_enabled() {
             self.active_popup = ActivePopup::None;
             return;
@@ -2596,22 +2585,51 @@ impl ChatComposer {
         }
     }
 
-    /// Convert a completed `/command` token on the first line into a text element.
-    ///
-    /// This keeps typed commands visually distinct and edits atomic once the
-    /// user finishes the command name and hits space.
-    fn mark_slash_command_element_on_space(&mut self) {
+    /// Keep slash command elements aligned with the current first line.
+    fn sync_slash_command_elements(&mut self) {
         if !self.slash_commands_enabled() {
             return;
         }
         let text = self.textarea.text();
         let first_line_end = text.find('\n').unwrap_or(text.len());
         let first_line = &text[..first_line_end];
-        let Some((name, _rest, _rest_offset)) = parse_slash_name(first_line) else {
-            return;
-        };
+        let desired_range = self.slash_command_element_range(first_line);
+        let mut has_desired = false;
+        let mut stale_ranges = Vec::new();
+
+        for elem in self.textarea.text_elements() {
+            let Some(payload) = elem.placeholder(text) else {
+                continue;
+            };
+            if !self.is_known_slash_payload(payload) {
+                continue;
+            }
+            let range = elem.byte_range.start..elem.byte_range.end;
+            if desired_range
+                .as_ref()
+                .is_some_and(|desired| desired.start == range.start && desired.end == range.end)
+            {
+                has_desired = true;
+            } else {
+                stale_ranges.push(range);
+            }
+        }
+
+        for range in stale_ranges {
+            self.textarea.remove_element_range(range);
+        }
+
+        if let Some(range) = desired_range
+            && !has_desired
+        {
+            self.textarea.add_element_range(range);
+        }
+    }
+
+    fn slash_command_element_range(&self, first_line: &str) -> Option<Range<usize>> {
+        let (name, _rest, _rest_offset) = parse_slash_name(first_line)?;
         if name.contains('/') {
-            return;
+            return None;
         }
         let element_end = 1 + name.len();
         let has_space_after = first_line
@@ -2619,8 +2637,26 @@ impl ChatComposer {
             .and_then(|tail| tail.chars().next())
             .is_some_and(char::is_whitespace);
         if !has_space_after {
-            return;
+            return None;
         }
+        if self.is_known_slash_name(name) {
+            Some(0..element_end)
+        } else {
+            None
+        }
+    }
+
+    fn is_known_slash_payload(&self, payload: &str) -> bool {
+        let Some(name) = payload.strip_prefix('/') else {
+            return false;
+        };
+        if name.is_empty() || name.contains('/') || name.chars().any(char::is_whitespace) {
+            return false;
+        }
+        self.is_known_slash_name(name)
+    }
+
+    fn is_known_slash_name(&self, name: &str) -> bool {
         let is_builtin = slash_commands::find_builtin_command(
             name,
             self.collaboration_modes_enabled,
@@ -2629,21 +2665,18 @@ impl ChatComposer {
             self.windows_degraded_sandbox_active,
         )
         .is_some();
-        let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
-        let is_prompt = name
-            .strip_prefix(&prompt_prefix)
-            .map(|prompt_name| {
-                self.custom_prompts
-                    .iter()
-                    .any(|prompt| prompt.name == prompt_name)
-            })
-            .unwrap_or(false);
-        if !is_builtin && !is_prompt {
-            return;
+        if is_builtin {
+            return true;
         }
-        if element_end <= first_line.len() {
-            self.textarea.add_element_range(0..element_end);
+        if let Some(rest) = name.strip_prefix(PROMPTS_CMD_PREFIX)
+            && let Some(prompt_name) = rest.strip_prefix(':')
+        {
+            return self
+                .custom_prompts
+                .iter()
+                .any(|prompt| prompt.name == prompt_name);
         }
+        false
     }
 
     /// If the cursor is currently within a slash command on the first line,
@@ -4919,6 +4952,34 @@ mod tests {
         let text = composer.textarea.text().to_string();
         let elements = composer.textarea.text_elements();
         assert_eq!(text, "/Users ");
+        assert!(elements.is_empty());
+    }
+
+    #[test]
+    fn slash_command_element_removed_when_not_at_start() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        type_chars_humanlike(&mut composer, &['/', 'r', 'e', 'v', 'i', 'e', 'w', ' ']);
+
+        let text = composer.textarea.text().to_string();
+        let elements = composer.textarea.text_elements();
+        assert_eq!(text, "/review ");
+        assert_eq!(elements.len(), 1);
+
+        composer.textarea.set_cursor(0);
+        type_chars_humanlike(&mut composer, &['x']);
+
+        let text = composer.textarea.text().to_string();
+        let elements = composer.textarea.text_elements();
+        assert_eq!(text, "x/review ");
         assert!(elements.is_empty());
     }
 
