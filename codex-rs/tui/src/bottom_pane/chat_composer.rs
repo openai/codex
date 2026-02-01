@@ -2058,7 +2058,7 @@ impl ChatComposer {
             return None;
         }
 
-        let (name, rest, _rest_offset) = parse_slash_name(&text)?;
+        let (name, rest, rest_offset) = parse_slash_name(&text)?;
         if rest.is_empty() || name.contains('/') {
             return None;
         }
@@ -2081,8 +2081,22 @@ impl ChatComposer {
             return Some(InputResult::None);
         }
 
-        let record_history = matches!(cmd, SlashCommand::Plan);
-        let (prepared_text, prepared_elements) = self.prepare_submission_text(record_history)?;
+        if cmd == SlashCommand::Plan {
+            let mut args_elements = Self::slash_command_args_elements(
+                rest,
+                rest_offset,
+                &self.textarea.text_elements(),
+            );
+            let trimmed_rest = rest.trim();
+            args_elements = Self::trim_text_elements(rest, trimmed_rest, args_elements);
+            return Some(InputResult::CommandWithArgs(
+                cmd,
+                trimmed_rest.to_string(),
+                args_elements,
+            ));
+        }
+
+        let (prepared_text, prepared_elements) = self.prepare_submission_text(false)?;
         let (_, prepared_rest, prepared_rest_offset) = parse_slash_name(&prepared_text)?;
         let mut args_elements = Self::slash_command_args_elements(
             prepared_rest,
@@ -2096,6 +2110,19 @@ impl ChatComposer {
             trimmed_rest.to_string(),
             args_elements,
         ))
+    }
+
+    pub(crate) fn prepare_plan_args_submission(&mut self) -> Option<(String, Vec<TextElement>)> {
+        let (prepared_text, prepared_elements) = self.prepare_submission_text(true)?;
+        let (_, prepared_rest, prepared_rest_offset) = parse_slash_name(&prepared_text)?;
+        let mut args_elements = Self::slash_command_args_elements(
+            prepared_rest,
+            prepared_rest_offset,
+            &prepared_elements,
+        );
+        let trimmed_rest = prepared_rest.trim();
+        args_elements = Self::trim_text_elements(prepared_rest, trimmed_rest, args_elements);
+        Some((trimmed_rest.to_string(), args_elements))
     }
 
     fn reject_slash_command_if_unavailable(&self, cmd: SlashCommand) -> bool {

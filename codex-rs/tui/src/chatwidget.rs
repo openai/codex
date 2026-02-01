@@ -3024,7 +3024,7 @@ impl ChatWidget {
         &mut self,
         cmd: SlashCommand,
         args: String,
-        text_elements: Vec<TextElement>,
+        _text_elements: Vec<TextElement>,
     ) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
@@ -3054,15 +3054,19 @@ impl ChatWidget {
             SlashCommand::Plan if !trimmed.is_empty() => {
                 self.dispatch_command(cmd);
                 if self.active_mode_kind() != ModeKind::Plan {
-                    self.bottom_pane.drain_pending_submission_state();
                     return;
                 }
+                let Some((prepared_args, prepared_elements)) =
+                    self.bottom_pane.prepare_plan_args_submission()
+                else {
+                    return;
+                };
                 let user_message = UserMessage {
-                    text: args,
+                    text: prepared_args,
                     local_images: self
                         .bottom_pane
                         .take_recent_submission_images_with_placeholders(),
-                    text_elements,
+                    text_elements: prepared_elements,
                     mention_paths: self.bottom_pane.take_mention_paths(),
                 };
                 if self.is_session_configured() {

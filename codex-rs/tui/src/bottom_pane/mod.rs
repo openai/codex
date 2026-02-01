@@ -794,6 +794,10 @@ impl BottomPane {
             .take_recent_submission_images_with_placeholders()
     }
 
+    pub(crate) fn prepare_plan_args_submission(&mut self) -> Option<(String, Vec<TextElement>)> {
+        self.composer.prepare_plan_args_submission()
+    }
+
     fn as_renderable(&'_ self) -> RenderableItem<'_> {
         if let Some(view) = self.active_view() {
             RenderableItem::Borrowed(view)
