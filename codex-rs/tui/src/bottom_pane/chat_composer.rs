@@ -84,7 +84,6 @@
 //! state.
 use crate::bottom_pane::footer::mode_indicator_line;
 use crate::bottom_pane::selection_popup_common::truncate_line_with_ellipsis_if_overflow;
-use crate::bottom_pane::status_line_setup::StatusLineItem;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::has_ctrl_or_alt;
@@ -303,8 +302,6 @@ pub(crate) struct ChatComposer {
     windows_degraded_sandbox_active: bool,
     status_line_value: Option<StatusLineValue>,
     status_line_enabled: bool,
-    status_line_preview: Vec<StatusLineItem>,
-    status_line_preview_text: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -396,8 +393,6 @@ impl ChatComposer {
             windows_degraded_sandbox_active: false,
             status_line_value: None,
             status_line_enabled: false,
-            status_line_preview: Vec::new(),
-            status_line_preview_text: None,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -2540,7 +2535,6 @@ impl ChatComposer {
             context_window_used_tokens: self.context_window_used_tokens,
             status_line_value: self.status_line_value.clone(),
             status_line_enabled: self.status_line_enabled,
-            status_line_preview: self.status_line_preview_text.clone(),
         }
     }
 
@@ -3030,25 +3024,6 @@ impl ChatComposer {
 
     pub(crate) fn set_status_line_enabled(&mut self, enabled: bool) {
         self.status_line_enabled = enabled;
-    }
-
-    pub(crate) fn preview_status_line(&mut self, items: Vec<StatusLineItem>) {
-        self.status_line_preview = items;
-        self.update_status_line_preview_text();
-    }
-
-    fn update_status_line_preview_text(&mut self) {
-        let preview = self
-            .status_line_preview
-            .iter()
-            .map(StatusLineItem::short_label)
-            .collect::<Vec<_>>()
-            .join(" · ");
-        if preview.is_empty() {
-            self.status_line_preview_text = None;
-        } else {
-            self.status_line_preview_text = Some(preview);
-        }
     }
 }
 

@@ -19,7 +19,6 @@ use std::path::PathBuf;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::queued_user_messages::QueuedUserMessages;
-pub(crate) use crate::bottom_pane::status_line_setup::StatusLineItem;
 use crate::bottom_pane::unified_exec_footer::UnifiedExecFooter;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
@@ -875,11 +874,6 @@ impl BottomPane {
 
     pub(crate) fn set_status_line_enabled(&mut self, enabled: bool) {
         self.composer.set_status_line_enabled(enabled);
-        self.request_redraw();
-    }
-
-    pub(crate) fn preview_status_line(&mut self, items: Vec<StatusLineItem>) {
-        self.composer.preview_status_line(items);
         self.request_redraw();
     }
 

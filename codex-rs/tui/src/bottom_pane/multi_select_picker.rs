@@ -503,7 +503,7 @@ impl MultiSelectPickerBuilder {
         self
     }
 
-    pub fn preview<F>(mut self, callback: F) -> Self
+    pub fn on_preview<F>(mut self, callback: F) -> Self
     where
         F: Fn(&[MultiSelectItem]) -> Option<Line<'static>> + Send + Sync + 'static,
     {

@@ -29,7 +29,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::StatusLineSetupView;
 use crate::diff_render::calculate_add_remove_from_diff;
 use crate::status_line::StatusLineValue;
@@ -806,10 +805,6 @@ impl ChatWidget {
 
     pub(crate) fn cancel_status_line_setup(&self) {
         tracing::info!("Status line setup canceled by user");
-    }
-
-    pub(crate) fn preview_status_line(&mut self, items: Vec<StatusLineItem>) {
-        self.bottom_pane.preview_status_line(items);
     }
 
     pub(crate) fn setup_status_line(&mut self, items: Vec<String>) {

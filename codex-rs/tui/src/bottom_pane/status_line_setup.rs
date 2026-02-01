@@ -16,6 +16,7 @@ use crate::render::renderable::Renderable;
 #[derive(EnumIter, EnumString, Debug, Clone, Eq, PartialEq)]
 pub(crate) enum StatusLineItem {
     ModelName,
+    ModelNameWithReasoning,
     Cwd,
     GitBranch,
     ContextUsedPct,
@@ -24,9 +25,9 @@ pub(crate) enum StatusLineItem {
     ContextWindowSize,
     TotalInputTokens,
     TotalOutputTokens,
-    GitLinesAdded,
-    GitLinesRemoved,
+    GitLines,
     SessionId,
+    SessionIdPrefix,
 }
 
 impl StatusLineItem {
@@ -34,6 +35,7 @@ impl StatusLineItem {
     pub(crate) fn description(&self) -> &'static str {
         match self {
             StatusLineItem::ModelName => "Current model name",
+            StatusLineItem::ModelNameWithReasoning => "Current model name with reasoning level",
             StatusLineItem::Cwd => "Current working directory",
             StatusLineItem::GitBranch => "Current Git branch",
             StatusLineItem::ContextUsedPct => "Percentage of context window used",
@@ -43,26 +45,27 @@ impl StatusLineItem {
             StatusLineItem::ContextWindowSize => "Total context window size in tokens",
             StatusLineItem::TotalInputTokens => "Total input tokens used in session",
             StatusLineItem::TotalOutputTokens => "Total output tokens used in session",
-            StatusLineItem::GitLinesAdded => "Total lines added to Git in session",
-            StatusLineItem::GitLinesRemoved => "Total lines removed from Git in session",
+            StatusLineItem::GitLines => "Total lines added to and removed from Git in session",
             StatusLineItem::SessionId => "Current session identifier",
+            StatusLineItem::SessionIdPrefix => "Current session identifier (shortened)",
         }
     }
 
-    pub(crate) fn short_label(&self) -> &'static str {
+    pub(crate) fn render(&self) -> &'static str {
         match self {
-            StatusLineItem::ModelName => "Model",
-            StatusLineItem::Cwd => "Cwd",
-            StatusLineItem::GitBranch => "Git",
-            StatusLineItem::ContextUsedPct => "Used",
-            StatusLineItem::ContextRemainingPct => "Remaining",
-            StatusLineItem::CodexVersion => "Version",
-            StatusLineItem::ContextWindowSize => "Ctx",
-            StatusLineItem::TotalInputTokens => "In",
-            StatusLineItem::TotalOutputTokens => "Out",
-            StatusLineItem::GitLinesAdded => "+Lines",
-            StatusLineItem::GitLinesRemoved => "-Lines",
-            StatusLineItem::SessionId => "Session",
+            StatusLineItem::ModelName => "gpt-5.2-codex",
+            StatusLineItem::ModelNameWithReasoning => "gpt-5.2-codex (medium)",
+            StatusLineItem::Cwd => "~/project/path",
+            StatusLineItem::GitBranch => "feat/awesome-feature",
+            StatusLineItem::ContextUsedPct => "82%",
+            StatusLineItem::ContextRemainingPct => "18%",
+            StatusLineItem::CodexVersion => "v0.93.0",
+            StatusLineItem::ContextWindowSize => "258,400",
+            StatusLineItem::TotalInputTokens => "17,588",
+            StatusLineItem::TotalOutputTokens => "265",
+            StatusLineItem::GitLines => "+123/-45",
+            StatusLineItem::SessionId => "019c19bd-ceb6-73b0-adc8-8ec0397b85cf",
+            StatusLineItem::SessionIdPrefix => "019c19bd",
         }
     }
 }
@@ -95,12 +98,12 @@ impl StatusLineSetupView {
             ])
             .items(items)
             .enable_ordering()
-            .preview(|items| {
+            .on_preview(|items| {
                 let preview = items
                     .iter()
                     .filter(|item| item.enabled)
                     .filter_map(|item| item.id.parse::<StatusLineItem>().ok())
-                    .map(|item| item.short_label())
+                    .map(|item| item.render())
                     .collect::<Vec<_>>()
                     .join(" · ");
                 if preview.is_empty() {
@@ -109,21 +112,11 @@ impl StatusLineSetupView {
                     Some(Line::from(preview))
                 }
             })
-            .on_change(|items, app_event| {
-                let items = items
-                    .iter()
-                    .filter(|multi_select_item| multi_select_item.enabled)
-                    .filter_map(|multi_select_item| multi_select_item.id.parse().ok())
-                    .collect();
-                app_event.send(AppEvent::StatusLinePreview { items });
-            })
             .on_confirm(|items, app_event| {
-                app_event.send(AppEvent::StatusLinePreview { items: Vec::new() });
                 let items = items.into();
                 app_event.send(AppEvent::StatusLineSetup { items });
             })
             .on_cancel(|app_event| {
-                app_event.send(AppEvent::StatusLinePreview { items: Vec::new() });
                 app_event.send(AppEvent::StatusLineSetupCancelled);
             })
             .build(),
@@ -143,8 +136,6 @@ impl BottomPaneView for StatusLineSetupView {
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
         self.picker.close();
-        self.app_event_tx
-            .send(AppEvent::StatusLinePreview { items: Vec::new() });
         self.app_event_tx.send(AppEvent::StatusLineSetupCancelled);
         CancellationEvent::Handled
     }
