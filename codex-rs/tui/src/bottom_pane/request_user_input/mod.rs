@@ -714,13 +714,26 @@ impl RequestUserInputOverlay {
                 answers.insert(question.id.clone(), answer);
             }
         }
+        let request = self.request.clone();
+        self.submit_interrupted_response(&request, answers);
+        while let Some(request) = self.queue.pop_front() {
+            self.submit_interrupted_response(&request, HashMap::new());
+        }
+    }
+
+    /// Emit an interrupted response (plus history cell) for a request_user_input call.
+    fn submit_interrupted_response(
+        &mut self,
+        request: &RequestUserInputEvent,
+        answers: HashMap<String, RequestUserInputAnswer>,
+    ) {
         // This path only runs when the user explicitly interrupts the questions UI.
         let interrupted = true;
         let history_answers = answers.clone();
         self.app_event_tx
             .send(AppEvent::CodexOp(Op::UserInputAnswer {
-                id: self.request.turn_id.clone(),
-                call_id: Some(self.request.call_id.clone()),
+                id: request.turn_id.clone(),
+                call_id: Some(request.call_id.clone()),
                 response: RequestUserInputResponse {
                     answers,
                     interrupted,
@@ -728,7 +741,7 @@ impl RequestUserInputOverlay {
             }));
         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
             history_cell::RequestUserInputResultCell {
-                questions: self.request.questions.clone(),
+                questions: request.questions.clone(),
                 answers: history_answers,
                 interrupted,
             },
@@ -1465,6 +1478,45 @@ mod tests {
 
         overlay.submit_answers();
         assert_eq!(overlay.request.turn_id, "turn-3");
+    }
+
+    #[test]
+    fn interrupt_drains_queued_requests() {
+        let (tx, mut rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event("turn-1", vec![question_with_options("q1", "First")]),
+            tx,
+            true,
+            false,
+            false,
+        );
+        overlay.try_consume_user_input_request(RequestUserInputEvent {
+            call_id: "call-2".to_string(),
+            turn_id: "turn-2".to_string(),
+            questions: vec![question_with_options("q2", "Second")],
+        });
+        overlay.try_consume_user_input_request(RequestUserInputEvent {
+            call_id: "call-3".to_string(),
+            turn_id: "turn-3".to_string(),
+            questions: vec![question_with_options("q3", "Third")],
+        });
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
+
+        assert!(overlay.done, "expected overlay to be done");
+        for expected_turn_id in ["turn-1", "turn-2", "turn-3"] {
+            let event = rx.try_recv().expect("expected UserInputAnswer");
+            let AppEvent::CodexOp(Op::UserInputAnswer { id, response, .. }) = event else {
+                panic!("expected UserInputAnswer");
+            };
+            assert_eq!(id, expected_turn_id);
+            assert!(response.interrupted, "expected interrupted flag");
+            assert!(response.answers.is_empty(), "expected no committed answers");
+
+            let event = rx.try_recv().expect("expected history cell");
+            assert!(matches!(event, AppEvent::InsertHistoryCell(_)));
+        }
+        assert!(rx.try_recv().is_err(), "unexpected AppEvent after drain");
     }
 
     #[test]
