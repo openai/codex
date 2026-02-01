@@ -110,8 +110,8 @@ plan content
 plan content should be human and agent digestible. The final plan must be plan-only and include:
 
 * A clear title
-* A brief summary section.
-* Important changes or additions to public APIs/interfaces/types.
+* A brief summary section
+* Important changes or additions to public APIs/interfaces/types
 * Test cases and scenarios
 * Explicit assumptions and defaults chosen where needed
 
