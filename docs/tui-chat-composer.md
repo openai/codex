@@ -215,7 +215,7 @@ There are three distinct “Enter becomes newline” mechanisms:
   `\n` into the burst buffer so multi-line pastes stay buffered as one explicit paste. If the ASCII
   path is still holding the first char (`pending_first_char`) and an Enter arrives immediately
   after (within `PASTE_BURST_CHAR_INTERVAL`), `append_newline_if_active` promotes the held char into
-  the burst buffer *before* appending `\n` (preserving ordering for streams like `h\ni`).
+  the burst buffer _before_ appending `\n` (preserving ordering for streams like `h\ni`).
 - **Immediately after burst activity** (enter suppression window):
   `newline_should_insert_instead_of_submit(now)` inserts `\n` into the textarea and calls
   `extend_window(now)` so a slightly-late Enter keeps behaving like “newline” rather than “submit”.
