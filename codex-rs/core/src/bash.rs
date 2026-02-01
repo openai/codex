@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use shlex::split as shlex_split;
 use tree_sitter::Node;
 use tree_sitter::Parser;
 use tree_sitter::Tree;
@@ -119,6 +120,83 @@ pub fn parse_shell_lc_plain_commands(command: &[String]) -> Option<Vec<Vec<Strin
     try_parse_word_only_commands_sequence(&tree, script)
 }
 
+/// Returns a best-effort sequence of command prefixes for execpolicy evaluation.
+///
+/// This intentionally falls back to a looser split than `parse_shell_lc_plain_commands`,
+/// but refuses to parse when the fallback line contains shell substitutions.
+pub fn parse_shell_lc_execpolicy_prefix(command: &[String]) -> Option<Vec<Vec<String>>> {
+    if let Some(commands) = parse_shell_lc_plain_commands(command) {
+        if !commands.is_empty() {
+            return Some(commands);
+        }
+    }
+
+    let (_, script) = extract_bash_command(command)?;
+    let tokens = if let Some(tokens) = shlex_split(script) {
+        tokens
+    } else {
+        let first_line = script.lines().next().unwrap_or_default();
+        if first_line.is_empty() || contains_shell_substitution(first_line) {
+            return None;
+        }
+        shlex_split(first_line)?
+    };
+    let mut commands = Vec::new();
+    let mut current = Vec::new();
+
+    for token in tokens {
+        if is_shell_separator(&token) {
+            if let Some(command_tokens) = finalize_execpolicy_tokens(&mut current) {
+                commands.push(command_tokens);
+            }
+            continue;
+        }
+        current.push(token);
+    }
+
+    if let Some(command_tokens) = finalize_execpolicy_tokens(&mut current) {
+        commands.push(command_tokens);
+    }
+
+    if commands.is_empty() {
+        None
+    } else {
+        Some(commands)
+    }
+}
+
+fn finalize_execpolicy_tokens(tokens: &mut Vec<String>) -> Option<Vec<String>> {
+    if tokens.is_empty() {
+        return None;
+    }
+
+    let mut command_tokens = Vec::new();
+    for token in tokens.iter() {
+        if is_redirection_token(token) {
+            break;
+        }
+        command_tokens.push(token.clone());
+    }
+    tokens.clear();
+    if command_tokens.is_empty() {
+        None
+    } else {
+        Some(command_tokens)
+    }
+}
+
+fn is_shell_separator(token: &str) -> bool {
+    matches!(token, "&&" | "||" | ";" | "|")
+}
+
+fn is_redirection_token(token: &str) -> bool {
+    token.contains('<') || token.contains('>')
+}
+
+fn contains_shell_substitution(line: &str) -> bool {
+    line.chars().any(|c| matches!(c, '$' | '`' | '(' | ')'))
+}
+
 fn parse_plain_command_from_node(cmd: tree_sitter::Node, src: &str) -> Option<Vec<String>> {
     if cmd.kind() != "command" {
         return None;
@@ -215,6 +293,17 @@ mod tests {
     fn parse_seq(src: &str) -> Option<Vec<Vec<String>>> {
         let tree = try_parse_shell(src)?;
         try_parse_word_only_commands_sequence(&tree, src)
+    }
+
+    #[test]
+    fn parse_shell_lc_execpolicy_prefix_rejects_substitution_chars() {
+        let command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "python3 $(echo hi) <<'PY'\nprint('hi)\nPY".to_string(),
+        ];
+
+        assert!(parse_shell_lc_execpolicy_prefix(&command).is_none());
     }
 
     #[test]

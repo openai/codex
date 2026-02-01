@@ -24,13 +24,11 @@ use thiserror::Error;
 use tokio::fs;
 use tokio::task::spawn_blocking;
 
-use crate::bash::extract_bash_command;
-use crate::bash::parse_shell_lc_plain_commands;
+use crate::bash::parse_shell_lc_execpolicy_prefix;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::sandboxing::ExecApprovalRequirement;
-use shlex::split as shlex_split;
 use shlex::try_join as shlex_try_join;
 
 const PROMPT_CONFLICT_REASON: &str =
@@ -134,8 +132,8 @@ impl ExecPolicyManager {
             prefix_rule,
         } = req;
         let exec_policy = self.current();
-        let commands = parse_shell_lc_commands_for_execpolicy(command)
-            .unwrap_or_else(|| vec![command.to_vec()]);
+        let commands =
+            parse_shell_lc_execpolicy_prefix(command).unwrap_or_else(|| vec![command.to_vec()]);
         let exec_policy_fallback = |cmd: &[String]| {
             render_decision_for_unmatched_command(
                 approval_policy,
@@ -362,98 +360,6 @@ pub fn render_decision_for_unmatched_command(
 
 fn default_policy_path(codex_home: &Path) -> PathBuf {
     codex_home.join(RULES_DIR_NAME).join(DEFAULT_POLICY_FILE)
-}
-
-fn parse_shell_lc_commands_for_execpolicy(command: &[String]) -> Option<Vec<Vec<String>>> {
-    if let Some(commands) = parse_shell_lc_plain_commands(command) {
-        if !commands.is_empty() {
-            return Some(commands);
-        }
-    }
-
-    let (_, script) = extract_bash_command(command)?;
-    let tokens = if let Some(tokens) = shlex_split(script) {
-        tokens
-    } else {
-        let first_line = script.lines().next().unwrap_or_default();
-        if first_line.is_empty() || contains_shell_substitution(first_line) {
-            return None;
-        }
-        shlex_split(first_line)?
-    };
-    let mut commands = Vec::new();
-    let mut current = Vec::new();
-
-    for token in tokens {
-        if is_shell_separator(&token) {
-            if let Some(command_tokens) = finalize_shell_tokens(&mut current) {
-                commands.push(command_tokens);
-            }
-            continue;
-        }
-        current.push(token);
-    }
-
-    if let Some(command_tokens) = finalize_shell_tokens(&mut current) {
-        commands.push(command_tokens);
-    }
-
-    if commands.is_empty() {
-        None
-    } else {
-        Some(commands)
-    }
-}
-
-fn finalize_shell_tokens(tokens: &mut Vec<String>) -> Option<Vec<String>> {
-    if tokens.is_empty() {
-        return None;
-    }
-
-    let mut index = 0;
-    while index < tokens.len() && is_env_assignment(&tokens[index]) {
-        index += 1;
-    }
-
-    let mut command_tokens = Vec::new();
-    for token in &tokens[index..] {
-        if is_redirection_token(token) {
-            break;
-        }
-        command_tokens.push(token.clone());
-    }
-    tokens.clear();
-    if command_tokens.is_empty() {
-        None
-    } else {
-        Some(command_tokens)
-    }
-}
-
-fn is_shell_separator(token: &str) -> bool {
-    matches!(token, "&&" | "||" | ";" | "|")
-}
-
-fn is_env_assignment(token: &str) -> bool {
-    let Some((name, _value)) = token.split_once('=') else {
-        return false;
-    };
-    let mut chars = name.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !matches!(first, 'A'..='Z' | 'a'..='z' | '_') {
-        return false;
-    }
-    chars.all(|c| matches!(c, 'A'..='Z' | 'a'..='z' | '0'..='9' | '_'))
-}
-
-fn is_redirection_token(token: &str) -> bool {
-    token.contains('<') || token.contains('>')
-}
-
-fn contains_shell_substitution(line: &str) -> bool {
-    line.chars().any(|c| matches!(c, '$' | '`' | '(' | ')'))
 }
 
 /// Derive a proposed execpolicy amendment when a command requires user approval
@@ -922,17 +828,6 @@ prefix_rule(pattern=["rm"], decision="forbidden")
                 reason: "`bash -lc 'rm -rf /some/important/folder'` rejected: policy forbids commands starting with `rm`".to_string()
             }
         );
-    }
-
-    #[test]
-    fn parse_shell_lc_fallback_rejects_substitution_chars() {
-        let command = vec![
-            "bash".to_string(),
-            "-lc".to_string(),
-            "python3 $(echo hi) <<'PY'\nprint('hi)\nPY".to_string(),
-        ];
-
-        assert!(parse_shell_lc_commands_for_execpolicy(&command).is_none());
     }
 
     #[tokio::test]
