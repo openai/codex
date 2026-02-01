@@ -1691,10 +1691,6 @@ impl Session {
         _call_id: Option<String>,
         response: RequestUserInputResponse,
     ) {
-        if response.interrupted {
-            // An interrupted request_user_input should end the turn without a follow-up request.
-            self.mark_request_user_input_interrupted().await;
-        }
         let entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
@@ -1708,6 +1704,11 @@ impl Session {
 
         match entry {
             Some(tx_response) => {
+                if response.interrupted {
+                    // An interrupted request_user_input should end the turn without a follow-up
+                    // request; only mark the active turn when the response is still pending.
+                    self.mark_request_user_input_interrupted().await;
+                }
                 tx_response.send(response).ok();
             }
             None => {
