@@ -41,6 +41,18 @@ type ChatBlock =
     }
   | {
       id: string;
+      type: "opencodePermission";
+      requestID: string;
+      permission: string;
+      status: "pending" | "replied" | "error";
+      patterns: string[];
+      always: string[];
+      metadata: Record<string, unknown> | null;
+      reply?: "once" | "always" | "reject" | null;
+      error?: string | null;
+    }
+  | {
+      id: string;
       type: "divider";
       text: string;
       status?: "inProgress" | "completed" | "failed";
@@ -162,6 +174,7 @@ type ChatViewState = {
   reloading: boolean;
   hydrationBlockedText?: string | null;
   opencodeDefaultModelKey?: string | null;
+  opencodeDefaultAgentName?: string | null;
   cliDefaultModelState?: ModelState | null;
   statusText?: string | null;
   statusTooltip?: string | null;
@@ -309,9 +322,11 @@ function main(): void {
   reasoningSelect.className = "modelSelect effort";
   const agentSelect = document.createElement("select");
   agentSelect.className = "modelSelect agent";
+  // For opencode sessions, `agentSelect` is used as the Build/Plan mode selector.
+  // Keep it to the left of model selection.
+  modelBarEl.appendChild(agentSelect);
   modelBarEl.appendChild(modelSelect);
   modelBarEl.appendChild(reasoningSelect);
-  modelBarEl.appendChild(agentSelect);
 
   const placeholder = {
     // Keep the placeholder short (single-line). Put detailed hints in title.
@@ -912,7 +927,7 @@ function main(): void {
     for (const opt of opts) {
       const o = document.createElement("option");
       o.value = opt;
-      o.textContent = opt === "default" ? "default (CLI config)" : opt;
+      o.textContent = opt === "default" ? "default" : opt;
       if (opt === v) o.selected = true;
       el.appendChild(o);
     }
@@ -942,7 +957,7 @@ function main(): void {
       o.value = opt.value;
       o.textContent =
         opt.value === "default"
-          ? (opts?.defaultLabel ?? "default (CLI config)")
+          ? (opts?.defaultLabel ?? "default")
           : opt.label;
       if (opt.value === v) o.selected = true;
       el.appendChild(o);
@@ -1167,7 +1182,10 @@ function main(): void {
   ): { label: string; tooltip: string } => {
     const title = String(sess.title || "").trim() || "Untitled";
     if (sess.customTitle) return { label: title, tooltip: title };
-    return { label: `${title} #${idx + 1}`, tooltip: title };
+    if (Number.isFinite(idx) && idx >= 0) {
+      return { label: `${title} #${idx + 1}`, tooltip: title };
+    }
+    return { label: title, tooltip: title };
   };
 
   if (typeof markdownit !== "function") {
@@ -2741,7 +2759,12 @@ function main(): void {
     sum.appendChild(icon);
     det.appendChild(sum);
     blockElByKey.set(key, det);
-    logEl.appendChild(det);
+    // Keep notices at the top of the log (they're not part of the conversation stream).
+    if (/\bnotice\b/.test(className)) {
+      logEl.insertBefore(det, logEl.firstChild);
+    } else {
+      logEl.appendChild(det);
+    }
     return det;
   }
 
@@ -3586,14 +3609,78 @@ function main(): void {
     renderBlocks(s);
   }
 
+  function normalizeFsPath(p: string): string {
+    const trimmed = String(p || "").trim();
+    if (!trimmed) return "";
+    if (trimmed === "/") return "/";
+    return trimmed.replace(/\/+$/, "");
+  }
+
+  function workspacePathForSession(sess: Session): string {
+    return normalizeFsPath(uriToHashKey(String(sess.workspaceFolderUri || "")));
+  }
+
+  function shouldShowGlobalBlock(
+    block: ChatBlock,
+    sess: Session | null,
+  ): boolean {
+    if (!sess) return true;
+
+    const id = String((block as any).id || "");
+    const title = "title" in block ? String((block as any).title || "") : "";
+    if (block.type !== "info") return true;
+
+    const activeBackendId = sess.backendId;
+    const activeCwd = workspacePathForSession(sess);
+
+    if (title === "Thread started") {
+      const backendPrefix = "global:threadStarted:backend:";
+      const legacyCwdPrefix = "global:threadStarted:cwd:";
+      if (id.startsWith(backendPrefix)) {
+        const rest = id.slice(backendPrefix.length);
+        const idx = rest.indexOf(":cwd:");
+        if (idx <= 0) return false;
+        const backendId = rest.slice(0, idx);
+        const cwd = normalizeFsPath(rest.slice(idx + ":cwd:".length));
+        return backendId === activeBackendId && cwd === activeCwd;
+      }
+      if (id.startsWith(legacyCwdPrefix)) {
+        const cwd = normalizeFsPath(id.slice(legacyCwdPrefix.length));
+        return activeBackendId !== "opencode" && cwd === activeCwd;
+      }
+    }
+
+    if (title === "OpenCode started") {
+      const prefix = "global:opencodeStarted:cwd:";
+      if (!id.startsWith(prefix)) return true;
+      const cwd = normalizeFsPath(id.slice(prefix.length));
+      return activeBackendId === "opencode" && cwd === activeCwd;
+    }
+
+    return true;
+  }
+
   function renderControl(s: ChatViewState): void {
     state = s;
-    titleEl.textContent = s.activeSession
-      ? getSessionDisplayTitle(
-          s.activeSession,
-          (s.sessions || []).findIndex((x) => x.id === s.activeSession!.id),
-        ).label
-      : "Codex UI (no session selected)";
+    titleEl.textContent = (() => {
+      const active = s.activeSession;
+      if (!active) return "Codex UI (no session selected)";
+      let idx = -1;
+      if (!active.customTitle) {
+        const sessionsList = s.sessions || [];
+        let seen = 0;
+        for (const sess of sessionsList) {
+          if (sess.backendId !== active.backendId) continue;
+          if (sess.workspaceFolderUri !== active.workspaceFolderUri) continue;
+          if (sess.id === active.id) {
+            idx = seen;
+            break;
+          }
+          seen += 1;
+        }
+      }
+      return getSessionDisplayTitle(active, idx).label;
+    })();
 
     const ms = s.modelState || {
       model: null,
@@ -3644,9 +3731,29 @@ function main(): void {
         label: String(m.displayName || m.model || m.id),
       })),
     ];
+    const selectedModelKey = String(ms.model || "").trim() || "default";
+    const defaultModelLabel = (() => {
+      if (backendId === "opencode") {
+        if (!opencodeDefaultKey) return "default";
+        const match = models.find((m) => (m.model || m.id) === opencodeDefaultKey);
+        return String(match?.displayName || opencodeDefaultKey);
+      }
+      const d = s.cliDefaultModelState || { model: null, provider: null, reasoning: null };
+      const provider = d.provider ? String(d.provider).trim() : "";
+      const model = d.model ? String(d.model).trim() : "";
+      if (provider && model) return `${provider} / ${model}`;
+      if (provider) return `${provider} / default`;
+      if (model) return model;
+      const backendDefault = models.find((m) => Boolean(m.isDefault));
+      if (backendDefault) {
+        const label = String(backendDefault.displayName || backendDefault.model || backendDefault.id);
+        return label;
+      }
+      return "default";
+    })();
+    modelSelect.title = selectedModelKey === "default" ? defaultModelLabel : "";
     populateSelectWithLabels(modelSelect, modelOptions, ms.model, {
-      defaultLabel:
-        backendId === "opencode" ? opencodeDefaultDisplay : cliDefaultDisplay,
+      defaultLabel: defaultModelLabel,
     });
 
     const effortOptions = (() => {
@@ -3666,20 +3773,61 @@ function main(): void {
         return ["default", "none", "minimal", "low", "medium", "high", "xhigh"];
       return ["default", ...supported];
     })();
-    populateSelect(reasoningSelect, effortOptions, ms.reasoning);
+    const defaultReasoningLabel = (() => {
+      if (backendId === "opencode") {
+        // opencode does not expose the effective default variant/effort; show the explicit options instead.
+        return "server default";
+      }
+      const d = s.cliDefaultModelState || { model: null, provider: null, reasoning: null };
+      const reasoning = d.reasoning ? String(d.reasoning).trim() : "";
+      if (reasoning) return reasoning;
+      const backendDefault = models.find((m) => Boolean(m.isDefault));
+      if (backendDefault) {
+        const eff = String(backendDefault.defaultReasoningEffort || "").trim();
+        if (eff) return eff;
+      }
+      return "default";
+    })();
+    const reasoningOptions = effortOptions.map((v) => ({
+      value: v,
+      label: v === "default" ? defaultReasoningLabel : v,
+    }));
+    const selectedReasoningKey = String(ms.reasoning || "").trim() || "default";
+    reasoningSelect.title =
+      selectedReasoningKey === "default" ? defaultReasoningLabel : "";
+    populateSelectWithLabels(reasoningSelect, reasoningOptions, ms.reasoning, {
+      defaultLabel: defaultReasoningLabel,
+    });
 
-    // Agent selector for opencode sessions (Build/Plan mode)
+    // Mode selector for opencode sessions (Build/Plan)
     const agents = s.opencodeAgents ?? [];
-    if (backendId === "opencode" && agents.length > 0) {
+    if (backendId === "opencode") {
       agentSelect.style.display = "";
+      const buildLabel =
+        agents.find(
+          (a) =>
+            String(a.id || "")
+              .trim()
+              .toLowerCase() === "build",
+        )?.name || "build";
+      const planLabel =
+        agents.find(
+          (a) =>
+            String(a.id || "")
+              .trim()
+              .toLowerCase() === "plan",
+        )?.name || "plan";
       const agentOptions = [
-        { value: "default", label: "default (auto)" },
-        ...agents.map((a) => ({
-          value: a.id,
-          label: a.name || a.id,
-        })),
+        { value: "default", label: "default" },
+        { value: "build", label: buildLabel },
+        { value: "plan", label: planLabel },
       ];
-      populateSelectWithLabels(agentSelect, agentOptions, ms.agent ?? null);
+      const defaultAgent = String(s.opencodeDefaultAgentName || "").trim();
+      const defaultAgentLabel = defaultAgent || "default";
+      agentSelect.title = defaultAgent ? `default_agent=${defaultAgent}` : "";
+      populateSelectWithLabels(agentSelect, agentOptions, ms.agent ?? null, {
+        defaultLabel: defaultAgentLabel,
+      });
     } else {
       agentSelect.style.display = "none";
     }
@@ -3810,12 +3958,25 @@ function main(): void {
     const workspaceColorOverrides = s.workspaceColorOverrides || {};
     const overridesSig = workspaceOverridesSig(workspaceColorOverrides);
 
-    const nextTabsSig = sessionsList
-      .map((sess, idx) => {
+    // The tab UI groups sessions by workspace folder; match the Sessions tree numbering
+    // (index within workspace + backend), rather than using the global session index.
+    const visibleSessions = sessionsList;
+    const displayIndexBySessionId = new Map<string, number>();
+    const nextIndexByGroupKey = new Map<string, number>();
+    for (const sess of visibleSessions) {
+      const groupKey = `${sess.workspaceFolderUri}\t${sess.backendId}`;
+      const next = nextIndexByGroupKey.get(groupKey) ?? 0;
+      displayIndexBySessionId.set(sess.id, next);
+      nextIndexByGroupKey.set(groupKey, next + 1);
+    }
+
+    const nextTabsSig = visibleSessions
+      .map((sess) => {
         const isUnread = unread.has(sess.id);
         const isRunning = running.has(sess.id);
         const isActive = activeId === sess.id;
-        const dt = getSessionDisplayTitle(sess, idx);
+        const displayIdx = displayIndexBySessionId.get(sess.id) ?? -1;
+        const dt = getSessionDisplayTitle(sess, displayIdx);
         return [
           sess.id,
           sess.workspaceFolderUri,
@@ -3838,19 +3999,13 @@ function main(): void {
       const groupTabsElByWorkspaceUri = new Map<string, HTMLDivElement>();
       const groupOrder: string[] = [];
 
-      // Get the backendId of the active session to filter sessions
-      const activeBackendId = s.activeSession?.backendId;
-
-      sessionsList.forEach((sess, idx) => {
-        // Filter sessions by backendId: only show sessions with the same backendId as the active session
-        if (activeBackendId && sess.backendId !== activeBackendId) {
-          return;
-        }
+      visibleSessions.forEach((sess) => {
         wanted.add(sess.id);
         const isUnread = unread.has(sess.id);
         const isRunning = running.has(sess.id);
         const isActive = activeId === sess.id;
-        const dt = getSessionDisplayTitle(sess, idx);
+        const displayIdx = displayIndexBySessionId.get(sess.id) ?? -1;
+        const dt = getSessionDisplayTitle(sess, displayIdx);
 
         const groupKey = sess.workspaceFolderUri;
         let groupEl = groupElByWorkspaceUri.get(groupKey);
@@ -4044,7 +4199,9 @@ function main(): void {
       approvalsEl.style.display = approvalsVisible ? "" : "none";
     }
 
-    const globalBlocks = s.globalBlocks || [];
+    const globalBlocks = (s.globalBlocks || []).filter((b) =>
+      shouldShowGlobalBlock(b, s.activeSession),
+    );
     if (globalBlocks.length > 0) {
       for (const block of globalBlocks) {
         const id = "global:" + block.type + ":" + block.id;
@@ -4112,9 +4269,90 @@ function main(): void {
     const forceScrollToBottom = forceScrollToBottomNextRender;
     forceScrollToBottomNextRender = false;
 
+    const normalizeOpencodeMessageId = (id: string): string | null => {
+      const stepIdx = id.indexOf(":step:");
+      if (stepIdx > 0) return id.slice(0, stepIdx);
+      const partIdx = id.indexOf(":part:");
+      if (partIdx > 0) return id.slice(0, partIdx);
+      const reasoningIdx = id.indexOf(":reasoning");
+      if (reasoningIdx > 0) return id.slice(0, reasoningIdx);
+      return null;
+    };
+
+    const reorderBlocksForOpencode = (blocks: ChatBlock[]): ChatBlock[] => {
+      const assistantIndexById = new Map<string, number>();
+      for (let i = 0; i < blocks.length; i++) {
+        const b = blocks[i];
+        if (b?.type === "assistant" && typeof b.id === "string") {
+          assistantIndexById.set(b.id, i);
+        }
+      }
+
+      const scored = blocks.map((b, originalIndex) => {
+        // Default: keep original order.
+        let base = originalIndex * 10 + 9;
+
+        if (b && typeof b.id === "string") {
+          if (b.type === "assistant") {
+            const ai = assistantIndexById.get(b.id);
+            if (typeof ai === "number") base = ai * 10 + 9;
+          } else if (b.type === "reasoning" || b.type === "step") {
+            const msgId = normalizeOpencodeMessageId(b.id);
+            const ai = msgId ? assistantIndexById.get(msgId) : undefined;
+            if (typeof ai === "number") {
+              // Ensure reasoning/steps appear immediately before their assistant message.
+              const offset = b.type === "reasoning" ? 0 : 5;
+              base = ai * 10 + offset;
+            }
+          }
+        }
+
+        return { b, base, originalIndex };
+      });
+
+      scored.sort((a, b) => {
+        if (a.base !== b.base) return a.base - b.base;
+        return a.originalIndex - b.originalIndex;
+      });
+
+      return scored.map((x) => x.b);
+    };
+
+	    const blocks = (() => {
+	      const raw = s.blocks || [];
+	      return s.activeSession?.backendId === "opencode"
+	        ? reorderBlocksForOpencode(raw)
+	        : raw;
+	    })();
+
+	    const opencodeReorder = s.activeSession?.backendId === "opencode";
+	    const cursorStart = (() => {
+	      if (!opencodeReorder) return null;
+	      let cur: ChildNode | null = logEl.firstChild;
+	      while (cur) {
+	        const el = cur as HTMLElement;
+	        const cls = typeof el.className === "string" ? el.className : "";
+	        if (el.tagName.toLowerCase() === "details" && /\bnotice\b/.test(cls)) {
+	          cur = cur.nextSibling;
+	          continue;
+	        }
+	        break;
+	      }
+	      return cur;
+	    })();
+	    let cursor: ChildNode | null = cursorStart;
+	    const placeTopLevel = (el: HTMLElement): void => {
+	      if (!opencodeReorder) return;
+	      // Reorder DOM to match the (potentially reordered) blocks list.
+	      if (el.parentElement !== logEl || el !== cursor) {
+	        logEl.insertBefore(el, cursor);
+	      }
+	      cursor = el.nextSibling;
+	    };
+
     let userTurnIndex = 0;
-    for (const block of s.blocks || []) {
-      if (block.type === "divider") {
+    for (const block of blocks) {
+	      if (block.type === "divider") {
         const key = "b:" + block.id;
         const dividerText = String(block.text ?? "");
         const hasText = dividerText.trim().length > 0;
@@ -4154,20 +4392,22 @@ function main(): void {
         } else if (existingIcon) {
           existingIcon.remove();
         }
-        const pre = ensurePre(div, "body");
-        if (pre.textContent !== dividerText) pre.textContent = dividerText;
-        continue;
-      }
+	        const pre = ensurePre(div, "body");
+	        if (pre.textContent !== dividerText) pre.textContent = dividerText;
+	        placeTopLevel(div);
+	        continue;
+	      }
 
-      if (block.type === "note") {
-        const key = "b:" + block.id;
-        const div = ensureDiv(key, "note");
-        const text = String(block.text ?? "");
-        if (div.textContent !== text) div.textContent = text;
-        continue;
-      }
+	      if (block.type === "note") {
+	        const key = "b:" + block.id;
+	        const div = ensureDiv(key, "note");
+	        const text = String(block.text ?? "");
+	        if (div.textContent !== text) div.textContent = text;
+	        placeTopLevel(div);
+	        continue;
+	      }
 
-      if (block.type === "image") {
+	      if (block.type === "image") {
         const key = "b:" + block.id;
         const div = ensureDiv(
           key,
@@ -4210,12 +4450,13 @@ function main(): void {
             div.appendChild(c);
             return c;
           })();
-        void ensureImageRendered(block, img, captionEl).catch((err) => {
-          captionEl.textContent = `画像の描画に失敗: ${String(err)}`;
-          captionEl.style.display = "";
-        });
-        continue;
-      }
+	        void ensureImageRendered(block, img, captionEl).catch((err) => {
+	          captionEl.textContent = `画像の描画に失敗: ${String(err)}`;
+	          captionEl.style.display = "";
+	        });
+	        placeTopLevel(div);
+	        continue;
+	      }
 
       if (block.type === "imageGallery") {
         const key = "b:" + block.id;
@@ -4311,12 +4552,12 @@ function main(): void {
         continue;
       }
 
-      if (block.type === "user" || block.type === "assistant") {
-        const key = "b:" + block.id;
-        const div = ensureDiv(
-          key,
-          "msg " + (block.type === "user" ? "user" : "assistant"),
-        );
+	      if (block.type === "user" || block.type === "assistant") {
+	        const key = "b:" + block.id;
+	        const div = ensureDiv(
+	          key,
+	          "msg " + (block.type === "user" ? "user" : "assistant"),
+	        );
 
         if (block.type === "user") {
           const backendId = state.activeSession?.backendId ?? null;
@@ -4409,8 +4650,8 @@ function main(): void {
         ) as HTMLDivElement | null;
         if (!metaText) {
           if (existingMeta) existingMeta.remove();
-        } else {
-          const metaEl =
+	        } else {
+	          const metaEl =
             existingMeta ??
             (() => {
               const m = document.createElement("div");
@@ -4419,15 +4660,109 @@ function main(): void {
               div.appendChild(m);
               return m;
             })();
-          if (metaEl.textContent !== metaText) metaEl.textContent = metaText;
-        }
-        continue;
-      }
+	          if (metaEl.textContent !== metaText) metaEl.textContent = metaText;
+	        }
+	        placeTopLevel(div);
+	        continue;
+	      }
 
-      if (block.type === "reasoning") {
-        const summary = (block.summaryParts || []).filter(Boolean).join("");
-        const raw = (block.rawParts || []).filter(Boolean).join("");
-        if (!summary && !raw) {
+	      if (block.type === "opencodePermission") {
+	        const id = "opencodePermission:" + block.id;
+        const title = `Permission required: ${String(block.permission ?? "").trim() || "permission"}`;
+        const open = block.status === "pending";
+        const det = ensureDetails(id, "tool opencodePermission", open, title, id);
+        const status =
+          block.status === "pending"
+            ? "inProgress"
+            : block.status === "replied"
+              ? "completed"
+              : "failed";
+        setStatusIcon(det, status);
+
+        const meta = ensureMeta(det, "meta");
+        const metaParts: string[] = [];
+        if (Array.isArray(block.patterns) && block.patterns.length > 0) {
+          metaParts.push(`patterns=${block.patterns.join(", ")}`);
+        }
+        if (Array.isArray(block.always) && block.always.length > 0) {
+          metaParts.push(`always=${block.always.join(", ")}`);
+        }
+        if (block.reply) metaParts.push(`reply=${block.reply}`);
+        const metaText = metaParts.join(" ");
+        if (meta.textContent !== metaText) meta.textContent = metaText;
+
+        const bodyLines: string[] = [];
+        if (Array.isArray(block.patterns) && block.patterns.length > 0) {
+          bodyLines.push("patterns:");
+          for (const p of block.patterns) bodyLines.push(`- ${p}`);
+        }
+        if (Array.isArray(block.always) && block.always.length > 0) {
+          if (bodyLines.length > 0) bodyLines.push("");
+          bodyLines.push("always:");
+          for (const a of block.always) bodyLines.push(`- ${a}`);
+        }
+        if (block.metadata) {
+          if (bodyLines.length > 0) bodyLines.push("");
+          bodyLines.push("metadata:");
+          bodyLines.push(JSON.stringify(block.metadata, null, 2));
+        }
+        if (block.error) {
+          if (bodyLines.length > 0) bodyLines.push("");
+          bodyLines.push(`error: ${String(block.error)}`);
+        }
+        const pre = ensurePre(det, "body");
+        const bodyText = bodyLines.join("\n").trimEnd();
+        if (pre.textContent !== bodyText) pre.textContent = bodyText;
+
+        const actions =
+          (det.querySelector(
+            ':scope > div[data-k="actions"]',
+          ) as HTMLDivElement | null) ??
+          (() => {
+            const a = document.createElement("div");
+            a.dataset.k = "actions";
+            a.className = "approvalActions";
+            det.appendChild(a);
+            return a;
+          })();
+
+        actions.replaceChildren();
+        const disabled = block.status !== "pending";
+
+        const mk = (label: string, reply: "once" | "always" | "reject") => {
+          const btn = document.createElement("button");
+          btn.textContent = label;
+          btn.disabled = disabled;
+          btn.addEventListener("click", () => {
+            const sessionId = state.activeSession?.id ?? null;
+            if (!sessionId) return;
+            vscode.postMessage({
+              type: "opencodePermissionReply",
+              sessionId,
+              requestID: String(block.requestID),
+              reply,
+            });
+          });
+          return btn;
+        };
+
+	        actions.appendChild(mk("Allow once", "once"));
+	        actions.appendChild(mk("Always allow", "always"));
+	        actions.appendChild(mk("Reject", "reject"));
+	        placeTopLevel(det);
+	        continue;
+	      }
+
+	      if (block.type === "reasoning") {
+        const summary = (block.summaryParts || [])
+          .map((s) => String(s ?? ""))
+          .filter((s) => s.trim().length > 0)
+          .join("");
+        const raw = (block.rawParts || [])
+          .map((s) => String(s ?? ""))
+          .filter((s) => s.trim().length > 0)
+          .join("");
+        if (!summary.trim() && !raw.trim()) {
           const id = "reasoning:" + block.id;
           for (const [k, el] of blockElByKey.entries()) {
             if (k !== id && !k.startsWith(id + ":")) continue;
@@ -4448,22 +4783,23 @@ function main(): void {
         );
         setStatusIcon(det, block.status);
 
-        if (summary) {
+        if (summary.trim()) {
           const pre = det.querySelector(`pre[data-k="summary"]`);
           if (pre) pre.remove();
           const mdEl = ensureMd(det, "summary");
           renderMarkdownInto(mdEl, summary);
         }
-        if (raw) {
+	        if (raw.trim()) {
           const rawId = id + ":raw";
           const rawDet = ensureDetails(rawId, "", false, "Raw", rawId);
           // Ensure raw is nested under the reasoning details.
           if (rawDet.parentElement !== det) det.appendChild(rawDet);
-          const pre = ensurePre(rawDet, "body");
-          if (pre.textContent !== raw) pre.textContent = raw;
-        }
-        continue;
-      }
+	          const pre = ensurePre(rawDet, "body");
+	          if (pre.textContent !== raw) pre.textContent = raw;
+	        }
+	        placeTopLevel(det);
+	        continue;
+	      }
 
       if (block.type === "command") {
         const id = "command:" + block.id;
@@ -4648,7 +4984,7 @@ function main(): void {
         continue;
       }
 
-      if (block.type === "step") {
+	      if (block.type === "step") {
         const id = "step:" + block.id;
         const tools = Array.isArray(block.tools) ? block.tools : [];
         const toolCount = tools.length;
@@ -4731,16 +5067,17 @@ function main(): void {
           if (pre.textContent !== text) pre.textContent = text;
         }
 
-        for (const [k, el] of blockElByKey.entries()) {
-          if (!k.startsWith(id + ":tool:")) continue;
-          if (wantedKeys.has(k)) continue;
-          if (el.parentElement) el.parentElement.removeChild(el);
-          blockElByKey.delete(k);
-          delete detailsState[k];
-        }
+	        for (const [k, el] of blockElByKey.entries()) {
+	          if (!k.startsWith(id + ":tool:")) continue;
+	          if (wantedKeys.has(k)) continue;
+	          if (el.parentElement) el.parentElement.removeChild(el);
+	          blockElByKey.delete(k);
+	          delete detailsState[k];
+	        }
 
-        continue;
-      }
+	        placeTopLevel(det);
+	        continue;
+	      }
 
       if (block.type === "plan") {
         const id = "plan:" + block.id;

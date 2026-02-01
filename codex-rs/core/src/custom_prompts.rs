@@ -12,6 +12,54 @@ pub fn default_prompts_dir() -> Option<PathBuf> {
         .map(|home| home.join("prompts"))
 }
 
+/// Return the repo-local prompts directory: `<git root>/.codex/prompts`.
+///
+/// The git root is detected by walking up from `cwd` until a `.git` marker is found.
+/// If no git root is found, returns `None`.
+pub fn repo_prompts_dir(cwd: &Path) -> Option<PathBuf> {
+    let mut cur = if cwd.is_dir() {
+        cwd.to_path_buf()
+    } else {
+        cwd.parent()?.to_path_buf()
+    };
+
+    loop {
+        let git_marker = cur.join(".git");
+        if std::fs::metadata(&git_marker).is_ok() {
+            return Some(cur.join(".codex").join("prompts"));
+        }
+
+        let Some(parent) = cur.parent() else {
+            return None;
+        };
+        cur = parent.to_path_buf();
+    }
+}
+
+/// Discover custom prompts from repo-local and user directories.
+///
+/// Prompt name conflicts are resolved by preferring repo-local prompts over user prompts.
+pub async fn discover_custom_prompts(
+    repo_dir: Option<&Path>,
+    user_dir: Option<&Path>,
+) -> Vec<CustomPrompt> {
+    let mut out: Vec<CustomPrompt> = Vec::new();
+    let mut exclude: HashSet<String> = HashSet::new();
+
+    if let Some(dir) = repo_dir {
+        let prompts = discover_prompts_in(dir).await;
+        exclude.extend(prompts.iter().map(|p| p.name.clone()));
+        out.extend(prompts);
+    }
+
+    if let Some(dir) = user_dir {
+        out.extend(discover_prompts_in_excluding(dir, &exclude).await);
+    }
+
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
+
 /// Discover prompt files in the given directory, returning entries sorted by name.
 /// Non-files are ignored. If the directory does not exist or cannot be read, returns empty.
 pub async fn discover_prompts_in(dir: &Path) -> Vec<CustomPrompt> {
@@ -240,5 +288,44 @@ mod tests {
         assert_eq!(desc.as_deref(), Some("Line endings"));
         assert_eq!(hint.as_deref(), Some("[arg]"));
         assert_eq!(body, "First line\r\nSecond line\r\n");
+    }
+
+    #[test]
+    fn finds_repo_prompts_dir_from_nested_cwd() {
+        let tmp = tempdir().expect("create TempDir");
+        let repo = tmp.path().join("repo");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        let nested = repo.join("a").join("b");
+        fs::create_dir_all(&nested).unwrap();
+
+        assert_eq!(
+            repo_prompts_dir(&nested),
+            Some(repo.join(".codex").join("prompts"))
+        );
+    }
+
+    #[tokio::test]
+    async fn merges_repo_and_user_prompts_preferring_repo() {
+        let tmp = tempdir().expect("create TempDir");
+
+        let repo_prompts = tmp.path().join("repo_prompts");
+        fs::create_dir_all(&repo_prompts).unwrap();
+        fs::write(repo_prompts.join("shared.md"), b"repo").unwrap();
+        fs::write(repo_prompts.join("repo_only.md"), b"repo_only").unwrap();
+
+        let user_prompts = tmp.path().join("user_prompts");
+        fs::create_dir_all(&user_prompts).unwrap();
+        fs::write(user_prompts.join("shared.md"), b"user").unwrap();
+        fs::write(user_prompts.join("user_only.md"), b"user_only").unwrap();
+
+        let found = discover_custom_prompts(Some(&repo_prompts), Some(&user_prompts)).await;
+        let names: Vec<String> = found.iter().map(|e| e.name.clone()).collect();
+        assert_eq!(names, vec!["repo_only", "shared", "user_only"]);
+
+        let shared = found
+            .iter()
+            .find(|p| p.name == "shared")
+            .expect("shared prompt exists");
+        assert_eq!(shared.content, "repo");
     }
 }

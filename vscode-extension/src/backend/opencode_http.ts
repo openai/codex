@@ -70,6 +70,21 @@ export type OpencodeProviderAuthorization = {
   instructions: string;
 };
 
+export type OpencodePermissionReply = "once" | "always" | "reject";
+
+export type OpencodeQuestionRequest = {
+  id: string;
+  sessionID: string;
+  questions: Array<{
+    question: string;
+    header: string;
+    options: Array<{ label: string; description: string }>;
+    multiple?: boolean;
+    custom?: boolean;
+  }>;
+  tool?: { messageID: string; callID: string };
+};
+
 export type OpencodeEvent =
   | { type: string; properties: any }
   | { payload: { type: string; properties: any }; directory?: string };
@@ -150,6 +165,7 @@ export class OpencodeHttpClient {
       parts: Array<Record<string, unknown>>;
       model?: { providerID: string; modelID: string };
       agent?: string;
+      variant?: string;
     },
   ): Promise<OpencodeMessageWithParts> {
     const body: Record<string, unknown> = {
@@ -157,6 +173,7 @@ export class OpencodeHttpClient {
     };
     if (args.model) body["model"] = args.model;
     if (args.agent) body["agent"] = args.agent;
+    if (args.variant) body["variant"] = args.variant;
     const res = await this.postJson(
       `/session/${encodeURIComponent(sessionID)}/message`,
       body,
@@ -239,8 +256,8 @@ export class OpencodeHttpClient {
     });
     if (!Array.isArray(res)) return [];
     return (res as any[]).map((a) => ({
-      id: String(a.id ?? ""),
       name: String(a.name ?? a.id ?? ""),
+      id: String(a.id ?? a.name ?? ""),
       description:
         typeof a.description === "string" ? a.description : undefined,
     }));
@@ -253,29 +270,66 @@ export class OpencodeHttpClient {
         ? res.default
         : {};
     const out: Model[] = [];
+    const supportedEfforts = new Set([
+      "none",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
     for (const p of providers) {
       const providerID = String(p.id ?? "");
       const providerName = String(p.name ?? providerID);
       const rawModels = (p as any).models as unknown;
-      const modelEntries: Array<{ id: string; name: string }> = [];
+      const modelEntries: Array<{
+        id: string;
+        name: string;
+        supportedEfforts: string[];
+      }> = [];
       if (Array.isArray(rawModels)) {
         for (const m of rawModels as any[]) {
           const modelID = String(m?.id ?? "");
           const modelName = String(m?.name ?? modelID);
+          const status =
+            typeof m?.status === "string" ? String(m.status).trim() : null;
+          if (status && status !== "active") continue;
           if (!modelID) continue;
-          modelEntries.push({ id: modelID, name: modelName });
+          const variants =
+            m && typeof m === "object" && !Array.isArray(m)
+              ? (m as any).variants
+              : null;
+          const efforts =
+            variants && typeof variants === "object" && !Array.isArray(variants)
+              ? Object.keys(variants)
+                  .map((v) => String(v ?? "").trim())
+                  .filter((v) => supportedEfforts.has(v))
+              : [];
+          modelEntries.push({ id: modelID, name: modelName, supportedEfforts: efforts });
         }
       } else if (typeof rawModels === "object" && rawModels !== null) {
         for (const [modelID, meta] of Object.entries(
           rawModels as Record<string, unknown>,
         )) {
+          const status =
+            typeof (meta as any)?.status === "string"
+              ? String((meta as any).status).trim()
+              : null;
+          if (status && status !== "active") continue;
           const modelName =
             typeof (meta as any)?.name === "string" &&
             String((meta as any).name).trim()
               ? String((meta as any).name).trim()
               : modelID;
           if (!modelID) continue;
-          modelEntries.push({ id: modelID, name: modelName });
+          const variants = (meta as any)?.variants;
+          const efforts =
+            variants && typeof variants === "object" && !Array.isArray(variants)
+              ? Object.keys(variants)
+                  .map((v) => String(v ?? "").trim())
+                  .filter((v) => supportedEfforts.has(v))
+              : [];
+          modelEntries.push({ id: modelID, name: modelName, supportedEfforts: efforts });
         }
       }
 
@@ -287,6 +341,14 @@ export class OpencodeHttpClient {
       for (const m of modelEntries) {
         if (!providerID || !m.id) continue;
         const key = `${providerID}:${m.id}`;
+        const effortsInOrder = [
+          "none",
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+        ].filter((v) => m.supportedEfforts.includes(v));
         out.push({
           id: key,
           // For opencode, the model selection UI only carries a single string.
@@ -294,7 +356,10 @@ export class OpencodeHttpClient {
           model: key,
           displayName: `${providerName} / ${m.name}`,
           description: "",
-          supportedReasoningEfforts: [],
+          supportedReasoningEfforts: effortsInOrder.map((effort) => ({
+            reasoningEffort: effort as any,
+            description: "",
+          })),
           defaultReasoningEffort: "none",
           isDefault: defaultModelID ? defaultModelID === m.id : false,
         });
@@ -342,6 +407,44 @@ export class OpencodeHttpClient {
       `/auth/${encodeURIComponent(args.providerID)}`,
       { type: "api", key: args.apiKey },
       { directory: this.opts.directory },
+    );
+  }
+
+  public async listPermissions(): Promise<unknown> {
+    return await this.getJson(`/permission`);
+  }
+
+  public async replyPermission(args: {
+    requestID: string;
+    reply: OpencodePermissionReply;
+    message?: string;
+  }): Promise<void> {
+    await this.postJson(
+      `/permission/${encodeURIComponent(args.requestID)}/reply`,
+      { reply: args.reply, ...(args.message ? { message: args.message } : {}) },
+    );
+  }
+
+  public async listQuestions(): Promise<OpencodeQuestionRequest[]> {
+    const res = await this.getJson(`/question`);
+    if (!Array.isArray(res)) return [];
+    return res as any;
+  }
+
+  public async replyQuestion(args: {
+    requestID: string;
+    answers: string[][];
+  }): Promise<void> {
+    await this.postJson(
+      `/question/${encodeURIComponent(args.requestID)}/reply`,
+      { answers: args.answers },
+    );
+  }
+
+  public async rejectQuestion(args: { requestID: string }): Promise<void> {
+    await this.postJson(
+      `/question/${encodeURIComponent(args.requestID)}/reject`,
+      {},
     );
   }
 
@@ -409,6 +512,20 @@ export class OpencodeHttpClient {
             `SSE connect failed: ${res.status} ${res.statusText}`,
           );
         if (!res.body) throw new Error("SSE response has no body");
+
+        const takeNextSseEvent = (
+          buf: string,
+        ): { event: string; rest: string } | null => {
+          // Support both LF and CRLF encodings.
+          const idxN = buf.indexOf("\n\n");
+          const idxR = buf.indexOf("\r\n\r\n");
+          const idx =
+            idxN === -1 ? idxR : idxR === -1 ? idxN : Math.min(idxN, idxR);
+          if (idx === -1) return null;
+          const delimLen = idx === idxR ? 4 : 2;
+          return { event: buf.slice(0, idx), rest: buf.slice(idx + delimLen) };
+        };
+
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buf = "";
@@ -417,12 +534,13 @@ export class OpencodeHttpClient {
           if (done) break;
           buf += decoder.decode(value, { stream: true });
           for (;;) {
-            const idx = buf.indexOf("\n\n");
-            if (idx === -1) break;
-            const raw = buf.slice(0, idx);
-            buf = buf.slice(idx + 2);
+            const next = takeNextSseEvent(buf);
+            if (!next) break;
+            const raw = next.event;
+            buf = next.rest;
+
             const dataLines = raw
-              .split("\n")
+              .split(/\r?\n/)
               .map((l) => l.trimEnd())
               .filter((l) => l.startsWith("data:"))
               .map((l) => l.slice("data:".length).trimStart());
@@ -488,7 +606,9 @@ export class OpencodeHttpClient {
         body: JSON.stringify(body ?? {}),
       });
     } catch (err) {
-      const e = new Error(`POST ${pathname} fetch failed: url=${url}`);
+      const causeText =
+        err instanceof Error ? err.message : `Unknown error: ${String(err)}`;
+      const e = new Error(`POST ${pathname} fetch failed: url=${url}; cause=${causeText}`);
       (e as any).cause = err;
       throw e;
     }

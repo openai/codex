@@ -70,6 +70,9 @@ dev/
 /.worktrees/
 web/.data/
 
+# references (vendored clones)
+reference/opencode/
+
 # personal files
 personal/
 

@@ -803,6 +803,34 @@ export function activate(context: vscode.ExtensionContext): void {
         getSessionModelState(session.id),
       );
     },
+    async (session, args) => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      const requestID = String(args.requestID ?? "").trim();
+      const reply = args.reply;
+      if (!requestID) throw new Error("Missing requestID");
+      if (reply !== "once" && reply !== "always" && reply !== "reject") {
+        throw new Error(`Invalid reply: ${String(reply)}`);
+      }
+      await backendManager.replyOpencodePermission({
+        session,
+        requestID,
+        reply,
+      });
+      const rt = ensureRuntime(session.id);
+      const id = `opencodePermission:${requestID}`;
+      const idx = rt.blockIndexById.get(id);
+      if (idx !== undefined) {
+        const b = rt.blocks[idx];
+        if (b && (b as any).type === "opencodePermission") {
+          (b as any).status = "replied";
+          (b as any).reply = reply;
+          (b as any).error = null;
+          chatView?.postBlockUpsert(session.id, b as any);
+          chatView?.refresh();
+          schedulePersistRuntime(session.id);
+        }
+      }
+    },
     async (session) => {
       if (!backendManager) throw new Error("backendManager is not initialized");
       return await backendManager.listAccounts(session);
@@ -4215,6 +4243,8 @@ function buildChatState(): ChatViewState {
     hydrationBlockedText,
     opencodeDefaultModelKey:
       backendManager?.getOpencodeDefaultModelKey(activeRaw) ?? null,
+    opencodeDefaultAgentName:
+      backendManager?.getOpencodeDefaultAgentName(activeRaw) ?? null,
     statusText:
       statusText ??
       [globalStatusText, globalRateLimitStatusText].filter(Boolean).join(" • "),
@@ -4519,6 +4549,70 @@ function applyServerNotification(
         .join("\n");
       const text = p.explanation ? `${p.explanation}\n${steps}` : steps;
       upsertBlock(sessionId, { id, type: "plan", title: "Plan", text });
+      chatView?.refresh();
+      return;
+    }
+    case "opencode/permission/asked": {
+      const p = (n as any).params as {
+        requestID?: unknown;
+        permission?: unknown;
+        patterns?: unknown;
+        always?: unknown;
+        metadata?: unknown;
+      };
+      const requestID =
+        typeof p?.requestID === "string" ? p.requestID : String(p?.requestID ?? "");
+      const permission =
+        typeof p?.permission === "string" ? p.permission : String(p?.permission ?? "");
+      if (!requestID.trim() || !permission.trim()) return;
+      const patterns = Array.isArray(p?.patterns)
+        ? (p.patterns as unknown[]).map((x) => String(x ?? "")).filter(Boolean)
+        : [];
+      const always = Array.isArray(p?.always)
+        ? (p.always as unknown[]).map((x) => String(x ?? "")).filter(Boolean)
+        : [];
+      const metadata =
+        typeof p?.metadata === "object" && p.metadata !== null
+          ? (p.metadata as Record<string, unknown>)
+          : null;
+      const id = `opencodePermission:${requestID}`;
+      upsertBlock(sessionId, {
+        id,
+        type: "opencodePermission",
+        requestID,
+        permission,
+        status: "pending",
+        patterns,
+        always,
+        metadata,
+        reply: null,
+        error: null,
+      });
+      chatView?.refresh();
+      return;
+    }
+    case "opencode/permission/replied": {
+      const p = (n as any).params as {
+        requestID?: unknown;
+        reply?: unknown;
+      };
+      const requestID =
+        typeof p?.requestID === "string" ? p.requestID : String(p?.requestID ?? "");
+      const replyRaw =
+        typeof p?.reply === "string" ? p.reply : String(p?.reply ?? "");
+      if (!requestID.trim()) return;
+      const id = `opencodePermission:${requestID}`;
+      const idx = rt.blockIndexById.get(id);
+      if (idx === undefined) return;
+      const b = rt.blocks[idx];
+      if (!b || (b as any).type !== "opencodePermission") return;
+      (b as any).status = "replied";
+      (b as any).reply =
+        replyRaw === "once" || replyRaw === "always" || replyRaw === "reject"
+          ? replyRaw
+          : null;
+      (b as any).error = null;
+      chatView?.postBlockUpsert(sessionId, b as any);
       chatView?.refresh();
       return;
     }

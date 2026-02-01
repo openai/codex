@@ -6,10 +6,39 @@
 
 - **Sessions / Tabs**
   - セッションタブを backendId（opencode / codez）でフィルタリング。アクティブセッションと同じ backend のセッションのみ表示されるように変更
+  - セッション番号付けを Sessions ツリーと一致（ワークスペース+backend 単位の連番）
 - **OpenCode / Agent Mode**
   - OpenCodeのAgentモード（Build/Plan）切り替えをサポート
-  - opencodeセッション時にモデルセレクターの横にAgentセレクターを表示
+  - opencodeセッション時にモデルセレクターの左にAgentセレクターを表示
   - Agent選択時にAPIリクエストにagentパラメータを含めて送信
+  - Agentセレクターのラベルをシンプル化（"default (CLI config)" → "default"）
+- **OpenCode / Reasoning (Variant)**
+  - OpenCodeモデルで推論強度（reasoning effort）の選択をサポート（none/minimal/low/medium/high/xhigh）
+  - APIリクエストに `variant` パラメータを追加
+  - モデル一覧に `supportedReasoningEfforts` を表示し、利用可能な推論強度を示す
+  - 推論強度セレクターに "server default" を表示
+- **OpenCode / Provider Filtering**
+  - `enabled_providers` / `disabled_providers` 設定に対応し、プロバイダー一覧をフィルタリング
+  - 接続済みプロバイダーのみを表示（サーバーが connected 情報を返す場合）
+- **OpenCode / Reasoning UI Improvements**
+  - 複数の reasoning パートを1つのUIブロックに統合（opencode web と同じ表示方式）
+  - reasoning の time.end を反映し、完了時にスピナーが残り続ける問題を修正
+- **OpenCode / Tool & Message Handling**
+  - step より前に到着する tool パートを適切に処理
+  - SSE イベントパースを改善（CRLF/LF の両方に対応）
+  - 空の assistant メッセージを送信しないように修正
+  - /message 応答と SSE の二重反映でカードが重複・順序が崩れる問題を修正（SSE を唯一の描画ソースに統一）
+  - OpenCode サーバへの接続エラー時に opencode backend を破棄してキャッシュをクリーンアップ（次の操作で再起動できる状態に）
+  - delta が空の unknown part で空カード（黒いカード）が出る問題を修正
+  - カードの並び替えが UI 上で反映されない問題を修正（OpenCodeブロックのみ順序に追従して再配置）
+  - Notice（起動時カード）が更新のたびに末尾へ移動してしまう問題を修正（Noticeは先頭に固定）
+- **OpenCode / Permissions**
+  - permission.asked を UI に表示し、Allow once / Always allow / Reject の応答をサポート（これが無いとツールが待ち状態で止まり得る）
+- **OpenCode / Server Process**
+  - opencode サーバープロセスを拡張内で共有（ワークスペースごとに `opencode serve` が増殖してフリーズ/競合しやすい問題を緩和）
+- **OpenCode / Server Info**
+  - 起動時のサーバー情報カードから Config keys と Skills の一覧表示を削除（エラー時のみ表示）
+  - codez/codex セッションで OpenCode の起動時カードが混ざる問題を修正（OpenCode started としてbackend/cwdでフィルタ）
 
 ## 0.2.7
 

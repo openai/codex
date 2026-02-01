@@ -18,6 +18,18 @@ export type ChatBlock =
     }
   | {
       id: string;
+      type: "opencodePermission";
+      requestID: string;
+      permission: string;
+      status: "pending" | "replied" | "error";
+      patterns: string[];
+      always: string[];
+      metadata: Record<string, unknown> | null;
+      reply?: "once" | "always" | "reject" | null;
+      error?: string | null;
+    }
+  | {
+      id: string;
       type: "divider";
       text: string;
       status?: "inProgress" | "completed" | "failed";
@@ -145,6 +157,7 @@ export type ChatViewState = {
   reloading: boolean;
   hydrationBlockedText?: string | null;
   opencodeDefaultModelKey?: string | null;
+  opencodeDefaultAgentName?: string | null;
   cliDefaultModelState?: ModelState | null;
   statusText?: string | null;
   statusTooltip?: string | null;
@@ -276,6 +289,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       text: string,
       images?: Array<{ name: string; url: string }>,
       rewind?: RewindRequest | null,
+    ) => Promise<void>,
+    private readonly onOpencodePermissionReply: (
+      session: Session,
+      args: { requestID: string; reply: "once" | "always" | "reject" },
     ) => Promise<void>,
     private readonly onAccountList: (
       session: Session,
@@ -610,6 +627,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           url: (img as any).url as string,
         }));
       await this.onSend(text, normalized, (rewind as any) ?? null);
+      return;
+    }
+
+    if (type === "opencodePermissionReply") {
+      const sessionId = anyMsg["sessionId"];
+      const requestID = anyMsg["requestID"];
+      const reply = anyMsg["reply"];
+      if (typeof sessionId !== "string" || !sessionId) return;
+      if (typeof requestID !== "string" || !requestID) return;
+      if (reply !== "once" && reply !== "always" && reply !== "reject") return;
+      const st = this.getState();
+      const session = (st.sessions || []).find((s) => s.id === sessionId) ?? null;
+      if (!session) return;
+      if (session.backendId !== "opencode") return;
+      await this.onOpencodePermissionReply(session, { requestID, reply });
       return;
     }
 
@@ -1425,6 +1457,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       approvals: full.approvals,
       customPrompts: full.customPrompts,
       opencodeAgents: this.opencodeAgentsCache,
+      opencodeDefaultAgentName: full.opencodeDefaultAgentName,
     };
     void this.view.webview
       .postMessage({ type: "controlState", seq, state: controlState })

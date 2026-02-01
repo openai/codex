@@ -2158,7 +2158,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 handlers::refresh_mcp_servers(&sess, config).await;
             }
             Op::ListCustomPrompts => {
-                handlers::list_custom_prompts(&sess, sub.id.clone()).await;
+                handlers::list_custom_prompts(&sess, &config, sub.id.clone()).await;
             }
             Op::ListSkills { cwds, force_reload } => {
                 handlers::list_skills(&sess, sub.id.clone(), cwds, force_reload).await;
@@ -2542,13 +2542,15 @@ mod handlers {
         sess.send_event_raw(event).await;
     }
 
-    pub async fn list_custom_prompts(sess: &Session, sub_id: String) {
-        let custom_prompts: Vec<CustomPrompt> =
-            if let Some(dir) = crate::custom_prompts::default_prompts_dir() {
-                crate::custom_prompts::discover_prompts_in(&dir).await
-            } else {
-                Vec::new()
-            };
+    pub async fn list_custom_prompts(sess: &Session, config: &Arc<Config>, sub_id: String) {
+        let repo_dir = crate::custom_prompts::repo_prompts_dir(&config.cwd);
+        let user_dir = crate::custom_prompts::default_prompts_dir();
+
+        let custom_prompts: Vec<CustomPrompt> = crate::custom_prompts::discover_custom_prompts(
+            repo_dir.as_deref(),
+            user_dir.as_deref(),
+        )
+        .await;
 
         let event = Event {
             id: sub_id,
