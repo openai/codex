@@ -1440,7 +1440,7 @@
           "$ref": "#/definitions/Personality"
         }
       ],
-      "description": "EXPERIMENTAL Optionally specify a personality for the model"
+      "description": "Optionally specify a personality for the model"
     },
     "profile": {
       "description": "Profile to use from the `profiles` map.",
