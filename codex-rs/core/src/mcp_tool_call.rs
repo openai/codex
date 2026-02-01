@@ -10,6 +10,7 @@ use crate::protocol::EventMsg;
 use crate::protocol::McpInvocation;
 use crate::protocol::McpToolCallBeginEvent;
 use crate::protocol::McpToolCallEndEvent;
+use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::AskForApproval;
@@ -18,7 +19,7 @@ use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_protocol::request_user_input::RequestUserInputResponse;
-use mcp_types::ToolAnnotations;
+use rmcp::model::ToolAnnotations;
 use std::sync::Arc;
 
 /// Handles the specified tool call dispatches the appropriate
@@ -72,7 +73,7 @@ pub(crate) async fn handle_mcp_tool_call(
                     .await;
 
                 let start = Instant::now();
-                let result = sess
+                let result: Result<CallToolResult, String> = sess
                     .call_tool(&server, &tool_name, arguments_value.clone())
                     .await
                     .map_err(|e| format!("tool call error: {e:?}"));
@@ -134,7 +135,7 @@ pub(crate) async fn handle_mcp_tool_call(
 
     let start = Instant::now();
     // Perform the tool call.
-    let result = sess
+    let result: Result<CallToolResult, String> = sess
         .call_tool(&server, &tool_name, arguments_value.clone())
         .await
         .map_err(|e| format!("tool call error: {e:?}"));
@@ -341,7 +342,7 @@ async fn notify_mcp_tool_call_skip(
     call_id: &str,
     invocation: McpInvocation,
     message: String,
-) -> Result<mcp_types::CallToolResult, String> {
+) -> Result<CallToolResult, String> {
     let tool_call_begin_event = EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
         call_id: call_id.to_string(),
         invocation: invocation.clone(),
