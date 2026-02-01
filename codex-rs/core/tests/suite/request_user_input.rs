@@ -1,8 +1,5 @@
 #![allow(clippy::unwrap_used)]
 
-use std::collections::HashMap;
-use std::time::Duration;
-
 use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
@@ -12,7 +9,6 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
-use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
@@ -28,10 +24,11 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
-use core_test_support::wait_for_event_with_timeout;
+use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use std::collections::HashMap;
 
 fn call_output(req: &ResponsesRequest, call_id: &str) -> String {
     let raw = req.function_call_output(call_id);
@@ -147,15 +144,11 @@ async fn request_user_input_round_trip_resolves_pending() -> anyhow::Result<()> 
         })
         .await?;
 
-    let request_event = wait_for_event_with_timeout(
-        &codex,
-        |event| matches!(event, EventMsg::RequestUserInput(_)),
-        Duration::from_secs(20),
-    )
+    let request = wait_for_event_match(&codex, |event| match event {
+        EventMsg::RequestUserInput(request) => Some(request.clone()),
+        _ => None,
+    })
     .await;
-    let EventMsg::RequestUserInput(request) = request_event else {
-        panic!("expected RequestUserInput event");
-    };
     assert_eq!(request.call_id, call_id);
     assert_eq!(request.questions.len(), 1);
     assert_eq!(request.questions[0].is_other, true);
@@ -191,194 +184,6 @@ async fn request_user_input_round_trip_resolves_pending() -> anyhow::Result<()> 
                 "confirm_path": { "answers": ["yes"] }
             },
             "interrupted": false
-        })
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn request_user_input_partial_answers_replayed_after_interrupt() -> anyhow::Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-
-    let builder = test_codex();
-    let TestCodex {
-        codex,
-        cwd,
-        session_configured,
-        ..
-    } = builder
-        .with_config(|config| {
-            config.features.enable(Feature::CollaborationModes);
-        })
-        .build(&server)
-        .await?;
-
-    let call_id = "user-input-partial-call";
-    let request_args = json!({
-        "questions": [{
-            "id": "confirm_path",
-            "header": "Confirm",
-            "question": "Proceed with the plan?",
-            "isOther": false,
-            "options": [{
-                "label": "Yes (Recommended)",
-                "description": "Continue the current plan."
-            }, {
-                "label": "No",
-                "description": "Stop and revisit the approach."
-            }]
-        }, {
-            "id": "details",
-            "header": "Details",
-            "question": "Any extra notes?",
-            "isOther": false,
-            "options": [{
-                "label": "No extra notes (Recommended)",
-                "description": "Continue without additional detail."
-            }, {
-                "label": "Add notes",
-                "description": "Provide more context."
-            }]
-        }]
-    })
-    .to_string();
-
-    let first_response = sse(vec![
-        ev_response_created("resp-1"),
-        ev_function_call(call_id, "request_user_input", &request_args),
-        ev_completed("resp-1"),
-    ]);
-    responses::mount_sse_once(&server, first_response).await;
-
-    let second_response = sse(vec![
-        ev_response_created("resp-2"),
-        ev_assistant_message("msg-2", "acknowledged"),
-        ev_completed("resp-2"),
-    ]);
-    let second_mock = responses::mount_sse_once(&server, second_response).await;
-
-    let session_model = session_configured.model.clone();
-
-    codex
-        .submit(Op::UserTurn {
-            items: vec![UserInput::Text {
-                text: "please confirm".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            model: session_model.clone(),
-            effort: None,
-            summary: ReasoningSummary::Auto,
-            collaboration_mode: Some(CollaborationMode {
-                mode: ModeKind::Plan,
-                settings: Settings {
-                    model: session_configured.model.clone(),
-                    reasoning_effort: None,
-                    developer_instructions: None,
-                },
-            }),
-            personality: None,
-        })
-        .await?;
-
-    let request_event = wait_for_event_with_timeout(
-        &codex,
-        |event| matches!(event, EventMsg::RequestUserInput(_)),
-        Duration::from_secs(20),
-    )
-    .await;
-    let EventMsg::RequestUserInput(request) = request_event else {
-        panic!("expected RequestUserInput event");
-    };
-    assert_eq!(request.call_id, call_id);
-
-    codex.submit(Op::Interrupt).await?;
-
-    wait_for_event(&codex, |event| match event {
-        EventMsg::TurnAborted(ev) => ev.reason == TurnAbortReason::Interrupted,
-        _ => false,
-    })
-    .await;
-
-    let mut answers = HashMap::new();
-    answers.insert(
-        "confirm_path".to_string(),
-        RequestUserInputAnswer {
-            answers: vec!["yes".to_string()],
-        },
-    );
-    codex
-        .submit(Op::UserInputAnswer {
-            id: request.turn_id.clone(),
-            call_id: Some(request.call_id.clone()),
-            response: RequestUserInputResponse {
-                answers,
-                interrupted: true,
-            },
-        })
-        .await?;
-
-    codex
-        .submit(Op::UserTurn {
-            items: vec![UserInput::Text {
-                text: "continue".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            model: session_model,
-            effort: None,
-            summary: ReasoningSummary::Auto,
-            collaboration_mode: Some(CollaborationMode {
-                mode: ModeKind::Plan,
-                settings: Settings {
-                    model: session_configured.model.clone(),
-                    reasoning_effort: None,
-                    developer_instructions: None,
-                },
-            }),
-            personality: None,
-        })
-        .await?;
-
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
-
-    let req = second_mock.single_request();
-    let input = req.input();
-    let output_item = input
-        .iter()
-        .rev()
-        .find(|item| {
-            item.get("type").and_then(Value::as_str) == Some("function_call_output")
-                && item.get("call_id").and_then(Value::as_str) == Some(call_id)
-        })
-        .expect("pending function_call_output present");
-    let output = output_item.get("output").cloned().unwrap_or(Value::Null);
-    let output_text = match output {
-        Value::String(text) => text,
-        Value::Object(obj) => obj
-            .get("content")
-            .and_then(Value::as_str)
-            .expect("function_call_output missing content")
-            .to_string(),
-        _ => panic!("unexpected function_call_output payload"),
-    };
-    let output_json: Value = serde_json::from_str(&output_text)?;
-    assert_eq!(
-        output_json,
-        json!({
-            "answers": {
-                "confirm_path": { "answers": ["yes"] }
-            },
-            "interrupted": true
         })
     );
 

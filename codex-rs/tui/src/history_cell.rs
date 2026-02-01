@@ -1764,6 +1764,7 @@ pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     PlainHistoryCell { lines }
 }
 
+/// Build a history cell that renders request_user_input questions and answers.
 pub(crate) fn new_request_user_input_result(
     questions: Vec<RequestUserInputQuestion>,
     answers: HashMap<String, RequestUserInputAnswer>,
@@ -1776,6 +1777,7 @@ pub(crate) fn new_request_user_input_result(
     }
 }
 
+/// Renders a completed (or interrupted) request_user_input exchange in history.
 #[derive(Debug)]
 pub(crate) struct RequestUserInputResultCell {
     questions: Vec<RequestUserInputQuestion>,
@@ -1820,8 +1822,6 @@ impl HistoryCell for RequestUserInputResultCell {
                 Style::default(),
             );
             if answer_missing && let Some(last) = question_lines.last_mut() {
-                let spans = last.spans.to_vec();
-                last.spans = spans;
                 last.spans.push(" (unanswered)".dim());
             }
             lines.extend(question_lines);

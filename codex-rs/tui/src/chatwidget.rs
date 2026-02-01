@@ -72,6 +72,7 @@ use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::RateLimitSnapshot;
+use codex_core::protocol::RawResponseItemEvent;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::SkillMetadata as ProtocolSkillMetadata;
@@ -103,10 +104,11 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Settings;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
-use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputEvent;
+use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
@@ -389,13 +391,6 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) otel_manager: OtelManager,
 }
 
-struct PendingRequestUserInputAnswers {
-    turn_id: String,
-    call_id: String,
-    answers: HashMap<String, RequestUserInputAnswer>,
-    interrupted: bool,
-}
-
 #[derive(Default)]
 enum RateLimitSwitchPromptState {
     #[default]
@@ -538,8 +533,8 @@ pub(crate) struct ChatWidget {
     suppress_session_configured_redraw: bool,
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
-    // Partial request_user_input answers to send before the next user turn.
-    pending_request_user_input_answers: VecDeque<PendingRequestUserInputAnswers>,
+    // Replayed request_user_input questions keyed by call_id to render answers on resume.
+    replay_request_user_input_questions: HashMap<String, Vec<RequestUserInputQuestion>>,
     // Pending notification to show when unfocused on next Draw
     pending_notification: Option<Notification>,
     /// When `Some`, the user has pressed a quit shortcut and the second press
@@ -807,7 +802,7 @@ impl ChatWidget {
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.set_skills(None);
         self.bottom_pane.set_connectors_snapshot(None);
-        self.clear_pending_request_user_input_answers();
+        self.replay_request_user_input_questions.clear();
         self.thread_id = Some(event.session_id);
         self.thread_name = event.thread_name.clone();
         self.forked_from = event.forked_from_id;
@@ -1519,6 +1514,37 @@ impl ChatWidget {
             |q| q.push_user_input(ev),
             |s| s.handle_request_user_input_now(ev2),
         );
+    }
+
+    /// Cache replayed request_user_input questions so answers can render once the
+    /// corresponding tool output is replayed.
+    fn cache_request_user_input_for_replay(&mut self, ev: RequestUserInputEvent) {
+        self.replay_request_user_input_questions
+            .insert(ev.call_id, ev.questions);
+    }
+
+    /// Replay handler for request_user_input tool outputs, rendering them into history.
+    fn on_raw_response_item_replay(&mut self, event: RawResponseItemEvent) {
+        let ResponseItem::FunctionCallOutput { call_id, output } = event.item else {
+            return;
+        };
+        let Some(questions) = self.replay_request_user_input_questions.remove(&call_id) else {
+            return;
+        };
+        let response: RequestUserInputResponse = match serde_json::from_str(&output.content) {
+            Ok(response) => response,
+            Err(err) => {
+                tracing::warn!(
+                    "failed to parse request_user_input response for call_id {call_id}: {err}"
+                );
+                return;
+            }
+        };
+        self.add_to_history(history_cell::new_request_user_input_result(
+            questions,
+            response.answers,
+            response.interrupted,
+        ));
     }
 
     fn on_exec_command_begin(&mut self, ev: ExecCommandBeginEvent) {
@@ -2293,7 +2319,7 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
-            pending_request_user_input_answers: VecDeque::new(),
+            replay_request_user_input_questions: HashMap::new(),
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
@@ -2443,7 +2469,7 @@ impl ChatWidget {
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             queued_user_messages: VecDeque::new(),
-            pending_request_user_input_answers: VecDeque::new(),
+            replay_request_user_input_questions: HashMap::new(),
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
@@ -2574,7 +2600,7 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
-            pending_request_user_input_answers: VecDeque::new(),
+            replay_request_user_input_questions: HashMap::new(),
             show_welcome_banner: false,
             suppress_session_configured_redraw: true,
             pending_notification: None,
@@ -3218,54 +3244,6 @@ impl ChatWidget {
         }
     }
 
-    pub(crate) fn queue_request_user_input_answers(
-        &mut self,
-        turn_id: String,
-        call_id: String,
-        answers: HashMap<String, RequestUserInputAnswer>,
-        interrupted: bool,
-    ) {
-        if answers.is_empty() && !interrupted {
-            return;
-        }
-        if let Some(existing) = self
-            .pending_request_user_input_answers
-            .iter_mut()
-            .find(|pending| pending.call_id == call_id)
-        {
-            existing.turn_id = turn_id;
-            existing.answers = answers;
-            existing.interrupted = interrupted;
-            return;
-        }
-        self.pending_request_user_input_answers
-            .push_back(PendingRequestUserInputAnswers {
-                turn_id,
-                call_id,
-                answers,
-                interrupted,
-            });
-    }
-
-    fn flush_pending_request_user_input_answers(&mut self) {
-        let pending = std::mem::take(&mut self.pending_request_user_input_answers);
-        for pending in pending {
-            let call_id = pending.call_id;
-            self.submit_op(Op::UserInputAnswer {
-                id: pending.turn_id,
-                call_id: Some(call_id),
-                response: RequestUserInputResponse {
-                    answers: pending.answers,
-                    interrupted: pending.interrupted,
-                },
-            });
-        }
-    }
-
-    fn clear_pending_request_user_input_answers(&mut self) {
-        self.pending_request_user_input_answers.clear();
-    }
-
     fn submit_user_message(&mut self, user_message: UserMessage) {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
@@ -3344,7 +3322,6 @@ impl ChatWidget {
                 });
             }
         }
-        self.flush_pending_request_user_input_answers();
 
         let effective_mode = self.effective_collaboration_mode();
         let collaboration_mode = if self.collaboration_modes_enabled() {
@@ -3501,11 +3478,15 @@ impl ChatWidget {
             EventMsg::McpStartupUpdate(ev) => self.on_mcp_startup_update(ev),
             EventMsg::McpStartupComplete(ev) => self.on_mcp_startup_complete(ev),
             EventMsg::TurnAborted(ev) => match ev.reason {
-                TurnAbortReason::Interrupted => self.on_interrupted_turn(ev.reason),
+                TurnAbortReason::Interrupted => {
+                    self.on_interrupted_turn(ev.reason);
+                }
                 TurnAbortReason::Replaced => {
                     self.on_error("Turn aborted: replaced by a new task".to_owned())
                 }
-                TurnAbortReason::ReviewEnded => self.on_interrupted_turn(ev.reason),
+                TurnAbortReason::ReviewEnded => {
+                    self.on_interrupted_turn(ev.reason);
+                }
             },
             EventMsg::PlanUpdate(update) => self.on_plan_update(update),
             EventMsg::ExecApprovalRequest(ev) => {
@@ -3519,12 +3500,12 @@ impl ChatWidget {
                 self.on_elicitation_request(ev);
             }
             EventMsg::RequestUserInput(ev) => {
-                // Replay should not reopen interactive question UIs for now; we only replay the
-                // persisted tool call/output items. Once we reconstruct answers on replay,
-                // remove this guard and render the questions from history instead.
-                // TODO: Support request_user_input replay by reconstructing question/answer
-                // history and rendering without re-prompting.
-                if !from_replay {
+                if from_replay {
+                    // During replay, avoid reopening the questions UI and instead cache
+                    // questions until we see the matching tool output.
+                    // TODO: support replaying unanswered questions as a UI flow.
+                    self.cache_request_user_input_for_replay(ev);
+                } else {
                     self.on_request_user_input(ev);
                 }
             }
@@ -3582,9 +3563,13 @@ impl ChatWidget {
             EventMsg::CollabWaitingEnd(ev) => self.on_collab_event(collab::waiting_end(ev)),
             EventMsg::CollabCloseBegin(_) => {}
             EventMsg::CollabCloseEnd(ev) => self.on_collab_event(collab::close_end(ev)),
-            EventMsg::ThreadRolledBack(_) => self.clear_pending_request_user_input_answers(),
-            EventMsg::RawResponseItem(_)
-            | EventMsg::ItemStarted(_)
+            EventMsg::ThreadRolledBack(_) => {}
+            EventMsg::RawResponseItem(event) => {
+                if from_replay {
+                    self.on_raw_response_item_replay(event);
+                }
+            }
+            EventMsg::ItemStarted(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)

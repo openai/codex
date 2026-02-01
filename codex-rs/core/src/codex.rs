@@ -1688,9 +1688,13 @@ impl Session {
     pub async fn notify_user_input_response(
         &self,
         sub_id: &str,
-        call_id: Option<String>,
+        _call_id: Option<String>,
         response: RequestUserInputResponse,
     ) {
+        if response.interrupted {
+            // An interrupted request_user_input should end the turn without a follow-up request.
+            self.mark_request_user_input_interrupted().await;
+        }
         let entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
@@ -1707,32 +1711,7 @@ impl Session {
                 tx_response.send(response).ok();
             }
             None => {
-                // No pending user-input sender means the tool response arrived after the
-                // original request_user_input turn ended (e.g., the TUI queued partial
-                // answers on interrupt and is replaying them on the next user turn).
-                // Record a function_call_output so history/rollout includes the tool
-                // response in the correct order before the next user message, without
-                // starting a new model request immediately.
-                if response.answers.is_empty() && !response.interrupted {
-                    warn!(
-                        "dropping empty request_user_input response for sub_id: {sub_id}; likely cancelled"
-                    );
-                    return;
-                }
-                let call_id = call_id.unwrap_or_else(|| sub_id.to_string());
-                let call_id_for_log = call_id.clone();
-                let response_item = match response.to_function_call_output(call_id) {
-                    Ok(item) => item,
-                    Err(err) => {
-                        warn!(
-                            "failed to serialize request_user_input response for call_id: {call_id_for_log}: {err}"
-                        );
-                        return;
-                    }
-                };
-                let turn_context = self.new_default_turn_with_sub_id(sub_id.to_string()).await;
-                self.record_conversation_items(&turn_context, &[response_item])
-                    .await;
+                warn!("No pending user input found for sub_id: {sub_id}");
             }
         }
     }
@@ -2256,6 +2235,25 @@ impl Session {
             Some(at) => {
                 let ts = at.turn_state.lock().await;
                 ts.has_pending_input()
+            }
+            None => false,
+        }
+    }
+
+    pub async fn mark_request_user_input_interrupted(&self) {
+        let mut active = self.active_turn.lock().await;
+        if let Some(at) = active.as_mut() {
+            let mut ts = at.turn_state.lock().await;
+            ts.mark_request_user_input_interrupted();
+        }
+    }
+
+    pub async fn take_request_user_input_interrupted(&self) -> bool {
+        let mut active = self.active_turn.lock().await;
+        match active.as_mut() {
+            Some(at) => {
+                let mut ts = at.turn_state.lock().await;
+                ts.take_request_user_input_interrupted()
             }
             None => false,
         }
@@ -4268,7 +4266,7 @@ async fn try_run_sampling_request(
     let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
     let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
     let receiving_span = trace_span!("receiving_stream");
-    let outcome: CodexResult<SamplingRequestResult> = loop {
+    let mut outcome: CodexResult<SamplingRequestResult> = loop {
         let handle_responses = trace_span!(
             parent: &receiving_span,
             "handle_responses",
@@ -4478,6 +4476,13 @@ async fn try_run_sampling_request(
     };
 
     drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
+
+    if let Ok(result) = outcome.as_mut() {
+        // Suppress follow-up requests when request_user_input was interrupted.
+        if sess.take_request_user_input_interrupted().await {
+            result.needs_follow_up = false;
+        }
+    }
 
     if should_emit_turn_diff {
         let unified_diff = {

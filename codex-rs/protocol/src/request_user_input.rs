@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 
-use crate::models::FunctionCallOutputPayload;
-use crate::models::ResponseItem;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -53,21 +51,6 @@ pub struct RequestUserInputResponse {
 impl RequestUserInputResponse {
     pub fn to_output_content(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string(self)
-    }
-
-    pub fn to_function_call_output(
-        &self,
-        call_id: String,
-    ) -> Result<ResponseItem, serde_json::Error> {
-        let content = self.to_output_content()?;
-        Ok(ResponseItem::FunctionCallOutput {
-            call_id,
-            output: FunctionCallOutputPayload {
-                content,
-                success: Some(true),
-                ..Default::default()
-            },
-        })
     }
 }
 

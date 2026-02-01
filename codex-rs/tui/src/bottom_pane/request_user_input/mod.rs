@@ -671,6 +671,7 @@ impl RequestUserInputOverlay {
         self.sync_composer_placeholder();
     }
 
+    /// Build the answer payload for a question if it is committed (or include empty if requested).
     fn answer_for_question(
         &self,
         idx: usize,
@@ -692,8 +693,7 @@ impl RequestUserInputOverlay {
         } else {
             None
         };
-        let draft = answer_state.draft.clone();
-        let notes = draft.text_with_pending().trim().to_string();
+        let notes = answer_state.draft.text_with_pending().trim().to_string();
         let selected_label = selected_idx
             .and_then(|selected_idx| Self::option_label_for_index(question, selected_idx));
         let mut answers = selected_label.into_iter().collect::<Vec<_>>();
@@ -706,6 +706,7 @@ impl RequestUserInputOverlay {
         Some(RequestUserInputAnswer { answers })
     }
 
+    /// Submit committed answers when the questions UI is explicitly interrupted.
     fn submit_committed_answers_for_interrupt(&mut self) {
         let mut answers = HashMap::new();
         for (idx, question) in self.request.questions.iter().enumerate() {
@@ -715,17 +716,16 @@ impl RequestUserInputOverlay {
         }
         // This path only runs when the user explicitly interrupts the questions UI.
         let interrupted = true;
-        if answers.is_empty() && !interrupted {
-            return;
-        }
         let history_answers = answers.clone();
         self.app_event_tx
-            .send(AppEvent::QueueRequestUserInputAnswers {
-                turn_id: self.request.turn_id.clone(),
-                call_id: self.request.call_id.clone(),
-                answers,
-                interrupted,
-            });
+            .send(AppEvent::CodexOp(Op::UserInputAnswer {
+                id: self.request.turn_id.clone(),
+                call_id: Some(self.request.call_id.clone()),
+                response: RequestUserInputResponse {
+                    answers,
+                    interrupted,
+                },
+            }));
         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
             history_cell::new_request_user_input_result(
                 self.request.questions.clone(),
@@ -1044,7 +1044,6 @@ impl BottomPaneView for RequestUserInputOverlay {
 
         if matches!(key_event.code, KeyCode::Esc) {
             self.submit_committed_answers_for_interrupt();
-            self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
             self.done = true;
             return;
         }
@@ -1252,7 +1251,6 @@ impl BottomPaneView for RequestUserInputOverlay {
         if self.confirm_unanswered_active() {
             self.close_unanswered_confirmation();
             self.submit_committed_answers_for_interrupt();
-            self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
             self.done = true;
             return CancellationEvent::Handled;
         }
@@ -1262,7 +1260,6 @@ impl BottomPaneView for RequestUserInputOverlay {
         }
 
         self.submit_committed_answers_for_interrupt();
-        self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
         self.done = true;
         CancellationEvent::Handled
     }
@@ -1758,25 +1755,18 @@ mod tests {
 
         assert_eq!(overlay.done, true);
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::QueueRequestUserInputAnswers {
-            answers,
-            interrupted,
-            ..
-        } = event
-        else {
-            panic!("expected queued answers");
+        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+            panic!("expected UserInputAnswer");
         };
-        assert!(interrupted, "expected interrupted flag");
-        assert!(answers.is_empty(), "expected no committed answers");
+        assert!(response.interrupted, "expected interrupted flag");
+        assert!(response.answers.is_empty(), "expected no committed answers");
 
         let event = rx.try_recv().expect("expected history cell");
         assert!(matches!(event, AppEvent::InsertHistoryCell(_)));
-
-        let event = rx.try_recv().expect("expected interrupt AppEvent");
-        let AppEvent::CodexOp(op) = event else {
-            panic!("expected CodexOp");
-        };
-        assert_eq!(op, Op::Interrupt);
+        assert!(
+            rx.try_recv().is_err(),
+            "unexpected AppEvent after history cell"
+        );
     }
 
     #[test]
@@ -1794,25 +1784,18 @@ mod tests {
 
         assert_eq!(overlay.done, true);
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::QueueRequestUserInputAnswers {
-            answers,
-            interrupted,
-            ..
-        } = event
-        else {
-            panic!("expected queued answers");
+        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+            panic!("expected UserInputAnswer");
         };
-        assert!(interrupted, "expected interrupted flag");
-        assert!(answers.is_empty(), "expected no committed answers");
+        assert!(response.interrupted, "expected interrupted flag");
+        assert!(response.answers.is_empty(), "expected no committed answers");
 
         let event = rx.try_recv().expect("expected history cell");
         assert!(matches!(event, AppEvent::InsertHistoryCell(_)));
-
-        let event = rx.try_recv().expect("expected interrupt AppEvent");
-        let AppEvent::CodexOp(op) = event else {
-            panic!("expected CodexOp");
-        };
-        assert_eq!(op, Op::Interrupt);
+        assert!(
+            rx.try_recv().is_err(),
+            "unexpected AppEvent after history cell"
+        );
     }
 
     #[test]
@@ -1833,24 +1816,19 @@ mod tests {
 
         assert_eq!(overlay.done, true);
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::QueueRequestUserInputAnswers {
-            answers: _,
-            interrupted,
-            ..
-        } = event
-        else {
-            panic!("expected queued answers");
+        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+            panic!("expected UserInputAnswer");
         };
-        assert!(interrupted, "expected interrupted flag");
+        assert!(response.interrupted, "expected interrupted flag");
+        let answer = response.answers.get("q1").expect("answer missing");
+        assert_eq!(answer.answers, vec!["Option 1".to_string()]);
 
         let event = rx.try_recv().expect("expected history cell");
         assert!(matches!(event, AppEvent::InsertHistoryCell(_)));
-
-        let event = rx.try_recv().expect("expected interrupt AppEvent");
-        let AppEvent::CodexOp(op) = event else {
-            panic!("expected CodexOp");
-        };
-        assert_eq!(op, Op::Interrupt);
+        assert!(
+            rx.try_recv().is_err(),
+            "unexpected AppEvent after history cell"
+        );
     }
 
     #[test]
@@ -1872,24 +1850,19 @@ mod tests {
 
         assert_eq!(overlay.done, true);
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::QueueRequestUserInputAnswers {
-            answers: _,
-            interrupted,
-            ..
-        } = event
-        else {
-            panic!("expected queued answers");
+        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+            panic!("expected UserInputAnswer");
         };
-        assert!(interrupted, "expected interrupted flag");
+        assert!(response.interrupted, "expected interrupted flag");
+        let answer = response.answers.get("q1").expect("answer missing");
+        assert_eq!(answer.answers, vec!["Option 1".to_string()]);
 
         let event = rx.try_recv().expect("expected history cell");
         assert!(matches!(event, AppEvent::InsertHistoryCell(_)));
-
-        let event = rx.try_recv().expect("expected interrupt AppEvent");
-        let AppEvent::CodexOp(op) = event else {
-            panic!("expected CodexOp");
-        };
-        assert_eq!(op, Op::Interrupt);
+        assert!(
+            rx.try_recv().is_err(),
+            "unexpected AppEvent after history cell"
+        );
     }
 
     #[test]
@@ -1918,26 +1891,19 @@ mod tests {
         overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
 
         let event = rx.try_recv().expect("expected partial answers");
-        let AppEvent::QueueRequestUserInputAnswers {
-            answers,
-            interrupted,
-            ..
-        } = event
-        else {
-            panic!("expected queued answers");
+        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+            panic!("expected UserInputAnswer");
         };
-        assert!(interrupted, "expected interrupted flag");
-        let answer = answers.get("q1").expect("answer missing");
+        assert!(response.interrupted, "expected interrupted flag");
+        let answer = response.answers.get("q1").expect("answer missing");
         assert_eq!(answer.answers, vec!["Option 1".to_string()]);
 
         let event = rx.try_recv().expect("expected history cell");
         assert!(matches!(event, AppEvent::InsertHistoryCell(_)));
-
-        let event = rx.try_recv().expect("expected interrupt AppEvent");
-        let AppEvent::CodexOp(op) = event else {
-            panic!("expected CodexOp");
-        };
-        assert_eq!(op, Op::Interrupt);
+        assert!(
+            rx.try_recv().is_err(),
+            "unexpected AppEvent after history cell"
+        );
     }
 
     #[test]

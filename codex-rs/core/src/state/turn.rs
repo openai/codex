@@ -73,6 +73,8 @@ pub(crate) struct TurnState {
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
     pending_input: Vec<ResponseInputItem>,
+    /// True when a request_user_input flow was interrupted and should suppress follow-up.
+    request_user_input_interrupted: bool,
 }
 
 impl TurnState {
@@ -96,6 +98,7 @@ impl TurnState {
         self.pending_user_input.clear();
         self.pending_dynamic_tools.clear();
         self.pending_input.clear();
+        self.request_user_input_interrupted = false;
     }
 
     pub(crate) fn insert_pending_user_input(
@@ -144,6 +147,14 @@ impl TurnState {
 
     pub(crate) fn has_pending_input(&self) -> bool {
         !self.pending_input.is_empty()
+    }
+
+    pub(crate) fn mark_request_user_input_interrupted(&mut self) {
+        self.request_user_input_interrupted = true;
+    }
+
+    pub(crate) fn take_request_user_input_interrupted(&mut self) -> bool {
+        std::mem::take(&mut self.request_user_input_interrupted)
     }
 }
 
