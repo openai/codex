@@ -29,6 +29,7 @@ use core_test_support::skip_if_no_network;
 use futures::StreamExt;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -133,6 +134,72 @@ async fn responses_websocket_emits_reasoning_included_event() {
     }
 
     assert!(saw_reasoning_included);
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_emits_metadata_events() {
+    skip_if_no_network!();
+
+    let metadata_headers = json!({
+        "X-Codex-Primary-Used-Percent": "42",
+        "X-Codex-Primary-Window-Minutes": "60",
+        "X-Codex-Primary-Reset-At": "1700000000",
+        "X-Codex-Credits-Has-Credits": "true",
+        "X-Codex-Credits-Unlimited": "false",
+        "X-Codex-Credits-Balance": "123",
+        "X-Models-Etag": "etag-123",
+        "X-Reasoning-Included": "true",
+    });
+
+    let server = start_websocket_server(vec![vec![vec![
+        json!({"type": "codex.metadata", "headers": metadata_headers}),
+        ev_response_created("resp-1"),
+        ev_completed("resp-1"),
+    ]]])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    let mut session = harness.client.new_session();
+    let prompt = prompt_with_input(vec![message_item("hello")]);
+
+    let mut stream = session
+        .stream(&prompt)
+        .await
+        .expect("websocket stream failed");
+
+    let mut saw_rate_limits = None;
+    let mut saw_models_etag = None;
+    let mut saw_reasoning_included = false;
+
+    while let Some(event) = stream.next().await {
+        match event.expect("event") {
+            ResponseEvent::RateLimits(snapshot) => {
+                saw_rate_limits = Some(snapshot);
+            }
+            ResponseEvent::ModelsEtag(etag) => {
+                saw_models_etag = Some(etag);
+            }
+            ResponseEvent::ServerReasoningIncluded(true) => {
+                saw_reasoning_included = true;
+            }
+            ResponseEvent::Completed { .. } => break,
+            _ => {}
+        }
+    }
+
+    let rate_limits = saw_rate_limits.expect("missing rate limits");
+    let primary = rate_limits.primary.expect("missing primary window");
+    assert_eq!(primary.used_percent, 42.0);
+    assert_eq!(primary.window_minutes, Some(60));
+    assert_eq!(primary.resets_at, Some(1_700_000_000));
+    let credits = rate_limits.credits.expect("missing credits");
+    assert!(credits.has_credits);
+    assert!(!credits.unlimited);
+    assert_eq!(credits.balance.as_deref(), Some("123"));
+    assert_eq!(saw_models_etag.as_deref(), Some("etag-123"));
+    assert!(saw_reasoning_included);
+
     server.shutdown().await;
 }
 

@@ -5,6 +5,7 @@ use crate::common::ResponseStream;
 use crate::common::ResponsesWsRequest;
 use crate::error::ApiError;
 use crate::provider::Provider;
+use crate::rate_limits::parse_rate_limit;
 use crate::sse::responses::ResponsesStreamEvent;
 use crate::sse::responses::process_responses_event;
 use crate::telemetry::WebsocketTelemetry;
@@ -12,6 +13,8 @@ use codex_client::TransportError;
 use futures::SinkExt;
 use futures::StreamExt;
 use http::HeaderMap;
+use http::HeaderName;
+use http::HeaderValue;
 use serde_json::Value;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -41,6 +44,7 @@ pub struct ResponsesWebsocketConnection {
     idle_timeout: Duration,
     server_reasoning_included: bool,
     telemetry: Option<Arc<dyn WebsocketTelemetry>>,
+    turn_state: Option<Arc<OnceLock<String>>>,
 }
 
 impl ResponsesWebsocketConnection {
@@ -49,12 +53,14 @@ impl ResponsesWebsocketConnection {
         idle_timeout: Duration,
         server_reasoning_included: bool,
         telemetry: Option<Arc<dyn WebsocketTelemetry>>,
+        turn_state: Option<Arc<OnceLock<String>>>,
     ) -> Self {
         Self {
             stream: Arc::new(Mutex::new(Some(stream))),
             idle_timeout,
             server_reasoning_included,
             telemetry,
+            turn_state,
         }
     }
 
@@ -72,6 +78,7 @@ impl ResponsesWebsocketConnection {
         let idle_timeout = self.idle_timeout;
         let server_reasoning_included = self.server_reasoning_included;
         let telemetry = self.telemetry.clone();
+        let turn_state = self.turn_state.clone();
         let request_body = serde_json::to_value(&request).map_err(|err| {
             ApiError::Stream(format!("failed to encode websocket request: {err}"))
         })?;
@@ -98,6 +105,7 @@ impl ResponsesWebsocketConnection {
                 request_body,
                 idle_timeout,
                 telemetry,
+                turn_state,
             )
             .await
             {
@@ -137,12 +145,13 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
         add_auth_headers_to_header_map(&self.auth, &mut headers);
 
         let (stream, server_reasoning_included) =
-            connect_websocket(ws_url, headers, turn_state).await?;
+            connect_websocket(ws_url, headers, turn_state.clone()).await?;
         Ok(ResponsesWebsocketConnection::new(
             stream,
             self.provider.stream_idle_timeout,
             server_reasoning_included,
             telemetry,
+            turn_state,
         ))
     }
 }
@@ -212,12 +221,31 @@ fn map_ws_error(err: WsError, url: &Url) -> ApiError {
     }
 }
 
+fn headers_from_value(raw: &Value) -> Option<HeaderMap> {
+    let obj = raw.as_object()?;
+    let mut headers = HeaderMap::new();
+    for (name, value) in obj {
+        let Some(value_str) = value.as_str() else {
+            continue;
+        };
+        let Ok(header_name) = HeaderName::from_bytes(name.as_bytes()) else {
+            continue;
+        };
+        let Ok(header_value) = HeaderValue::from_str(value_str) else {
+            continue;
+        };
+        headers.insert(header_name, header_value);
+    }
+    Some(headers)
+}
+
 async fn run_websocket_response_stream(
     ws_stream: &mut WsStream,
     tx_event: mpsc::Sender<std::result::Result<ResponseEvent, ApiError>>,
     request_body: Value,
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn WebsocketTelemetry>>,
+    turn_state: Option<Arc<OnceLock<String>>>,
 ) -> Result<(), ApiError> {
     let request_text = match serde_json::to_string(&request_body) {
         Ok(text) => text,
@@ -273,6 +301,36 @@ async fn run_websocket_response_stream(
                         continue;
                     }
                 };
+                if event.kind() == "codex.metadata" {
+                    if let Some(raw_headers) = event.headers()
+                        && let Some(headers) = headers_from_value(raw_headers)
+                    {
+                        if let Some(turn_state) = turn_state.as_ref()
+                            && let Some(header_value) = headers
+                                .get(X_CODEX_TURN_STATE_HEADER)
+                                .and_then(|value| value.to_str().ok())
+                        {
+                            let _ = turn_state.set(header_value.to_string());
+                        }
+                        if let Some(snapshot) = parse_rate_limit(&headers) {
+                            let _ = tx_event.send(Ok(ResponseEvent::RateLimits(snapshot))).await;
+                        }
+                        if let Some(etag) = headers
+                            .get("X-Models-Etag")
+                            .and_then(|value| value.to_str().ok())
+                        {
+                            let _ = tx_event
+                                .send(Ok(ResponseEvent::ModelsEtag(etag.to_string())))
+                                .await;
+                        }
+                        if headers.contains_key(X_REASONING_INCLUDED_HEADER) {
+                            let _ = tx_event
+                                .send(Ok(ResponseEvent::ServerReasoningIncluded(true)))
+                                .await;
+                        }
+                    }
+                    continue;
+                }
                 match process_responses_event(event) {
                     Ok(Some(event)) => {
                         let is_completed = matches!(event, ResponseEvent::Completed { .. });
