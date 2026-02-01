@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::Read;
 use std::io::Seek;
@@ -8,6 +10,7 @@ use std::path::PathBuf;
 use codex_protocol::ThreadId;
 use serde::Deserialize;
 use serde::Serialize;
+use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
 
 const SESSION_INDEX_FILE: &str = "session_index.jsonl";
@@ -74,6 +77,38 @@ pub async fn find_thread_name_by_id(
         .await
         .map_err(std::io::Error::other)??;
     Ok(entry.map(|entry| entry.thread_name))
+}
+
+/// Find the latest thread names for a batch of thread ids.
+pub async fn find_thread_names_by_ids(
+    codex_home: &Path,
+    thread_ids: &HashSet<ThreadId>,
+) -> std::io::Result<HashMap<ThreadId, String>> {
+    let path = session_index_path(codex_home);
+    if thread_ids.is_empty() || !path.exists() {
+        return Ok(HashMap::new());
+    }
+
+    let file = tokio::fs::File::open(&path).await?;
+    let reader = tokio::io::BufReader::new(file);
+    let mut lines = reader.lines();
+    let mut names = HashMap::with_capacity(thread_ids.len());
+
+    while let Some(line) = lines.next_line().await? {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(entry) = serde_json::from_str::<SessionIndexEntry>(trimmed) else {
+            continue;
+        };
+        let name = entry.thread_name.trim();
+        if !name.is_empty() && thread_ids.contains(&entry.id) {
+            names.insert(entry.id, name.to_string());
+        }
+    }
+
+    Ok(names)
 }
 
 /// Find the most recently updated thread id for a thread name, if any.
@@ -197,6 +232,8 @@ where
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
+    use std::collections::HashSet;
     use tempfile::TempDir;
     fn write_index(path: &Path, lines: &[SessionIndexEntry]) -> std::io::Result<()> {
         let mut out = String::new();
@@ -276,6 +313,44 @@ mod tests {
 
         let missing_id = scan_index_from_end_by_id(&path, &ThreadId::new())?;
         assert_eq!(missing_id, None);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn find_thread_names_by_ids_prefers_latest_entry() -> std::io::Result<()> {
+        let temp = TempDir::new()?;
+        let path = session_index_path(temp.path());
+        let id1 = ThreadId::new();
+        let id2 = ThreadId::new();
+        let lines = vec![
+            SessionIndexEntry {
+                id: id1,
+                thread_name: "first".to_string(),
+                updated_at: "2024-01-01T00:00:00Z".to_string(),
+            },
+            SessionIndexEntry {
+                id: id2,
+                thread_name: "other".to_string(),
+                updated_at: "2024-01-01T00:00:00Z".to_string(),
+            },
+            SessionIndexEntry {
+                id: id1,
+                thread_name: "latest".to_string(),
+                updated_at: "2024-01-02T00:00:00Z".to_string(),
+            },
+        ];
+        write_index(&path, &lines)?;
+
+        let mut ids = HashSet::new();
+        ids.insert(id1);
+        ids.insert(id2);
+
+        let mut expected = HashMap::new();
+        expected.insert(id1, "latest".to_string());
+        expected.insert(id2, "other".to_string());
+
+        let found = find_thread_names_by_ids(temp.path(), &ids).await?;
+        assert_eq!(found, expected);
         Ok(())
     }
 
