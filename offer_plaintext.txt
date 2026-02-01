@@ -1,0 +1,16 @@
+Allison Van Cura — Senior Annotation Architect
+Offer: 1-Week Paid Pilot — Taxonomy + Gold Standard + Label Studio Setup
+Price: $1,500 (30% deposit to start)
+
+Deliverables (7 days)
+- 2-page taxonomy & edge rules
+- 500 labeled examples (or 300 + 200 gold)
+- 200-example gold set with rationales (audit-ready)
+- Label Studio project export + keyboard shortcuts
+- QA snapshot showing IAB, error types, throughput
+- 60–90m onboarding + 30m handoff call
+
+Guarantee: If the gold set does not meet the acceptance criteria defined at kickoff, I will revise at no charge.
+
+Why hire me: Senior systems-level thinking that turns ambiguous labeling into repeatable ops. Typical outcomes: ≥3× faster labeling and IAB ≥ 0.80.
+Contact: acfwrites@gmail.com | calendly.com/your-link
