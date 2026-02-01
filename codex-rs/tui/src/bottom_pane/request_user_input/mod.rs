@@ -708,6 +708,7 @@ impl RequestUserInputOverlay {
 
     /// Submit committed answers when the questions UI is explicitly interrupted.
     fn submit_committed_answers_for_interrupt(&mut self) {
+        self.save_current_draft();
         let mut answers = HashMap::new();
         for (idx, question) in self.request.questions.iter().enumerate() {
             if let Some(answer) = self.answer_for_question(idx, false) {
