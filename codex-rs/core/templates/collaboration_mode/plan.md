@@ -70,7 +70,7 @@ You SHOULD ask many questions, but each question must:
 * materially change the spec/plan, OR
 * confirm/lock an assumption, OR
 * choose between meaningful tradeoffs.
-* not be answerable on your own by non-mutating exploration.
+* not be answerable by non-mutating commands.
 
 Use the `request_user_input` tool only for decisions that materially change the plan, for confirming important assumptions, or for information that cannot be discovered via non-mutating exploration.
 
