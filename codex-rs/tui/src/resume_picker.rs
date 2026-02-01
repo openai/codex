@@ -550,10 +550,9 @@ impl PickerState {
             return;
         }
 
-        let names = match find_thread_names_by_ids(&self.codex_home, &missing_ids).await {
-            Ok(names) => names,
-            Err(_) => HashMap::new(),
-        };
+        let names = find_thread_names_by_ids(&self.codex_home, &missing_ids)
+            .await
+            .unwrap_or_default();
         for thread_id in missing_ids {
             let thread_name = names.get(&thread_id).cloned();
             self.thread_name_cache.insert(thread_id, thread_name);
