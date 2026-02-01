@@ -19,6 +19,7 @@ use std::path::PathBuf;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::queued_user_messages::QueuedUserMessages;
+pub(crate) use crate::bottom_pane::status_line_setup::StatusLineItem;
 use crate::bottom_pane::unified_exec_footer::UnifiedExecFooter;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
@@ -41,7 +42,9 @@ use std::time::Duration;
 
 mod app_link_view;
 mod approval_overlay;
+mod multi_select_picker;
 mod request_user_input;
+mod status_line_setup;
 pub(crate) use app_link_view::AppLinkView;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
@@ -75,6 +78,7 @@ pub(crate) use feedback_view::feedback_selection_params;
 pub(crate) use feedback_view::feedback_upload_consent_params;
 pub(crate) use skills_toggle_view::SkillsToggleItem;
 pub(crate) use skills_toggle_view::SkillsToggleView;
+pub(crate) use status_line_setup::StatusLineSetupView;
 mod paste_burst;
 pub mod popup_consts;
 mod queued_user_messages;
@@ -872,6 +876,15 @@ impl BottomPane {
     pub(crate) fn set_status_line_enabled(&mut self, enabled: bool) {
         self.composer.set_status_line_enabled(enabled);
         self.request_redraw();
+    }
+
+    pub(crate) fn preview_status_line(&mut self, items: Vec<StatusLineItem>) {
+        self.composer.preview_status_line(items);
+        self.request_redraw();
+    }
+
+    pub(crate) fn setup_status_line(&mut self, items: Vec<String>) {
+        tracing::info!("Setting up status line with items: {:?}", items);
     }
 }
 

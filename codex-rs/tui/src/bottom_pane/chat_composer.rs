@@ -84,6 +84,7 @@
 //! state.
 use crate::bottom_pane::footer::mode_indicator_line;
 use crate::bottom_pane::selection_popup_common::truncate_line_with_ellipsis_if_overflow;
+use crate::bottom_pane::status_line_setup::StatusLineItem;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::has_ctrl_or_alt;
@@ -302,6 +303,7 @@ pub(crate) struct ChatComposer {
     windows_degraded_sandbox_active: bool,
     status_line_value: Option<StatusLineValue>,
     status_line_enabled: bool,
+    status_line_preview: Vec<StatusLineItem>,
 }
 
 #[derive(Clone, Debug)]
@@ -393,6 +395,7 @@ impl ChatComposer {
             windows_degraded_sandbox_active: false,
             status_line_value: None,
             status_line_enabled: false,
+            status_line_preview: Vec::new(),
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -3024,6 +3027,10 @@ impl ChatComposer {
 
     pub(crate) fn set_status_line_enabled(&mut self, enabled: bool) {
         self.status_line_enabled = enabled;
+    }
+
+    pub(crate) fn preview_status_line(&mut self, items: Vec<StatusLineItem>) {
+        self.status_line_preview = items;
     }
 }
 

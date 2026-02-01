@@ -19,6 +19,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 
 use crate::bottom_pane::ApprovalRequest;
+use crate::bottom_pane::StatusLineItem;
 use crate::history_cell::HistoryCell;
 use crate::status_line::StatusLineValue;
 
@@ -306,6 +307,13 @@ pub(crate) enum AppEvent {
     StatusLineErrorWarning {
         message: String,
     },
+    StatusLinePreview {
+        items: Vec<StatusLineItem>,
+    },
+    StatusLineSetup {
+        items: Vec<String>,
+    },
+    StatusLineSetupCancelled,
 }
 
 /// The exit strategy requested by the UI layer.

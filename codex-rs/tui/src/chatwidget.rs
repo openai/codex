@@ -29,6 +29,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::bottom_pane::StatusLineItem;
+use crate::bottom_pane::StatusLineSetupView;
 use crate::diff_render::calculate_add_remove_from_diff;
 use crate::status_line::StatusLineValue;
 use crate::version::CODEX_CLI_VERSION;
@@ -800,6 +802,19 @@ impl ChatWidget {
     pub(crate) fn set_status_line(&mut self, status_line: Option<StatusLineValue>) {
         self.bottom_pane.set_status_line(status_line);
         self.request_redraw();
+    }
+
+    pub(crate) fn cancel_status_line_setup(&self) {
+        tracing::info!("Status line setup canceled by user");
+    }
+
+    pub(crate) fn preview_status_line(&mut self, items: Vec<StatusLineItem>) {
+        self.bottom_pane.preview_status_line(items);
+    }
+
+    pub(crate) fn setup_status_line(&mut self, items: Vec<String>) {
+        tracing::info!("status line setup confirmed with items: {items:#?}");
+        self.bottom_pane.setup_status_line(items);
     }
 
     fn restore_retry_status_header_if_present(&mut self) {
@@ -3045,6 +3060,9 @@ impl ChatWidget {
             SlashCommand::DebugConfig => {
                 self.add_debug_config_output();
             }
+            SlashCommand::Statusline => {
+                self.open_status_line_setup();
+            }
             SlashCommand::Ps => {
                 self.add_ps_output();
             }
@@ -3822,6 +3840,11 @@ impl ChatWidget {
 
     pub(crate) fn add_debug_config_output(&mut self) {
         self.add_to_history(crate::debug_config::new_debug_config_output(&self.config));
+    }
+
+    fn open_status_line_setup(&mut self) {
+        let view = StatusLineSetupView::new(self.app_event_tx.clone());
+        self.bottom_pane.show_view(Box::new(view));
     }
 
     pub(crate) fn add_ps_output(&mut self) {
