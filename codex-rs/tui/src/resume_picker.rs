@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
@@ -12,6 +13,7 @@ use codex_core::ThreadItem;
 use codex_core::ThreadSortKey;
 use codex_core::ThreadsPage;
 use codex_core::path_utils;
+use codex_core::read_thread_names_by_id;
 use codex_protocol::items::TurnItem;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
@@ -34,6 +36,7 @@ use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
+use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionMetaLine;
 
@@ -138,6 +141,10 @@ async fn run_session_picker(
     show_all: bool,
     action: SessionPickerAction,
 ) -> Result<SessionSelection> {
+    let thread_names_by_id = read_thread_names_by_id(codex_home)
+        .await
+        .unwrap_or_default();
+
     let alt = AltScreenGuard::enter(tui);
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
 
@@ -173,6 +180,7 @@ async fn run_session_picker(
 
     let mut state = PickerState::new(
         codex_home.to_path_buf(),
+        thread_names_by_id,
         alt.tui.frame_requester(),
         page_loader,
         default_provider.clone(),
@@ -240,6 +248,7 @@ impl Drop for AltScreenGuard<'_> {
 
 struct PickerState {
     codex_home: PathBuf,
+    thread_names_by_id: HashMap<ThreadId, String>,
     requester: FrameRequester,
     pagination: PaginationState,
     all_rows: Vec<Row>,
@@ -312,6 +321,7 @@ impl SearchState {
 struct Row {
     path: PathBuf,
     preview: String,
+    thread_name: Option<String>,
     created_at: Option<DateTime<Utc>>,
     updated_at: Option<DateTime<Utc>>,
     cwd: Option<PathBuf>,
@@ -321,6 +331,7 @@ struct Row {
 impl PickerState {
     fn new(
         codex_home: PathBuf,
+        thread_names_by_id: HashMap<ThreadId, String>,
         requester: FrameRequester,
         page_loader: PageLoader,
         default_provider: String,
@@ -330,6 +341,7 @@ impl PickerState {
     ) -> Self {
         Self {
             codex_home,
+            thread_names_by_id,
             requester,
             pagination: PaginationState {
                 next_cursor: None,
@@ -498,7 +510,7 @@ impl PickerState {
             self.pagination.reached_scan_cap = true;
         }
 
-        let rows = rows_from_items(page.items);
+        let rows = rows_from_items(page.items, &self.thread_names_by_id);
         for row in rows {
             if self.seen_paths.insert(row.path.clone()) {
                 self.all_rows.push(row);
@@ -518,7 +530,12 @@ impl PickerState {
         } else {
             let q = self.query.to_lowercase();
             self.filtered_rows = base_iter
-                .filter(|r| r.preview.to_lowercase().contains(&q))
+                .filter(|r| {
+                    r.preview.to_lowercase().contains(&q)
+                        || r.thread_name
+                            .as_ref()
+                            .is_some_and(|name| name.to_lowercase().contains(&q))
+                })
                 .cloned()
                 .collect();
         }
@@ -696,11 +713,17 @@ impl PickerState {
     }
 }
 
-fn rows_from_items(items: Vec<ThreadItem>) -> Vec<Row> {
-    items.into_iter().map(|item| head_to_row(&item)).collect()
+fn rows_from_items(
+    items: Vec<ThreadItem>,
+    thread_names_by_id: &HashMap<ThreadId, String>,
+) -> Vec<Row> {
+    items
+        .into_iter()
+        .map(|item| head_to_row(&item, thread_names_by_id))
+        .collect()
 }
 
-fn head_to_row(item: &ThreadItem) -> Row {
+fn head_to_row(item: &ThreadItem, thread_names_by_id: &HashMap<ThreadId, String>) -> Row {
     let created_at = item
         .created_at
         .as_deref()
@@ -712,7 +735,8 @@ fn head_to_row(item: &ThreadItem) -> Row {
         .and_then(parse_timestamp_str)
         .or(created_at);
 
-    let (cwd, git_branch) = extract_session_meta_from_head(&item.head);
+    let (thread_id, cwd, git_branch) = extract_session_meta_from_head(&item.head);
+    let thread_name = thread_id.and_then(|id| thread_names_by_id.get(&id).cloned());
     let preview = preview_from_head(&item.head)
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
@@ -721,6 +745,7 @@ fn head_to_row(item: &ThreadItem) -> Row {
     Row {
         path: item.path.clone(),
         preview,
+        thread_name,
         created_at,
         updated_at,
         cwd,
@@ -728,15 +753,18 @@ fn head_to_row(item: &ThreadItem) -> Row {
     }
 }
 
-fn extract_session_meta_from_head(head: &[serde_json::Value]) -> (Option<PathBuf>, Option<String>) {
+fn extract_session_meta_from_head(
+    head: &[serde_json::Value],
+) -> (Option<ThreadId>, Option<PathBuf>, Option<String>) {
     for value in head {
         if let Ok(meta_line) = serde_json::from_value::<SessionMetaLine>(value.clone()) {
+            let thread_id = Some(meta_line.meta.id);
             let cwd = Some(meta_line.meta.cwd);
             let git_branch = meta_line.git.and_then(|git| git.branch);
-            return (cwd, git_branch);
+            return (thread_id, cwd, git_branch);
         }
     }
-    (None, None)
+    (None, None, None)
 }
 
 fn paths_match(a: &Path, b: &Path) -> bool {
@@ -849,10 +877,11 @@ fn render_list(
     let mut y = area.y;
 
     let max_updated_width = metrics.max_updated_width;
+    let max_name_width = metrics.max_name_width;
     let max_branch_width = metrics.max_branch_width;
     let max_cwd_width = metrics.max_cwd_width;
 
-    for (idx, (row, (updated_label, branch_label, cwd_label))) in rows[start..end]
+    for (idx, (row, (updated_label, name_label, branch_label, cwd_label))) in rows[start..end]
         .iter()
         .zip(labels[start..end].iter())
         .enumerate()
@@ -864,6 +893,20 @@ fn render_list(
             None
         } else {
             Some(Span::from(format!("{updated_label:<max_updated_width$}")).dim())
+        };
+        let name_span = if max_name_width == 0 {
+            None
+        } else if name_label.is_empty() {
+            Some(
+                Span::from(format!(
+                    "{empty:<width$}",
+                    empty = "-",
+                    width = max_name_width
+                ))
+                .dim(),
+            )
+        } else {
+            Some(Span::from(format!("{name_label:<max_name_width$}")).magenta())
         };
         let branch_span = if max_branch_width == 0 {
             None
@@ -899,13 +942,19 @@ fn render_list(
         if max_updated_width > 0 {
             preview_width = preview_width.saturating_sub(max_updated_width + 2);
         }
+        if max_name_width > 0 {
+            preview_width = preview_width.saturating_sub(max_name_width + 2);
+        }
         if max_branch_width > 0 {
             preview_width = preview_width.saturating_sub(max_branch_width + 2);
         }
         if max_cwd_width > 0 {
             preview_width = preview_width.saturating_sub(max_cwd_width + 2);
         }
-        let add_leading_gap = max_updated_width == 0 && max_branch_width == 0 && max_cwd_width == 0;
+        let add_leading_gap = max_updated_width == 0
+            && max_name_width == 0
+            && max_branch_width == 0
+            && max_cwd_width == 0;
         if add_leading_gap {
             preview_width = preview_width.saturating_sub(2);
         }
@@ -913,6 +962,10 @@ fn render_list(
         let mut spans: Vec<Span> = vec![marker];
         if let Some(updated) = updated_span {
             spans.push(updated);
+            spans.push("  ".into());
+        }
+        if let Some(name) = name_span {
+            spans.push(name);
             spans.push("  ".into());
         }
         if let Some(branch) = branch_span {
@@ -1031,6 +1084,15 @@ fn render_column_headers(
         spans.push(Span::from(label).bold());
         spans.push("  ".into());
     }
+    if metrics.max_name_width > 0 {
+        let label = format!(
+            "{text:<width$}",
+            text = "Name",
+            width = metrics.max_name_width
+        );
+        spans.push(Span::from(label).bold());
+        spans.push("  ".into());
+    }
     if metrics.max_branch_width > 0 {
         let label = format!(
             "{text:<width$}",
@@ -1055,9 +1117,10 @@ fn render_column_headers(
 
 struct ColumnMetrics {
     max_updated_width: usize,
+    max_name_width: usize,
     max_branch_width: usize,
     max_cwd_width: usize,
-    labels: Vec<(String, String, String)>,
+    labels: Vec<(String, String, String, String)>,
 }
 
 fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
@@ -1080,8 +1143,9 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
         format!("…{tail}")
     }
 
-    let mut labels: Vec<(String, String, String)> = Vec::with_capacity(rows.len());
+    let mut labels: Vec<(String, String, String, String)> = Vec::with_capacity(rows.len());
     let mut max_updated_width = UnicodeWidthStr::width("Updated");
+    let mut max_name_width = 0usize;
     let mut max_branch_width = UnicodeWidthStr::width("Branch");
     let mut max_cwd_width = if include_cwd {
         UnicodeWidthStr::width("CWD")
@@ -1091,6 +1155,16 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
 
     for row in rows {
         let updated = format_updated_label(row);
+        let name_raw = row.thread_name.as_deref().unwrap_or_default();
+        let name = if name_raw.is_empty() {
+            String::new()
+        } else {
+            right_elide(name_raw, 24)
+        };
+        if !name.is_empty() {
+            max_name_width = max_name_width.max(UnicodeWidthStr::width("Name"));
+            max_name_width = max_name_width.max(UnicodeWidthStr::width(name.as_str()));
+        }
         let branch_raw = row.git_branch.clone().unwrap_or_default();
         let branch = right_elide(&branch_raw, 24);
         let cwd = if include_cwd {
@@ -1106,11 +1180,12 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
         max_updated_width = max_updated_width.max(UnicodeWidthStr::width(updated.as_str()));
         max_branch_width = max_branch_width.max(UnicodeWidthStr::width(branch.as_str()));
         max_cwd_width = max_cwd_width.max(UnicodeWidthStr::width(cwd.as_str()));
-        labels.push((updated, branch, cwd));
+        labels.push((updated, name, branch, cwd));
     }
 
     ColumnMetrics {
         max_updated_width,
+        max_name_width,
         max_branch_width,
         max_cwd_width,
         labels,
@@ -1223,7 +1298,8 @@ mod tests {
             created_at: Some("2025-01-02T00:00:00Z".into()),
             updated_at: Some("2025-01-02T00:00:00Z".into()),
         };
-        let rows = rows_from_items(vec![a, b]);
+        let thread_names_by_id = HashMap::new();
+        let rows = rows_from_items(vec![a, b], &thread_names_by_id);
         assert_eq!(rows.len(), 2);
         // Preserve the given order even if timestamps differ; backend already provides newest-first.
         assert!(rows[0].preview.contains('A'));
@@ -1240,7 +1316,8 @@ mod tests {
             updated_at: Some("2025-01-01T01:00:00Z".into()),
         };
 
-        let row = head_to_row(&item);
+        let thread_names_by_id = HashMap::new();
+        let row = head_to_row(&item, &thread_names_by_id);
         let expected_created = chrono::DateTime::parse_from_rfc3339("2025-01-01T00:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
@@ -1253,6 +1330,35 @@ mod tests {
     }
 
     #[test]
+    fn search_matches_thread_name() {
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            HashMap::new(),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+            true,
+            None,
+            SessionPickerAction::Resume,
+        );
+        let now = Utc::now();
+        state.all_rows = vec![Row {
+            path: PathBuf::from("/tmp/a.jsonl"),
+            preview: String::from("alpha"),
+            thread_name: Some("My Thread".to_string()),
+            created_at: Some(now),
+            updated_at: Some(now),
+            cwd: None,
+            git_branch: None,
+        }];
+        state.apply_filter();
+
+        state.set_query("my thread".to_string());
+        assert_eq!(state.filtered_rows.len(), 1);
+    }
+
+    #[test]
     fn resume_table_snapshot() {
         use crate::custom_terminal::Terminal;
         use crate::test_backend::VT100Backend;
@@ -1262,6 +1368,7 @@ mod tests {
         let loader: PageLoader = Arc::new(|_| {});
         let mut state = PickerState::new(
             PathBuf::from("/tmp"),
+            HashMap::new(),
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
@@ -1275,6 +1382,7 @@ mod tests {
             Row {
                 path: PathBuf::from("/tmp/a.jsonl"),
                 preview: String::from("Fix resume picker timestamps"),
+                thread_name: Some("resume-picker".to_string()),
                 created_at: Some(now - Duration::minutes(16)),
                 updated_at: Some(now - Duration::seconds(42)),
                 cwd: None,
@@ -1283,6 +1391,7 @@ mod tests {
             Row {
                 path: PathBuf::from("/tmp/b.jsonl"),
                 preview: String::from("Investigate lazy pagination cap"),
+                thread_name: None,
                 created_at: Some(now - Duration::hours(1)),
                 updated_at: Some(now - Duration::minutes(35)),
                 cwd: None,
@@ -1291,6 +1400,7 @@ mod tests {
             Row {
                 path: PathBuf::from("/tmp/c.jsonl"),
                 preview: String::from("Explain the codebase"),
+                thread_name: None,
                 created_at: Some(now - Duration::hours(2)),
                 updated_at: Some(now - Duration::hours(2)),
                 cwd: None,
@@ -1411,6 +1521,7 @@ mod tests {
         let loader: PageLoader = Arc::new(|_| {});
         let mut state = PickerState::new(
             PathBuf::from("/tmp"),
+            HashMap::new(),
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
@@ -1431,7 +1542,8 @@ mod tests {
         .await
         .expect("list conversations");
 
-        let rows = rows_from_items(page.items);
+        let thread_names_by_id = HashMap::new();
+        let rows = rows_from_items(page.items, &thread_names_by_id);
         state.all_rows = rows.clone();
         state.filtered_rows = rows;
         state.view_rows = Some(4);
@@ -1493,6 +1605,7 @@ mod tests {
         let loader: PageLoader = Arc::new(|_| {});
         let mut state = PickerState::new(
             PathBuf::from("/tmp"),
+            HashMap::new(),
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
@@ -1562,6 +1675,7 @@ mod tests {
 
         let mut state = PickerState::new(
             PathBuf::from("/tmp"),
+            HashMap::new(),
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
@@ -1594,6 +1708,7 @@ mod tests {
         let loader: PageLoader = Arc::new(|_| {});
         let mut state = PickerState::new(
             PathBuf::from("/tmp"),
+            HashMap::new(),
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
@@ -1639,6 +1754,7 @@ mod tests {
         let loader: PageLoader = Arc::new(|_| {});
         let mut state = PickerState::new(
             PathBuf::from("/tmp"),
+            HashMap::new(),
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),
@@ -1684,6 +1800,7 @@ mod tests {
 
         let mut state = PickerState::new(
             PathBuf::from("/tmp"),
+            HashMap::new(),
             FrameRequester::test_dummy(),
             loader,
             String::from("openai"),

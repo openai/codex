@@ -25,6 +25,7 @@ pub use list::rollout_date_parts;
 pub use recorder::RolloutRecorder;
 pub use recorder::RolloutRecorderParams;
 pub use session_index::find_thread_path_by_name_str;
+pub use session_index::read_thread_names_by_id;
 
 #[cfg(test)]
 pub mod tests;

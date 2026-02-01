@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::io::Seek;
@@ -105,6 +106,39 @@ pub async fn find_thread_path_by_name_str(
         return Ok(None);
     };
     super::list::find_thread_path_by_id_str(codex_home, &thread_id.to_string()).await
+}
+
+/// Read the session index and return the latest thread name for each thread id.
+///
+/// The session index is append-only; when multiple entries exist for the same id,
+/// the last entry in the file wins.
+pub async fn read_thread_names_by_id(
+    codex_home: &Path,
+) -> std::io::Result<HashMap<ThreadId, String>> {
+    use tokio::io::AsyncBufReadExt as _;
+
+    let path = session_index_path(codex_home);
+    if !path.exists() {
+        return Ok(HashMap::new());
+    }
+
+    let file = tokio::fs::File::open(path).await?;
+    let reader = tokio::io::BufReader::new(file);
+    let mut lines = reader.lines();
+
+    let mut names = HashMap::new();
+    while let Some(line) = lines.next_line().await? {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(entry) = serde_json::from_str::<SessionIndexEntry>(trimmed) else {
+            continue;
+        };
+        names.insert(entry.id, entry.thread_name);
+    }
+
+    Ok(names)
 }
 
 fn session_index_path(codex_home: &Path) -> PathBuf {
@@ -320,6 +354,39 @@ mod tests {
 
         let found_other_by_id = scan_index_from_end_by_id(&path, &id_other)?;
         assert_eq!(found_other_by_id, Some(expected_other));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_thread_names_by_id_returns_latest_name_per_thread() -> std::io::Result<()> {
+        let temp = TempDir::new()?;
+        let path = session_index_path(temp.path());
+        let id1 = ThreadId::new();
+        let id2 = ThreadId::new();
+        let lines = vec![
+            SessionIndexEntry {
+                id: id1,
+                thread_name: "first".to_string(),
+                updated_at: "2024-01-01T00:00:00Z".to_string(),
+            },
+            SessionIndexEntry {
+                id: id2,
+                thread_name: "other".to_string(),
+                updated_at: "2024-01-02T00:00:00Z".to_string(),
+            },
+            SessionIndexEntry {
+                id: id1,
+                thread_name: "second".to_string(),
+                updated_at: "2024-01-03T00:00:00Z".to_string(),
+            },
+        ];
+        write_index(&path, &lines)?;
+
+        let names = read_thread_names_by_id(temp.path()).await?;
+        assert_eq!(
+            names,
+            HashMap::from([(id1, "second".to_string()), (id2, "other".to_string())])
+        );
         Ok(())
     }
 }
