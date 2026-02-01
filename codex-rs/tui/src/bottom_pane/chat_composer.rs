@@ -2071,10 +2071,7 @@ impl ChatComposer {
             self.windows_degraded_sandbox_active,
         )?;
 
-        if !matches!(
-            cmd,
-            SlashCommand::Review | SlashCommand::Rename | SlashCommand::Plan
-        ) {
+        if !cmd.supports_inline_args() {
             return None;
         }
         if self.reject_slash_command_if_unavailable(cmd) {

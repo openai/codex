@@ -3026,6 +3026,10 @@ impl ChatWidget {
         args: String,
         _text_elements: Vec<TextElement>,
     ) {
+        if !cmd.supports_inline_args() {
+            self.dispatch_command(cmd);
+            return;
+        }
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
