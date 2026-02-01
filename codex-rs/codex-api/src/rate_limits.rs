@@ -78,7 +78,10 @@ pub fn parse_rate_limit_event(payload: &str) -> Option<RateLimitSnapshot> {
         return None;
     }
     let (primary, secondary) = if let Some(details) = event.rate_limits.as_ref() {
-        (map_event_window(details.primary.as_ref()), map_event_window(details.secondary.as_ref()))
+        (
+            map_event_window(details.primary.as_ref()),
+            map_event_window(details.secondary.as_ref()),
+        )
     } else {
         (None, None)
     };

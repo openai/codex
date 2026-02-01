@@ -45,7 +45,6 @@ pub struct ResponsesWebsocketConnection {
     server_reasoning_included: bool,
     models_etag: Option<String>,
     telemetry: Option<Arc<dyn WebsocketTelemetry>>,
-    turn_state: Option<Arc<OnceLock<String>>>,
 }
 
 impl ResponsesWebsocketConnection {
@@ -55,7 +54,6 @@ impl ResponsesWebsocketConnection {
         server_reasoning_included: bool,
         models_etag: Option<String>,
         telemetry: Option<Arc<dyn WebsocketTelemetry>>,
-        turn_state: Option<Arc<OnceLock<String>>>,
     ) -> Self {
         Self {
             stream: Arc::new(Mutex::new(Some(stream))),
@@ -63,7 +61,6 @@ impl ResponsesWebsocketConnection {
             server_reasoning_included,
             models_etag,
             telemetry,
-            turn_state,
         }
     }
 
@@ -157,7 +154,6 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
             server_reasoning_included,
             models_etag,
             telemetry,
-            turn_state,
         ))
     }
 }
