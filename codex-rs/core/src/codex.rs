@@ -50,6 +50,7 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
+use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::FileChange;
@@ -71,14 +72,12 @@ use codex_rmcp_client::OAuthCredentialsStoreMode;
 use futures::future::BoxFuture;
 use futures::prelude::*;
 use futures::stream::FuturesOrdered;
-use mcp_types::CallToolResult;
-use mcp_types::ListResourceTemplatesRequestParams;
-use mcp_types::ListResourceTemplatesResult;
-use mcp_types::ListResourcesRequestParams;
-use mcp_types::ListResourcesResult;
-use mcp_types::ReadResourceRequestParams;
-use mcp_types::ReadResourceResult;
-use mcp_types::RequestId;
+use rmcp::model::ListResourceTemplatesResult;
+use rmcp::model::ListResourcesResult;
+use rmcp::model::PaginatedRequestParam;
+use rmcp::model::ReadResourceRequestParam;
+use rmcp::model::ReadResourceResult;
+use rmcp::model::RequestId;
 use serde_json;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -2202,7 +2201,7 @@ impl Session {
     pub async fn list_resources(
         &self,
         server: &str,
-        params: Option<ListResourcesRequestParams>,
+        params: Option<PaginatedRequestParam>,
     ) -> anyhow::Result<ListResourcesResult> {
         self.services
             .mcp_connection_manager
@@ -2215,7 +2214,7 @@ impl Session {
     pub async fn list_resource_templates(
         &self,
         server: &str,
-        params: Option<ListResourceTemplatesRequestParams>,
+        params: Option<PaginatedRequestParam>,
     ) -> anyhow::Result<ListResourceTemplatesResult> {
         self.services
             .mcp_connection_manager
@@ -2228,7 +2227,7 @@ impl Session {
     pub async fn read_resource(
         &self,
         server: &str,
-        params: ReadResourceRequestParams,
+        params: ReadResourceRequestParam,
     ) -> anyhow::Result<ReadResourceResult> {
         self.services
             .mcp_connection_manager
@@ -2555,10 +2554,10 @@ mod handlers {
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::config_types::Settings;
     use codex_protocol::dynamic_tools::DynamicToolResponse;
+    use codex_protocol::mcp::RequestId as ProtocolRequestId;
     use codex_protocol::user_input::UserInput;
     use codex_rmcp_client::ElicitationAction;
     use codex_rmcp_client::ElicitationResponse;
-    use mcp_types::RequestId;
     use std::path::PathBuf;
     use std::sync::Arc;
     use tracing::info;
@@ -2729,7 +2728,7 @@ mod handlers {
     pub async fn resolve_elicitation(
         sess: &Arc<Session>,
         server_name: String,
-        request_id: RequestId,
+        request_id: ProtocolRequestId,
         decision: codex_protocol::approvals::ElicitationAction,
     ) {
         let action = match decision {
@@ -2744,6 +2743,12 @@ mod handlers {
             ElicitationAction::Decline | ElicitationAction::Cancel => None,
         };
         let response = ElicitationResponse { action, content };
+        let request_id = match request_id {
+            ProtocolRequestId::String(value) => {
+                rmcp::model::NumberOrString::String(std::sync::Arc::from(value))
+            }
+            ProtocolRequestId::Integer(value) => rmcp::model::NumberOrString::Number(value),
+        };
         if let Err(err) = sess
             .resolve_elicitation(server_name, request_id, response)
             .await
@@ -4536,8 +4541,7 @@ mod tests {
     use std::time::Duration;
     use tokio::time::sleep;
 
-    use mcp_types::ContentBlock;
-    use mcp_types::TextContent;
+    use codex_protocol::mcp::CallToolResult as McpCallToolResult;
     use pretty_assertions::assert_eq;
     use serde::Deserialize;
     use serde_json::json;
@@ -5121,7 +5125,7 @@ mod tests {
 
     #[test]
     fn prefers_structured_content_when_present() {
-        let ctr = CallToolResult {
+        let ctr = McpCallToolResult {
             // Content present but should be ignored because structured_content is set.
             content: vec![text_block("ignored")],
             is_error: None,
@@ -5129,6 +5133,7 @@ mod tests {
                 "ok": true,
                 "value": 42
             })),
+            meta: None,
         };
 
         let got = FunctionCallOutputPayload::from(&ctr);
@@ -5167,10 +5172,11 @@ mod tests {
 
     #[test]
     fn falls_back_to_content_when_structured_is_null() {
-        let ctr = CallToolResult {
+        let ctr = McpCallToolResult {
             content: vec![text_block("hello"), text_block("world")],
             is_error: None,
             structured_content: Some(serde_json::Value::Null),
+            meta: None,
         };
 
         let got = FunctionCallOutputPayload::from(&ctr);
@@ -5186,10 +5192,11 @@ mod tests {
 
     #[test]
     fn success_flag_reflects_is_error_true() {
-        let ctr = CallToolResult {
+        let ctr = McpCallToolResult {
             content: vec![text_block("unused")],
             is_error: Some(true),
             structured_content: Some(json!({ "message": "bad" })),
+            meta: None,
         };
 
         let got = FunctionCallOutputPayload::from(&ctr);
@@ -5204,10 +5211,11 @@ mod tests {
 
     #[test]
     fn success_flag_true_with_no_error_and_content_used() {
-        let ctr = CallToolResult {
+        let ctr = McpCallToolResult {
             content: vec![text_block("alpha")],
             is_error: Some(false),
             structured_content: None,
+            meta: None,
         };
 
         let got = FunctionCallOutputPayload::from(&ctr);
@@ -5258,11 +5266,10 @@ mod tests {
         }
     }
 
-    fn text_block(s: &str) -> ContentBlock {
-        ContentBlock::TextContent(TextContent {
-            annotations: None,
-            text: s.to_string(),
-            r#type: "text".to_string(),
+    fn text_block(s: &str) -> serde_json::Value {
+        json!({
+            "type": "text",
+            "text": s,
         })
     }
 

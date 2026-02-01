@@ -9,9 +9,12 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use async_channel::unbounded;
+use codex_protocol::mcp::Resource;
+use codex_protocol::mcp::ResourceTemplate;
+use codex_protocol::mcp::Tool;
 use codex_protocol::protocol::McpListToolsResponseEvent;
 use codex_protocol::protocol::SandboxPolicy;
-use mcp_types::Tool as McpTool;
+use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::AuthManager;
@@ -201,8 +204,8 @@ pub fn split_qualified_tool_name(qualified_name: &str) -> Option<(String, String
 }
 
 pub fn group_tools_by_server(
-    tools: &HashMap<String, McpTool>,
-) -> HashMap<String, HashMap<String, McpTool>> {
+    tools: &HashMap<String, Tool>,
+) -> HashMap<String, HashMap<String, Tool>> {
     let mut grouped = HashMap::new();
     for (qualified_name, tool) in tools {
         if let Some((server_name, tool_name)) = split_qualified_tool_name(qualified_name) {
@@ -213,6 +216,101 @@ pub fn group_tools_by_server(
         }
     }
     grouped
+}
+
+fn take_string(obj: &mut serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| obj.remove(*key))
+        .and_then(|v| v.as_str().map(ToString::to_string))
+}
+
+fn take_optional_string(obj: &mut serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| obj.get(*key))
+        .and_then(|v| v.as_str().map(ToString::to_string))
+}
+
+fn take_optional_i64(obj: &mut serde_json::Map<String, Value>, keys: &[&str]) -> Option<i64> {
+    let number = keys
+        .iter()
+        .find_map(|key| obj.get(*key))
+        .and_then(serde_json::Value::as_number)?;
+    number
+        .as_i64()
+        .or_else(|| number.as_u64().and_then(|v| i64::try_from(v).ok()))
+}
+
+fn tool_from_value(value: Value) -> Result<Tool, String> {
+    let Value::Object(mut obj) = value else {
+        return Err("tool must be a JSON object".to_string());
+    };
+
+    let name = take_string(&mut obj, &["name"]).ok_or_else(|| "tool.name missing".to_string())?;
+    let title = take_optional_string(&mut obj, &["title"]);
+    let description = take_optional_string(&mut obj, &["description"]);
+    let input_schema = obj
+        .remove("inputSchema")
+        .or_else(|| obj.remove("input_schema"))
+        .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+    let output_schema = obj
+        .remove("outputSchema")
+        .or_else(|| obj.remove("output_schema"));
+    let annotations = obj.remove("annotations");
+    let icons = obj.remove("icons").and_then(|v| v.as_array().cloned());
+    let meta = obj.remove("_meta");
+
+    Ok(Tool {
+        name,
+        title,
+        description,
+        input_schema,
+        output_schema,
+        annotations,
+        icons,
+        meta,
+    })
+}
+
+fn resource_from_value(value: Value) -> Result<Resource, String> {
+    let Value::Object(mut obj) = value else {
+        return Err("resource must be a JSON object".to_string());
+    };
+
+    let name =
+        take_string(&mut obj, &["name"]).ok_or_else(|| "resource.name missing".to_string())?;
+    let uri = take_string(&mut obj, &["uri"]).ok_or_else(|| "resource.uri missing".to_string())?;
+
+    Ok(Resource {
+        annotations: obj.remove("annotations"),
+        description: take_optional_string(&mut obj, &["description"]),
+        mime_type: take_optional_string(&mut obj, &["mimeType", "mime_type"]),
+        name,
+        size: take_optional_i64(&mut obj, &["size"]),
+        title: take_optional_string(&mut obj, &["title"]),
+        uri,
+        icons: obj.remove("icons").and_then(|v| v.as_array().cloned()),
+        meta: obj.remove("_meta"),
+    })
+}
+
+fn resource_template_from_value(value: Value) -> Result<ResourceTemplate, String> {
+    let Value::Object(mut obj) = value else {
+        return Err("resource template must be a JSON object".to_string());
+    };
+
+    let uri_template = take_string(&mut obj, &["uriTemplate", "uri_template"])
+        .ok_or_else(|| "resourceTemplate.uriTemplate missing".to_string())?;
+    let name = take_string(&mut obj, &["name"])
+        .ok_or_else(|| "resourceTemplate.name missing".to_string())?;
+
+    Ok(ResourceTemplate {
+        annotations: obj.remove("annotations"),
+        uri_template,
+        name,
+        title: take_optional_string(&mut obj, &["title"]),
+        description: take_optional_string(&mut obj, &["description"]),
+        mime_type: take_optional_string(&mut obj, &["mimeType", "mime_type"]),
+    })
 }
 
 pub(crate) async fn collect_mcp_snapshot_from_manager(
@@ -230,11 +328,96 @@ pub(crate) async fn collect_mcp_snapshot_from_manager(
         .map(|(name, entry)| (name.clone(), entry.auth_status))
         .collect();
 
+    let tools = tools
+        .into_iter()
+        .filter_map(|(name, tool)| match serde_json::to_value(tool.tool) {
+            Ok(value) => match tool_from_value(value) {
+                Ok(tool) => Some((name, tool)),
+                Err(err) => {
+                    tracing::warn!("Failed to convert MCP tool '{name}': {err}");
+                    None
+                }
+            },
+            Err(err) => {
+                tracing::warn!("Failed to serialize MCP tool '{name}': {err}");
+                None
+            }
+        })
+        .collect();
+
+    let resources = resources
+        .into_iter()
+        .map(|(name, resources)| {
+            let resources = resources
+                .into_iter()
+                .filter_map(|resource| match serde_json::to_value(resource) {
+                    Ok(value) => match resource_from_value(value.clone()) {
+                        Ok(resource) => Some(resource),
+                        Err(err) => {
+                            let (uri, resource_name) = match value {
+                                Value::Object(mut obj) => (
+                                    obj.remove("uri")
+                                        .and_then(|v| v.as_str().map(ToString::to_string)),
+                                    obj.remove("name")
+                                        .and_then(|v| v.as_str().map(ToString::to_string)),
+                                ),
+                                _ => (None, None),
+                            };
+
+                            tracing::warn!(
+                                "Failed to convert MCP resource (uri={uri:?}, name={resource_name:?}): {err}"
+                            );
+                            None
+                        }
+                    },
+                    Err(err) => {
+                        tracing::warn!("Failed to serialize MCP resource: {err}");
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            (name, resources)
+        })
+        .collect();
+
+    let resource_templates = resource_templates
+        .into_iter()
+        .map(|(name, templates)| {
+            let templates = templates
+                .into_iter()
+                .filter_map(|template| match serde_json::to_value(template) {
+                    Ok(value) => match resource_template_from_value(value.clone()) {
+                        Ok(template) => Some(template),
+                        Err(err) => {
+                            let (uri_template, template_name) = match value {
+                                Value::Object(mut obj) => (
+                                    obj.remove("uriTemplate")
+                                        .or_else(|| obj.remove("uri_template"))
+                                        .and_then(|v| v.as_str().map(ToString::to_string)),
+                                    obj.remove("name")
+                                        .and_then(|v| v.as_str().map(ToString::to_string)),
+                                ),
+                                _ => (None, None),
+                            };
+
+                            tracing::warn!(
+                                "Failed to convert MCP resource template (uri_template={uri_template:?}, name={template_name:?}): {err}"
+                            );
+                            None
+                        }
+                    },
+                    Err(err) => {
+                        tracing::warn!("Failed to serialize MCP resource template: {err}");
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            (name, templates)
+        })
+        .collect();
+
     McpListToolsResponseEvent {
-        tools: tools
-            .into_iter()
-            .map(|(name, tool)| (name, tool.tool))
-            .collect(),
+        tools,
         resources,
         resource_templates,
         auth_statuses,
@@ -244,21 +427,17 @@ pub(crate) async fn collect_mcp_snapshot_from_manager(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mcp_types::ToolInputSchema;
     use pretty_assertions::assert_eq;
-
-    fn make_tool(name: &str) -> McpTool {
-        McpTool {
-            annotations: None,
-            description: None,
-            input_schema: ToolInputSchema {
-                properties: None,
-                required: None,
-                r#type: "object".to_string(),
-            },
+    fn make_tool(name: &str) -> Tool {
+        Tool {
             name: name.to_string(),
-            output_schema: None,
             title: None,
+            description: None,
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+            output_schema: None,
+            annotations: None,
+            icons: None,
+            meta: None,
         }
     }
 
