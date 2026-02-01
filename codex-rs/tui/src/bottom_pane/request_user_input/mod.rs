@@ -1810,6 +1810,7 @@ mod tests {
         );
         let answer = overlay.current_answer_mut().expect("answer missing");
         answer.options_state.selected_idx = Some(0);
+        answer.answer_committed = true;
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Tab));
         overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
@@ -1843,6 +1844,7 @@ mod tests {
         );
         let answer = overlay.current_answer_mut().expect("answer missing");
         answer.options_state.selected_idx = Some(0);
+        answer.answer_committed = true;
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Tab));
         overlay.handle_key_event(KeyEvent::from(KeyCode::Char('a')));
