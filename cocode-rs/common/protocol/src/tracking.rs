@@ -3,9 +3,12 @@
 //! These types track the state of queries and auto-compaction.
 
 use std::path::PathBuf;
+use std::time::Duration;
+use std::time::Instant;
 use std::time::SystemTime;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Tracking information for a query chain.
 ///
@@ -46,8 +49,8 @@ impl QueryTracking {
     }
 }
 
-/// Tracking information for auto-compaction.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Tracking information for auto-compaction and session memory extraction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AutoCompactTracking {
     /// Whether compaction has been performed.
     #[serde(default)]
@@ -58,7 +61,67 @@ pub struct AutoCompactTracking {
     /// Turn counter at time of tracking.
     #[serde(default)]
     pub turn_counter: i32,
+
+    // ========================================================================
+    // Session Memory Extraction Tracking
+    // ========================================================================
+    /// Number of extractions performed in this session.
+    #[serde(default)]
+    pub extraction_count: i32,
+    /// Token count at the last extraction.
+    #[serde(default)]
+    pub last_extraction_tokens: i32,
+    /// Tool call count at the last extraction.
+    #[serde(default)]
+    pub last_extraction_tool_calls: i32,
+    /// Last summarized message ID (for incremental updates).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_extraction_id: Option<String>,
+    /// Whether an extraction is currently in progress.
+    #[serde(default)]
+    pub extraction_in_progress: bool,
+    /// Total tool calls in the session.
+    #[serde(default)]
+    pub tool_call_count: i32,
+
+    /// Timestamp of last extraction (not serialized, runtime-only).
+    #[serde(skip)]
+    last_extraction_time: Option<Instant>,
 }
+
+impl Default for AutoCompactTracking {
+    fn default() -> Self {
+        Self {
+            compacted: false,
+            turn_id: None,
+            turn_counter: 0,
+            extraction_count: 0,
+            last_extraction_tokens: 0,
+            last_extraction_tool_calls: 0,
+            last_extraction_id: None,
+            extraction_in_progress: false,
+            tool_call_count: 0,
+            last_extraction_time: None,
+        }
+    }
+}
+
+impl PartialEq for AutoCompactTracking {
+    fn eq(&self, other: &Self) -> bool {
+        // Compare all serializable fields
+        self.compacted == other.compacted
+            && self.turn_id == other.turn_id
+            && self.turn_counter == other.turn_counter
+            && self.extraction_count == other.extraction_count
+            && self.last_extraction_tokens == other.last_extraction_tokens
+            && self.last_extraction_tool_calls == other.last_extraction_tool_calls
+            && self.last_extraction_id == other.last_extraction_id
+            && self.extraction_in_progress == other.extraction_in_progress
+            && self.tool_call_count == other.tool_call_count
+    }
+}
+
+impl Eq for AutoCompactTracking {}
 
 impl AutoCompactTracking {
     /// Create a new tracking instance.
@@ -78,6 +141,61 @@ impl AutoCompactTracking {
         self.compacted = false;
         self.turn_id = None;
         self.turn_counter = 0;
+        self.extraction_count = 0;
+        self.last_extraction_tokens = 0;
+        self.last_extraction_tool_calls = 0;
+        self.last_extraction_id = None;
+        self.extraction_in_progress = false;
+        self.last_extraction_time = None;
+        self.tool_call_count = 0;
+    }
+
+    /// Record that a tool call was made.
+    pub fn record_tool_call(&mut self) {
+        self.tool_call_count += 1;
+    }
+
+    /// Mark that extraction has started.
+    pub fn mark_extraction_started(&mut self) {
+        self.extraction_in_progress = true;
+    }
+
+    /// Mark that extraction has completed successfully.
+    pub fn mark_extraction_completed(
+        &mut self,
+        current_tokens: i32,
+        last_summarized_id: impl Into<String>,
+    ) {
+        self.extraction_in_progress = false;
+        self.extraction_count += 1;
+        self.last_extraction_tokens = current_tokens;
+        self.last_extraction_tool_calls = self.tool_call_count;
+        self.last_extraction_id = Some(last_summarized_id.into());
+        self.last_extraction_time = Some(Instant::now());
+    }
+
+    /// Mark that extraction failed.
+    pub fn mark_extraction_failed(&mut self) {
+        self.extraction_in_progress = false;
+    }
+
+    /// Get the time since the last extraction.
+    ///
+    /// Returns `Duration::MAX` if no extraction has occurred yet.
+    pub fn time_since_extraction(&self) -> Duration {
+        self.last_extraction_time
+            .map(|t| t.elapsed())
+            .unwrap_or(Duration::MAX)
+    }
+
+    /// Get the number of tokens accumulated since last extraction.
+    pub fn tokens_since_extraction(&self, current_tokens: i32) -> i32 {
+        current_tokens - self.last_extraction_tokens
+    }
+
+    /// Get the number of tool calls since last extraction.
+    pub fn tool_calls_since_extraction(&self) -> i32 {
+        self.tool_call_count - self.last_extraction_tool_calls
     }
 }
 
@@ -319,13 +437,53 @@ mod tests {
         let parsed: QueryTracking = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, tracking);
 
-        let compact = AutoCompactTracking {
-            compacted: true,
-            turn_id: Some("turn-1".to_string()),
-            turn_counter: 5,
-        };
+        let mut compact = AutoCompactTracking::new();
+        compact.mark_compacted("turn-1", 5);
         let json = serde_json::to_string(&compact).unwrap();
         let parsed: AutoCompactTracking = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, compact);
+    }
+
+    #[test]
+    fn test_extraction_tracking() {
+        let mut tracking = AutoCompactTracking::new();
+        assert_eq!(tracking.extraction_count, 0);
+        assert!(!tracking.extraction_in_progress);
+
+        // Record some tool calls
+        tracking.record_tool_call();
+        tracking.record_tool_call();
+        assert_eq!(tracking.tool_call_count, 2);
+
+        // Start extraction
+        tracking.mark_extraction_started();
+        assert!(tracking.extraction_in_progress);
+
+        // Complete extraction
+        tracking.mark_extraction_completed(10000, "msg-123");
+        assert!(!tracking.extraction_in_progress);
+        assert_eq!(tracking.extraction_count, 1);
+        assert_eq!(tracking.last_extraction_tokens, 10000);
+        assert_eq!(tracking.last_extraction_tool_calls, 2);
+        assert_eq!(tracking.last_extraction_id.as_deref(), Some("msg-123"));
+
+        // Check tokens/calls since extraction
+        assert_eq!(tracking.tokens_since_extraction(15000), 5000);
+        assert_eq!(tracking.tool_calls_since_extraction(), 0);
+
+        // Record more tool calls
+        tracking.record_tool_call();
+        assert_eq!(tracking.tool_calls_since_extraction(), 1);
+    }
+
+    #[test]
+    fn test_extraction_failure() {
+        let mut tracking = AutoCompactTracking::new();
+        tracking.mark_extraction_started();
+        assert!(tracking.extraction_in_progress);
+
+        tracking.mark_extraction_failed();
+        assert!(!tracking.extraction_in_progress);
+        assert_eq!(tracking.extraction_count, 0); // Count should not increase on failure
     }
 }

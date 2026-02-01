@@ -2,7 +2,8 @@
 //!
 //! Plugins are discovered from multiple scopes in priority order.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use std::path::PathBuf;
 
 /// The scope from which a plugin was loaded.

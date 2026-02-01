@@ -3,7 +3,8 @@
 //! Each loaded skill carries provenance information describing where it
 //! was discovered. This is used for precedence resolution and diagnostics.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use std::fmt;
 use std::path::PathBuf;
 

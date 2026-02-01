@@ -4,14 +4,76 @@
 //! needed for tool execution, including permissions, event channels,
 //! and cancellation support.
 
-use cocode_protocol::{LoopEvent, PermissionMode};
-use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use cocode_hooks::HookRegistry;
+use cocode_lsp::LspServerManager;
+use cocode_protocol::LoopEvent;
+use cocode_protocol::PermissionMode;
+use cocode_shell::BackgroundTaskRegistry;
+use cocode_skill::SkillManager;
+use serde::Deserialize;
+use serde::Serialize;
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Instant;
 use std::time::SystemTime;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+
+/// Input for spawning a subagent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpawnAgentInput {
+    /// The agent type to spawn.
+    pub agent_type: String,
+    /// The task prompt for the agent.
+    pub prompt: String,
+    /// Optional model override.
+    pub model: Option<String>,
+    /// Optional turn limit override.
+    pub max_turns: Option<i32>,
+    /// Whether to run in background.
+    pub run_in_background: bool,
+    /// Optional tool filter override.
+    pub allowed_tools: Option<Vec<String>>,
+}
+
+/// Result of spawning a subagent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpawnAgentResult {
+    /// The unique agent ID.
+    pub agent_id: String,
+    /// The agent output (foreground only).
+    pub output: Option<String>,
+    /// Background agent output file path.
+    pub output_file: Option<PathBuf>,
+}
+
+/// Type alias for the agent spawn callback function.
+///
+/// This callback is provided by the executor layer to enable tools
+/// to spawn subagents without creating circular dependencies.
+pub type SpawnAgentFn = Arc<
+    dyn Fn(
+            SpawnAgentInput,
+        )
+            -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<SpawnAgentResult>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Information about an invoked skill.
+///
+/// Tracks skills that have been invoked during the session for hook cleanup.
+#[derive(Debug, Clone)]
+pub struct InvokedSkill {
+    /// The skill name.
+    pub name: String,
+    /// When the skill was invoked.
+    pub started_at: Instant,
+}
 
 /// Stored approvals for tools.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -116,6 +178,17 @@ impl FileTracker {
         Self::default()
     }
 
+    /// Get all read files with their state for syncing to another tracker.
+    ///
+    /// This is used to sync file read state to the system-reminder's FileTracker
+    /// for change detection.
+    pub fn read_files_with_state(&self) -> Vec<(PathBuf, &FileReadState)> {
+        self.read_files
+            .iter()
+            .map(|(k, v)| (k.clone(), v))
+            .collect()
+    }
+
     /// Record a file read (simple — backward-compatible).
     pub fn record_read(&mut self, path: impl Into<PathBuf>) {
         let path = path.into();
@@ -183,6 +256,11 @@ impl FileTracker {
 /// - Event channel for progress updates
 /// - Cancellation support
 /// - File tracking with content/timestamp validation
+/// - Subagent spawning capability
+/// - Plan mode state for Write/Edit permission checks
+/// - Background task registry for Bash background execution
+/// - LSP server manager for language intelligence
+/// - Session directory for persisting large tool results
 #[derive(Clone)]
 pub struct ToolContext {
     /// Unique call ID for this execution.
@@ -207,6 +285,27 @@ pub struct ToolContext {
     pub approval_store: Arc<Mutex<ApprovalStore>>,
     /// File tracker.
     pub file_tracker: Arc<Mutex<FileTracker>>,
+    /// Optional callback for spawning subagents.
+    pub spawn_agent_fn: Option<SpawnAgentFn>,
+    /// Whether plan mode is currently active.
+    pub is_plan_mode: bool,
+    /// Path to the current plan file (if in plan mode).
+    pub plan_file_path: Option<PathBuf>,
+    /// Background task registry for managing background shell commands.
+    pub background_registry: BackgroundTaskRegistry,
+    /// Optional LSP server manager for language intelligence tools.
+    pub lsp_manager: Option<Arc<LspServerManager>>,
+    /// Optional skill manager for executing named skills.
+    pub skill_manager: Option<Arc<SkillManager>>,
+    /// Optional hook registry for skill hook integration.
+    pub hook_registry: Option<Arc<HookRegistry>>,
+    /// Skills that have been invoked (for hook cleanup).
+    pub invoked_skills: Arc<Mutex<Vec<InvokedSkill>>>,
+    /// Session directory for storing tool results.
+    ///
+    /// Large tool results (>400K chars by default) are persisted here with only
+    /// a preview kept in context. Typical path: `~/.cocode/sessions/{session_id}/`
+    pub session_dir: Option<PathBuf>,
 }
 
 impl ToolContext {
@@ -224,6 +323,15 @@ impl ToolContext {
             cancel_token: CancellationToken::new(),
             approval_store: Arc::new(Mutex::new(ApprovalStore::new())),
             file_tracker: Arc::new(Mutex::new(FileTracker::new())),
+            spawn_agent_fn: None,
+            is_plan_mode: false,
+            plan_file_path: None,
+            background_registry: BackgroundTaskRegistry::new(),
+            lsp_manager: None,
+            skill_manager: None,
+            hook_registry: None,
+            invoked_skills: Arc::new(Mutex::new(Vec::new())),
+            session_dir: None,
         }
     }
 
@@ -273,6 +381,65 @@ impl ToolContext {
     pub fn with_additional_working_directories(mut self, dirs: Vec<PathBuf>) -> Self {
         self.additional_working_directories = dirs;
         self
+    }
+
+    /// Set the spawn agent callback.
+    pub fn with_spawn_agent_fn(mut self, f: SpawnAgentFn) -> Self {
+        self.spawn_agent_fn = Some(f);
+        self
+    }
+
+    /// Set plan mode state.
+    pub fn with_plan_mode(mut self, is_active: bool, plan_file_path: Option<PathBuf>) -> Self {
+        self.is_plan_mode = is_active;
+        self.plan_file_path = plan_file_path;
+        self
+    }
+
+    /// Set the background task registry.
+    pub fn with_background_registry(mut self, registry: BackgroundTaskRegistry) -> Self {
+        self.background_registry = registry;
+        self
+    }
+
+    /// Set the LSP server manager.
+    pub fn with_lsp_manager(mut self, manager: Arc<LspServerManager>) -> Self {
+        self.lsp_manager = Some(manager);
+        self
+    }
+
+    /// Set the skill manager.
+    pub fn with_skill_manager(mut self, manager: Arc<SkillManager>) -> Self {
+        self.skill_manager = Some(manager);
+        self
+    }
+
+    /// Set the hook registry.
+    pub fn with_hook_registry(mut self, registry: Arc<HookRegistry>) -> Self {
+        self.hook_registry = Some(registry);
+        self
+    }
+
+    /// Set the session directory for persisting large tool results.
+    pub fn with_session_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.session_dir = Some(dir.into());
+        self
+    }
+
+    /// Spawn a subagent using the configured callback.
+    ///
+    /// Returns an error if no spawn callback is configured.
+    pub async fn spawn_agent(&self, input: SpawnAgentInput) -> anyhow::Result<SpawnAgentResult> {
+        let spawn_fn = self
+            .spawn_agent_fn
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No spawn_agent_fn configured"))?;
+        spawn_fn(input).await
+    }
+
+    /// Check if agent spawning is available.
+    pub fn can_spawn_agent(&self) -> bool {
+        self.spawn_agent_fn.is_some()
     }
 
     /// Emit a loop event.
@@ -399,6 +566,11 @@ impl std::fmt::Debug for ToolContext {
             .field("cwd", &self.cwd)
             .field("permission_mode", &self.permission_mode)
             .field("is_cancelled", &self.is_cancelled())
+            .field("is_plan_mode", &self.is_plan_mode)
+            .field("plan_file_path", &self.plan_file_path)
+            .field("lsp_manager", &self.lsp_manager.is_some())
+            .field("skill_manager", &self.skill_manager.is_some())
+            .field("session_dir", &self.session_dir)
             .finish_non_exhaustive()
     }
 }
@@ -416,6 +588,15 @@ pub struct ToolContextBuilder {
     cancel_token: CancellationToken,
     approval_store: Arc<Mutex<ApprovalStore>>,
     file_tracker: Arc<Mutex<FileTracker>>,
+    spawn_agent_fn: Option<SpawnAgentFn>,
+    is_plan_mode: bool,
+    plan_file_path: Option<PathBuf>,
+    background_registry: BackgroundTaskRegistry,
+    lsp_manager: Option<Arc<LspServerManager>>,
+    skill_manager: Option<Arc<SkillManager>>,
+    hook_registry: Option<Arc<HookRegistry>>,
+    invoked_skills: Arc<Mutex<Vec<InvokedSkill>>>,
+    session_dir: Option<PathBuf>,
 }
 
 impl ToolContextBuilder {
@@ -433,6 +614,15 @@ impl ToolContextBuilder {
             cancel_token: CancellationToken::new(),
             approval_store: Arc::new(Mutex::new(ApprovalStore::new())),
             file_tracker: Arc::new(Mutex::new(FileTracker::new())),
+            spawn_agent_fn: None,
+            is_plan_mode: false,
+            plan_file_path: None,
+            background_registry: BackgroundTaskRegistry::new(),
+            lsp_manager: None,
+            skill_manager: None,
+            hook_registry: None,
+            invoked_skills: Arc::new(Mutex::new(Vec::new())),
+            session_dir: None,
         }
     }
 
@@ -490,6 +680,49 @@ impl ToolContextBuilder {
         self
     }
 
+    /// Set the spawn agent callback.
+    pub fn spawn_agent_fn(mut self, f: SpawnAgentFn) -> Self {
+        self.spawn_agent_fn = Some(f);
+        self
+    }
+
+    /// Set plan mode state.
+    pub fn plan_mode(mut self, is_active: bool, plan_file_path: Option<PathBuf>) -> Self {
+        self.is_plan_mode = is_active;
+        self.plan_file_path = plan_file_path;
+        self
+    }
+
+    /// Set the background task registry.
+    pub fn background_registry(mut self, registry: BackgroundTaskRegistry) -> Self {
+        self.background_registry = registry;
+        self
+    }
+
+    /// Set the LSP server manager.
+    pub fn lsp_manager(mut self, manager: Arc<LspServerManager>) -> Self {
+        self.lsp_manager = Some(manager);
+        self
+    }
+
+    /// Set the skill manager.
+    pub fn skill_manager(mut self, manager: Arc<SkillManager>) -> Self {
+        self.skill_manager = Some(manager);
+        self
+    }
+
+    /// Set the hook registry.
+    pub fn hook_registry(mut self, registry: Arc<HookRegistry>) -> Self {
+        self.hook_registry = Some(registry);
+        self
+    }
+
+    /// Set the session directory for persisting large tool results.
+    pub fn session_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.session_dir = Some(dir.into());
+        self
+    }
+
     /// Build the context.
     pub fn build(self) -> ToolContext {
         ToolContext {
@@ -504,6 +737,15 @@ impl ToolContextBuilder {
             cancel_token: self.cancel_token,
             approval_store: self.approval_store,
             file_tracker: self.file_tracker,
+            spawn_agent_fn: self.spawn_agent_fn,
+            is_plan_mode: self.is_plan_mode,
+            plan_file_path: self.plan_file_path,
+            background_registry: self.background_registry,
+            lsp_manager: self.lsp_manager,
+            skill_manager: self.skill_manager,
+            hook_registry: self.hook_registry,
+            invoked_skills: self.invoked_skills,
+            session_dir: self.session_dir,
         }
     }
 }

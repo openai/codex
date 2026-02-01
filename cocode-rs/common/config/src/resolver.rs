@@ -13,7 +13,8 @@
 use crate::builtin;
 use crate::error::ConfigError;
 use crate::error::NotFoundKind;
-use crate::error::config_error::{AuthSnafu, NotFoundSnafu};
+use crate::error::config_error::AuthSnafu;
+use crate::error::config_error::NotFoundSnafu;
 use crate::types::ModelsFile;
 use crate::types::ProviderConfig;
 use crate::types::ProvidersFile;
@@ -84,34 +85,42 @@ impl ConfigResolver {
     /// 3. Provider-level overrides (from provider config)
     /// 4. Model entry config (flattened ModelInfo fields)
     /// 5. Model entry overrides (HashMap for extensibility)
+    ///
+    /// # Arguments
+    /// * `provider_name` - Provider identifier (e.g., "openai", "anthropic")
+    /// * `slug` - Model configuration identifier (e.g., "gpt-4o", "deepseek-r1")
     pub fn resolve_model_info(
         &self,
         provider_name: &str,
-        model_id: &str,
+        slug: &str,
     ) -> Result<ResolvedModelInfo, ConfigError> {
         // Get provider config, or use a default empty one
         if let Some(provider_config) = self.providers.get(provider_name) {
-            self.resolve_model_info_internal(provider_config, model_id)
+            self.resolve_model_info_internal(provider_config, slug)
         } else {
             // No provider config, use defaults only
-            self.resolve_model_info_no_provider(provider_name, model_id)
+            self.resolve_model_info_no_provider(provider_name, slug)
         }
     }
 
     /// Resolve model info without a provider config (fallback path).
+    ///
+    /// # Arguments
+    /// * `provider_name` - Provider identifier
+    /// * `slug` - Model configuration identifier
     fn resolve_model_info_no_provider(
         &self,
         provider_name: &str,
-        model_id: &str,
+        slug: &str,
     ) -> Result<ResolvedModelInfo, ConfigError> {
         // Start with built-in defaults
-        let mut config = builtin::get_model_defaults(model_id).unwrap_or_default();
-        config.slug = model_id.to_string();
+        let mut config = builtin::get_model_defaults(slug).unwrap_or_default();
+        config.slug = slug.to_string();
 
         // Layer 2: User model config from models.json
-        if let Some(user_config) = self.models.get(model_id) {
+        if let Some(user_config) = self.models.get(slug) {
             config.merge_from(user_config);
-            debug!(model = model_id, "Applied user model config");
+            debug!(slug = slug, "Applied user model config");
         }
 
         // Resolve timeout_secs: use model config or default
@@ -122,8 +131,8 @@ impl ConfigResolver {
 
         // Convert to resolved model info
         Ok(ResolvedModelInfo {
-            id: model_id.to_string(),
-            display_name: config.display_name.unwrap_or_else(|| model_id.to_string()),
+            id: slug.to_string(),
+            display_name: config.display_name.unwrap_or_else(|| slug.to_string()),
             description: config.description,
             provider: provider_name.to_string(),
             context_window: config.context_window.unwrap_or(4096),
@@ -139,7 +148,9 @@ impl ConfigResolver {
             default_thinking_level: config.default_thinking_level,
             supported_thinking_levels: config.supported_thinking_levels,
             include_thoughts: config.include_thoughts,
+            reasoning_summary: config.reasoning_summary,
             base_instructions,
+            extra: config.extra,
         })
     }
 
@@ -256,19 +267,23 @@ impl ConfigResolver {
     /// Resolve and merge model config layers, returning a `ModelInfo`.
     ///
     /// This is used when building `ProviderInfo.models` to store fully resolved configs.
+    ///
+    /// # Arguments
+    /// * `provider_config` - Provider configuration
+    /// * `slug` - Model configuration identifier
     fn resolve_model_info_for_provider(
         &self,
         provider_config: &ProviderConfig,
-        model_id: &str,
+        slug: &str,
     ) -> ModelInfo {
         // Start with built-in defaults
-        let mut config = builtin::get_model_defaults(model_id).unwrap_or_default();
-        config.slug = model_id.to_string();
+        let mut config = builtin::get_model_defaults(slug).unwrap_or_default();
+        config.slug = slug.to_string();
 
         // Layer 2: User model config from models.json
-        if let Some(user_config) = self.models.get(model_id) {
+        if let Some(user_config) = self.models.get(slug) {
             config.merge_from(user_config);
-            debug!(model = model_id, "Applied user model config");
+            debug!(slug = slug, "Applied user model config");
         }
 
         // Layer 3: Provider-level overrides (apply to all models in this provider)
@@ -278,15 +293,15 @@ impl ConfigResolver {
         }
 
         // Layer 4 & 5: Model entry config and overrides
-        if let Some(model_entry) = provider_config.find_model(model_id) {
+        if let Some(model_entry) = provider_config.find_model(slug) {
             // Apply flattened ModelInfo fields
             config.merge_from(&model_entry.model_info);
-            debug!(model = model_id, "Applied model entry config");
+            debug!(slug = slug, "Applied model entry config");
 
             // Apply model-specific overrides
             if !model_entry.overrides.is_empty() {
                 config.apply_overrides(&model_entry.overrides);
-                debug!(model = model_id, "Applied model-specific overrides");
+                debug!(slug = slug, "Applied model-specific overrides");
             }
         }
 
@@ -305,17 +320,21 @@ impl ConfigResolver {
     }
 
     /// Internal method to resolve model info given a provider config.
+    ///
+    /// # Arguments
+    /// * `provider_config` - Provider configuration
+    /// * `slug` - Model configuration identifier
     fn resolve_model_info_internal(
         &self,
         provider_config: &ProviderConfig,
-        model_id: &str,
+        slug: &str,
     ) -> Result<ResolvedModelInfo, ConfigError> {
-        let config = self.resolve_model_info_for_provider(provider_config, model_id);
+        let config = self.resolve_model_info_for_provider(provider_config, slug);
 
         // Convert to resolved model info
         Ok(ResolvedModelInfo {
-            id: model_id.to_string(),
-            display_name: config.display_name.unwrap_or_else(|| model_id.to_string()),
+            id: slug.to_string(),
+            display_name: config.display_name.unwrap_or_else(|| slug.to_string()),
             description: config.description,
             provider: provider_config.name.clone(),
             context_window: config.context_window.unwrap_or(4096),
@@ -331,7 +350,9 @@ impl ConfigResolver {
             default_thinking_level: config.default_thinking_level,
             supported_thinking_levels: config.supported_thinking_levels,
             include_thoughts: config.include_thoughts,
+            reasoning_summary: config.reasoning_summary,
             base_instructions: config.base_instructions,
+            extra: config.extra,
         })
     }
 
@@ -444,6 +465,7 @@ mod tests {
                     },
                 ],
                 extra: None,
+                interceptors: Vec::new(),
             },
         );
 
@@ -701,6 +723,7 @@ mod tests {
                 overrides,
                 models: vec![ProviderModelEntry::new("test-model")],
                 extra: None,
+                interceptors: Vec::new(),
             },
         );
 
@@ -748,6 +771,7 @@ mod tests {
                     overrides: model_overrides,
                 }],
                 extra: None,
+                interceptors: Vec::new(),
             },
         );
 
@@ -823,5 +847,142 @@ mod tests {
         assert_eq!(provider_info.effective_timeout("test-model"), 300); // Provider default (no model override)
         assert_eq!(provider_info.effective_timeout("ep-12345"), 300); // Provider default
         assert_eq!(provider_info.effective_timeout("nonexistent"), 300); // Provider default for unknown
+    }
+
+    #[test]
+    fn test_extra_field_propagation() {
+        // Test that extra fields are properly merged through resolution layers
+        let mut models = HashMap::new();
+        let mut user_extra = HashMap::new();
+        user_extra.insert("user_key".to_string(), serde_json::json!("user_value"));
+        user_extra.insert(
+            "override_key".to_string(),
+            serde_json::json!("user_override"),
+        );
+
+        models.insert(
+            "test-model".to_string(),
+            ModelInfo {
+                slug: "test-model".to_string(),
+                extra: Some(user_extra),
+                ..Default::default()
+            },
+        );
+
+        let mut providers = HashMap::new();
+        let mut model_extra = HashMap::new();
+        model_extra.insert("model_key".to_string(), serde_json::json!("model_value"));
+        model_extra.insert(
+            "override_key".to_string(),
+            serde_json::json!("model_override"),
+        ); // Should override user_override
+
+        providers.insert(
+            "test-provider".to_string(),
+            ProviderConfig {
+                name: "Test Provider".to_string(),
+                provider_type: ProviderType::Openai,
+                base_url: "https://api.test.com".to_string(),
+                timeout_secs: 300,
+                env_key: None,
+                api_key: Some("test-key".to_string()),
+                streaming: true,
+                wire_api: WireApi::Responses,
+                overrides: HashMap::new(),
+                models: vec![ProviderModelEntry {
+                    model_info: ModelInfo {
+                        slug: "test-model".to_string(),
+                        extra: Some(model_extra),
+                        ..Default::default()
+                    },
+                    model_alias: None,
+                    overrides: HashMap::new(),
+                }],
+                extra: None,
+                interceptors: Vec::new(),
+            },
+        );
+
+        let resolver = ConfigResolver {
+            models,
+            providers,
+            config_dir: None,
+        };
+
+        let info = resolver
+            .resolve_model_info("test-provider", "test-model")
+            .unwrap();
+
+        // Extra should be present
+        assert!(info.extra.is_some());
+        let extra = info.extra.unwrap();
+
+        // User key preserved
+        assert_eq!(
+            extra.get("user_key"),
+            Some(&serde_json::json!("user_value"))
+        );
+        // Model key added
+        assert_eq!(
+            extra.get("model_key"),
+            Some(&serde_json::json!("model_value"))
+        );
+        // Model override takes precedence over user
+        assert_eq!(
+            extra.get("override_key"),
+            Some(&serde_json::json!("model_override"))
+        );
+    }
+
+    #[test]
+    fn test_unknown_overrides_go_to_extra() {
+        let mut providers = HashMap::new();
+        let mut overrides = HashMap::new();
+        overrides.insert("temperature".to_string(), serde_json::json!(0.8)); // Known key
+        overrides.insert(
+            "response_format".to_string(),
+            serde_json::json!({"type": "json_object"}),
+        ); // Unknown key
+        overrides.insert("seed".to_string(), serde_json::json!(42)); // Unknown key
+
+        providers.insert(
+            "test-provider".to_string(),
+            ProviderConfig {
+                name: "Test Provider".to_string(),
+                provider_type: ProviderType::Openai,
+                base_url: "https://api.test.com".to_string(),
+                timeout_secs: 300,
+                env_key: None,
+                api_key: Some("test-key".to_string()),
+                streaming: true,
+                wire_api: WireApi::Responses,
+                overrides,
+                models: vec![ProviderModelEntry::new("test-model")],
+                extra: None,
+                interceptors: Vec::new(),
+            },
+        );
+
+        let resolver = ConfigResolver {
+            models: HashMap::new(),
+            providers,
+            config_dir: None,
+        };
+
+        let info = resolver
+            .resolve_model_info("test-provider", "test-model")
+            .unwrap();
+
+        // Known key goes to temperature field
+        assert_eq!(info.temperature, Some(0.8));
+
+        // Unknown keys go to extra
+        assert!(info.extra.is_some());
+        let extra = info.extra.unwrap();
+        assert_eq!(
+            extra.get("response_format"),
+            Some(&serde_json::json!({"type": "json_object"}))
+        );
+        assert_eq!(extra.get("seed"), Some(&serde_json::json!(42)));
     }
 }

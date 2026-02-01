@@ -2,10 +2,12 @@
 
 use super::prompts;
 use crate::context::ToolContext;
-use crate::error::{Result, ToolError};
+use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
-use cocode_protocol::{ConcurrencySafety, ContextModifier, ToolOutput};
+use cocode_protocol::ConcurrencySafety;
+use cocode_protocol::ContextModifier;
+use cocode_protocol::ToolOutput;
 use serde_json::Value;
 use tokio::fs;
 
@@ -87,9 +89,12 @@ impl Tool for ReadTool {
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
-        let file_path = input["file_path"]
-            .as_str()
-            .ok_or_else(|| ToolError::invalid_input("file_path must be a string"))?;
+        let file_path = input["file_path"].as_str().ok_or_else(|| {
+            crate::error::tool_error::InvalidInputSnafu {
+                message: "file_path must be a string",
+            }
+            .build()
+        })?;
 
         let offset = input["offset"].as_i64().map(|n| n as i32).unwrap_or(0);
         let limit = input["limit"]
@@ -102,29 +107,35 @@ impl Tool for ReadTool {
 
         // Check if file exists
         if !path.exists() {
-            return Err(ToolError::execution_failed(format!(
-                "File not found: {}",
-                path.display()
-            )));
+            return Err(crate::error::tool_error::ExecutionFailedSnafu {
+                message: format!("File not found: {}", path.display()),
+            }
+            .build());
         }
 
         // Check file size
         let metadata = fs::metadata(&path).await?;
         if metadata.len() as i64 > self.max_file_size {
-            return Err(ToolError::execution_failed(format!(
-                "File too large: {} bytes (max: {} bytes)",
-                metadata.len(),
-                self.max_file_size
-            )));
+            return Err(crate::error::tool_error::ExecutionFailedSnafu {
+                message: format!(
+                    "File too large: {} bytes (max: {} bytes)",
+                    metadata.len(),
+                    self.max_file_size
+                ),
+            }
+            .build());
         }
 
         // Get file modification time for tracking
         let file_mtime = metadata.modified().ok();
 
         // Read file
-        let content = fs::read_to_string(&path)
-            .await
-            .map_err(|e| ToolError::execution_failed(format!("Failed to read file: {e}")))?;
+        let content = fs::read_to_string(&path).await.map_err(|e| {
+            crate::error::tool_error::ExecutionFailedSnafu {
+                message: format!("Failed to read file: {e}"),
+            }
+            .build()
+        })?;
 
         // Apply offset and limit
         let lines: Vec<&str> = content.lines().collect();

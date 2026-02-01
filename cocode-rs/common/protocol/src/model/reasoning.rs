@@ -1,7 +1,27 @@
 //! Reasoning effort level types.
 
-use serde::{Deserialize, Serialize};
-use strum::{Display, EnumIter};
+use serde::Deserialize;
+use serde::Serialize;
+use strum::Display;
+use strum::EnumIter;
+
+/// Reasoning summary level for models that support it.
+///
+/// See <https://platform.openai.com/docs/guides/reasoning#reasoning-summaries>
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, Display)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum ReasoningSummary {
+    /// No reasoning summary.
+    None,
+    /// Auto (provider decides).
+    #[default]
+    Auto,
+    /// Concise summary.
+    Concise,
+    /// Detailed summary.
+    Detailed,
+}
 
 /// Reasoning effort level for models that support extended thinking.
 ///
@@ -110,5 +130,28 @@ mod tests {
 
         let parsed: ReasoningEffort = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed, ReasoningEffort::High);
+    }
+
+    #[test]
+    fn test_reasoning_summary_default() {
+        assert_eq!(ReasoningSummary::default(), ReasoningSummary::Auto);
+    }
+
+    #[test]
+    fn test_reasoning_summary_serde() {
+        let summary = ReasoningSummary::Detailed;
+        let json = serde_json::to_string(&summary).expect("serialize");
+        assert_eq!(json, "\"detailed\"");
+
+        let parsed: ReasoningSummary = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, ReasoningSummary::Detailed);
+    }
+
+    #[test]
+    fn test_reasoning_summary_display() {
+        assert_eq!(ReasoningSummary::None.to_string(), "none");
+        assert_eq!(ReasoningSummary::Auto.to_string(), "auto");
+        assert_eq!(ReasoningSummary::Concise.to_string(), "concise");
+        assert_eq!(ReasoningSummary::Detailed.to_string(), "detailed");
     }
 }

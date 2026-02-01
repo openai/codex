@@ -3,8 +3,12 @@
 //! Combines environment info, budget, tool state, memory, and configuration
 //! into a single context value used by the prompt builder.
 
-use cocode_protocol::{CompactConfig, PermissionMode, SessionMemoryConfig, ThinkingLevel};
-use serde::{Deserialize, Serialize};
+use cocode_protocol::CompactConfig;
+use cocode_protocol::PermissionMode;
+use cocode_protocol::SessionMemoryConfig;
+use cocode_protocol::ThinkingLevel;
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::budget::ContextBudget;
 use crate::environment::EnvironmentInfo;
@@ -94,6 +98,8 @@ pub struct ConversationContext {
     pub session_memory_config: SessionMemoryConfig,
     /// Subagent type (if this is a subagent).
     pub subagent_type: Option<SubagentType>,
+    /// Path to the conversation transcript file.
+    pub transcript_path: Option<std::path::PathBuf>,
 }
 
 impl ConversationContext {
@@ -132,6 +138,7 @@ pub struct ConversationContextBuilder {
     compact_config: CompactConfig,
     session_memory_config: SessionMemoryConfig,
     subagent_type: Option<SubagentType>,
+    transcript_path: Option<std::path::PathBuf>,
 }
 
 impl ConversationContextBuilder {
@@ -190,13 +197,21 @@ impl ConversationContextBuilder {
         self
     }
 
+    pub fn transcript_path(mut self, path: std::path::PathBuf) -> Self {
+        self.transcript_path = Some(path);
+        self
+    }
+
     /// Build the [`ConversationContext`].
     ///
     /// Returns `Err` if required fields are missing.
     pub fn build(self) -> crate::error::Result<ConversationContext> {
-        let environment = self
-            .environment
-            .ok_or_else(|| crate::error::ContextError::build_error("environment is required"))?;
+        let environment = self.environment.ok_or_else(|| {
+            crate::error::context_error::BuildSnafu {
+                message: "environment is required",
+            }
+            .build()
+        })?;
 
         let budget = self.budget.unwrap_or_else(|| {
             ContextBudget::new(environment.context_window, environment.output_token_limit)
@@ -214,6 +229,7 @@ impl ConversationContextBuilder {
             compact_config: self.compact_config,
             session_memory_config: self.session_memory_config,
             subagent_type: self.subagent_type,
+            transcript_path: self.transcript_path,
         })
     }
 }

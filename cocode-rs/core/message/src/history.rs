@@ -3,12 +3,15 @@
 //! This module provides [`MessageHistory`] which manages the conversation
 //! history for the agent loop, including turn tracking and compaction.
 
-use crate::normalization::{NormalizationOptions, estimate_tokens, normalize_messages_for_api};
+use crate::normalization::NormalizationOptions;
+use crate::normalization::estimate_tokens;
+use crate::normalization::normalize_messages_for_api;
 use crate::tracked::TrackedMessage;
 use crate::turn::Turn;
 use cocode_protocol::TokenUsage;
 use hyper_sdk::Message;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Configuration for message history.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,6 +28,39 @@ pub struct HistoryConfig {
     /// Whether to enable automatic compaction.
     #[serde(default = "default_auto_compact")]
     pub auto_compact: bool,
+}
+
+/// Metadata about a compaction boundary.
+///
+/// This marks where compaction occurred in the conversation history,
+/// helping distinguish between pre-compaction and post-compaction content.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompactionBoundary {
+    /// Turn ID where compaction occurred.
+    pub turn_id: String,
+    /// Turn number at compaction time.
+    pub turn_number: i32,
+    /// Number of turns that were compacted.
+    pub turns_compacted: i32,
+    /// Estimated tokens saved by compaction.
+    pub tokens_saved: i32,
+    /// Timestamp of compaction (Unix milliseconds).
+    pub timestamp_ms: i64,
+    /// Trigger type for the compaction.
+    #[serde(default)]
+    pub trigger: cocode_protocol::CompactTrigger,
+    /// Pre-compaction token count.
+    #[serde(default)]
+    pub pre_tokens: i32,
+    /// Post-compaction token count.
+    #[serde(default)]
+    pub post_tokens: Option<i32>,
+    /// Path to full transcript file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_path: Option<std::path::PathBuf>,
+    /// Whether recent messages were preserved verbatim.
+    #[serde(default)]
+    pub recent_messages_preserved: bool,
 }
 
 fn default_max_turns() -> i32 {
@@ -62,6 +98,9 @@ pub struct MessageHistory {
     /// Compacted summary of earlier turns.
     #[serde(skip_serializing_if = "Option::is_none")]
     compacted_summary: Option<String>,
+    /// Compaction boundary marker.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    compaction_boundary: Option<CompactionBoundary>,
     /// Total input tokens used.
     #[serde(default)]
     total_input_tokens: i64,
@@ -86,6 +125,7 @@ impl MessageHistory {
             system_message: None,
             turns: Vec::new(),
             compacted_summary: None,
+            compaction_boundary: None,
             total_input_tokens: 0,
             total_output_tokens: 0,
             config: HistoryConfig::default(),
@@ -186,6 +226,17 @@ impl MessageHistory {
         estimate_tokens(&messages)
     }
 
+    /// Get messages as JSON values for compaction calculations.
+    ///
+    /// This is used by the keep window algorithm which operates on
+    /// JSON message structures rather than typed Message objects.
+    pub fn messages_for_api_json(&self) -> Vec<serde_json::Value> {
+        self.messages_for_api()
+            .iter()
+            .filter_map(|m| serde_json::to_value(m).ok())
+            .collect()
+    }
+
     /// Check if compaction is needed.
     pub fn needs_compaction(&self) -> bool {
         if !self.config.auto_compact {
@@ -208,7 +259,77 @@ impl MessageHistory {
     ///
     /// This method adjusts token accounting by deducting the tokens from
     /// removed turns to maintain accurate running totals.
-    pub fn apply_compaction(&mut self, summary: String, keep_turns: i32) {
+    ///
+    /// # Arguments
+    /// * `summary` - The compacted summary text
+    /// * `keep_turns` - Number of recent turns to keep
+    /// * `turn_id` - ID of the turn where compaction occurred
+    /// * `tokens_saved` - Estimated tokens saved by compaction
+    pub fn apply_compaction(
+        &mut self,
+        summary: String,
+        keep_turns: i32,
+        turn_id: impl Into<String>,
+        tokens_saved: i32,
+    ) {
+        self.apply_compaction_with_metadata(
+            summary,
+            keep_turns,
+            turn_id,
+            tokens_saved,
+            cocode_protocol::CompactTrigger::Auto,
+            0,
+            None,
+            false,
+        );
+    }
+
+    /// Set compacted summary with full metadata.
+    ///
+    /// Extended version of `apply_compaction` that includes additional metadata
+    /// for compact boundary tracking.
+    ///
+    /// # Arguments
+    /// * `summary` - The compacted summary text
+    /// * `keep_turns` - Number of recent turns to keep
+    /// * `turn_id` - ID of the turn where compaction occurred
+    /// * `tokens_saved` - Estimated tokens saved by compaction
+    /// * `trigger` - Trigger type (auto or manual)
+    /// * `pre_tokens` - Token count before compaction
+    /// * `transcript_path` - Optional path to full transcript file
+    /// * `recent_messages_preserved` - Whether recent messages were kept verbatim
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_compaction_with_metadata(
+        &mut self,
+        summary: String,
+        keep_turns: i32,
+        turn_id: impl Into<String>,
+        tokens_saved: i32,
+        trigger: cocode_protocol::CompactTrigger,
+        pre_tokens: i32,
+        transcript_path: Option<std::path::PathBuf>,
+        recent_messages_preserved: bool,
+    ) {
+        let turns_compacted = self.turns.len().saturating_sub(keep_turns.max(1) as usize) as i32;
+        let turn_number = self.turn_count();
+
+        // Record the compaction boundary
+        self.compaction_boundary = Some(CompactionBoundary {
+            turn_id: turn_id.into(),
+            turn_number,
+            turns_compacted,
+            tokens_saved,
+            timestamp_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0),
+            trigger,
+            pre_tokens,
+            post_tokens: None, // Will be set after compaction completes
+            transcript_path,
+            recent_messages_preserved,
+        });
+
         self.compacted_summary = Some(summary);
 
         // Keep only the most recent turns
@@ -225,12 +346,30 @@ impl MessageHistory {
         }
     }
 
+    /// Update the compaction boundary with post-compaction token count.
+    pub fn update_boundary_post_tokens(&mut self, post_tokens: i32) {
+        if let Some(boundary) = &mut self.compaction_boundary {
+            boundary.post_tokens = Some(post_tokens);
+        }
+    }
+
     /// Clear all history.
     pub fn clear(&mut self) {
         self.turns.clear();
         self.compacted_summary = None;
+        self.compaction_boundary = None;
         self.total_input_tokens = 0;
         self.total_output_tokens = 0;
+    }
+
+    /// Get the compaction boundary (if any).
+    pub fn compaction_boundary(&self) -> Option<&CompactionBoundary> {
+        self.compaction_boundary.as_ref()
+    }
+
+    /// Get the compacted summary (if any).
+    pub fn compacted_summary(&self) -> Option<&str> {
+        self.compacted_summary.as_deref()
     }
 
     /// Micro-compact: Clear old tool result content to save tokens.
@@ -463,9 +602,17 @@ mod tests {
 
         assert_eq!(history.turn_count(), 10);
 
-        history.apply_compaction("Summary of turns 1-8".to_string(), 2);
+        history.apply_compaction("Summary of turns 1-8".to_string(), 2, "turn-10", 5000);
         assert_eq!(history.turn_count(), 2);
-        assert!(history.compacted_summary.is_some());
+        assert!(history.compacted_summary().is_some());
+
+        // Verify compaction boundary
+        let boundary = history.compaction_boundary().unwrap();
+        assert_eq!(boundary.turn_id, "turn-10");
+        assert_eq!(boundary.turn_number, 10);
+        assert_eq!(boundary.turns_compacted, 8);
+        assert_eq!(boundary.tokens_saved, 5000);
+        assert!(boundary.timestamp_ms > 0);
     }
 
     #[test]
@@ -503,10 +650,15 @@ mod tests {
     fn test_clear() {
         let mut history = MessageHistory::new();
         history.add_turn(make_turn(1));
-        history.apply_compaction("Summary".to_string(), 1);
+        history.apply_compaction("Summary".to_string(), 1, "turn-1", 100);
+
+        // Verify compaction was applied
+        assert!(history.compacted_summary().is_some());
+        assert!(history.compaction_boundary().is_some());
 
         history.clear();
         assert_eq!(history.turn_count(), 0);
-        assert!(history.compacted_summary.is_none());
+        assert!(history.compacted_summary().is_none());
+        assert!(history.compaction_boundary().is_none());
     }
 }

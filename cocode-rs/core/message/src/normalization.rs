@@ -4,7 +4,9 @@
 //! expected by the API, similar to Claude Code's `normalization.ts`.
 
 use crate::tracked::TrackedMessage;
-use hyper_sdk::{ContentBlock, Message, Role};
+use hyper_sdk::ContentBlock;
+use hyper_sdk::Message;
+use hyper_sdk::Role;
 
 /// Options for message normalization.
 #[derive(Debug, Clone, Default)]

@@ -1,0 +1,149 @@
+set positional-arguments
+
+# Display help
+help:
+    just -l
+
+# ============================================================================
+# Development
+# ============================================================================
+
+# Format code
+fmt:
+    cargo fmt -- --config imports_granularity=Item 2>/dev/null
+
+# Check all crates
+check *args:
+    cargo check "$@"
+
+# Build all crates
+build *args:
+    cargo build "$@"
+
+# Run clippy on all crates
+clippy *args:
+    cargo clippy --all-features --tests "$@"
+
+# Fix clippy warnings
+fix *args:
+    cargo clippy --fix --all-features --tests --allow-dirty "$@"
+
+# Install dependencies
+install:
+    rustup show active-toolchain
+    cargo fetch
+
+# ============================================================================
+# Testing
+# ============================================================================
+
+# Run all tests (nextest, faster than cargo test)
+test *args:
+    cargo nextest run --no-fail-fast "$@"
+
+# Test a specific crate
+test-crate crate *args:
+    cargo test -p {{crate}} "$@"
+
+# ============================================================================
+# Running
+# ============================================================================
+
+# Run cocode CLI
+alias c := cocode
+cocode *args:
+    cargo run --bin cocode -- "$@"
+
+# Run file-search CLI
+file-search *args:
+    cargo run --bin cocode-file-search -- "$@"
+
+# ============================================================================
+# Live Integration Tests (Provider SDKs)
+# ============================================================================
+
+# Run all provider live tests
+live-test:
+    cargo test -p hyper-sdk --ignored -- --test-threads=1
+
+# Run Anthropic live tests
+live-test-anthropic:
+    cargo test -p anthropic-sdk --ignored -- --test-threads=1
+
+# Run OpenAI live tests
+live-test-openai:
+    cargo test -p openai-sdk --ignored -- --test-threads=1
+
+# Run Google GenAI live tests
+live-test-google:
+    cargo test -p google-genai-sdk --ignored -- --test-threads=1
+
+# Run Volcengine Ark live tests
+live-test-volc:
+    cargo test -p volcengine-ark-sdk --ignored -- --test-threads=1
+
+# Run Z.AI live tests
+live-test-zai:
+    cargo test -p z-ai-sdk --ignored -- --test-threads=1
+
+# Run live tests for a specific feature
+live-test-feature feature:
+    cargo test -p hyper-sdk --ignored {{feature}} -- --test-threads=1
+
+# ============================================================================
+# Security & Audit
+# ============================================================================
+
+# Run cargo-deny checks (licenses, advisories, bans, sources)
+deny *args:
+    cargo deny check "$@"
+
+# Run cargo-audit for security vulnerabilities
+audit:
+    cargo audit
+
+# ============================================================================
+# Documentation
+# ============================================================================
+
+# Generate documentation
+doc *args:
+    cargo doc --no-deps "$@"
+
+# Generate and open documentation
+doc-open:
+    cargo doc --no-deps --open
+
+# ============================================================================
+# Utilities
+# ============================================================================
+
+# Clean build artifacts
+clean:
+    cargo clean
+
+# Build in release mode
+release *args:
+    cargo build --release "$@"
+
+# Update dependencies
+update:
+    cargo update
+
+# Show outdated dependencies
+outdated:
+    cargo outdated -R
+
+# Tree view of dependencies
+tree *args:
+    cargo tree "$@"
+
+# ============================================================================
+# CI / Pre-commit
+# ============================================================================
+
+# Run all CI checks (format, clippy, test, deny)
+ci: fmt clippy test deny
+
+# Quick pre-commit check (format + build)
+pre-commit: fmt build

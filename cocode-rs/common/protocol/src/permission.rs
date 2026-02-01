@@ -3,7 +3,8 @@
 //! These types control how the agent requests and receives permissions
 //! for potentially dangerous operations.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Permission mode that controls how the agent handles tool execution permissions.
 ///

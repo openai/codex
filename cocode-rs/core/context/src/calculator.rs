@@ -3,7 +3,8 @@
 //! Provides approximate token counting based on character-to-token ratios,
 //! and computes token budgets for the context window.
 
-use crate::budget::{BudgetCategory, ContextBudget};
+use crate::budget::BudgetCategory;
+use crate::budget::ContextBudget;
 use crate::conversation_context::MemoryFile;
 use crate::environment::EnvironmentInfo;
 

@@ -8,7 +8,10 @@ use crate::redirects::extract_redirects_from_tree;
 use crate::segments::extract_segments_from_tree;
 use crate::tokenizer::TokenKind;
 
-use super::risks::{RiskKind, RiskLevel, SecurityAnalysis, SecurityRisk};
+use super::risks::RiskKind;
+use super::risks::RiskLevel;
+use super::risks::SecurityAnalysis;
+use super::risks::SecurityRisk;
 
 /// Trait for security analyzers.
 pub trait Analyzer {

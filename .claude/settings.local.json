@@ -90,7 +90,11 @@
       "WebFetch(domain:dev.to)",
       "WebFetch(domain:www.unwoundstack.com)",
       "WebFetch(domain:users.rust-lang.org)",
-      "WebFetch(domain:greptimedb.rs)"
+      "WebFetch(domain:greptimedb.rs)",
+      "WebFetch(domain:ratatui.rs)",
+      "Bash(cocode-rs/target/release/cocode:*)",
+      "Bash(cocode-rs/target/release/cocode-tui:*)",
+      "Bash(cocode-rs/target/debug/cocode:*)"
     ],
     "deny": [],
     "ask": []

@@ -4,7 +4,10 @@
 //! (Anthropic/Gemini) approaches into a single unified type.
 
 use crate::model::ReasoningEffort;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::Deserialize;
+use serde::Deserializer;
+use serde::Serialize;
+use serde::Serializer;
 use std::fmt;
 use std::str::FromStr;
 
@@ -215,7 +218,8 @@ impl<'de> Deserialize<'de> for ThinkingLevel {
     where
         D: Deserializer<'de>,
     {
-        use serde::de::{MapAccess, Visitor};
+        use serde::de::MapAccess;
+        use serde::de::Visitor;
 
         struct ThinkingLevelVisitor;
 

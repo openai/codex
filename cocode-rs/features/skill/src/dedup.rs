@@ -96,6 +96,7 @@ mod tests {
                 description: "desc".to_string(),
                 prompt: "prompt".to_string(),
                 allowed_tools: None,
+                interface: None,
             },
             source: SkillSource::Bundled,
         }
@@ -152,6 +153,7 @@ mod tests {
                     description: "first".to_string(),
                     prompt: "first prompt".to_string(),
                     allowed_tools: None,
+                    interface: None,
                 },
                 source: SkillSource::ProjectLocal {
                     path: PathBuf::from("/first"),
@@ -163,6 +165,7 @@ mod tests {
                     description: "second".to_string(),
                     prompt: "second prompt".to_string(),
                     allowed_tools: None,
+                    interface: None,
                 },
                 source: SkillSource::UserGlobal {
                     path: PathBuf::from("/second"),

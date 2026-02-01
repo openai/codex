@@ -7,8 +7,11 @@ description = "Plugin system for cocode-rs"
 
 [dependencies]
 cocode-error.workspace = true
-cocode-skill.workspace = true
 cocode-hooks.workspace = true
+cocode-skill.workspace = true
+cocode-subagent.workspace = true
+anyhow.workspace = true
+dirs.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 snafu.workspace = true
@@ -16,7 +19,6 @@ snafu-virtstack.workspace = true
 toml.workspace = true
 tracing.workspace = true
 walkdir.workspace = true
-dirs.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

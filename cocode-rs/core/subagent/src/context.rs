@@ -1,4 +1,5 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Context linking a child subagent session back to its parent.
 #[derive(Debug, Clone, Serialize, Deserialize)]

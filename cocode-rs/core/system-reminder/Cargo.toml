@@ -1,0 +1,27 @@
+[package]
+name = "cocode-system-reminder"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cocode-protocol.workspace = true
+cocode-error.workspace = true
+snafu.workspace = true
+snafu-virtstack.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tracing.workspace = true
+async-trait.workspace = true
+tokio = { workspace = true, features = ["time", "sync"] }
+futures = { workspace = true, features = ["alloc"] }
+regex-lite.workspace = true
+chrono.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+pretty_assertions.workspace = true
+
+[lints]
+workspace = true

@@ -11,6 +11,8 @@ pub mod error;
 pub mod platform;
 
 pub use checker::PermissionChecker;
-pub use config::{SandboxConfig, SandboxMode};
+pub use config::SandboxConfig;
+pub use config::SandboxMode;
+pub use config::SandboxSettings;
 pub use error::SandboxError;
 pub use platform::SandboxPlatform;

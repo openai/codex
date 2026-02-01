@@ -3,15 +3,26 @@
 //! Scans directories for plugins (containing PLUGIN.toml) and loads their
 //! contributions.
 
-use crate::contribution::{PluginContribution, PluginContributions};
+use crate::agent_loader::load_agents_from_dir;
+use crate::command_loader::load_commands_from_dir;
+use crate::contribution::PluginContribution;
+use crate::contribution::PluginContributions;
 use crate::error::Result;
-use crate::error::plugin_error::{InvalidManifestSnafu, IoSnafu, PathTraversalSnafu};
-use crate::manifest::{PLUGIN_TOML, PluginManifest};
+use crate::error::plugin_error::InvalidManifestSnafu;
+use crate::error::plugin_error::IoSnafu;
+use crate::error::plugin_error::PathTraversalSnafu;
+use crate::manifest::PLUGIN_TOML;
+use crate::manifest::PluginManifest;
+use crate::mcp_loader::load_mcp_servers_from_dir;
 use crate::scope::PluginScope;
 
-use cocode_skill::{SkillLoadOutcome, load_skills_from_dir};
-use std::path::{Path, PathBuf};
-use tracing::{debug, info, warn};
+use cocode_skill::SkillLoadOutcome;
+use cocode_skill::load_skills_from_dir;
+use std::path::Path;
+use std::path::PathBuf;
+use tracing::debug;
+use tracing::info;
+use tracing::warn;
 use walkdir::WalkDir;
 
 /// Maximum depth to scan for plugins.
@@ -267,13 +278,82 @@ impl PluginLoader {
             }
         }
 
-        // Agents are not yet implemented
+        // Load agents
         for agent_path in &contributions.agents {
-            debug!(
-                plugin = %plugin_name,
-                path = %agent_path,
-                "Agent contributions not yet implemented"
-            );
+            let full_path = match self.validate_path(plugin_dir, agent_path) {
+                Ok(p) => p,
+                Err(e) => {
+                    warn!(
+                        plugin = %plugin_name,
+                        path = %agent_path,
+                        error = %e,
+                        "Invalid agent path in plugin"
+                    );
+                    continue;
+                }
+            };
+            if full_path.is_dir() {
+                let agents = load_agents_from_dir(&full_path, plugin_name);
+                result.extend(agents);
+            } else {
+                debug!(
+                    plugin = %plugin_name,
+                    path = %full_path.display(),
+                    "Agent path not found or not a directory"
+                );
+            }
+        }
+
+        // Load commands
+        for command_path in &contributions.commands {
+            let full_path = match self.validate_path(plugin_dir, command_path) {
+                Ok(p) => p,
+                Err(e) => {
+                    warn!(
+                        plugin = %plugin_name,
+                        path = %command_path,
+                        error = %e,
+                        "Invalid command path in plugin"
+                    );
+                    continue;
+                }
+            };
+            if full_path.is_dir() {
+                let commands = load_commands_from_dir(&full_path, plugin_name);
+                result.extend(commands);
+            } else {
+                debug!(
+                    plugin = %plugin_name,
+                    path = %full_path.display(),
+                    "Command path not found or not a directory"
+                );
+            }
+        }
+
+        // Load MCP servers
+        for mcp_path in &contributions.mcp_servers {
+            let full_path = match self.validate_path(plugin_dir, mcp_path) {
+                Ok(p) => p,
+                Err(e) => {
+                    warn!(
+                        plugin = %plugin_name,
+                        path = %mcp_path,
+                        error = %e,
+                        "Invalid MCP server path in plugin"
+                    );
+                    continue;
+                }
+            };
+            if full_path.is_dir() {
+                let servers = load_mcp_servers_from_dir(&full_path, plugin_name);
+                result.extend(servers);
+            } else {
+                debug!(
+                    plugin = %plugin_name,
+                    path = %full_path.display(),
+                    "MCP server path not found or not a directory"
+                );
+            }
         }
 
         Ok(result)

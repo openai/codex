@@ -3,40 +3,79 @@
 //! The `HookRegistry` is the central coordinator: it stores all registered
 //! hooks and, when an event occurs, finds the matching hooks and executes them.
 
+use std::collections::HashSet;
+use std::sync::RwLock;
 use std::time::Instant;
 
-use tracing::{info, warn};
+use tracing::debug;
+use tracing::info;
+use tracing::warn;
 
 use crate::context::HookContext;
-use crate::definition::{HookDefinition, HookHandler};
+use crate::definition::HookDefinition;
+use crate::definition::HookHandler;
 use crate::event::HookEventType;
 use crate::handlers;
-use crate::result::{HookOutcome, HookResult};
+use crate::result::HookOutcome;
+use crate::result::HookResult;
 
 /// Central registry that stores hooks and dispatches events.
-#[derive(Default)]
+///
+/// The registry supports one-shot hooks (`once: true`) which are automatically
+/// removed after successful execution.
+///
+/// This registry uses interior mutability (`RwLock`) to allow execution through
+/// shared references (`Arc<HookRegistry>`), which is needed for concurrent access
+/// from the executor.
 pub struct HookRegistry {
-    hooks: Vec<HookDefinition>,
+    hooks: RwLock<Vec<HookDefinition>>,
+}
+
+impl Default for HookRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HookRegistry {
     /// Creates a new empty registry.
     pub fn new() -> Self {
-        Self { hooks: Vec::new() }
+        Self {
+            hooks: RwLock::new(Vec::new()),
+        }
     }
 
     /// Registers a hook definition.
-    pub fn register(&mut self, hook: HookDefinition) {
-        info!(name = %hook.name, event = %hook.event_type, "Registered hook");
-        self.hooks.push(hook);
+    pub fn register(&self, hook: HookDefinition) {
+        info!(
+            name = %hook.name,
+            event = %hook.event_type,
+            once = hook.once,
+            "Registered hook"
+        );
+        if let Ok(mut hooks) = self.hooks.write() {
+            hooks.push(hook);
+        }
+    }
+
+    /// Registers multiple hook definitions.
+    pub fn register_all(&self, hooks: impl IntoIterator<Item = HookDefinition>) {
+        for hook in hooks {
+            self.register(hook);
+        }
     }
 
     /// Returns all hooks registered for a given event type.
-    pub fn hooks_for_event(&self, event_type: &HookEventType) -> Vec<&HookDefinition> {
-        self.hooks
-            .iter()
-            .filter(|h| h.enabled && h.event_type == *event_type)
-            .collect()
+    pub fn hooks_for_event(&self, event_type: &HookEventType) -> Vec<HookDefinition> {
+        if let Ok(hooks) = self.hooks.read() {
+            hooks
+                .iter()
+                .filter(|h| h.enabled && h.event_type == *event_type)
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        }
     }
 
     /// Executes all matching hooks for the given context.
@@ -45,23 +84,32 @@ impl HookRegistry {
     /// 1. Its event type equals the context event type.
     /// 2. It is enabled.
     /// 3. Its matcher (if any) matches the context tool name (or no matcher is set).
+    ///
+    /// One-shot hooks (`once: true`) are removed after successful execution.
+    /// They are NOT removed on timeout or failure, allowing retry.
     pub async fn execute(&self, ctx: &HookContext) -> Vec<HookOutcome> {
-        let matching: Vec<&HookDefinition> = self
-            .hooks
-            .iter()
-            .filter(|h| h.enabled && h.event_type == ctx.event_type)
-            .filter(|h| {
-                match (&h.matcher, &ctx.tool_name) {
-                    (Some(matcher), Some(tool)) => matcher.matches(tool),
-                    (Some(_), None) => false, // matcher present but no tool name to match against
-                    (None, _) => true,        // no matcher means always match
-                }
-            })
-            .collect();
+        // Get matching hooks (clone to release lock during execution)
+        let matching: Vec<HookDefinition> = if let Ok(hooks) = self.hooks.read() {
+            hooks
+                .iter()
+                .filter(|h| h.enabled && h.event_type == ctx.event_type)
+                .filter(|h| {
+                    match (&h.matcher, &ctx.tool_name) {
+                        (Some(matcher), Some(tool)) => matcher.matches(tool),
+                        (Some(_), None) => false, // matcher present but no tool name to match against
+                        (None, _) => true,        // no matcher means always match
+                    }
+                })
+                .cloned()
+                .collect()
+        } else {
+            return Vec::new();
+        };
 
         let mut outcomes = Vec::with_capacity(matching.len());
+        let mut once_hooks_to_remove: Vec<String> = Vec::new();
 
-        for hook in matching {
+        for hook in &matching {
             let start = Instant::now();
 
             let timeout = tokio::time::Duration::from_secs(hook.timeout_secs as u64);
@@ -69,23 +117,35 @@ impl HookRegistry {
 
             let duration_ms = start.elapsed().as_millis() as i64;
 
-            let result = match result {
-                Ok(r) => r,
+            let (result, is_success) = match result {
+                Ok(r) => {
+                    // Consider it a success unless it's a Reject
+                    let success = !matches!(r, HookResult::Reject { .. });
+                    (r, success)
+                }
                 Err(_) => {
                     warn!(
                         hook_name = %hook.name,
                         timeout_secs = hook.timeout_secs,
                         "Hook timed out"
                     );
-                    HookResult::Continue
+                    (HookResult::Continue, false) // Timeout is not a success
                 }
             };
 
             info!(
                 hook_name = %hook.name,
                 duration_ms,
+                once = hook.once,
+                success = is_success,
                 "Hook executed"
             );
+
+            // Mark one-shot hook for removal if successful
+            if hook.once && is_success {
+                debug!(hook_name = %hook.name, "One-shot hook will be removed");
+                once_hooks_to_remove.push(hook.name.clone());
+            }
 
             outcomes.push(HookOutcome {
                 hook_name: hook.name.clone(),
@@ -94,22 +154,78 @@ impl HookRegistry {
             });
         }
 
+        // Remove one-shot hooks that executed successfully
+        if !once_hooks_to_remove.is_empty() {
+            self.remove_hooks_by_name(&once_hooks_to_remove);
+        }
+
         outcomes
     }
 
+    /// Removes hooks by their names.
+    fn remove_hooks_by_name(&self, names: &[String]) {
+        let names_set: HashSet<_> = names.iter().collect();
+        if let Ok(mut hooks) = self.hooks.write() {
+            let before = hooks.len();
+            hooks.retain(|h| !names_set.contains(&h.name));
+            let removed = before - hooks.len();
+            if removed > 0 {
+                info!(
+                    count = removed,
+                    "Removed one-shot hooks after successful execution"
+                );
+            }
+        }
+    }
+
+    /// Removes all hooks from a specific source (e.g., when a skill ends).
+    pub fn remove_hooks_by_source_name(&self, source_name: &str) {
+        if let Ok(mut hooks) = self.hooks.write() {
+            let before = hooks.len();
+            hooks.retain(|h| h.source.name() != Some(source_name));
+            let removed = before - hooks.len();
+            if removed > 0 {
+                info!(
+                    source = source_name,
+                    count = removed,
+                    "Removed hooks by source"
+                );
+            }
+        }
+    }
+
+    /// Removes all hooks with the specified scope.
+    pub fn remove_hooks_by_scope(&self, scope: crate::scope::HookScope) {
+        if let Ok(mut hooks) = self.hooks.write() {
+            let before = hooks.len();
+            hooks.retain(|h| h.source.scope() != scope);
+            let removed = before - hooks.len();
+            if removed > 0 {
+                info!(scope = %scope, count = removed, "Removed hooks by scope");
+            }
+        }
+    }
+
     /// Removes all registered hooks.
-    pub fn clear(&mut self) {
-        self.hooks.clear();
+    pub fn clear(&self) {
+        if let Ok(mut hooks) = self.hooks.write() {
+            hooks.clear();
+        }
     }
 
     /// Returns the number of registered hooks.
     pub fn len(&self) -> usize {
-        self.hooks.len()
+        self.hooks.read().map(|h| h.len()).unwrap_or(0)
     }
 
     /// Returns `true` if no hooks are registered.
     pub fn is_empty(&self) -> bool {
-        self.hooks.is_empty()
+        self.len() == 0
+    }
+
+    /// Returns a copy of all registered hooks.
+    pub fn all_hooks(&self) -> Vec<HookDefinition> {
+        self.hooks.read().map(|h| h.clone()).unwrap_or_default()
     }
 }
 
@@ -117,13 +233,8 @@ impl HookRegistry {
 async fn execute_handler(handler: &HookHandler, ctx: &HookContext) -> HookResult {
     match handler {
         HookHandler::Command { command, args } => {
-            let input = ctx
-                .tool_input
-                .as_ref()
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
-            handlers::command::CommandHandler::execute(command, args, &input, &ctx.working_dir)
-                .await
+            // Pass full HookContext to command handler for env vars and stdin JSON
+            handlers::command::CommandHandler::execute(command, args, ctx).await
         }
         HookHandler::Prompt { template } => {
             let arguments = ctx
@@ -145,7 +256,7 @@ async fn execute_handler(handler: &HookHandler, ctx: &HookContext) -> HookResult
 impl std::fmt::Debug for HookRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HookRegistry")
-            .field("hooks_count", &self.hooks.len())
+            .field("hooks_count", &self.len())
             .finish()
     }
 }
@@ -173,14 +284,31 @@ mod tests {
             handler: HookHandler::Prompt {
                 template: "test".to_string(),
             },
+            source: Default::default(),
             enabled: true,
             timeout_secs: 30,
+            once: false,
+        }
+    }
+
+    fn make_once_hook(name: &str, event: HookEventType) -> HookDefinition {
+        HookDefinition {
+            name: name.to_string(),
+            event_type: event,
+            matcher: None,
+            handler: HookHandler::Prompt {
+                template: "test".to_string(),
+            },
+            source: Default::default(),
+            enabled: true,
+            timeout_secs: 30,
+            once: true,
         }
     }
 
     #[test]
     fn test_register_and_len() {
-        let mut registry = HookRegistry::new();
+        let registry = HookRegistry::new();
         assert!(registry.is_empty());
         assert_eq!(registry.len(), 0);
 
@@ -191,7 +319,7 @@ mod tests {
 
     #[test]
     fn test_hooks_for_event() {
-        let mut registry = HookRegistry::new();
+        let registry = HookRegistry::new();
         registry.register(make_hook("h1", HookEventType::PreToolUse, None));
         registry.register(make_hook("h2", HookEventType::PostToolUse, None));
         registry.register(make_hook("h3", HookEventType::PreToolUse, None));
@@ -210,7 +338,7 @@ mod tests {
 
     #[test]
     fn test_disabled_hooks_excluded() {
-        let mut registry = HookRegistry::new();
+        let registry = HookRegistry::new();
         let mut hook = make_hook("disabled", HookEventType::PreToolUse, None);
         hook.enabled = false;
         registry.register(hook);
@@ -224,7 +352,7 @@ mod tests {
 
     #[test]
     fn test_clear() {
-        let mut registry = HookRegistry::new();
+        let registry = HookRegistry::new();
         registry.register(make_hook("h1", HookEventType::PreToolUse, None));
         registry.register(make_hook("h2", HookEventType::PostToolUse, None));
         assert_eq!(registry.len(), 2);
@@ -243,7 +371,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_with_matcher() {
-        let mut registry = HookRegistry::new();
+        let registry = HookRegistry::new();
         registry.register(make_hook(
             "bash-only",
             HookEventType::PreToolUse,
@@ -266,7 +394,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_matcher_without_tool_name() {
-        let mut registry = HookRegistry::new();
+        let registry = HookRegistry::new();
         registry.register(make_hook(
             "need-tool",
             HookEventType::PreToolUse,
@@ -281,11 +409,103 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_no_matcher_always_matches() {
-        let mut registry = HookRegistry::new();
+        let registry = HookRegistry::new();
         registry.register(make_hook("always", HookEventType::SessionStart, None));
 
         let ctx = make_ctx(HookEventType::SessionStart, None);
         let outcomes = registry.execute(&ctx).await;
         assert_eq!(outcomes.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_once_hook_removed_after_success() {
+        let registry = HookRegistry::new();
+        registry.register(make_once_hook("one-shot", HookEventType::SessionStart));
+
+        assert_eq!(registry.len(), 1);
+
+        // First execution - hook should run and be removed
+        let ctx = make_ctx(HookEventType::SessionStart, None);
+        let outcomes = registry.execute(&ctx).await;
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].hook_name, "one-shot");
+
+        // Hook should be removed after successful execution
+        assert_eq!(registry.len(), 0);
+
+        // Second execution - no hook should run
+        let outcomes = registry.execute(&ctx).await;
+        assert!(outcomes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_regular_hook_not_removed() {
+        let registry = HookRegistry::new();
+        registry.register(make_hook("regular", HookEventType::SessionStart, None));
+
+        assert_eq!(registry.len(), 1);
+
+        let ctx = make_ctx(HookEventType::SessionStart, None);
+
+        // First execution
+        let outcomes = registry.execute(&ctx).await;
+        assert_eq!(outcomes.len(), 1);
+
+        // Hook should still exist
+        assert_eq!(registry.len(), 1);
+
+        // Second execution - hook should still run
+        let outcomes = registry.execute(&ctx).await;
+        assert_eq!(outcomes.len(), 1);
+    }
+
+    #[test]
+    fn test_remove_hooks_by_source_name() {
+        let registry = HookRegistry::new();
+        let mut h1 = make_hook("h1", HookEventType::PreToolUse, None);
+        h1.source = crate::scope::HookSource::Skill {
+            name: "my-skill".to_string(),
+        };
+        let mut h2 = make_hook("h2", HookEventType::PreToolUse, None);
+        h2.source = crate::scope::HookSource::Skill {
+            name: "other-skill".to_string(),
+        };
+        let h3 = make_hook("h3", HookEventType::PreToolUse, None); // Session source
+
+        registry.register(h1);
+        registry.register(h2);
+        registry.register(h3);
+
+        assert_eq!(registry.len(), 3);
+
+        registry.remove_hooks_by_source_name("my-skill");
+
+        assert_eq!(registry.len(), 2);
+        let hooks = registry.all_hooks();
+        assert!(hooks.iter().all(|h| h.name != "h1"));
+    }
+
+    #[test]
+    fn test_remove_hooks_by_scope() {
+        let registry = HookRegistry::new();
+        let mut h1 = make_hook("h1", HookEventType::PreToolUse, None);
+        h1.source = crate::scope::HookSource::Skill {
+            name: "skill".to_string(),
+        };
+        let mut h2 = make_hook("h2", HookEventType::PreToolUse, None);
+        h2.source = crate::scope::HookSource::Policy;
+        let h3 = make_hook("h3", HookEventType::PreToolUse, None); // Session source
+
+        registry.register(h1);
+        registry.register(h2);
+        registry.register(h3);
+
+        assert_eq!(registry.len(), 3);
+
+        registry.remove_hooks_by_scope(crate::scope::HookScope::Session);
+
+        assert_eq!(registry.len(), 2);
+        let hooks = registry.all_hooks();
+        assert!(hooks.iter().all(|h| h.name != "h3"));
     }
 }

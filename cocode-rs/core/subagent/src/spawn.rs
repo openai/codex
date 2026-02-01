@@ -1,4 +1,5 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Input parameters for spawning a new subagent.
 #[derive(Debug, Clone, Serialize, Deserialize)]

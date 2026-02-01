@@ -7,18 +7,33 @@ use std::sync::Arc;
 
 use cocode_api::ApiClient;
 use cocode_config::ConfigManager;
-use cocode_context::{ConversationContext, EnvironmentInfo};
+use cocode_context::ConversationContext;
+use cocode_context::EnvironmentInfo;
 use cocode_hooks::HookRegistry;
-use cocode_loop::{AgentLoop, CompactionConfig, FallbackConfig, LoopConfig, LoopResult};
+use cocode_loop::AgentLoop;
+use cocode_loop::CompactionConfig;
+use cocode_loop::FallbackConfig;
+use cocode_loop::LoopConfig;
+use cocode_loop::LoopResult;
 use cocode_message::MessageHistory;
-use cocode_protocol::{LoopEvent, ProviderType, TokenUsage};
+use cocode_protocol::LoopEvent;
+use cocode_protocol::ProviderType;
+use cocode_protocol::RoleSelection;
+use cocode_protocol::RoleSelections;
+use cocode_protocol::ThinkingLevel;
+use cocode_protocol::TokenUsage;
+use cocode_protocol::model::ModelRole;
 use cocode_skill::SkillInterface;
 use cocode_tools::ToolRegistry;
+
+use cocode_api::thinking_convert;
 use hyper_sdk::Provider;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info};
+use tracing::debug;
+use tracing::info;
 
 use crate::session::Session;
 
@@ -47,12 +62,10 @@ impl TurnResult {
         Self {
             final_text: result.final_text.clone(),
             turns_completed: result.turns_completed,
-            usage: TokenUsage {
-                input_tokens: result.total_input_tokens,
-                output_tokens: result.total_output_tokens,
-                cache_read_tokens: None,
-                cache_creation_tokens: None,
-            },
+            usage: TokenUsage::new(
+                result.total_input_tokens as i64,
+                result.total_output_tokens as i64,
+            ),
             has_pending_tools: false,
             is_complete: true,
         }
@@ -113,6 +126,9 @@ pub struct SessionState {
     /// API client for model inference.
     api_client: ApiClient,
 
+    /// Model for inference.
+    model: Arc<dyn hyper_sdk::Model>,
+
     /// Cancellation token for graceful shutdown.
     cancel_token: CancellationToken,
 
@@ -130,6 +146,12 @@ pub struct SessionState {
 
     /// Context window size for the model.
     context_window: i32,
+
+    /// Runtime role selections (model + thinking_level per role).
+    current_selections: RoleSelections,
+
+    /// Provider type for the current session.
+    provider_type: ProviderType,
 }
 
 impl SessionState {
@@ -157,8 +179,9 @@ impl SessionState {
             .and_then(|m| m.info.context_window)
             .unwrap_or(200_000) as i32;
 
-        // Create API client
-        let api_client = Self::create_api_client(&provider_info, &session.model)?;
+        // Create API client and model
+        let (api_client, model) =
+            Self::create_api_client_and_model(&provider_info, &session.model)?;
 
         // Create tool registry with built-in tools
         let mut tool_registry = ToolRegistry::new();
@@ -176,6 +199,12 @@ impl SessionState {
             ..LoopConfig::default()
         };
 
+        // Store provider type
+        let provider_type = provider_info.provider_type;
+
+        // Initialize role selections from config
+        let current_selections = config.current_selections();
+
         Ok(Self {
             session,
             message_history: MessageHistory::new(),
@@ -183,24 +212,30 @@ impl SessionState {
             hook_registry: Arc::new(hook_registry),
             skills,
             api_client,
+            model,
             cancel_token: CancellationToken::new(),
             loop_config,
             total_turns: 0,
             total_input_tokens: 0,
             total_output_tokens: 0,
             context_window,
+            current_selections,
+            provider_type,
         })
     }
 
-    /// Create an API client from provider info and model.
-    fn create_api_client(
+    /// Create an API client and model from provider info.
+    ///
+    /// Returns both the model-agnostic ApiClient and the provider-specific Model.
+    fn create_api_client_and_model(
         provider_info: &cocode_protocol::ProviderInfo,
         model: &str,
-    ) -> anyhow::Result<ApiClient> {
-        use hyper_sdk::providers::{
-            anthropic::AnthropicConfig, gemini::GeminiConfig, openai::OpenAIConfig,
-            volcengine::VolcengineConfig, zai::ZaiConfig,
-        };
+    ) -> anyhow::Result<(ApiClient, Arc<dyn hyper_sdk::Model>)> {
+        use hyper_sdk::providers::anthropic::AnthropicConfig;
+        use hyper_sdk::providers::gemini::GeminiConfig;
+        use hyper_sdk::providers::openai::OpenAIConfig;
+        use hyper_sdk::providers::volcengine::VolcengineConfig;
+        use hyper_sdk::providers::zai::ZaiConfig;
 
         // Get provider model info
         let provider_model = provider_info.get_model(model).ok_or_else(|| {
@@ -278,7 +313,7 @@ impl SessionState {
             }
         };
 
-        Ok(ApiClient::new(model))
+        Ok((ApiClient::new(), model))
     }
 
     /// Run a single turn with the given user input.
@@ -328,6 +363,7 @@ impl SessionState {
         // Build and run the agent loop
         let mut loop_instance = AgentLoop::builder()
             .api_client(self.api_client.clone())
+            .model(self.model.clone())
             .tool_registry(self.tool_registry.clone())
             .context(context)
             .config(self.loop_config.clone())
@@ -460,6 +496,185 @@ impl SessionState {
     pub fn loop_config(&self) -> &LoopConfig {
         &self.loop_config
     }
+
+    // ==========================================================
+    // Role Selection API
+    // ==========================================================
+
+    /// Get all current role selections.
+    pub fn selections(&self) -> &RoleSelections {
+        &self.current_selections
+    }
+
+    /// Get selection for a specific role.
+    pub fn selection(&self, role: ModelRole) -> Option<&RoleSelection> {
+        self.current_selections.get(role)
+    }
+
+    /// Get thinking level for a specific role.
+    ///
+    /// Returns the explicitly set thinking level for this role, or None
+    /// if no override is set (model's default will be used).
+    pub fn thinking_level(&self, role: ModelRole) -> Option<&ThinkingLevel> {
+        self.current_selections
+            .get(role)
+            .and_then(|s| s.thinking_level.as_ref())
+    }
+
+    /// Get the provider type for this session.
+    pub fn provider_type(&self) -> ProviderType {
+        self.provider_type
+    }
+
+    /// Switch model for a specific role.
+    ///
+    /// This updates the role selection and recreates the API client if needed.
+    /// Note: For now, this only updates the selection. Full model switching
+    /// with client recreation will be implemented when multi-model support
+    /// is added to the agent loop.
+    pub fn switch_role(&mut self, role: ModelRole, selection: RoleSelection) {
+        info!(
+            role = %role,
+            model = %selection.model,
+            thinking = ?selection.thinking_level,
+            "Switching role"
+        );
+        self.current_selections.set(role, selection);
+    }
+
+    /// Switch only the thinking level for a specific role.
+    ///
+    /// This updates the thinking level without changing the model.
+    /// Returns `true` if the role selection exists and was updated.
+    pub fn switch_thinking_level(&mut self, role: ModelRole, level: ThinkingLevel) -> bool {
+        info!(
+            role = %role,
+            thinking = %level,
+            "Switching thinking level for role"
+        );
+        self.current_selections.set_thinking_level(role, level)
+    }
+
+    /// Clear thinking level override for a specific role.
+    ///
+    /// Returns `true` if the role selection exists and was updated.
+    pub fn clear_thinking_level(&mut self, role: ModelRole) -> bool {
+        if let Some(selection) = self.current_selections.get_mut(role) {
+            selection.clear_thinking_level();
+            info!(role = %role, "Cleared thinking level for role");
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Build provider options from current thinking level for a role.
+    ///
+    /// Returns the provider-specific options needed to configure thinking
+    /// for the current session's provider, or None if no thinking is configured.
+    ///
+    /// Note: If `model_info` is None, default ModelInfo is used, which means
+    /// no reasoning_summary or include_thoughts overrides will be applied.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Get options for main role with model info
+    /// if let Some(opts) = state.build_thinking_options(ModelRole::Main, Some(&model_info)) {
+    ///     request = request.provider_options(opts);
+    /// }
+    /// ```
+    pub fn build_thinking_options(
+        &self,
+        role: ModelRole,
+        model_info: Option<&cocode_protocol::ModelInfo>,
+    ) -> Option<hyper_sdk::options::ProviderOptions> {
+        let thinking_level = self.thinking_level(role)?;
+        let default_model_info = cocode_protocol::ModelInfo::default();
+        let model_info = model_info.unwrap_or(&default_model_info);
+        thinking_convert::to_provider_options(thinking_level, model_info, self.provider_type)
+    }
+
+    // ==========================================================
+    // Streaming Turn API
+    // ==========================================================
+
+    /// Run a single turn with the given user input, streaming events to the provided channel.
+    ///
+    /// This is similar to `run_turn` but forwards all events to the provided channel
+    /// instead of handling them internally. This enables real-time streaming to a TUI
+    /// or other consumer.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use tokio::sync::mpsc;
+    /// use cocode_protocol::LoopEvent;
+    ///
+    /// let (event_tx, mut event_rx) = mpsc::channel::<LoopEvent>(256);
+    ///
+    /// // Spawn task to handle events
+    /// tokio::spawn(async move {
+    ///     while let Some(event) = event_rx.recv().await {
+    ///         // Process event (update TUI, etc.)
+    ///     }
+    /// });
+    ///
+    /// let result = state.run_turn_streaming("Hello!", event_tx).await?;
+    /// ```
+    pub async fn run_turn_streaming(
+        &mut self,
+        user_input: &str,
+        event_tx: mpsc::Sender<LoopEvent>,
+    ) -> anyhow::Result<TurnResult> {
+        info!(
+            session_id = %self.session.id,
+            input_len = user_input.len(),
+            "Running turn with streaming"
+        );
+
+        // Update session activity
+        self.session.touch();
+
+        // Build environment info
+        let environment = EnvironmentInfo::builder()
+            .cwd(&self.session.working_dir)
+            .model(&self.session.model)
+            .context_window(self.context_window)
+            .output_token_limit(16_384)
+            .build()
+            .map_err(|e| anyhow::anyhow!("Failed to build environment: {e}"))?;
+
+        // Build conversation context
+        let context = ConversationContext::builder()
+            .environment(environment)
+            .tool_names(self.tool_registry.tool_names())
+            .build()
+            .map_err(|e| anyhow::anyhow!("Failed to build context: {e}"))?;
+
+        // Build and run the agent loop with the provided event channel
+        let mut loop_instance = AgentLoop::builder()
+            .api_client(self.api_client.clone())
+            .model(self.model.clone())
+            .tool_registry(self.tool_registry.clone())
+            .context(context)
+            .config(self.loop_config.clone())
+            .fallback_config(FallbackConfig::default())
+            .compaction_config(CompactionConfig::default())
+            .hooks(self.hook_registry.clone())
+            .event_tx(event_tx)
+            .cancel_token(self.cancel_token.clone())
+            .build();
+
+        let result = loop_instance.run(user_input).await?;
+
+        // Update totals
+        self.total_turns += result.turns_completed;
+        self.total_input_tokens += result.total_input_tokens;
+        self.total_output_tokens += result.total_output_tokens;
+
+        Ok(TurnResult::from_loop_result(&result))
+    }
 }
 
 #[cfg(test)]
@@ -490,12 +705,7 @@ mod tests {
         let turn = TurnResult {
             final_text: "test".to_string(),
             turns_completed: 5,
-            usage: TokenUsage {
-                input_tokens: 100,
-                output_tokens: 50,
-                cache_read_tokens: None,
-                cache_creation_tokens: None,
-            },
+            usage: TokenUsage::new(100, 50),
             has_pending_tools: false,
             is_complete: true,
         };

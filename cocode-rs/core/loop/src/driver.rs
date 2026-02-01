@@ -3,27 +3,81 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use cocode_api::{ApiClient, CollectedResponse, QueryResultType, StreamOptions};
+use cocode_api::ApiClient;
+use cocode_api::CollectedResponse;
+use cocode_api::QueryResultType;
+use cocode_api::StreamOptions;
 use cocode_context::ConversationContext;
+use cocode_hooks::AsyncHookTracker;
 use cocode_hooks::HookRegistry;
-use cocode_message::{MessageHistory, TrackedMessage, Turn};
+use cocode_message::MessageHistory;
+use cocode_message::TrackedMessage;
+use cocode_message::Turn;
 use cocode_prompt::SystemPromptBuilder;
-use cocode_protocol::{
-    AutoCompactTracking, LoopConfig, LoopEvent, QueryTracking, TokenUsage, ToolResultContent,
-};
-use cocode_tools::{ExecutorConfig, StreamingToolExecutor, ToolExecutionResult, ToolRegistry};
-use hyper_sdk::{ContentBlock, FinishReason, GenerateRequest, Message, ToolCall, ToolDefinition};
+use cocode_protocol::AutoCompactTracking;
+use cocode_protocol::CompactConfig;
+use cocode_protocol::HookEventType;
+use cocode_protocol::LoopConfig;
+use cocode_protocol::LoopEvent;
+use cocode_protocol::QueryTracking;
+use cocode_protocol::TokenUsage;
+use cocode_protocol::ToolResultContent;
+use cocode_skill::SkillManager;
+use cocode_system_reminder::FileTracker;
+use cocode_system_reminder::GeneratorContext;
+use cocode_system_reminder::SystemReminderConfig;
+use cocode_system_reminder::SystemReminderOrchestrator;
+use cocode_system_reminder::combine_reminders;
+use cocode_system_reminder::generators::ASYNC_HOOK_RESPONSES_KEY;
+use cocode_system_reminder::generators::AVAILABLE_SKILLS_KEY;
+use cocode_system_reminder::generators::AsyncHookResponseInfo;
+use cocode_system_reminder::generators::HOOK_BLOCKING_KEY;
+use cocode_system_reminder::generators::HOOK_CONTEXT_KEY;
+use cocode_system_reminder::generators::HookBlockingInfo;
+use cocode_system_reminder::generators::HookContextInfo;
+use cocode_system_reminder::generators::SkillInfo;
+use cocode_tools::ExecutorConfig;
+use cocode_tools::FileTracker as ToolsFileTracker;
+use cocode_tools::SpawnAgentFn;
+use cocode_tools::StreamingToolExecutor;
+use cocode_tools::ToolExecutionResult;
+use cocode_tools::ToolRegistry;
+use hyper_sdk::ContentBlock;
+use hyper_sdk::FinishReason;
+use hyper_sdk::GenerateRequest;
+use hyper_sdk::Message;
+use hyper_sdk::Model;
+use hyper_sdk::ToolCall;
+use hyper_sdk::ToolDefinition;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::debug;
+use tracing::info;
+use tracing::warn;
 
 use crate::compaction::CompactionConfig;
-use crate::fallback::{FallbackConfig, FallbackState};
+use crate::compaction::InvokedSkillRestoration;
+use crate::compaction::SessionMemorySummary;
+use crate::compaction::TaskStatusRestoration;
+use crate::compaction::ThresholdStatus;
+use crate::compaction::build_compact_instructions;
+use crate::compaction::calculate_keep_start_index;
+use crate::compaction::map_message_index_to_keep_turns;
+use crate::compaction::try_session_memory_compact;
+use crate::compaction::write_session_memory;
+use crate::fallback::FallbackConfig;
+use crate::fallback::FallbackState;
 use crate::result::LoopResult;
+use crate::session_memory_agent::SessionMemoryExtractionAgent;
+use cocode_plan_mode::PlanModeState;
 
 /// Offset from the context window limit to determine the blocking threshold.
 /// If estimated tokens >= context_window - BLOCKING_LIMIT_OFFSET, the loop
 /// refuses to call the API.
+///
+/// Note: This constant is kept for backwards compatibility and test assertions.
+/// The actual blocking limit is now calculated by `CompactConfig::blocking_limit()`.
+#[allow(dead_code)]
 const BLOCKING_LIMIT_OFFSET: i32 = 13_000;
 
 /// Maximum number of retry attempts for output-token exhaustion recovery.
@@ -36,6 +90,7 @@ const MAX_OUTPUT_TOKEN_RECOVERY: i32 = 3;
 pub struct AgentLoop {
     // Provider / model
     api_client: ApiClient,
+    model: Arc<dyn Model>,
 
     // Tool system
     tool_registry: Arc<ToolRegistry>,
@@ -48,9 +103,21 @@ pub struct AgentLoop {
     config: LoopConfig,
     fallback_config: FallbackConfig,
     compaction_config: CompactionConfig,
+    /// Protocol-level compact configuration with all threshold constants.
+    compact_config: CompactConfig,
+
+    // System reminders
+    reminder_orchestrator: SystemReminderOrchestrator,
+    /// FileTracker for system reminders (change detection).
+    file_tracker: FileTracker,
+    /// Shared FileTracker for tool execution (persists across turns).
+    /// This is synced to `file_tracker` before generating reminders.
+    shared_tools_file_tracker: Arc<tokio::sync::Mutex<ToolsFileTracker>>,
 
     // Hooks
     hooks: Arc<HookRegistry>,
+    /// Shared async hook tracker (persists across turns for background hooks).
+    async_hook_tracker: Arc<AsyncHookTracker>,
 
     // Event channel
     event_tx: mpsc::Sender<LoopEvent>,
@@ -61,20 +128,51 @@ pub struct AgentLoop {
     fallback_state: FallbackState,
     total_input_tokens: i32,
     total_output_tokens: i32,
+
+    // Background extraction agent (optional)
+    extraction_agent: Option<Arc<SessionMemoryExtractionAgent>>,
+
+    // Agent type tracking (for tier filtering in system reminders)
+    /// Whether this is a subagent (spawned by Task tool).
+    /// When true, MainAgentOnly tier reminders are skipped.
+    is_subagent: bool,
+    /// Whether the current turn has user input.
+    /// When false, UserPrompt tier reminders are skipped.
+    current_turn_has_user_input: bool,
+
+    // Plan mode tracking
+    /// Plan mode state for the session.
+    plan_mode_state: PlanModeState,
+
+    // Subagent spawning
+    /// Optional callback for spawning subagents (used by Task tool).
+    spawn_agent_fn: Option<SpawnAgentFn>,
+
+    // Skill system
+    /// Optional skill manager for loading and executing skills.
+    skill_manager: Option<Arc<SkillManager>>,
 }
 
 /// Builder for constructing an [`AgentLoop`].
 pub struct AgentLoopBuilder {
     api_client: Option<ApiClient>,
+    model: Option<Arc<dyn Model>>,
     tool_registry: Option<Arc<ToolRegistry>>,
     message_history: Option<MessageHistory>,
     context: Option<ConversationContext>,
     config: LoopConfig,
     fallback_config: FallbackConfig,
     compaction_config: CompactionConfig,
+    compact_config: CompactConfig,
+    system_reminder_config: SystemReminderConfig,
     hooks: Option<Arc<HookRegistry>>,
     event_tx: Option<mpsc::Sender<LoopEvent>>,
     cancel_token: CancellationToken,
+    extraction_agent: Option<Arc<SessionMemoryExtractionAgent>>,
+    is_subagent: bool,
+    plan_mode_state: Option<PlanModeState>,
+    spawn_agent_fn: Option<SpawnAgentFn>,
+    skill_manager: Option<Arc<SkillManager>>,
 }
 
 impl AgentLoopBuilder {
@@ -82,20 +180,34 @@ impl AgentLoopBuilder {
     pub fn new() -> Self {
         Self {
             api_client: None,
+            model: None,
             tool_registry: None,
             message_history: None,
             context: None,
             config: LoopConfig::default(),
             fallback_config: FallbackConfig::default(),
             compaction_config: CompactionConfig::default(),
+            compact_config: CompactConfig::default(),
+            system_reminder_config: SystemReminderConfig::default(),
             hooks: None,
             event_tx: None,
             cancel_token: CancellationToken::new(),
+            extraction_agent: None,
+            is_subagent: false,
+            plan_mode_state: None,
+            spawn_agent_fn: None,
+            skill_manager: None,
         }
     }
 
     pub fn api_client(mut self, client: ApiClient) -> Self {
         self.api_client = Some(client);
+        self
+    }
+
+    /// Set the model for API calls.
+    pub fn model(mut self, model: Arc<dyn Model>) -> Self {
+        self.model = Some(model);
         self
     }
 
@@ -129,6 +241,18 @@ impl AgentLoopBuilder {
         self
     }
 
+    /// Set the protocol-level compact configuration.
+    pub fn compact_config(mut self, config: CompactConfig) -> Self {
+        self.compact_config = config;
+        self
+    }
+
+    /// Set the system reminder configuration.
+    pub fn system_reminder_config(mut self, config: SystemReminderConfig) -> Self {
+        self.system_reminder_config = config;
+        self
+    }
+
     pub fn hooks(mut self, hooks: Arc<HookRegistry>) -> Self {
         self.hooks = Some(hooks);
         self
@@ -144,11 +268,43 @@ impl AgentLoopBuilder {
         self
     }
 
+    /// Set the background session memory extraction agent.
+    pub fn extraction_agent(mut self, agent: Arc<SessionMemoryExtractionAgent>) -> Self {
+        self.extraction_agent = Some(agent);
+        self
+    }
+
+    /// Mark this loop as a subagent (spawned via Task tool).
+    ///
+    /// Subagents skip MainAgentOnly tier system reminders.
+    pub fn is_subagent(mut self, is_subagent: bool) -> Self {
+        self.is_subagent = is_subagent;
+        self
+    }
+
+    /// Set initial plan mode state (for session resumption).
+    pub fn plan_mode_state(mut self, state: PlanModeState) -> Self {
+        self.plan_mode_state = Some(state);
+        self
+    }
+
+    /// Set the spawn agent callback for the Task tool.
+    pub fn spawn_agent_fn(mut self, f: SpawnAgentFn) -> Self {
+        self.spawn_agent_fn = Some(f);
+        self
+    }
+
+    /// Set the skill manager for loading and executing skills.
+    pub fn skill_manager(mut self, manager: Arc<SkillManager>) -> Self {
+        self.skill_manager = Some(manager);
+        self
+    }
+
     /// Build the [`AgentLoop`].
     ///
     /// # Panics
-    /// Panics if required fields (`api_client`, `tool_registry`, `context`,
-    /// `event_tx`) have not been set.
+    /// Panics if required fields (`api_client`, `model`, `tool_registry`,
+    /// `context`, `event_tx`) have not been set.
     pub fn build(self) -> AgentLoop {
         let model_name = self
             .config
@@ -156,21 +312,40 @@ impl AgentLoopBuilder {
             .clone()
             .unwrap_or_else(|| "unknown".to_string());
 
+        // Create system reminder components
+        let reminder_orchestrator = SystemReminderOrchestrator::new(self.system_reminder_config);
+        let file_tracker = FileTracker::new();
+        // Create shared file tracker for tool execution (persists across turns)
+        let shared_tools_file_tracker = Arc::new(tokio::sync::Mutex::new(ToolsFileTracker::new()));
+
         AgentLoop {
             api_client: self.api_client.expect("api_client is required"),
+            model: self.model.expect("model is required"),
             tool_registry: self.tool_registry.expect("tool_registry is required"),
             message_history: self.message_history.unwrap_or_default(),
             context: self.context.expect("context is required"),
             config: self.config,
             fallback_config: self.fallback_config,
             compaction_config: self.compaction_config,
+            compact_config: self.compact_config,
+            reminder_orchestrator,
+            file_tracker,
+            shared_tools_file_tracker,
             hooks: self.hooks.unwrap_or_else(|| Arc::new(HookRegistry::new())),
+            async_hook_tracker: Arc::new(AsyncHookTracker::new()),
             event_tx: self.event_tx.expect("event_tx is required"),
             turn_number: 0,
             cancel_token: self.cancel_token,
             fallback_state: FallbackState::new(model_name),
             total_input_tokens: 0,
             total_output_tokens: 0,
+            extraction_agent: self.extraction_agent,
+            is_subagent: self.is_subagent,
+            // Initially true - the first turn always has user input
+            current_turn_has_user_input: true,
+            plan_mode_state: self.plan_mode_state.unwrap_or_default(),
+            spawn_agent_fn: self.spawn_agent_fn,
+            skill_manager: self.skill_manager,
         }
     }
 }
@@ -202,6 +377,9 @@ impl AgentLoop {
         let user_msg = TrackedMessage::user(initial_message, &turn_id);
         let turn = Turn::new(1, user_msg);
         self.message_history.add_turn(turn);
+
+        // Mark that this turn has user input (new conversation start)
+        self.current_turn_has_user_input = true;
 
         // Initialize tracking
         let mut query_tracking = QueryTracking::new_root(uuid::Uuid::new_v4().to_string());
@@ -238,22 +416,69 @@ impl AgentLoop {
 
         // ── STEP 4: Micro-compaction (PRE-API) ──
         if self.config.enable_micro_compaction {
-            let removed = self.micro_compact();
+            let (removed, tokens_saved) = self.micro_compact();
             if removed > 0 {
                 self.emit(LoopEvent::MicroCompactionApplied {
                     removed_results: removed,
+                    tokens_saved,
                 })
                 .await;
             }
         }
 
         // ── STEP 5: Auto-compaction check ──
+        // Use ThresholdStatus for accurate threshold calculations
         let estimated_tokens = self.message_history.estimate_tokens();
         let context_window = self.context.environment.context_window;
-        let compact_threshold = (context_window as f32 * self.config.auto_compact_threshold) as i32;
 
-        if estimated_tokens >= compact_threshold {
-            self.compact(auto_compact_tracking, &turn_id).await?;
+        // Apply safety margin to token estimate
+        let estimated_with_margin = self
+            .compact_config
+            .estimate_tokens_with_margin(estimated_tokens);
+
+        let status =
+            ThresholdStatus::calculate(estimated_with_margin, context_window, &self.compact_config);
+
+        debug!(
+            estimated_tokens,
+            estimated_with_margin,
+            context_window,
+            percent_left = %format!("{:.1}%", status.percent_left * 100.0),
+            status = status.status_description(),
+            "Context usage check"
+        );
+
+        // Emit warning event if above warning but below auto-compact
+        if status.is_above_warning_threshold && !status.is_above_auto_compact_threshold {
+            let target = self.compact_config.auto_compact_target(context_window);
+            let warning_threshold = self.compact_config.warning_threshold(target);
+            self.emit(LoopEvent::ContextUsageWarning {
+                estimated_tokens: estimated_with_margin,
+                warning_threshold,
+                percent_left: status.percent_left,
+            })
+            .await;
+        }
+
+        // Trigger auto-compact if above threshold (and auto-compact is enabled)
+        if status.is_above_auto_compact_threshold && self.compact_config.is_auto_compact_enabled() {
+            // Tier 1: Try session memory first (zero API cost)
+            // Only if session memory compact is enabled
+            if self.compaction_config.session_memory.enable_sm_compact {
+                if let Some(summary) =
+                    try_session_memory_compact(&self.compaction_config.session_memory)
+                {
+                    self.apply_session_memory_summary(summary, &turn_id, auto_compact_tracking)
+                        .await?;
+                } else {
+                    // Tier 2: Fall back to LLM-based compaction
+                    self.compact(auto_compact_tracking, &turn_id).await?;
+                }
+            } else {
+                // Session memory compact disabled, go directly to Tier 2
+                debug!("Session memory compact disabled, using LLM-based compaction");
+                self.compact(auto_compact_tracking, &turn_id).await?;
+            }
         }
 
         // ── STEP 6: Initialize state ──
@@ -264,14 +489,111 @@ impl AgentLoop {
         })
         .await;
 
+        // ── STEP 6.5: Generate system reminders ──
+        // System reminders provide dynamic context (file changes, plan mode, etc.)
+        // that is visible to the model but hidden from the user.
+        //
+        // First, sync file read state from tools' FileTracker to system-reminder's FileTracker.
+        // This ensures the ChangedFilesGenerator can detect files that have been modified
+        // since they were last read by tools (Read, Glob, etc.).
+        self.sync_file_trackers().await;
+
+        // Collect completed async hooks from previous turns
+        let completed_hooks = self.async_hook_tracker.take_completed();
+        let async_responses: Vec<AsyncHookResponseInfo> = completed_hooks
+            .iter()
+            .map(|h| AsyncHookResponseInfo {
+                hook_name: h.hook_name.clone(),
+                additional_context: h.additional_context.clone(),
+                was_blocking: h.was_blocking,
+                blocking_reason: h.blocking_reason.clone(),
+                duration_ms: h.duration_ms,
+            })
+            .collect();
+
+        // Separate blocking and context hooks for their dedicated generators
+        let blocking_hooks: Vec<HookBlockingInfo> = completed_hooks
+            .iter()
+            .filter(|h| h.was_blocking)
+            .map(|h| HookBlockingInfo {
+                hook_name: h.hook_name.clone(),
+                event_type: "async".to_string(),
+                tool_name: None,
+                reason: h
+                    .blocking_reason
+                    .clone()
+                    .unwrap_or_else(|| "Hook blocked execution".to_string()),
+            })
+            .collect();
+
+        let context_hooks: Vec<HookContextInfo> = completed_hooks
+            .into_iter()
+            .filter(|h| h.additional_context.is_some() && !h.was_blocking)
+            .map(|h| HookContextInfo {
+                hook_name: h.hook_name,
+                event_type: "async".to_string(),
+                tool_name: None,
+                additional_context: h.additional_context.unwrap_or_default(),
+            })
+            .collect();
+
+        let reminder_config = self.reminder_orchestrator.config();
+        let mut gen_ctx_builder = GeneratorContext::builder()
+            .config(reminder_config)
+            .turn_number(self.turn_number)
+            .is_main_agent(!self.is_subagent)
+            .has_user_input(self.current_turn_has_user_input)
+            .context_window(self.context.environment.context_window)
+            .cwd(self.context.environment.cwd.clone())
+            .file_tracker(&self.file_tracker)
+            .is_plan_mode(self.plan_mode_state.is_active)
+            .is_plan_reentry(self.plan_mode_state.is_reentry());
+
+        // Add plan file path if in plan mode
+        if let Some(path) = self.plan_mode_state.plan_file_path.clone() {
+            gen_ctx_builder = gen_ctx_builder.plan_file_path(path);
+        }
+
+        // Add async hook responses to generator context
+        if !async_responses.is_empty() {
+            gen_ctx_builder = gen_ctx_builder.extension(ASYNC_HOOK_RESPONSES_KEY, async_responses);
+        }
+        if !blocking_hooks.is_empty() {
+            gen_ctx_builder = gen_ctx_builder.extension(HOOK_BLOCKING_KEY, blocking_hooks);
+        }
+        if !context_hooks.is_empty() {
+            gen_ctx_builder = gen_ctx_builder.extension(HOOK_CONTEXT_KEY, context_hooks);
+        }
+
+        // Add available skills to generator context for system reminders
+        if let Some(ref sm) = self.skill_manager {
+            let skill_infos: Vec<SkillInfo> = sm
+                .all()
+                .map(|skill| SkillInfo {
+                    name: skill.name.clone(),
+                    description: skill.description.clone(),
+                })
+                .collect();
+
+            if !skill_infos.is_empty() {
+                gen_ctx_builder = gen_ctx_builder.extension(AVAILABLE_SKILLS_KEY, skill_infos);
+            }
+        }
+
+        let gen_ctx = gen_ctx_builder.build();
+
+        let reminders = self.reminder_orchestrator.generate_all(&gen_ctx).await;
+        let reminder_content = combine_reminders(reminders);
+
         // ── STEP 7: Resolve model (permissions checked externally) ──
         // In this implementation, model selection is handled by ApiClient.
 
         // ── STEP 8: Check blocking token limit ──
-        let blocking_limit = context_window - BLOCKING_LIMIT_OFFSET;
-        if estimated_tokens >= blocking_limit {
+        // Use CompactConfig for blocking limit calculation
+        let blocking_limit = self.compact_config.blocking_limit(context_window);
+        if status.is_at_blocking_limit {
             warn!(
-                estimated_tokens,
+                estimated_tokens = estimated_with_margin,
                 blocking_limit, "Context window exceeded blocking limit"
             );
             return Ok(LoopResult::error(
@@ -279,9 +601,41 @@ impl AgentLoop {
                 self.total_input_tokens,
                 self.total_output_tokens,
                 format!(
-                    "Context window exceeded: {estimated_tokens} tokens >= {blocking_limit} limit"
+                    "Context window exceeded: {estimated_with_margin} tokens >= {blocking_limit} limit"
                 ),
             ));
+        }
+
+        // Create executor for this turn BEFORE streaming starts.
+        // This enables tool execution to begin DURING streaming.
+        let executor_config = ExecutorConfig {
+            session_id: query_tracking.chain_id.clone(),
+            permission_mode: self.config.permission_mode,
+            cwd: self.context.environment.cwd.clone().into(),
+            is_plan_mode: self.plan_mode_state.is_active,
+            plan_file_path: self.plan_mode_state.plan_file_path.clone(),
+            ..ExecutorConfig::default()
+        };
+        let mut executor = StreamingToolExecutor::new(
+            self.tool_registry.clone(),
+            executor_config,
+            Some(self.event_tx.clone()),
+        )
+        .with_cancel_token(self.cancel_token.clone())
+        .with_hooks(self.hooks.clone())
+        // Share the file tracker across turns for change detection
+        .with_file_tracker(self.shared_tools_file_tracker.clone())
+        // Share async hook tracker for background hook completion tracking
+        .with_async_hook_tracker(self.async_hook_tracker.clone());
+
+        // Add spawn_agent_fn if available for Task tool
+        if let Some(ref spawn_fn) = self.spawn_agent_fn {
+            executor = executor.with_spawn_agent_fn(spawn_fn.clone());
+        }
+
+        // Add skill_manager if available for Skill tool
+        if let Some(ref sm) = self.skill_manager {
+            executor = executor.with_skill_manager(sm.clone());
         }
 
         // ── STEP 9: Main API streaming loop with retry ──
@@ -295,7 +649,10 @@ impl AgentLoop {
                 ));
             }
 
-            match self.stream_with_tools(&turn_id).await {
+            match self
+                .stream_with_tools(&turn_id, &executor, reminder_content.as_deref())
+                .await
+            {
                 Ok(collected) => break collected,
                 Err(e) => {
                     // Check if retriable (output token exhaustion)
@@ -316,8 +673,8 @@ impl AgentLoop {
 
         // ── STEP 10: Record API call info ──
         if let Some(usage) = &collected.usage {
-            self.total_input_tokens += usage.input_tokens;
-            self.total_output_tokens += usage.output_tokens;
+            self.total_input_tokens += usage.input_tokens as i32;
+            self.total_output_tokens += usage.output_tokens as i32;
         }
 
         let usage = collected.usage.clone().unwrap_or_default();
@@ -351,6 +708,8 @@ impl AgentLoop {
 
         // ── STEP 11: Check for tool calls ──
         // ── STEP 12: Execute tool queue ──
+        // Tool execution already started DURING streaming for safe tools.
+        // Now we execute pending unsafe tools and collect all results.
         if has_tool_calls {
             let tool_calls: Vec<_> = collected
                 .content
@@ -363,29 +722,10 @@ impl AgentLoop {
                 })
                 .collect();
 
-            // Create executor for this turn
-            let executor_config = ExecutorConfig {
-                session_id: query_tracking.chain_id.clone(),
-                permission_mode: self.config.permission_mode,
-                ..ExecutorConfig::default()
-            };
-            let executor = StreamingToolExecutor::new(
-                self.tool_registry.clone(),
-                executor_config,
-                Some(self.event_tx.clone()),
-            )
-            .with_cancel_token(self.cancel_token.clone())
-            .with_hooks(self.hooks.clone());
-
-            // Submit all tool calls
-            for tc in &tool_calls {
-                executor.on_tool_complete(tc.clone()).await;
-            }
-
-            // Execute pending unsafe tools
+            // Execute pending unsafe tools (safe tools already started during streaming)
             executor.execute_pending_unsafe().await;
 
-            // Drain results
+            // Drain all results (both from streaming and unsafe execution)
             let results = executor.drain().await;
 
             // ── STEP 13: Handle abort after tool execution ──
@@ -400,6 +740,59 @@ impl AgentLoop {
 
             // Add tool results to history - use proper tool_result messages
             self.add_tool_results_to_history(&results, &tool_calls);
+
+            // ── Handle plan mode transitions ──
+            // Check if EnterPlanMode or ExitPlanMode was called
+            for tc in &tool_calls {
+                match tc.name.as_str() {
+                    "EnterPlanMode" => {
+                        // Find the result for this tool call to extract plan file path
+                        if let Some(result) = results.iter().find(|r| r.call_id == tc.id) {
+                            if let Ok(output) = &result.result {
+                                // Extract plan file path from output
+                                // The output is text containing "Plan file: /path/to/file"
+                                if let ToolResultContent::Text(text) = &output.content {
+                                    if let Some(path_line) =
+                                        text.lines().find(|l| l.starts_with("Plan file:"))
+                                    {
+                                        let path_str =
+                                            path_line.trim_start_matches("Plan file:").trim();
+                                        let path = std::path::PathBuf::from(path_str);
+                                        let slug = path
+                                            .file_stem()
+                                            .and_then(|s| s.to_str())
+                                            .unwrap_or("plan")
+                                            .to_string();
+                                        self.plan_mode_state.enter(path, slug, self.turn_number);
+                                        info!(turn = self.turn_number, "Entered plan mode");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    "ExitPlanMode" => {
+                        // Update plan mode state
+                        self.plan_mode_state.exit(self.turn_number);
+                        info!(turn = self.turn_number, "Exited plan mode");
+
+                        // Return with plan mode exit stop reason
+                        // Note: approval is false until user confirms
+                        return Ok(LoopResult::plan_mode_exit(
+                            self.turn_number,
+                            self.total_input_tokens,
+                            self.total_output_tokens,
+                            false, // approved = false, awaiting user approval
+                            collected.content,
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+
+            // Track tool calls for extraction triggering
+            for _ in &tool_calls {
+                auto_compact_tracking.record_tool_call();
+            }
         }
 
         // ── STEP 14: Check for hook stop ──
@@ -407,6 +800,67 @@ impl AgentLoop {
 
         // ── STEP 15: Update auto-compact tracking ──
         auto_compact_tracking.turn_counter += 1;
+
+        // ── STEP 15.5: Check session memory extraction trigger ──
+        // This runs a background agent to proactively update summary.md
+        if let Some(ref extraction_agent) = self.extraction_agent {
+            let estimated_tokens = self.message_history.estimate_tokens();
+            let is_compacting = false; // We're not currently in a compaction
+
+            if extraction_agent.should_trigger(
+                auto_compact_tracking,
+                estimated_tokens,
+                is_compacting,
+            ) {
+                // Build conversation text for extraction
+                let messages = self.message_history.messages_for_api();
+                let conversation_text: String = messages
+                    .iter()
+                    .map(|m| format!("{:?}", m))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                let current_tokens = estimated_tokens;
+                let tool_calls_since = auto_compact_tracking.tool_calls_since_extraction();
+                let last_message_id = turn_id.clone();
+                let message_count = messages.len() as i32;
+
+                // Mark extraction as started
+                auto_compact_tracking.mark_extraction_started();
+
+                // Clone what we need for the background task
+                let agent = Arc::clone(extraction_agent);
+                let tracking_current_tokens = current_tokens;
+
+                // Spawn extraction in background (non-blocking)
+                tokio::spawn(async move {
+                    match agent
+                        .run_extraction(
+                            &conversation_text,
+                            tracking_current_tokens,
+                            tool_calls_since,
+                            &last_message_id,
+                            message_count,
+                        )
+                        .await
+                    {
+                        Ok(result) => {
+                            debug!(
+                                summary_tokens = result.summary_tokens,
+                                last_id = %result.last_summarized_id,
+                                "Background extraction completed"
+                            );
+                            // Note: We can't update auto_compact_tracking here since
+                            // it's owned by the main loop. The next turn will see
+                            // the updated summary.md file.
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "Background extraction failed");
+                        }
+                    }
+                });
+            }
+        }
 
         // ── STEP 16: Process queued commands and attachments ──
         // Deferred to future sessions.
@@ -440,6 +894,8 @@ impl AgentLoop {
                 collected.content,
             )),
             FinishReason::ToolCalls => {
+                // Tool call turns don't have fresh user input - only tool results
+                self.current_turn_has_user_input = false;
                 // Recursive call for next turn (boxed to avoid infinite future size)
                 Box::pin(self.core_message_loop(query_tracking, auto_compact_tracking)).await
             }
@@ -470,14 +926,30 @@ impl AgentLoop {
     ///
     /// Uses `ApiClient::stream_request()` with tool definitions from the
     /// registry. Includes stall detection based on `stall_detection` config.
-    async fn stream_with_tools(&mut self, turn_id: &str) -> anyhow::Result<CollectedResponse> {
-        let request = self.build_request()?;
+    ///
+    /// **Key feature**: Tool execution starts DURING streaming. When a ToolUse
+    /// block is received, safe tools begin execution immediately via the
+    /// executor. This enables concurrent tool execution while the LLM continues
+    /// generating output.
+    ///
+    /// # Arguments
+    ///
+    /// * `turn_id` - Unique identifier for this turn
+    /// * `executor` - Tool executor for handling tool calls
+    /// * `reminder_content` - Optional system reminder content to inject
+    async fn stream_with_tools(
+        &mut self,
+        turn_id: &str,
+        executor: &StreamingToolExecutor,
+        reminder_content: Option<&str>,
+    ) -> anyhow::Result<CollectedResponse> {
+        let request = self.build_request(reminder_content)?;
 
         debug!(turn_id, "Sending API request");
 
         let mut stream = self
             .api_client
-            .stream_request(request, StreamOptions::streaming())
+            .stream_request(&*self.model, request, StreamOptions::streaming())
             .await
             .map_err(|e| anyhow::anyhow!("API stream error: {e}"))?;
 
@@ -575,7 +1047,7 @@ impl AgentLoop {
 
             match result.result_type {
                 QueryResultType::Assistant => {
-                    // Emit text deltas for UI
+                    // Emit text deltas for UI and process tool uses DURING streaming
                     for block in &result.content {
                         match block {
                             ContentBlock::Text { text } if !text.is_empty() => {
@@ -591,6 +1063,14 @@ impl AgentLoop {
                                     delta: content.clone(),
                                 })
                                 .await;
+                            }
+                            ContentBlock::ToolUse {
+                                id, name, input, ..
+                            } => {
+                                // Start tool execution DURING streaming!
+                                // Safe tools begin immediately; unsafe tools are queued.
+                                let tool_call = ToolCall::new(id, name, input.clone());
+                                executor.on_tool_complete(tool_call).await;
                             }
                             _ => {}
                         }
@@ -649,7 +1129,14 @@ impl AgentLoop {
     }
 
     /// Build the API request from current context, history, and tools.
-    fn build_request(&self) -> anyhow::Result<GenerateRequest> {
+    ///
+    /// # Arguments
+    ///
+    /// * `reminder_content` - Optional system reminder content to inject as a
+    ///   user message. These are dynamic contextual hints (file changes, plan
+    ///   mode instructions, etc.) that are visible to the model but hidden from
+    ///   the user interface.
+    fn build_request(&self, reminder_content: Option<&str>) -> anyhow::Result<GenerateRequest> {
         // Build system prompt
         let system_prompt = SystemPromptBuilder::build(&self.context);
 
@@ -658,6 +1145,13 @@ impl AgentLoop {
 
         // Build request with system, messages, and tools
         let mut all_messages = vec![Message::system(&system_prompt)];
+
+        // Inject system reminders as a user message before the conversation
+        // This provides dynamic context (file changes, plan mode, etc.)
+        if let Some(content) = reminder_content {
+            all_messages.push(Message::user(content));
+        }
+
         all_messages.extend(messages);
 
         // Get tool definitions
@@ -678,19 +1172,97 @@ impl AgentLoop {
 
     /// Micro-compaction: remove old tool results to save tokens (no LLM call).
     ///
-    /// Returns the number of tool results compacted.
-    fn micro_compact(&mut self) -> i32 {
-        self.message_history
-            .micro_compact(crate::compaction::RECENT_TOOL_RESULTS_TO_KEEP)
+    /// Uses `ThresholdStatus` to determine if micro-compaction is needed based on
+    /// current context usage relative to the warning threshold.
+    ///
+    /// Returns a tuple of (removed_count, tokens_saved).
+    fn micro_compact(&mut self) -> (i32, i32) {
+        // Check if micro-compact is enabled
+        if !self.compact_config.is_micro_compact_enabled() {
+            return (0, 0);
+        }
+
+        let tokens_before = self.message_history.estimate_tokens();
+        let context_window = self.context.environment.context_window;
+
+        // Use ThresholdStatus to check if we're above warning threshold
+        let status =
+            ThresholdStatus::calculate(tokens_before, context_window, &self.compact_config);
+
+        if !status.is_above_warning_threshold {
+            debug!(
+                tokens_before,
+                status = status.status_description(),
+                "Below warning threshold, skipping micro-compact"
+            );
+            return (0, 0);
+        }
+
+        // Apply micro-compaction using configured recent_tool_results_to_keep
+        let keep_count = self.compact_config.recent_tool_results_to_keep;
+        let removed = self.message_history.micro_compact(keep_count);
+
+        // Calculate tokens saved
+        let tokens_after = self.message_history.estimate_tokens();
+        let tokens_saved = tokens_before - tokens_after;
+
+        debug!(
+            removed,
+            tokens_before, tokens_after, tokens_saved, "Micro-compaction complete"
+        );
+
+        (removed, tokens_saved)
     }
 
     /// Run auto-compaction (LLM-based summarization).
+    ///
+    /// Uses the 9-section compact instructions from `build_compact_instructions()`
+    /// to generate a comprehensive conversation summary.
+    ///
+    /// Before compaction begins, PreCompact hooks are executed. If any hook
+    /// returns `Reject`, compaction is skipped and the rejection is logged.
     async fn compact(
         &mut self,
         tracking: &mut AutoCompactTracking,
         turn_id: &str,
     ) -> anyhow::Result<()> {
+        // Execute PreCompact hooks before starting compaction
+        let hook_ctx = cocode_hooks::HookContext::new(
+            cocode_hooks::HookEventType::PreCompact,
+            turn_id.to_string(),
+            self.context.environment.cwd.clone(),
+        );
+
+        let outcomes = self.hooks.execute(&hook_ctx).await;
+
+        // Check if any hook rejected compaction
+        for outcome in &outcomes {
+            // Emit HookExecuted event for each hook
+            self.emit(LoopEvent::HookExecuted {
+                hook_type: HookEventType::PreCompact,
+                hook_name: outcome.hook_name.clone(),
+            })
+            .await;
+
+            if let cocode_hooks::HookResult::Reject { reason } = &outcome.result {
+                info!(
+                    hook_name = %outcome.hook_name,
+                    reason = %reason,
+                    "Compaction skipped by hook"
+                );
+                self.emit(LoopEvent::CompactionSkippedByHook {
+                    hook_name: outcome.hook_name.clone(),
+                    reason: reason.clone(),
+                })
+                .await;
+                return Ok(());
+            }
+        }
+
         self.emit(LoopEvent::CompactionStarted).await;
+
+        // Estimate tokens before compaction
+        let tokens_before = self.message_history.estimate_tokens();
 
         // Build summarization prompt from conversation text
         let messages = self.message_history.messages_for_api();
@@ -700,46 +1272,376 @@ impl AgentLoop {
             .collect::<Vec<_>>()
             .join("\n");
 
-        let (system_prompt, user_prompt) =
-            SystemPromptBuilder::build_summarization(&conversation_text, None);
+        // Use the 9-section compact instructions
+        let max_output_tokens = self.compact_config.max_compact_output_tokens;
+        let system_prompt = build_compact_instructions(max_output_tokens);
 
-        // Use the API client to get a summary
-        let summary_messages = vec![Message::system(&system_prompt), Message::user(&user_prompt)];
-        let summary_request = GenerateRequest::new(summary_messages);
+        // Fallback to legacy prompt builder if available
+        let (_, user_prompt) = SystemPromptBuilder::build_summarization(&conversation_text, None);
 
-        let response = self
-            .api_client
-            .generate(summary_request)
-            .await
-            .map_err(|e| anyhow::anyhow!("Compaction API error: {e}"))?;
+        // Use the API client to get a summary with retry mechanism
+        let max_retries = self.compact_config.max_summary_retries;
+        let mut attempt = 0;
+        let mut last_error = String::new();
 
-        // Extract summary text
-        let summary_text: String = response
-            .content
+        let summary_text = loop {
+            attempt += 1;
+
+            // Build request for each attempt
+            let summary_messages =
+                vec![Message::system(&system_prompt), Message::user(&user_prompt)];
+            let mut summary_request = GenerateRequest::new(summary_messages);
+            summary_request.max_tokens = Some(max_output_tokens);
+
+            match self
+                .api_client
+                .generate(&*self.model, summary_request)
+                .await
+            {
+                Ok(response) => {
+                    // Extract summary text
+                    let text: String = response
+                        .content
+                        .iter()
+                        .filter_map(|b| match b {
+                            ContentBlock::Text { text } => Some(text.as_str()),
+                            _ => None,
+                        })
+                        .collect();
+
+                    if text.is_empty() {
+                        last_error = "Empty summary produced".to_string();
+                        if attempt <= max_retries {
+                            // Exponential backoff: 1s, 2s, 4s, ...
+                            let delay_ms = 1000 * (1 << (attempt - 1));
+                            self.emit(LoopEvent::CompactionRetry {
+                                attempt,
+                                max_attempts: max_retries + 1,
+                                delay_ms,
+                                reason: last_error.clone(),
+                            })
+                            .await;
+                            tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms as u64))
+                                .await;
+                            continue;
+                        }
+                    } else {
+                        break text;
+                    }
+                }
+                Err(e) => {
+                    last_error = e.to_string();
+                    if attempt <= max_retries {
+                        // Exponential backoff: 1s, 2s, 4s, ...
+                        let delay_ms = 1000 * (1 << (attempt - 1));
+                        warn!(
+                            attempt,
+                            max_retries,
+                            error = %last_error,
+                            delay_ms,
+                            "Compaction API call failed, retrying"
+                        );
+                        self.emit(LoopEvent::CompactionRetry {
+                            attempt,
+                            max_attempts: max_retries + 1,
+                            delay_ms,
+                            reason: last_error.clone(),
+                        })
+                        .await;
+                        tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms as u64))
+                            .await;
+                        continue;
+                    }
+                }
+            }
+
+            // All retries exhausted
+            warn!(
+                attempts = attempt,
+                error = %last_error,
+                "Compaction failed after all retries"
+            );
+            self.emit(LoopEvent::CompactionFailed {
+                attempts: attempt,
+                error: last_error,
+            })
+            .await;
+            return Ok(());
+        };
+
+        // Extract task status from tool calls before compaction
+        let tool_calls: Vec<(String, serde_json::Value)> = self
+            .message_history
+            .turns()
             .iter()
-            .filter_map(|b| match b {
-                ContentBlock::Text { text } => Some(text.as_str()),
-                _ => None,
+            .flat_map(|turn| {
+                turn.tool_calls
+                    .iter()
+                    .map(|tc| (tc.name.clone(), tc.input.clone()))
             })
             .collect();
 
-        if summary_text.is_empty() {
-            warn!("Compaction produced empty summary, skipping");
-            return Ok(());
-        }
+        let task_status = TaskStatusRestoration::from_tool_calls(&tool_calls);
 
-        // Apply compaction - keep recent turns
-        let keep_turns = self.compaction_config.min_messages_to_keep;
-        self.message_history
-            .apply_compaction(summary_text, keep_turns);
+        // Extract invoked skills from tool calls with turn numbers
+        let tool_calls_with_turns: Vec<(String, serde_json::Value, i32)> = self
+            .message_history
+            .turns()
+            .iter()
+            .flat_map(|turn| {
+                let turn_num = turn.number;
+                turn.tool_calls
+                    .iter()
+                    .map(move |tc| (tc.name.clone(), tc.input.clone(), turn_num))
+            })
+            .collect();
+
+        let invoked_skills = InvokedSkillRestoration::from_tool_calls(&tool_calls_with_turns);
+
+        // Build final summary with task status
+        let final_summary = if task_status.tasks.is_empty() {
+            summary_text
+        } else {
+            let tasks_section = task_status
+                .tasks
+                .iter()
+                .map(|t| {
+                    let owner = t.owner.as_deref().unwrap_or("unassigned");
+                    format!("- [{}] {}: {} ({})", t.status, t.id, t.subject, owner)
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            format!("{summary_text}\n\n<task_status>\n{tasks_section}\n</task_status>")
+        };
+
+        // Calculate keep window using token-based algorithm
+        let messages_json = self.message_history.messages_for_api_json();
+        let keep_result =
+            calculate_keep_start_index(&messages_json, &self.compact_config.keep_window);
+        let keep_turns = map_message_index_to_keep_turns(
+            self.message_history.turn_count(),
+            &messages_json,
+            keep_result.keep_start_index,
+        );
+        let tokens_saved = (tokens_before - self.message_history.estimate_tokens()).max(0);
+
+        debug!(
+            keep_turns,
+            keep_start_index = keep_result.keep_start_index,
+            keep_tokens = keep_result.keep_tokens,
+            text_messages_kept = keep_result.text_messages_kept,
+            "Calculated keep window for compaction"
+        );
+
+        // Get transcript path from context if available
+        let transcript_path = self.context.transcript_path.clone();
+
+        self.message_history.apply_compaction_with_metadata(
+            final_summary.clone(),
+            keep_turns,
+            turn_id,
+            tokens_saved,
+            cocode_protocol::CompactTrigger::Auto,
+            tokens_before,
+            transcript_path.clone(),
+            true, // Recent messages are preserved
+        );
 
         // Update tracking
         tracking.mark_compacted(turn_id, self.turn_number);
 
-        let estimated = self.message_history.estimate_tokens();
+        // Calculate post-compaction tokens and update boundary
+        let post_tokens = self.message_history.estimate_tokens();
+        self.message_history
+            .update_boundary_post_tokens(post_tokens);
+
         self.emit(LoopEvent::CompactionCompleted {
             removed_messages: 0, // Tracked by MessageHistory
-            summary_tokens: estimated,
+            summary_tokens: post_tokens,
+        })
+        .await;
+
+        // Emit compact boundary inserted event
+        self.emit(LoopEvent::CompactBoundaryInserted {
+            trigger: cocode_protocol::CompactTrigger::Auto,
+            pre_tokens: tokens_before,
+            post_tokens,
+        })
+        .await;
+
+        // Emit invoked skills restored event if any skills were found
+        if !invoked_skills.is_empty() {
+            let skill_names: Vec<String> = invoked_skills.iter().map(|s| s.name.clone()).collect();
+            self.emit(LoopEvent::InvokedSkillsRestored {
+                skills: skill_names,
+            })
+            .await;
+        }
+
+        // Save to session memory for future Tier 1 compaction
+        if self.compaction_config.session_memory.enabled {
+            if let Some(ref path) = self.compaction_config.session_memory.summary_path {
+                let summary_content = final_summary;
+                let turn_id_owned = turn_id.to_string();
+                let path_owned = path.clone();
+
+                // Spawn background task to write session memory
+                tokio::spawn(async move {
+                    if let Err(e) =
+                        write_session_memory(&path_owned, &summary_content, &turn_id_owned).await
+                    {
+                        tracing::warn!(
+                            error = %e,
+                            path = ?path_owned,
+                            "Failed to write session memory"
+                        );
+                    } else {
+                        tracing::debug!(
+                            path = ?path_owned,
+                            "Session memory saved for future Tier 1 compaction"
+                        );
+                    }
+                });
+            }
+        }
+
+        // Execute SessionStart hooks after compaction (with source: 'compact')
+        // This allows hooks to provide additional context after compaction
+        self.execute_post_compact_hooks(turn_id).await;
+
+        Ok(())
+    }
+
+    /// Execute SessionStart hooks after compaction.
+    ///
+    /// Runs SessionStart hooks with source='compact' to allow them to provide
+    /// additional context for the resumed conversation.
+    async fn execute_post_compact_hooks(&mut self, turn_id: &str) {
+        let hook_ctx = cocode_hooks::HookContext::new(
+            cocode_hooks::HookEventType::SessionStart,
+            turn_id.to_string(),
+            self.context.environment.cwd.clone(),
+        )
+        .with_metadata("source", "compact");
+
+        let outcomes = self.hooks.execute(&hook_ctx).await;
+
+        let mut hooks_executed = 0;
+        let mut additional_context_count = 0;
+
+        for outcome in &outcomes {
+            // Emit HookExecuted event for each hook
+            self.emit(LoopEvent::HookExecuted {
+                hook_type: HookEventType::SessionStart,
+                hook_name: outcome.hook_name.clone(),
+            })
+            .await;
+
+            hooks_executed += 1;
+
+            // Check for additional context from hooks
+            if let cocode_hooks::HookResult::ContinueWithContext { additional_context } =
+                &outcome.result
+            {
+                if let Some(ctx) = additional_context {
+                    if !ctx.is_empty() {
+                        additional_context_count += 1;
+                        debug!(
+                            hook_name = %outcome.hook_name,
+                            context_len = ctx.len(),
+                            "Hook provided additional context"
+                        );
+                    }
+                }
+            }
+        }
+
+        if hooks_executed > 0 {
+            self.emit(LoopEvent::PostCompactHooksExecuted {
+                hooks_executed,
+                additional_context_count,
+            })
+            .await;
+        }
+    }
+
+    /// Apply a cached session memory summary (Tier 1 compaction).
+    ///
+    /// This is the zero-cost compaction path that uses a previously saved summary
+    /// instead of making an LLM API call. The summary is stored in the session memory
+    /// file and can be reused across conversation continuations.
+    ///
+    /// # Arguments
+    /// * `summary` - The cached session memory summary
+    /// * `turn_id` - ID of the current turn
+    /// * `tracking` - Auto-compact tracking state
+    async fn apply_session_memory_summary(
+        &mut self,
+        summary: SessionMemorySummary,
+        turn_id: &str,
+        tracking: &mut AutoCompactTracking,
+    ) -> anyhow::Result<()> {
+        let tokens_before = self.message_history.estimate_tokens();
+
+        info!(
+            summary_tokens = summary.token_estimate,
+            last_id = ?summary.last_summarized_id,
+            "Applying session memory summary (Tier 1)"
+        );
+
+        // Get transcript path from context if available
+        let transcript_path = self.context.transcript_path.clone();
+
+        // Calculate keep window using token-based algorithm
+        let messages_json = self.message_history.messages_for_api_json();
+        let keep_result =
+            calculate_keep_start_index(&messages_json, &self.compact_config.keep_window);
+        let keep_turns = map_message_index_to_keep_turns(
+            self.message_history.turn_count(),
+            &messages_json,
+            keep_result.keep_start_index,
+        );
+        let tokens_saved = (tokens_before - summary.token_estimate).max(0);
+
+        debug!(
+            keep_turns,
+            keep_start_index = keep_result.keep_start_index,
+            keep_tokens = keep_result.keep_tokens,
+            "Calculated keep window for session memory compact"
+        );
+
+        self.message_history.apply_compaction_with_metadata(
+            summary.summary.clone(),
+            keep_turns,
+            turn_id,
+            tokens_saved,
+            cocode_protocol::CompactTrigger::Auto,
+            tokens_before,
+            transcript_path,
+            true, // Recent messages preserved
+        );
+
+        // Update tracking
+        tracking.mark_compacted(turn_id, self.turn_number);
+
+        // Calculate post-compaction tokens and update boundary
+        let post_tokens = self.message_history.estimate_tokens();
+        self.message_history
+            .update_boundary_post_tokens(post_tokens);
+
+        // Emit events
+        self.emit(LoopEvent::SessionMemoryCompactApplied {
+            saved_tokens: tokens_saved,
+            summary_tokens: summary.token_estimate,
+        })
+        .await;
+
+        // Emit compact boundary inserted event
+        self.emit(LoopEvent::CompactBoundaryInserted {
+            trigger: cocode_protocol::CompactTrigger::Auto,
+            pre_tokens: tokens_before,
+            post_tokens,
         })
         .await;
 
@@ -837,6 +1739,50 @@ impl AgentLoop {
     /// Returns the cancellation token.
     pub fn cancel_token(&self) -> &CancellationToken {
         &self.cancel_token
+    }
+
+    /// Sync file read state from tools' FileTracker to system-reminder's FileTracker.
+    ///
+    /// This bridges the gap between the two FileTracker implementations:
+    /// - `cocode_tools::FileTracker`: Tracks file reads during tool execution
+    /// - `cocode_system_reminder::FileTracker`: Detects file changes for reminders
+    ///
+    /// By syncing data from tools to system-reminder, the `ChangedFilesGenerator`
+    /// can accurately detect files that have been modified since they were read.
+    async fn sync_file_trackers(&mut self) {
+        let tools_tracker = self.shared_tools_file_tracker.lock().await;
+
+        for (path, state) in tools_tracker.read_files_with_state() {
+            // Convert tools::FileReadState to system_reminder::ReadFileState
+            // Only sync if we have content (complete reads)
+            if let Some(content) = &state.content {
+                if state.is_complete_read {
+                    self.file_tracker.sync_read(
+                        &path,
+                        content.clone(),
+                        state.file_mtime,
+                        self.turn_number,
+                    );
+                } else if let (Some(offset), Some(limit)) = (state.offset, state.limit) {
+                    self.file_tracker.sync_partial_read(
+                        &path,
+                        content.clone(),
+                        state.file_mtime,
+                        self.turn_number,
+                        offset as i64,
+                        limit as i64,
+                    );
+                }
+            } else {
+                // For reads without content (simple record_read calls), sync with minimal info
+                self.file_tracker.sync_read(
+                    &path,
+                    String::new(),
+                    state.file_mtime,
+                    self.turn_number,
+                );
+            }
+        }
     }
 }
 

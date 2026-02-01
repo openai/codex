@@ -2,7 +2,10 @@
 
 use std::path::PathBuf;
 
-use cocode_error::{ErrorExt, Location, StatusCode, stack_trace_debug};
+use cocode_error::ErrorExt;
+use cocode_error::Location;
+use cocode_error::StatusCode;
+use cocode_error::stack_trace_debug;
 use snafu::Snafu;
 
 /// Plugin errors.

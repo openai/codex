@@ -1,0 +1,28 @@
+[package]
+name = "cocode-arg0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Binary dispatcher for cocode CLI"
+
+[lib]
+name = "cocode_arg0"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Internal
+cocode-apply-patch = { workspace = true }
+cocode-sandbox = { workspace = true }
+
+# Runtime
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+
+# Utils
+dirs = { workspace = true }
+dotenvy = { workspace = true }
+tempfile = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }

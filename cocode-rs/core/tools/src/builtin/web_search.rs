@@ -2,10 +2,11 @@
 
 use super::prompts;
 use crate::context::ToolContext;
-use crate::error::{Result, ToolError};
+use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
-use cocode_protocol::{ConcurrencySafety, ToolOutput};
+use cocode_protocol::ConcurrencySafety;
+use cocode_protocol::ToolOutput;
 use serde_json::Value;
 
 /// Tool for performing web searches.
@@ -66,14 +67,18 @@ impl Tool for WebSearchTool {
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
-        let query = input["query"]
-            .as_str()
-            .ok_or_else(|| ToolError::invalid_input("query must be a string"))?;
+        let query = input["query"].as_str().ok_or_else(|| {
+            crate::error::tool_error::InvalidInputSnafu {
+                message: "query must be a string",
+            }
+            .build()
+        })?;
 
         if query.len() < 2 {
-            return Err(ToolError::invalid_input(
-                "query must be at least 2 characters",
-            ));
+            return Err(crate::error::tool_error::InvalidInputSnafu {
+                message: "query must be at least 2 characters",
+            }
+            .build());
         }
 
         ctx.emit_progress(format!("Searching: {query}")).await;

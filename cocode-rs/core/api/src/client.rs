@@ -7,17 +7,24 @@
 //! - Prompt caching support
 
 use crate::cache::PromptCacheConfig;
-use crate::error::{ApiError, Result};
+use crate::error::ApiError;
+use crate::error::Result;
 use crate::provider_factory;
-use crate::retry::{RetryConfig, RetryContext, RetryDecision};
+use crate::retry::RetryConfig;
+use crate::retry::RetryContext;
+use crate::retry::RetryDecision;
 use crate::unified_stream::UnifiedStream;
 use cocode_protocol::ProviderInfo;
-use hyper_sdk::{GenerateRequest, GenerateResponse, Model};
-use serde::{Deserialize, Serialize};
+use hyper_sdk::GenerateRequest;
+use hyper_sdk::GenerateResponse;
+use hyper_sdk::Model;
+use serde::Deserialize;
+use serde::Serialize;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tracing::{debug, info};
+use tracing::debug;
+use tracing::info;
 
 /// Options for a streaming request.
 #[derive(Debug, Clone, Default)]
@@ -667,7 +674,8 @@ mod tests {
 
     #[test]
     fn test_from_provider_info() {
-        use cocode_protocol::{ProviderInfo, ProviderType};
+        use cocode_protocol::ProviderInfo;
+        use cocode_protocol::ProviderType;
 
         let info = ProviderInfo::new("Test", ProviderType::Openai, "https://api.openai.com/v1")
             .with_api_key("test-key");

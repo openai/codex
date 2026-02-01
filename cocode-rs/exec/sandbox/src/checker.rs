@@ -2,8 +2,11 @@
 
 use std::path::Path;
 
-use crate::config::{SandboxConfig, SandboxMode};
-use crate::error::{self, Result, sandbox_error::*};
+use crate::config::SandboxConfig;
+use crate::config::SandboxMode;
+use crate::error::Result;
+use crate::error::sandbox_error::*;
+use crate::error::{self};
 
 /// Checks permissions against the sandbox configuration.
 #[derive(Debug, Clone)]

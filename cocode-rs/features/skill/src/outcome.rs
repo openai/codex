@@ -68,6 +68,7 @@ mod tests {
                 description: "A test skill".to_string(),
                 prompt: "Do something".to_string(),
                 allowed_tools: None,
+                interface: None,
             },
             source: SkillSource::Bundled,
         }

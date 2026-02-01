@@ -1663,6 +1663,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cocode-arg0"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "cocode-apply-patch",
+ "cocode-sandbox",
+ "dirs 6.0.0",
+ "dotenvy",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "cocode-async-utils"
 version = "0.0.0"
 dependencies = [
@@ -1678,10 +1692,13 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "cocode-arg0",
  "cocode-config",
+ "cocode-loop",
  "cocode-protocol",
  "cocode-session",
  "cocode-skill",
+ "cocode-tui",
  "dirs 6.0.0",
  "serde_json",
  "tempfile",
@@ -1697,6 +1714,7 @@ dependencies = [
  "cocode-error",
  "cocode-protocol",
  "dirs 5.0.1",
+ "hyper-sdk",
  "serde",
  "serde_json",
  "snafu",
@@ -1798,6 +1816,7 @@ dependencies = [
  "cocode-error",
  "cocode-protocol",
  "regex",
+ "reqwest",
  "serde",
  "serde_json",
  "snafu",
@@ -1806,6 +1825,7 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -1825,8 +1845,11 @@ dependencies = [
  "cocode-context",
  "cocode-hooks",
  "cocode-message",
+ "cocode-plan-mode",
  "cocode-prompt",
  "cocode-protocol",
+ "cocode-skill",
+ "cocode-system-reminder",
  "cocode-tools",
  "hyper-sdk",
  "serde",
@@ -1915,12 +1938,32 @@ dependencies = [
 ]
 
 [[package]]
-name = "cocode-plugin"
+name = "cocode-plan-mode"
 version = "0.0.0"
 dependencies = [
  "cocode-error",
+ "cocode-protocol",
+ "dirs 6.0.0",
+ "once_cell",
+ "rand 0.9.2",
+ "serde",
+ "serde_json",
+ "snafu",
+ "snafu-virtstack",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "cocode-plugin"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "cocode-error",
  "cocode-hooks",
  "cocode-skill",
+ "cocode-subagent",
  "dirs 6.0.0",
  "serde",
  "serde_json",
@@ -2099,12 +2142,18 @@ dependencies = [
 name = "cocode-shell"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "cocode-protocol",
+ "cocode-shell-parser",
+ "dirs 6.0.0",
+ "libc",
+ "pretty_assertions",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
  "tracing",
+ "which",
 ]
 
 [[package]]
@@ -2126,6 +2175,7 @@ name = "cocode-skill"
 version = "0.0.0"
 dependencies = [
  "cocode-error",
+ "cocode-hooks",
  "cocode-protocol",
  "serde",
  "serde_json",
@@ -2158,8 +2208,30 @@ dependencies = [
  "anyhow",
  "cocode-protocol",
  "cocode-tools",
+ "once_cell",
  "serde",
  "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "cocode-system-reminder"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "cocode-error",
+ "cocode-protocol",
+ "futures",
+ "pretty_assertions",
+ "regex-lite",
+ "serde",
+ "serde_json",
+ "snafu",
+ "snafu-virtstack",
  "tokio",
  "tracing",
  "uuid",
@@ -2169,17 +2241,22 @@ dependencies = [
 name = "cocode-tools"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "cocode-apply-patch",
  "cocode-error",
  "cocode-file-ignore",
  "cocode-file-search",
  "cocode-hooks",
+ "cocode-lsp",
  "cocode-mcp-types",
  "cocode-message",
+ "cocode-plan-mode",
  "cocode-protocol",
  "cocode-rmcp-client",
+ "cocode-shell",
  "cocode-shell-parser",
+ "cocode-skill",
  "globset",
  "hyper-sdk",
  "regex",
@@ -2193,6 +2270,26 @@ dependencies = [
  "tokio-util",
  "tracing",
  "walkdir",
+]
+
+[[package]]
+name = "cocode-tui"
+version = "0.0.0"
+dependencies = [
+ "cocode-config",
+ "cocode-error",
+ "cocode-loop",
+ "cocode-protocol",
+ "crossterm",
+ "futures",
+ "insta",
+ "pretty_assertions",
+ "ratatui",
+ "textwrap",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "unicode-width 0.2.0",
 ]
 
 [[package]]

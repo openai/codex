@@ -6,10 +6,12 @@
 use crate::context::ToolContext;
 use crate::error::ToolError;
 use async_trait::async_trait;
-use cocode_protocol::{
-    ConcurrencySafety, PermissionResult, ToolOutput, ToolResultContent, ValidationError,
-    ValidationResult,
-};
+use cocode_protocol::ConcurrencySafety;
+use cocode_protocol::PermissionResult;
+use cocode_protocol::ToolOutput;
+use cocode_protocol::ToolResultContent;
+use cocode_protocol::ValidationError;
+use cocode_protocol::ValidationResult;
 use hyper_sdk::ToolDefinition;
 use serde_json::Value;
 
@@ -254,9 +256,12 @@ mod tests {
             input: Value,
             _ctx: &mut ToolContext,
         ) -> Result<ToolOutput, ToolError> {
-            let message = input["message"]
-                .as_str()
-                .ok_or_else(|| ToolError::invalid_input("message must be a string"))?;
+            let message = input["message"].as_str().ok_or_else(|| {
+                crate::error::tool_error::InvalidInputSnafu {
+                    message: "message must be a string",
+                }
+                .build()
+            })?;
             Ok(ToolOutput::text(format!("Received: {message}")))
         }
     }

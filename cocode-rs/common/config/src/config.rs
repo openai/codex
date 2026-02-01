@@ -663,7 +663,9 @@ mod tests {
             default_thinking_level: None,
             supported_thinking_levels: None,
             include_thoughts: None,
+            reasoning_summary: None,
             base_instructions: None,
+            extra: None,
         };
 
         let mut resolved_models = HashMap::new();
@@ -711,7 +713,9 @@ mod tests {
             default_thinking_level: None,
             supported_thinking_levels: None,
             include_thoughts: None,
+            reasoning_summary: None,
             base_instructions: None,
+            extra: None,
         };
 
         let fast_info = ResolvedModelInfo {
@@ -760,7 +764,9 @@ mod tests {
             default_thinking_level: None,
             supported_thinking_levels: None,
             include_thoughts: None,
+            reasoning_summary: None,
             base_instructions: None,
+            extra: None,
         };
 
         let mut resolved_models = HashMap::new();

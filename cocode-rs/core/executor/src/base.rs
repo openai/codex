@@ -3,9 +3,14 @@
 use std::sync::Arc;
 
 use cocode_api::ApiClient;
-use cocode_context::{ConversationContext, EnvironmentInfo};
+use cocode_context::ConversationContext;
+use cocode_context::EnvironmentInfo;
 use cocode_hooks::HookRegistry;
-use cocode_loop::{AgentLoop, CompactionConfig, FallbackConfig, LoopConfig, LoopResult};
+use cocode_loop::AgentLoop;
+use cocode_loop::CompactionConfig;
+use cocode_loop::FallbackConfig;
+use cocode_loop::LoopConfig;
+use cocode_loop::LoopResult;
 use cocode_protocol::LoopEvent;
 use cocode_tools::ToolRegistry;
 use tokio::sync::mpsc;

@@ -2,10 +2,11 @@
 
 use super::prompts;
 use crate::context::ToolContext;
-use crate::error::{Result, ToolError};
+use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
-use cocode_protocol::{ConcurrencySafety, ToolOutput};
+use cocode_protocol::ConcurrencySafety;
+use cocode_protocol::ToolOutput;
 use serde_json::Value;
 
 /// Maximum result size for web content (characters).
@@ -67,18 +68,25 @@ impl Tool for WebFetchTool {
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
-        let url = input["url"]
-            .as_str()
-            .ok_or_else(|| ToolError::invalid_input("url must be a string"))?;
-        let prompt = input["prompt"]
-            .as_str()
-            .ok_or_else(|| ToolError::invalid_input("prompt must be a string"))?;
+        let url = input["url"].as_str().ok_or_else(|| {
+            crate::error::tool_error::InvalidInputSnafu {
+                message: "url must be a string",
+            }
+            .build()
+        })?;
+        let prompt = input["prompt"].as_str().ok_or_else(|| {
+            crate::error::tool_error::InvalidInputSnafu {
+                message: "prompt must be a string",
+            }
+            .build()
+        })?;
 
         // Validate URL
         if !url.starts_with("http://") && !url.starts_with("https://") {
-            return Err(ToolError::invalid_input(
-                "url must start with http:// or https://",
-            ));
+            return Err(crate::error::tool_error::InvalidInputSnafu {
+                message: "url must start with http:// or https://",
+            }
+            .build());
         }
 
         ctx.emit_progress(format!("Fetching {url}")).await;

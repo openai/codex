@@ -2,18 +2,25 @@
 //!
 //! The registry tracks loaded plugins and provides access to their contributions.
 
+use crate::command::PluginCommand;
 use crate::contribution::PluginContribution;
 #[cfg(test)]
 use crate::error::PluginError;
 use crate::error::Result;
 use crate::error::plugin_error::AlreadyRegisteredSnafu;
 use crate::loader::LoadedPlugin;
+use crate::mcp::McpServerConfig;
 use crate::scope::PluginScope;
 
-use cocode_hooks::{HookDefinition, HookRegistry};
-use cocode_skill::{SkillManager, SkillPromptCommand};
+use cocode_hooks::HookDefinition;
+use cocode_hooks::HookRegistry;
+use cocode_skill::SkillManager;
+use cocode_skill::SkillPromptCommand;
+use cocode_subagent::AgentDefinition;
+use cocode_subagent::SubagentManager;
 use std::collections::HashMap;
-use tracing::{debug, info};
+use tracing::debug;
+use tracing::info;
 
 /// Registry for managing loaded plugins.
 ///
@@ -133,6 +140,66 @@ impl PluginRegistry {
             .collect()
     }
 
+    /// Get all agent contributions.
+    pub fn agent_contributions(&self) -> Vec<(&AgentDefinition, &str)> {
+        self.plugins
+            .values()
+            .flat_map(|plugin| {
+                plugin.contributions.iter().filter_map(|c| {
+                    if let PluginContribution::Agent {
+                        definition,
+                        plugin_name,
+                    } = c
+                    {
+                        Some((definition, plugin_name.as_str()))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect()
+    }
+
+    /// Get all command contributions.
+    pub fn command_contributions(&self) -> Vec<(&PluginCommand, &str)> {
+        self.plugins
+            .values()
+            .flat_map(|plugin| {
+                plugin.contributions.iter().filter_map(|c| {
+                    if let PluginContribution::Command {
+                        command,
+                        plugin_name,
+                    } = c
+                    {
+                        Some((command, plugin_name.as_str()))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect()
+    }
+
+    /// Get all MCP server contributions.
+    pub fn mcp_server_contributions(&self) -> Vec<(&McpServerConfig, &str)> {
+        self.plugins
+            .values()
+            .flat_map(|plugin| {
+                plugin.contributions.iter().filter_map(|c| {
+                    if let PluginContribution::McpServer {
+                        config,
+                        plugin_name,
+                    } = c
+                    {
+                        Some((config, plugin_name.as_str()))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect()
+    }
+
     /// Apply all skill contributions to a skill manager.
     pub fn apply_skills_to(&self, manager: &mut SkillManager) {
         let skills = self.skill_contributions();
@@ -171,6 +238,26 @@ impl PluginRegistry {
         }
     }
 
+    /// Apply all agent contributions to a subagent manager.
+    pub fn apply_agents_to(&self, manager: &mut SubagentManager) {
+        let agents = self.agent_contributions();
+        let count = agents.len();
+
+        for (definition, plugin_name) in agents {
+            debug!(
+                agent = %definition.name,
+                agent_type = %definition.agent_type,
+                plugin = %plugin_name,
+                "Applying agent from plugin"
+            );
+            manager.register_agent_type(definition.clone());
+        }
+
+        if count > 0 {
+            info!(count = count, "Applied agents from plugins");
+        }
+    }
+
     /// Get plugins by scope.
     pub fn by_scope(&self, scope: PluginScope) -> Vec<&LoadedPlugin> {
         self.plugins.values().filter(|p| p.scope == scope).collect()
@@ -186,7 +273,8 @@ impl PluginRegistry {
 mod tests {
     use super::*;
     use crate::contribution::PluginContributions;
-    use crate::manifest::{PluginManifest, PluginMetadata};
+    use crate::manifest::PluginManifest;
+    use crate::manifest::PluginMetadata;
     use std::path::PathBuf;
 
     fn make_plugin(name: &str, scope: PluginScope) -> LoadedPlugin {

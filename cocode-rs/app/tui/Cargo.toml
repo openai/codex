@@ -1,0 +1,38 @@
+[package]
+name = "cocode-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Terminal UI for cocode"
+
+[dependencies]
+# TUI framework
+ratatui = { workspace = true }
+crossterm = { workspace = true, features = ["event-stream"] }
+
+# Async runtime
+tokio = { workspace = true, features = ["sync", "macros", "rt-multi-thread", "time"] }
+tokio-stream = { workspace = true }
+futures = { workspace = true }
+
+# Internal - common
+cocode-protocol = { workspace = true }
+cocode-error = { workspace = true }
+cocode-config = { workspace = true }
+
+# Internal - core
+cocode-loop = { workspace = true }
+
+# Text processing
+unicode-width = { workspace = true }
+textwrap = { workspace = true }
+
+# Utilities
+tracing = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+insta = { workspace = true }
+
+[lints]
+workspace = true

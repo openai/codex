@@ -32,7 +32,6 @@
 //! ```
 
 use crate::options::ProviderOptions;
-use crate::options::ThinkingConfig;
 use crate::request::GenerateRequest;
 use crate::tools::ToolChoice;
 use crate::tools::ToolDefinition;
@@ -53,8 +52,6 @@ pub struct SessionConfig {
     pub tools: Option<Vec<ToolDefinition>>,
     /// Default tool choice behavior.
     pub tool_choice: Option<ToolChoice>,
-    /// Default thinking configuration.
-    pub thinking_config: Option<ThinkingConfig>,
     /// Default provider-specific options.
     pub provider_options: Option<ProviderOptions>,
 }
@@ -95,18 +92,6 @@ impl SessionConfig {
         self
     }
 
-    /// Set the default thinking configuration.
-    pub fn thinking_config(mut self, config: ThinkingConfig) -> Self {
-        self.thinking_config = Some(config);
-        self
-    }
-
-    /// Enable thinking with a token budget.
-    pub fn with_thinking(mut self, budget_tokens: i32) -> Self {
-        self.thinking_config = Some(ThinkingConfig::with_budget(budget_tokens));
-        self
-    }
-
     /// Set provider-specific options.
     pub fn provider_options(mut self, options: ProviderOptions) -> Self {
         self.provider_options = Some(options);
@@ -138,10 +123,6 @@ impl SessionConfig {
             request.tool_choice = self.tool_choice.clone();
         }
 
-        if request.thinking_config.is_none() {
-            request.thinking_config = self.thinking_config.clone();
-        }
-
         // Note: provider_options are not merged by default as they are type-erased
         // and may require special handling per provider
     }
@@ -153,7 +134,6 @@ impl SessionConfig {
             && self.top_p.is_none()
             && self.tools.is_none()
             && self.tool_choice.is_none()
-            && self.thinking_config.is_none()
             && self.provider_options.is_none()
     }
 }
@@ -215,17 +195,6 @@ mod tests {
         // Temperature from request, max_tokens from config
         assert_eq!(request.temperature, Some(0.3));
         assert_eq!(request.max_tokens, Some(4096));
-    }
-
-    #[test]
-    fn test_with_thinking() {
-        let config = SessionConfig::new().with_thinking(10000);
-
-        assert!(config.thinking_config.is_some());
-        assert_eq!(
-            config.thinking_config.as_ref().unwrap().budget_tokens,
-            Some(10000)
-        );
     }
 
     #[test]

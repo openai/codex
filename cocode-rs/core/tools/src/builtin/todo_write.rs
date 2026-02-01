@@ -2,10 +2,11 @@
 
 use super::prompts;
 use crate::context::ToolContext;
-use crate::error::{Result, ToolError};
+use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
-use cocode_protocol::{ConcurrencySafety, ToolOutput};
+use cocode_protocol::ConcurrencySafety;
+use cocode_protocol::ToolOutput;
 use serde_json::Value;
 
 /// Tool for creating and managing a structured task list.
@@ -89,9 +90,12 @@ impl Tool for TodoWriteTool {
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
-        let todos = input["todos"]
-            .as_array()
-            .ok_or_else(|| ToolError::invalid_input("todos must be an array"))?;
+        let todos = input["todos"].as_array().ok_or_else(|| {
+            crate::error::tool_error::InvalidInputSnafu {
+                message: "todos must be an array",
+            }
+            .build()
+        })?;
 
         // Validate: max 1 in_progress task
         let in_progress_count = todos
@@ -100,24 +104,27 @@ impl Tool for TodoWriteTool {
             .count();
 
         if in_progress_count > 1 {
-            return Err(ToolError::invalid_input(
-                "At most 1 task can be in_progress at a time",
-            ));
+            return Err(crate::error::tool_error::InvalidInputSnafu {
+                message: "At most 1 task can be in_progress at a time",
+            }
+            .build());
         }
 
         // Validate each todo has required fields
         for (i, todo) in todos.iter().enumerate() {
             let status = todo["status"].as_str().unwrap_or("");
             if !matches!(status, "pending" | "in_progress" | "completed") {
-                return Err(ToolError::invalid_input(format!(
-                    "todo[{i}] invalid status: {status}"
-                )));
+                return Err(crate::error::tool_error::InvalidInputSnafu {
+                    message: format!("todo[{i}] invalid status: {status}"),
+                }
+                .build());
             }
             // Must have at least subject or content
             if todo["subject"].as_str().is_none() && todo["content"].as_str().is_none() {
-                return Err(ToolError::invalid_input(format!(
-                    "todo[{i}] must have either 'subject' or 'content'"
-                )));
+                return Err(crate::error::tool_error::InvalidInputSnafu {
+                    message: format!("todo[{i}] must have either 'subject' or 'content'"),
+                }
+                .build());
             }
         }
 

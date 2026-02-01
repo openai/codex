@@ -2,12 +2,17 @@
 //!
 //! Assembles the complete system prompt from templates and conversation context.
 
-use cocode_context::{ConversationContext, InjectionPosition, SubagentType};
+use cocode_context::ConversationContext;
+use cocode_context::InjectionPosition;
+use cocode_context::SubagentType;
 
-use crate::sections::{
-    self, PromptSection, assemble_sections, permission_section, render_environment,
-    render_injections, render_memory_files,
-};
+use crate::sections::PromptSection;
+use crate::sections::assemble_sections;
+use crate::sections::permission_section;
+use crate::sections::render_environment;
+use crate::sections::render_injections;
+use crate::sections::render_memory_files;
+use crate::sections::{self};
 use crate::summarization;
 use crate::templates;
 
@@ -139,7 +144,10 @@ impl SystemPromptBuilder {
 
 #[cfg(test)]
 mod tests {
-    use cocode_context::{ContextInjection, EnvironmentInfo, InjectionPosition, MemoryFile};
+    use cocode_context::ContextInjection;
+    use cocode_context::EnvironmentInfo;
+    use cocode_context::InjectionPosition;
+    use cocode_context::MemoryFile;
     use cocode_protocol::PermissionMode;
 
     use super::*;

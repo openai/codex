@@ -1,6 +1,9 @@
 //! Error types for tool execution.
 
-use cocode_error::{ErrorExt, Location, StatusCode, stack_trace_debug};
+use cocode_error::ErrorExt;
+use cocode_error::Location;
+use cocode_error::StatusCode;
+use cocode_error::stack_trace_debug;
 use snafu::Snafu;
 
 /// Tool execution errors.
@@ -81,95 +84,7 @@ pub enum ToolError {
     },
 }
 
-/// Create a Location from the caller's position.
-#[track_caller]
-fn caller_location() -> Location {
-    let loc = std::panic::Location::caller();
-    Location::new(loc.file(), loc.line(), loc.column())
-}
-
 impl ToolError {
-    /// Create a not found error.
-    #[track_caller]
-    pub fn not_found(name: impl Into<String>) -> Self {
-        Self::NotFound {
-            name: name.into(),
-            location: caller_location(),
-        }
-    }
-
-    /// Create an invalid input error.
-    #[track_caller]
-    pub fn invalid_input(message: impl Into<String>) -> Self {
-        Self::InvalidInput {
-            message: message.into(),
-            location: caller_location(),
-        }
-    }
-
-    /// Create an execution failed error.
-    #[track_caller]
-    pub fn execution_failed(message: impl Into<String>) -> Self {
-        Self::ExecutionFailed {
-            message: message.into(),
-            location: caller_location(),
-        }
-    }
-
-    /// Create a permission denied error.
-    #[track_caller]
-    pub fn permission_denied(message: impl Into<String>) -> Self {
-        Self::PermissionDenied {
-            message: message.into(),
-            location: caller_location(),
-        }
-    }
-
-    /// Create a timeout error.
-    #[track_caller]
-    pub fn timeout(timeout_secs: i64) -> Self {
-        Self::Timeout {
-            timeout_secs,
-            location: caller_location(),
-        }
-    }
-
-    /// Create an aborted error.
-    #[track_caller]
-    pub fn aborted(reason: impl Into<String>) -> Self {
-        Self::Aborted {
-            reason: reason.into(),
-            location: caller_location(),
-        }
-    }
-
-    /// Create an IO error.
-    #[track_caller]
-    pub fn io(message: impl Into<String>) -> Self {
-        Self::Io {
-            message: message.into(),
-            location: caller_location(),
-        }
-    }
-
-    /// Create an internal error.
-    #[track_caller]
-    pub fn internal(message: impl Into<String>) -> Self {
-        Self::Internal {
-            message: message.into(),
-            location: caller_location(),
-        }
-    }
-
-    /// Create a hook rejected error.
-    #[track_caller]
-    pub fn hook_rejected(reason: impl Into<String>) -> Self {
-        Self::HookRejected {
-            reason: reason.into(),
-            location: caller_location(),
-        }
-    }
-
     /// Check if this is a retriable error.
     pub fn is_retriable(&self) -> bool {
         matches!(self, ToolError::Timeout { .. } | ToolError::Io { .. })
@@ -203,13 +118,19 @@ impl ErrorExt for ToolError {
 
 impl From<std::io::Error> for ToolError {
     fn from(err: std::io::Error) -> Self {
-        ToolError::io(err.to_string())
+        tool_error::IoSnafu {
+            message: err.to_string(),
+        }
+        .build()
     }
 }
 
 impl From<serde_json::Error> for ToolError {
     fn from(err: serde_json::Error) -> Self {
-        ToolError::invalid_input(format!("JSON error: {err}"))
+        tool_error::InvalidInputSnafu {
+            message: format!("JSON error: {err}"),
+        }
+        .build()
     }
 }
 
@@ -218,39 +139,71 @@ pub type Result<T> = std::result::Result<T, ToolError>;
 
 #[cfg(test)]
 mod tests {
+    use super::tool_error::*;
     use super::*;
 
     #[test]
     fn test_error_constructors() {
-        let err = ToolError::not_found("test_tool");
+        let err: ToolError = NotFoundSnafu { name: "test_tool" }.build();
         assert!(err.to_string().contains("test_tool"));
 
-        let err = ToolError::invalid_input("bad json");
+        let err: ToolError = InvalidInputSnafu {
+            message: "bad json",
+        }
+        .build();
         assert!(err.to_string().contains("bad json"));
 
-        let err = ToolError::timeout(30);
+        let err: ToolError = TimeoutSnafu {
+            timeout_secs: 30i64,
+        }
+        .build();
         assert!(err.to_string().contains("30"));
     }
 
     #[test]
     fn test_is_retriable() {
-        assert!(ToolError::timeout(30).is_retriable());
-        assert!(ToolError::io("network error").is_retriable());
-        assert!(!ToolError::not_found("test").is_retriable());
-        assert!(!ToolError::permission_denied("denied").is_retriable());
+        assert!(
+            TimeoutSnafu {
+                timeout_secs: 30i64
+            }
+            .build()
+            .is_retriable()
+        );
+        assert!(
+            IoSnafu {
+                message: "network error"
+            }
+            .build()
+            .is_retriable()
+        );
+        assert!(!NotFoundSnafu { name: "test" }.build().is_retriable());
+        assert!(
+            !PermissionDeniedSnafu { message: "denied" }
+                .build()
+                .is_retriable()
+        );
     }
 
     #[test]
     fn test_status_codes() {
         assert_eq!(
-            ToolError::not_found("test").status_code(),
+            NotFoundSnafu { name: "test" }.build().status_code(),
             StatusCode::InvalidArguments
         );
         assert_eq!(
-            ToolError::permission_denied("test").status_code(),
+            PermissionDeniedSnafu { message: "test" }
+                .build()
+                .status_code(),
             StatusCode::PermissionDenied
         );
-        assert_eq!(ToolError::timeout(30).status_code(), StatusCode::Timeout);
+        assert_eq!(
+            TimeoutSnafu {
+                timeout_secs: 30i64
+            }
+            .build()
+            .status_code(),
+            StatusCode::Timeout
+        );
     }
 
     #[test]

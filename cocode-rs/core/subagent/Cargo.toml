@@ -7,12 +7,14 @@ license.workspace = true
 [dependencies]
 cocode-protocol.workspace = true
 cocode-tools.workspace = true
-tokio = { workspace = true, features = ["sync", "time"] }
+tokio = { workspace = true, features = ["sync", "time", "fs"] }
+tokio-util.workspace = true
 tracing.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 anyhow.workspace = true
 uuid = { workspace = true, features = ["v4"] }
+once_cell.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

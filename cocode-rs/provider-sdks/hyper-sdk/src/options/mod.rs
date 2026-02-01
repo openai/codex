@@ -202,35 +202,6 @@ pub fn validate_options_for_provider(
     }
 }
 
-/// Configuration for extended thinking/reasoning.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ThinkingConfig {
-    /// Enable extended thinking.
-    #[serde(default)]
-    pub enabled: bool,
-    /// Budget in tokens for thinking (Anthropic).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub budget_tokens: Option<i32>,
-}
-
-impl ThinkingConfig {
-    /// Create a thinking config with a token budget.
-    pub fn with_budget(tokens: i32) -> Self {
-        Self {
-            enabled: true,
-            budget_tokens: Some(tokens),
-        }
-    }
-
-    /// Create an enabled thinking config without explicit budget.
-    pub fn enabled() -> Self {
-        Self {
-            enabled: true,
-            budget_tokens: None,
-        }
-    }
-}
-
 // Re-export provider-specific options
 pub use anthropic::AnthropicOptions;
 pub use gemini::GeminiOptions;
@@ -289,17 +260,6 @@ mod tests {
         let opts: ProviderOptions = AnthropicOptions::new().boxed();
         let result = downcast_options::<OpenAIOptions>(&opts);
         assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_thinking_config() {
-        let config = ThinkingConfig::with_budget(1024);
-        assert!(config.enabled);
-        assert_eq!(config.budget_tokens, Some(1024));
-
-        let config = ThinkingConfig::enabled();
-        assert!(config.enabled);
-        assert_eq!(config.budget_tokens, None);
     }
 
     // ============================================================

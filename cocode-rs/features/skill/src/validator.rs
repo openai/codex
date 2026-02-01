@@ -105,6 +105,7 @@ mod tests {
             prompt_file: None,
             prompt_inline: Some("Analyze the diff".to_string()),
             allowed_tools: None,
+            hooks: None,
         }
     }
 
@@ -245,6 +246,7 @@ mod tests {
             prompt_file: None,
             prompt_inline: None,
             allowed_tools: None,
+            hooks: None,
         };
         let result = validate_skill(&iface);
         assert!(result.is_err());

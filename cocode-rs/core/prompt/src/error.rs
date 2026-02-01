@@ -1,6 +1,9 @@
 //! Error types for prompt generation.
 
-use cocode_error::{ErrorExt, Location, StatusCode, stack_trace_debug};
+use cocode_error::ErrorExt;
+use cocode_error::Location;
+use cocode_error::StatusCode;
+use cocode_error::stack_trace_debug;
 use snafu::Snafu;
 
 /// Prompt generation errors.
@@ -25,33 +28,6 @@ pub enum PromptError {
     },
 }
 
-/// Create a Location from the caller's position.
-#[track_caller]
-fn caller_location() -> Location {
-    let loc = std::panic::Location::caller();
-    Location::new(loc.file(), loc.line(), loc.column())
-}
-
-impl PromptError {
-    /// Create a template error.
-    #[track_caller]
-    pub fn template(message: impl Into<String>) -> Self {
-        Self::Template {
-            message: message.into(),
-            location: caller_location(),
-        }
-    }
-
-    /// Create a missing context error.
-    #[track_caller]
-    pub fn missing_context(field: impl Into<String>) -> Self {
-        Self::MissingContext {
-            field: field.into(),
-            location: caller_location(),
-        }
-    }
-}
-
 impl ErrorExt for PromptError {
     fn status_code(&self) -> StatusCode {
         match self {
@@ -70,25 +46,29 @@ pub type Result<T> = std::result::Result<T, PromptError>;
 
 #[cfg(test)]
 mod tests {
+    use super::prompt_error::*;
     use super::*;
 
     #[test]
     fn test_error_constructors() {
-        let err = PromptError::template("invalid placeholder");
+        let err: PromptError = TemplateSnafu {
+            message: "invalid placeholder",
+        }
+        .build();
         assert!(err.to_string().contains("invalid placeholder"));
 
-        let err = PromptError::missing_context("platform");
+        let err: PromptError = MissingContextSnafu { field: "platform" }.build();
         assert!(err.to_string().contains("platform"));
     }
 
     #[test]
     fn test_status_codes() {
         assert_eq!(
-            PromptError::template("test").status_code(),
+            TemplateSnafu { message: "test" }.build().status_code(),
             StatusCode::Internal
         );
         assert_eq!(
-            PromptError::missing_context("test").status_code(),
+            MissingContextSnafu { field: "test" }.build().status_code(),
             StatusCode::InvalidArguments
         );
     }

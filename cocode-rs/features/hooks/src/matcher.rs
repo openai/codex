@@ -3,7 +3,8 @@
 //! Matchers inspect a string value (typically a tool name) to decide whether
 //! the hook applies.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::error::HookError;
 use crate::error::hook_error::*;

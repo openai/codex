@@ -3,25 +3,21 @@
 use std::path::PathBuf;
 
 use cocode_config::ConfigManager;
-use cocode_protocol::ProviderType;
-use cocode_session::{Session, SessionState};
+use cocode_session::Session;
+use cocode_session::SessionState;
 
 use crate::output;
 use crate::repl::Repl;
 
-/// Run the chat command.
+/// Run the chat command in REPL mode.
 ///
 /// # Arguments
 ///
-/// * `model` - Optional model override
-/// * `provider` - Optional provider override
 /// * `initial_prompt` - Optional initial prompt for non-interactive mode
 /// * `title` - Optional session title
 /// * `max_turns` - Optional max turns limit
 /// * `config` - Configuration manager
 pub async fn run(
-    model: Option<String>,
-    provider: Option<String>,
     initial_prompt: Option<String>,
     title: Option<String>,
     max_turns: Option<i32>,
@@ -30,19 +26,18 @@ pub async fn run(
     // Get working directory
     let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
-    // Resolve provider and model
-    let (resolved_provider, resolved_model) =
-        resolve_provider_model(provider.as_deref(), model.as_deref(), config)?;
+    // Use current config (profile-based)
+    let (provider_name, model_name) = config.current();
 
-    // Get provider type from config (resolves correctly from registered providers)
+    // Get provider type from config
     let provider_type = config
-        .resolve_provider(&resolved_provider)
+        .resolve_provider(&provider_name)
         .map(|info| info.provider_type)
-        .unwrap_or(ProviderType::OpenaiCompat);
+        .unwrap_or(cocode_protocol::ProviderType::OpenaiCompat);
 
     // Create session
-    let mut session = Session::new(working_dir, &resolved_model, provider_type);
-    session.provider = resolved_provider.clone();
+    let mut session = Session::new(working_dir, &model_name, provider_type);
+    session.provider = provider_name;
 
     if let Some(t) = title {
         session.set_title(t);
@@ -77,57 +72,10 @@ pub async fn run(
     Ok(())
 }
 
-/// Resolve provider and model from options and config.
-fn resolve_provider_model(
-    provider: Option<&str>,
-    model: Option<&str>,
-    config: &ConfigManager,
-) -> anyhow::Result<(String, String)> {
-    match (provider, model) {
-        // Both specified
-        (Some(p), Some(m)) => Ok((p.to_string(), m.to_string())),
-
-        // Only provider - use its default model
-        (Some(p), None) => {
-            let models = config.list_models(p);
-            if models.is_empty() {
-                return Err(anyhow::anyhow!("No models found for provider: {p}"));
-            }
-            Ok((p.to_string(), models[0].id.clone()))
-        }
-
-        // Only model - infer provider from current config
-        (None, Some(m)) => {
-            let (current_provider, _) = config.current();
-            Ok((current_provider, m.to_string()))
-        }
-
-        // Neither - use current config
-        (None, None) => {
-            let (p, m) = config.current();
-            Ok((p, m))
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
-    fn test_resolve_provider_model_both_specified() {
-        let config = ConfigManager::empty();
-        let result = resolve_provider_model(Some("openai"), Some("gpt-4"), &config);
-        assert!(result.is_ok());
-        let (provider, model) = result.unwrap();
-        assert_eq!(provider, "openai");
-        assert_eq!(model, "gpt-4");
-    }
-
-    #[test]
-    fn test_resolve_provider_model_neither_specified() {
-        let config = ConfigManager::empty();
-        let result = resolve_provider_model(None, None, &config);
-        assert!(result.is_ok());
+    fn test_chat_module_compiles() {
+        assert!(true);
     }
 }

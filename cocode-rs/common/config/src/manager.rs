@@ -9,7 +9,8 @@ use crate::config::ConfigOverrides;
 use crate::env_loader::EnvLoader;
 use crate::error::ConfigError;
 use crate::error::NotFoundKind;
-use crate::error::config_error::{InternalSnafu, NotFoundSnafu};
+use crate::error::config_error::InternalSnafu;
+use crate::error::config_error::NotFoundSnafu;
 use crate::json_config::AppConfig;
 use crate::json_config::LoggingConfig;
 use crate::loader::ConfigLoader;
@@ -23,7 +24,10 @@ use crate::types::ResolvedModelInfo;
 use cocode_protocol::Features;
 use cocode_protocol::ModelInfo;
 use cocode_protocol::ProviderInfo;
+use cocode_protocol::RoleSelection;
+use cocode_protocol::RoleSelections;
 use cocode_protocol::SandboxMode;
+use cocode_protocol::ThinkingLevel;
 use cocode_protocol::model::ModelRole;
 use cocode_protocol::model::ModelSpec;
 use std::collections::HashMap;
@@ -36,10 +40,24 @@ use tracing::info;
 /// Runtime overrides for provider/model selection.
 ///
 /// These take highest precedence in the layered resolution.
+/// Supports per-role model and thinking level switching.
 #[derive(Debug, Clone, Default)]
 pub struct RuntimeOverrides {
-    /// Override main model (format: "provider/model").
-    pub main: Option<ModelSpec>,
+    /// Role-specific selections (model + thinking_level per role).
+    pub selections: RoleSelections,
+}
+
+impl RuntimeOverrides {
+    /// Get the main model override (for backward compatibility).
+    pub fn main(&self) -> Option<&ModelSpec> {
+        self.selections.get(ModelRole::Main).map(|s| &s.model)
+    }
+
+    /// Set the main model override (for backward compatibility).
+    pub fn set_main(&mut self, spec: ModelSpec) {
+        self.selections
+            .set(ModelRole::Main, RoleSelection::new(spec));
+    }
 }
 
 /// Configuration manager for multi-provider setup.
@@ -191,15 +209,19 @@ impl ConfigManager {
     /// Get the current active provider and model for a specific role.
     ///
     /// Resolution order (highest to lowest precedence):
-    /// 1. Runtime overrides (for Main role only)
+    /// 1. Runtime overrides (per-role selections)
     /// 2. JSON config with profile resolution (`config.json`)
     /// 3. Built-in defaults ("openai", "gpt-5")
     pub fn current_for_role(&self, role: ModelRole) -> (String, String) {
-        // 1. Check runtime overrides first (only for Main role)
-        if role == ModelRole::Main {
+        // 1. Check runtime overrides first (supports all roles)
+        {
             let runtime = self.runtime_overrides.read().unwrap();
-            if let Some(spec) = &runtime.main {
-                return (spec.provider.clone(), spec.model.clone());
+            // First try exact role, then fallback to main
+            if let Some(selection) = runtime.selections.get_or_main(role) {
+                return (
+                    selection.model.provider.clone(),
+                    selection.model.model.clone(),
+                );
             }
         }
 
@@ -231,6 +253,52 @@ impl ConfigManager {
     /// Get the application configuration.
     pub fn app_config(&self) -> AppConfig {
         self.config.read().unwrap().clone()
+    }
+
+    /// Set the active profile (in-memory only).
+    ///
+    /// This overrides the profile selection from config.json. The change is
+    /// in-memory only and will be lost on reload or restart.
+    ///
+    /// Returns `Ok(true)` if the profile exists, `Ok(false)` if the profile
+    /// doesn't exist (profile will still be set, but won't have any effect).
+    pub fn set_profile(&self, profile: &str) -> Result<bool, ConfigError> {
+        let mut config = self.config.write().map_err(|e| {
+            InternalSnafu {
+                message: format!("Failed to acquire write lock: {e}"),
+            }
+            .build()
+        })?;
+
+        let exists = config.has_profile(profile);
+        config.profile = Some(profile.to_string());
+
+        if exists {
+            info!(profile, "Profile set");
+        } else {
+            info!(
+                profile,
+                "Profile set (profile not found in config, will use defaults)"
+            );
+        }
+
+        Ok(exists)
+    }
+
+    /// Get the currently active profile name.
+    pub fn current_profile(&self) -> Option<String> {
+        self.config.read().unwrap().profile.clone()
+    }
+
+    /// List all available profiles.
+    pub fn list_profiles(&self) -> Vec<String> {
+        self.config
+            .read()
+            .unwrap()
+            .list_profiles()
+            .into_iter()
+            .map(String::from)
+            .collect()
     }
 
     /// Get the logging configuration from config.json.
@@ -291,11 +359,170 @@ impl ConfigManager {
                 .build()
             })?;
 
-            runtime.main = Some(ModelSpec::new(provider, model));
+            runtime.set_main(ModelSpec::new(provider, model));
         }
 
         info!(provider = provider, model = model, "Switched to new model");
         Ok(())
+    }
+
+    /// Switch model for a specific role (in-memory only).
+    ///
+    /// This updates the runtime overrides for the specified role.
+    /// To persist, edit the config file directly.
+    pub fn switch_role(
+        &self,
+        role: ModelRole,
+        provider: &str,
+        model: &str,
+    ) -> Result<(), ConfigError> {
+        // Validate the provider
+        let resolver = self.resolver.read().map_err(|e| {
+            InternalSnafu {
+                message: format!("Failed to acquire read lock: {e}"),
+            }
+            .build()
+        })?;
+
+        if !resolver.has_provider(provider) {
+            if builtin::get_provider_defaults(provider).is_none() {
+                return NotFoundSnafu {
+                    kind: NotFoundKind::Provider,
+                    name: provider.to_string(),
+                }
+                .fail();
+            }
+        }
+
+        drop(resolver);
+
+        // Update runtime overrides
+        {
+            let mut runtime = self.runtime_overrides.write().map_err(|e| {
+                InternalSnafu {
+                    message: format!("Failed to acquire write lock: {e}"),
+                }
+                .build()
+            })?;
+
+            runtime
+                .selections
+                .set(role, RoleSelection::new(ModelSpec::new(provider, model)));
+        }
+
+        info!(
+            provider = provider,
+            model = model,
+            role = %role,
+            "Switched model for role"
+        );
+        Ok(())
+    }
+
+    /// Switch model and thinking level for a specific role (in-memory only).
+    ///
+    /// This updates the runtime overrides for the specified role with
+    /// both model and thinking level.
+    pub fn switch_role_with_thinking(
+        &self,
+        role: ModelRole,
+        provider: &str,
+        model: &str,
+        thinking_level: ThinkingLevel,
+    ) -> Result<(), ConfigError> {
+        // Validate the provider
+        let resolver = self.resolver.read().map_err(|e| {
+            InternalSnafu {
+                message: format!("Failed to acquire read lock: {e}"),
+            }
+            .build()
+        })?;
+
+        if !resolver.has_provider(provider) {
+            if builtin::get_provider_defaults(provider).is_none() {
+                return NotFoundSnafu {
+                    kind: NotFoundKind::Provider,
+                    name: provider.to_string(),
+                }
+                .fail();
+            }
+        }
+
+        drop(resolver);
+
+        // Update runtime overrides
+        {
+            let mut runtime = self.runtime_overrides.write().map_err(|e| {
+                InternalSnafu {
+                    message: format!("Failed to acquire write lock: {e}"),
+                }
+                .build()
+            })?;
+
+            runtime.selections.set(
+                role,
+                RoleSelection::with_thinking(
+                    ModelSpec::new(provider, model),
+                    thinking_level.clone(),
+                ),
+            );
+        }
+
+        info!(
+            provider = provider,
+            model = model,
+            role = %role,
+            thinking = %thinking_level,
+            "Switched model with thinking level for role"
+        );
+        Ok(())
+    }
+
+    /// Switch only the thinking level for a specific role (in-memory only).
+    ///
+    /// Keeps the current model but updates the thinking level.
+    /// Returns `Ok(false)` if no model is configured for this role.
+    pub fn switch_thinking_level(
+        &self,
+        role: ModelRole,
+        thinking_level: ThinkingLevel,
+    ) -> Result<bool, ConfigError> {
+        let mut runtime = self.runtime_overrides.write().map_err(|e| {
+            InternalSnafu {
+                message: format!("Failed to acquire write lock: {e}"),
+            }
+            .build()
+        })?;
+
+        let updated = runtime
+            .selections
+            .set_thinking_level(role, thinking_level.clone());
+
+        if updated {
+            info!(
+                role = %role,
+                thinking = %thinking_level,
+                "Switched thinking level for role"
+            );
+        }
+
+        Ok(updated)
+    }
+
+    /// Get current selection for a role.
+    ///
+    /// Returns the runtime override selection if set, or None if not overridden.
+    pub fn current_selection(&self, role: ModelRole) -> Option<RoleSelection> {
+        let runtime = self.runtime_overrides.read().ok()?;
+        runtime.selections.get(role).cloned()
+    }
+
+    /// Get all current runtime selections.
+    pub fn current_selections(&self) -> RoleSelections {
+        self.runtime_overrides
+            .read()
+            .map(|r| r.selections.clone())
+            .unwrap_or_default()
     }
 
     /// Reload configuration from disk.
@@ -1019,5 +1246,123 @@ mod tests {
         // Main model should be the overridden one
         let main = config.main_model().unwrap();
         assert_eq!(main.model, "gpt-5-mini");
+    }
+
+    // ==========================================================
+    // Tests for role switching
+    // ==========================================================
+
+    #[test]
+    fn test_switch_role() {
+        let (_temp, manager) = create_test_manager();
+
+        // Switch fast role
+        manager
+            .switch_role(ModelRole::Fast, "test-openai", "gpt-5-mini")
+            .unwrap();
+
+        // Fast role should use the new model
+        let (provider, model) = manager.current_for_role(ModelRole::Fast);
+        assert_eq!(provider, "test-openai");
+        assert_eq!(model, "gpt-5-mini");
+
+        // Main role should be unchanged
+        let (provider, model) = manager.current_for_role(ModelRole::Main);
+        assert_eq!(provider, "test-openai");
+        assert_eq!(model, "gpt-5");
+    }
+
+    #[test]
+    fn test_switch_role_with_thinking() {
+        let (_temp, manager) = create_test_manager();
+
+        // Switch with thinking level
+        manager
+            .switch_role_with_thinking(
+                ModelRole::Main,
+                "test-openai",
+                "gpt-5",
+                ThinkingLevel::high().set_budget(32000),
+            )
+            .unwrap();
+
+        // Check the selection
+        let selection = manager.current_selection(ModelRole::Main).unwrap();
+        assert_eq!(selection.model.model, "gpt-5");
+        assert!(selection.thinking_level.is_some());
+        assert_eq!(
+            selection.thinking_level.as_ref().unwrap().budget_tokens,
+            Some(32000)
+        );
+    }
+
+    #[test]
+    fn test_switch_thinking_level() {
+        let (_temp, manager) = create_test_manager();
+
+        // First set up a role
+        manager
+            .switch_role(ModelRole::Main, "test-openai", "gpt-5")
+            .unwrap();
+
+        // Switch just the thinking level
+        let updated = manager
+            .switch_thinking_level(ModelRole::Main, ThinkingLevel::medium())
+            .unwrap();
+        assert!(updated);
+
+        // Check the selection
+        let selection = manager.current_selection(ModelRole::Main).unwrap();
+        assert!(selection.thinking_level.is_some());
+        assert_eq!(
+            selection.thinking_level.as_ref().unwrap().effort,
+            cocode_protocol::model::ReasoningEffort::Medium
+        );
+    }
+
+    #[test]
+    fn test_switch_thinking_level_no_selection() {
+        let manager = ConfigManager::empty();
+
+        // Try to switch thinking level for a role that has no selection
+        let updated = manager
+            .switch_thinking_level(ModelRole::Vision, ThinkingLevel::high())
+            .unwrap();
+
+        // Should return false since no selection exists
+        assert!(!updated);
+    }
+
+    #[test]
+    fn test_current_selections() {
+        let (_temp, manager) = create_test_manager();
+
+        // Set up multiple roles
+        manager
+            .switch_role(ModelRole::Main, "test-openai", "gpt-5")
+            .unwrap();
+        manager
+            .switch_role(ModelRole::Fast, "test-openai", "gpt-5-mini")
+            .unwrap();
+
+        let selections = manager.current_selections();
+        assert!(selections.get(ModelRole::Main).is_some());
+        assert!(selections.get(ModelRole::Fast).is_some());
+        assert!(selections.get(ModelRole::Vision).is_none());
+    }
+
+    #[test]
+    fn test_role_fallback_to_main() {
+        let (_temp, manager) = create_test_manager();
+
+        // Only set main role
+        manager
+            .switch_role(ModelRole::Main, "test-openai", "gpt-5-mini")
+            .unwrap();
+
+        // Fast role should fallback to main
+        let (provider, model) = manager.current_for_role(ModelRole::Fast);
+        assert_eq!(provider, "test-openai");
+        assert_eq!(model, "gpt-5-mini");
     }
 }

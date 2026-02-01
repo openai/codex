@@ -2,7 +2,8 @@
 //!
 //! Defines the lifecycle points at which hooks can be triggered.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Type of hook event that triggers hook execution.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

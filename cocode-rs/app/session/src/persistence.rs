@@ -5,9 +5,11 @@
 use std::path::Path;
 
 use cocode_message::MessageHistory;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use tokio::fs;
-use tracing::{debug, info};
+use tracing::debug;
+use tracing::info;
 
 use crate::session::Session;
 

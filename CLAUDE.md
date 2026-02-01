@@ -33,11 +33,11 @@ cd cocode-rs && cargo build                         # Avoid (stay in codex/)
 
 ### Error Handling
 
-**Use `cocode-error` for cocode-rs common/ crates:**
+**Use `cocode-error` for cocode-rs crates:**
 
-| Crate Category         | Error Type |
-|------------------------|------------|
-| common/                | `cocode-error` + custom error enum |
+| Crate Category        | Error Type |
+|-----------------------|------------|
+| common/, core/        | `cocode-error` + snafu (NO custom constructors) |
 | provider-sdks/, utils/ | `anyhow::Result` (avoids reverse dependency on common) |
 
 **Required pattern:**

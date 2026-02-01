@@ -5,9 +5,12 @@
 
 use crate::contribution::PluginContributions;
 use crate::error::Result;
-use crate::error::plugin_error::{InvalidManifestSnafu, IoSnafu, ManifestNotFoundSnafu};
+use crate::error::plugin_error::InvalidManifestSnafu;
+use crate::error::plugin_error::IoSnafu;
+use crate::error::plugin_error::ManifestNotFoundSnafu;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use std::fs;
 use std::path::Path;
 

@@ -1,5 +1,24 @@
+use std::pin::Pin;
+use std::sync::Arc;
+
 use crate::iterative::condition::IterationCondition;
 use crate::iterative::context::IterationRecord;
+
+/// Callback type for executing an agent for one iteration.
+///
+/// The callback receives:
+/// - `iteration`: The current iteration number (0-based)
+/// - `prompt`: The task prompt for the iteration
+///
+/// Returns the iteration result as a string.
+pub type IterationExecuteFn = Arc<
+    dyn Fn(
+            i32,    // iteration
+            String, // prompt
+        ) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>>
+        + Send
+        + Sync,
+>;
 
 /// Executor that runs an agent prompt iteratively based on a condition.
 pub struct IterativeExecutor {
@@ -8,6 +27,9 @@ pub struct IterativeExecutor {
 
     /// Maximum number of iterations allowed.
     pub max_iterations: i32,
+
+    /// Optional callback for executing each iteration.
+    execute_fn: Option<IterationExecuteFn>,
 }
 
 impl IterativeExecutor {
@@ -21,7 +43,14 @@ impl IterativeExecutor {
         Self {
             condition,
             max_iterations,
+            execute_fn: None,
         }
+    }
+
+    /// Set the execution callback for each iteration.
+    pub fn with_execute_fn(mut self, f: IterationExecuteFn) -> Self {
+        self.execute_fn = Some(f);
+        self
     }
 
     /// Execute the prompt iteratively according to the configured condition.
@@ -50,19 +79,43 @@ impl IterativeExecutor {
                 }
             }
 
-            // TODO: Execute actual agent call here.
-            let result = format!("Iteration {i} result for: {prompt}");
+            // Execute actual agent call using callback, or use stub
+            let result = if let Some(execute_fn) = &self.execute_fn {
+                match execute_fn(i, prompt.to_string()).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        tracing::error!(iteration = i, error = %e, "Iteration failed");
+                        format!("Iteration {i} failed: {e}")
+                    }
+                }
+            } else {
+                // No execute function - return stub
+                format!("Iteration {i} result for: {prompt}")
+            };
+
             let duration_ms = iter_start.elapsed().as_millis() as i64;
 
             records.push(IterationRecord {
                 iteration: i,
-                result,
+                result: result.clone(),
                 duration_ms,
             });
 
             // Check count condition.
             if let IterationCondition::Count { max } = &self.condition {
                 if i + 1 >= *max {
+                    break;
+                }
+            }
+
+            // Check "Until" condition if configured
+            if let IterationCondition::Until { check } = &self.condition {
+                if result.contains(check) {
+                    tracing::info!(
+                        iteration = i,
+                        check = %check,
+                        "Until condition satisfied"
+                    );
                     break;
                 }
             }

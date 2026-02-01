@@ -214,6 +214,7 @@ fn init_builtin_providers() -> HashMap<String, ProviderConfig> {
             overrides: HashMap::new(),
             models: Vec::new(),
             extra: None,
+            interceptors: Vec::new(),
         },
     );
 
@@ -231,6 +232,7 @@ fn init_builtin_providers() -> HashMap<String, ProviderConfig> {
             overrides: HashMap::new(),
             models: Vec::new(),
             extra: None,
+            interceptors: Vec::new(),
         },
     );
 

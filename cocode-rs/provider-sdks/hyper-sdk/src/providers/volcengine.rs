@@ -255,17 +255,6 @@ impl Model for VolcengineModel {
             params = params.tool_choice(convert_tool_choice_to_ark(choice));
         }
 
-        // Handle thinking config
-        if let Some(thinking_config) = &request.thinking_config {
-            if thinking_config.enabled {
-                if let Some(budget) = thinking_config.budget_tokens {
-                    params = params.thinking(ark::ThinkingConfig::enabled(budget));
-                } else {
-                    params = params.thinking(ark::ThinkingConfig::auto());
-                }
-            }
-        }
-
         // Handle provider-specific options
         if let Some(ref options) = request.provider_options {
             if let Some(volcengine_opts) = downcast_options::<VolcengineOptions>(options) {

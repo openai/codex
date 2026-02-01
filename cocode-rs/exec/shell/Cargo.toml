@@ -6,14 +6,22 @@ license.workspace = true
 
 [dependencies]
 cocode-protocol.workspace = true
-tokio = { workspace = true, features = ["sync", "process", "time", "io-util", "rt"] }
+cocode-shell-parser.workspace = true
+tokio = { workspace = true, features = ["sync", "process", "time", "io-util", "rt", "fs"] }
 tracing.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+anyhow.workspace = true
+dirs.workspace = true
+which.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tempfile.workspace = true
+pretty_assertions.workspace = true
 
 [lints]
 workspace = true

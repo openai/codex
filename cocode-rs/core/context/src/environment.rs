@@ -4,7 +4,8 @@
 
 use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Runtime environment information for the agent session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,15 +108,21 @@ impl EnvironmentInfoBuilder {
                 .platform
                 .unwrap_or_else(|| std::env::consts::OS.to_string()),
             os_version: self.os_version.unwrap_or_default(),
-            cwd: self
-                .cwd
-                .ok_or_else(|| crate::error::ContextError::build_error("cwd is required"))?,
+            cwd: self.cwd.ok_or_else(|| {
+                crate::error::context_error::BuildSnafu {
+                    message: "cwd is required",
+                }
+                .build()
+            })?,
             is_git_repo: self.is_git_repo,
             git_branch: self.git_branch,
             date: self.date.unwrap_or(today),
-            model: self
-                .model
-                .ok_or_else(|| crate::error::ContextError::build_error("model is required"))?,
+            model: self.model.ok_or_else(|| {
+                crate::error::context_error::BuildSnafu {
+                    message: "model is required",
+                }
+                .build()
+            })?,
             context_window: self.context_window.unwrap_or(200000),
             output_token_limit: self.output_token_limit.unwrap_or(16384),
         })

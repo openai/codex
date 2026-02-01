@@ -4,10 +4,14 @@
 //! complete user-assistant exchanges including tool executions.
 
 use crate::tracked::TrackedMessage;
-use chrono::{DateTime, Utc};
-use cocode_protocol::{AbortReason, TokenUsage, ToolResultContent};
+use chrono::DateTime;
+use chrono::Utc;
+use cocode_protocol::AbortReason;
+use cocode_protocol::TokenUsage;
+use cocode_protocol::ToolResultContent;
 use hyper_sdk::ToolCall;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
 

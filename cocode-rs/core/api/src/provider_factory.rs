@@ -15,12 +15,17 @@
 //! let model = create_model(&info, "gpt-4o")?;
 //! ```
 
-use crate::error::{ApiError, Result};
-use cocode_protocol::{ProviderInfo, ProviderType};
-use hyper_sdk::{
-    AnthropicProvider, GeminiProvider, Model, OpenAICompatProvider, OpenAIProvider, Provider,
-    VolcengineProvider, ZaiProvider,
-};
+use crate::error::Result;
+use cocode_protocol::ProviderInfo;
+use cocode_protocol::ProviderType;
+use hyper_sdk::AnthropicProvider;
+use hyper_sdk::GeminiProvider;
+use hyper_sdk::Model;
+use hyper_sdk::OpenAICompatProvider;
+use hyper_sdk::OpenAIProvider;
+use hyper_sdk::Provider;
+use hyper_sdk::VolcengineProvider;
+use hyper_sdk::ZaiProvider;
 use std::sync::Arc;
 
 /// Create a provider from ProviderInfo configuration.
@@ -48,7 +53,12 @@ pub fn create_provider(info: &ProviderInfo) -> Result<Arc<dyn Provider>> {
                 }
             }
 
-            Arc::new(builder.build().map_err(|e| ApiError::sdk(e.to_string()))?)
+            Arc::new(builder.build().map_err(|e| {
+                crate::error::api_error::SdkSnafu {
+                    message: e.to_string(),
+                }
+                .build()
+            })?)
         }
         ProviderType::Anthropic => {
             let builder = AnthropicProvider::builder()
@@ -56,7 +66,12 @@ pub fn create_provider(info: &ProviderInfo) -> Result<Arc<dyn Provider>> {
                 .base_url(&info.base_url)
                 .timeout_secs(info.timeout_secs);
 
-            Arc::new(builder.build().map_err(|e| ApiError::sdk(e.to_string()))?)
+            Arc::new(builder.build().map_err(|e| {
+                crate::error::api_error::SdkSnafu {
+                    message: e.to_string(),
+                }
+                .build()
+            })?)
         }
         ProviderType::Gemini => {
             let builder = GeminiProvider::builder()
@@ -64,7 +79,12 @@ pub fn create_provider(info: &ProviderInfo) -> Result<Arc<dyn Provider>> {
                 .base_url(&info.base_url)
                 .timeout_secs(info.timeout_secs);
 
-            Arc::new(builder.build().map_err(|e| ApiError::sdk(e.to_string()))?)
+            Arc::new(builder.build().map_err(|e| {
+                crate::error::api_error::SdkSnafu {
+                    message: e.to_string(),
+                }
+                .build()
+            })?)
         }
         ProviderType::Volcengine => {
             let builder = VolcengineProvider::builder()
@@ -72,7 +92,12 @@ pub fn create_provider(info: &ProviderInfo) -> Result<Arc<dyn Provider>> {
                 .base_url(&info.base_url)
                 .timeout_secs(info.timeout_secs);
 
-            Arc::new(builder.build().map_err(|e| ApiError::sdk(e.to_string()))?)
+            Arc::new(builder.build().map_err(|e| {
+                crate::error::api_error::SdkSnafu {
+                    message: e.to_string(),
+                }
+                .build()
+            })?)
         }
         ProviderType::Zai => {
             let mut builder = ZaiProvider::builder()
@@ -87,7 +112,12 @@ pub fn create_provider(info: &ProviderInfo) -> Result<Arc<dyn Provider>> {
                 }
             }
 
-            Arc::new(builder.build().map_err(|e| ApiError::sdk(e.to_string()))?)
+            Arc::new(builder.build().map_err(|e| {
+                crate::error::api_error::SdkSnafu {
+                    message: e.to_string(),
+                }
+                .build()
+            })?)
         }
         ProviderType::OpenaiCompat => {
             let builder = OpenAICompatProvider::builder(&info.name)
@@ -95,7 +125,12 @@ pub fn create_provider(info: &ProviderInfo) -> Result<Arc<dyn Provider>> {
                 .base_url(&info.base_url)
                 .timeout_secs(info.timeout_secs);
 
-            Arc::new(builder.build().map_err(|e| ApiError::sdk(e.to_string()))?)
+            Arc::new(builder.build().map_err(|e| {
+                crate::error::api_error::SdkSnafu {
+                    message: e.to_string(),
+                }
+                .build()
+            })?)
         }
     };
     Ok(provider)
@@ -123,9 +158,12 @@ pub fn create_model(info: &ProviderInfo, model_slug: &str) -> Result<Arc<dyn Mod
     // Get the API model name (handles aliases like endpoint IDs for Volcengine)
     let api_name = info.api_model_name(model_slug).unwrap_or(model_slug);
 
-    provider
-        .model(api_name)
-        .map_err(|e| ApiError::sdk(e.to_string()))
+    provider.model(api_name).map_err(|e| {
+        crate::error::api_error::SdkSnafu {
+            message: e.to_string(),
+        }
+        .build()
+    })
 }
 
 #[cfg(test)]

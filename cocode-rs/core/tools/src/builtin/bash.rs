@@ -2,13 +2,19 @@
 
 use super::prompts;
 use crate::context::ToolContext;
-use crate::error::{Result, ToolError};
+use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
-use cocode_protocol::{ConcurrencySafety, ToolOutput};
+use cocode_protocol::ConcurrencySafety;
+use cocode_protocol::ToolOutput;
+use cocode_shell::BackgroundProcess;
 use serde_json::Value;
 use std::process::Stdio;
+use std::sync::Arc;
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
+use tokio::sync::Mutex;
+use tokio::sync::Notify;
 
 /// Maximum output size (bytes) before truncation.
 const MAX_OUTPUT_SIZE: usize = 30_000;
@@ -127,9 +133,12 @@ impl Tool for BashTool {
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
-        let command = input["command"]
-            .as_str()
-            .ok_or_else(|| ToolError::invalid_input("command must be a string"))?;
+        let command = input["command"].as_str().ok_or_else(|| {
+            crate::error::tool_error::InvalidInputSnafu {
+                message: "command must be a string",
+            }
+            .build()
+        })?;
 
         let timeout_ms = input["timeout"]
             .as_i64()
@@ -141,15 +150,96 @@ impl Tool for BashTool {
         let desc = input["description"].as_str().unwrap_or("Executing command");
         ctx.emit_progress(desc).await;
 
-        // Background execution stub
+        // Background execution
         if run_in_background {
-            // TODO: spawn as background task via BackgroundTaskRegistry (from exec/shell)
-            // and return task ID immediately. For now, return a stub response.
-            let task_id = format!("bg-{}", ctx.call_id);
+            let task_id = format!("bg-{}", uuid_simple());
+            let output = Arc::new(Mutex::new(String::new()));
+            let completed = Arc::new(Notify::new());
+
+            let process = BackgroundProcess {
+                id: task_id.clone(),
+                command: command.to_string(),
+                output: Arc::clone(&output),
+                completed: Arc::clone(&completed),
+            };
+
+            // Register the background task
+            ctx.background_registry
+                .register(task_id.clone(), process)
+                .await;
+
+            // Spawn the background process
+            let cwd = ctx.cwd.clone();
+            let cmd = command.to_string();
+
+            tokio::spawn(async move {
+                let child = Command::new("bash")
+                    .arg("-c")
+                    .arg(&cmd)
+                    .current_dir(&cwd)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .kill_on_drop(true)
+                    .spawn();
+
+                match child {
+                    Ok(mut child) => {
+                        // Read stdout asynchronously
+                        if let Some(mut stdout) = child.stdout.take() {
+                            let output_clone = Arc::clone(&output);
+                            tokio::spawn(async move {
+                                let mut buf = vec![0u8; 4096];
+                                loop {
+                                    match stdout.read(&mut buf).await {
+                                        Ok(0) => break,
+                                        Ok(n) => {
+                                            if let Ok(text) = String::from_utf8(buf[..n].to_vec()) {
+                                                let mut out = output_clone.lock().await;
+                                                out.push_str(&text);
+                                            }
+                                        }
+                                        Err(_) => break,
+                                    }
+                                }
+                            });
+                        }
+
+                        // Read stderr asynchronously
+                        if let Some(mut stderr) = child.stderr.take() {
+                            let output_clone = Arc::clone(&output);
+                            tokio::spawn(async move {
+                                let mut buf = vec![0u8; 4096];
+                                loop {
+                                    match stderr.read(&mut buf).await {
+                                        Ok(0) => break,
+                                        Ok(n) => {
+                                            if let Ok(text) = String::from_utf8(buf[..n].to_vec()) {
+                                                let mut out = output_clone.lock().await;
+                                                out.push_str(&text);
+                                            }
+                                        }
+                                        Err(_) => break,
+                                    }
+                                }
+                            });
+                        }
+
+                        // Wait for process to complete
+                        let _ = child.wait().await;
+                    }
+                    Err(e) => {
+                        let mut out = output.lock().await;
+                        out.push_str(&format!("Failed to spawn command: {e}"));
+                    }
+                }
+
+                completed.notify_waiters();
+                // Note: Task remains in registry until explicitly stopped or output retrieved
+            });
+
             return Ok(ToolOutput::text(format!(
-                "Background task started with ID: {task_id}\n\n\
-                 [Background execution not yet connected — command will not run.\\n\
-                 To enable, wire up BackgroundTaskRegistry from exec/shell.]"
+                "Background task started with ID: {task_id}\n\
+                 Use TaskOutput tool with task_id=\"{task_id}\" to retrieve output."
             )));
         }
 
@@ -171,12 +261,13 @@ impl Tool for BashTool {
         let output = match result {
             Ok(Ok(output)) => output,
             Ok(Err(e)) => {
-                return Err(ToolError::execution_failed(format!(
-                    "Failed to execute command: {e}"
-                )));
+                return Err(crate::error::tool_error::ExecutionFailedSnafu {
+                    message: format!("Failed to execute command: {e}"),
+                }
+                .build());
             }
             Err(_) => {
-                return Err(ToolError::timeout(timeout_secs));
+                return Err(crate::error::tool_error::TimeoutSnafu { timeout_secs }.build());
             }
         };
 
@@ -229,6 +320,17 @@ fn truncate_output(output: &str, max_size: usize) -> String {
             output.len() - max_size
         )
     }
+}
+
+/// Generates a simple unique identifier (timestamp-based).
+fn uuid_simple() -> String {
+    use std::time::SystemTime;
+    use std::time::UNIX_EPOCH;
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{nanos:x}")
 }
 
 #[cfg(test)]

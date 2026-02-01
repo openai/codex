@@ -9,6 +9,7 @@ members = [
     "core/tools",
     "core/context",
     "core/prompt",
+    "core/system-reminder",
     "utils/file-ignore",
     "utils/file-search",
     "provider-sdks/anthropic",
@@ -38,14 +39,17 @@ members = [
     "lsp",
     "exec/shell",
     "exec/sandbox",
+    "exec/arg0",
     "features/skill",
     "features/hooks",
     "features/plugin",
+    "features/plan-mode",
     "core/loop",
     "core/subagent",
     "core/executor",
     "app/session",
     "app/cli",
+    "app/tui",
 ]
 resolver = "2"
 
@@ -73,6 +77,7 @@ cocode-context = { path = "core/context" }
 cocode-prompt = { path = "core/prompt" }
 cocode-loop = { path = "core/loop" }
 cocode-subagent = { path = "core/subagent" }
+cocode-system-reminder = { path = "core/system-reminder" }
 cocode-executor = { path = "core/executor" }
 
 # Internal - provider SDKs (keep original names)
@@ -109,15 +114,18 @@ cocode-rmcp-client = { path = "mcp/rmcp-client" }
 # Internal - exec
 cocode-shell = { path = "exec/shell" }
 cocode-sandbox = { path = "exec/sandbox" }
+cocode-arg0 = { path = "exec/arg0" }
 
 # Internal - features
 cocode-skill = { path = "features/skill" }
 cocode-hooks = { path = "features/hooks" }
 cocode-plugin = { path = "features/plugin" }
+cocode-plan-mode = { path = "features/plan-mode" }
 
 # Internal - app
 cocode-session = { path = "app/session" }
 cocode-cli = { path = "app/cli" }
+cocode-tui = { path = "app/tui" }
 
 # Internal - LSP
 cocode-lsp = { path = "lsp" }
@@ -153,6 +161,7 @@ opentelemetry_sdk = "0.31.0"
 path-absolutize = "3.1.1"
 portable-pty = "0.9.0"
 pretty_assertions = "1.4.1"
+rand = "0.9"
 regex = "1.12.2"
 regex-lite = "0.1.8"
 reqwest = "0.12"

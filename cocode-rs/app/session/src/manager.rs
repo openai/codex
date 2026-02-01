@@ -8,12 +8,16 @@ use std::path::PathBuf;
 use cocode_config::ConfigManager;
 use cocode_protocol::ProviderType;
 use tokio::fs;
-use tracing::{debug, info, warn};
+use tracing::debug;
+use tracing::info;
+use tracing::warn;
 
-use crate::persistence::{
-    default_sessions_dir, delete_session_file, load_session_from_file, save_session_to_file,
-    session_exists, session_file_path,
-};
+use crate::persistence::default_sessions_dir;
+use crate::persistence::delete_session_file;
+use crate::persistence::load_session_from_file;
+use crate::persistence::save_session_to_file;
+use crate::persistence::session_exists;
+use crate::persistence::session_file_path;
 use crate::session::Session;
 use crate::state::SessionState;
 

@@ -20,11 +20,32 @@ pub enum ReasoningEffort {
     High,
 }
 
+/// Reasoning summary level for OpenAI o1/o3 models.
+///
+/// See <https://platform.openai.com/docs/guides/reasoning#reasoning-summaries>
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReasoningSummary {
+    /// No reasoning summary.
+    None,
+    /// Auto (provider decides).
+    #[default]
+    Auto,
+    /// Concise summary.
+    Concise,
+    /// Detailed summary.
+    Detailed,
+}
+
 /// OpenAI-specific options.
 #[derive(Debug, Clone, Default)]
 pub struct OpenAIOptions {
     /// Reasoning effort for o1/o3 models.
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// Reasoning summary level for o1/o3 models.
+    pub reasoning_summary: Option<ReasoningSummary>,
+    /// Include encrypted reasoning content in response.
+    pub include_encrypted_content: Option<bool>,
     /// Previous response ID for conversation continuity.
     pub previous_response_id: Option<String>,
     /// Response format (e.g., "json_object" for JSON mode).
@@ -42,6 +63,18 @@ impl OpenAIOptions {
     /// Set reasoning effort.
     pub fn with_reasoning_effort(mut self, effort: ReasoningEffort) -> Self {
         self.reasoning_effort = Some(effort);
+        self
+    }
+
+    /// Set reasoning summary level.
+    pub fn with_reasoning_summary(mut self, summary: ReasoningSummary) -> Self {
+        self.reasoning_summary = Some(summary);
+        self
+    }
+
+    /// Set whether to include encrypted content in response.
+    pub fn with_include_encrypted_content(mut self, include: bool) -> Self {
+        self.include_encrypted_content = Some(include);
         self
     }
 
@@ -116,5 +149,25 @@ mod tests {
             openai_opts.unwrap().reasoning_effort,
             Some(ReasoningEffort::Low)
         );
+    }
+
+    #[test]
+    fn test_reasoning_summary() {
+        let opts = OpenAIOptions::new()
+            .with_reasoning_summary(ReasoningSummary::Detailed)
+            .with_include_encrypted_content(true);
+
+        assert_eq!(opts.reasoning_summary, Some(ReasoningSummary::Detailed));
+        assert_eq!(opts.include_encrypted_content, Some(true));
+    }
+
+    #[test]
+    fn test_reasoning_summary_serde() {
+        let summary = ReasoningSummary::Concise;
+        let json = serde_json::to_string(&summary).unwrap();
+        assert_eq!(json, "\"concise\"");
+
+        let parsed: ReasoningSummary = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, ReasoningSummary::Concise);
     }
 }

@@ -1,8 +1,11 @@
 //! Interactive REPL for chat sessions.
 
 use cocode_session::SessionState;
-use cocode_skill::{SkillManager, execute_skill};
-use std::io::{self, BufRead, Write};
+use cocode_skill::SkillManager;
+use cocode_skill::execute_skill;
+use std::io::BufRead;
+use std::io::Write;
+use std::io::{self};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 

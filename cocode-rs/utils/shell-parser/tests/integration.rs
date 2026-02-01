@@ -1,10 +1,13 @@
 //! Integration tests for shell-parser crate.
 
-use cocode_shell_parser::{
-    ShellParser, TokenKind, Tokenizer, extract_redirects_from_tree, extract_segments_from_tree,
-    parse_and_analyze,
-    security::{RiskKind, RiskLevel},
-};
+use cocode_shell_parser::ShellParser;
+use cocode_shell_parser::TokenKind;
+use cocode_shell_parser::Tokenizer;
+use cocode_shell_parser::extract_redirects_from_tree;
+use cocode_shell_parser::extract_segments_from_tree;
+use cocode_shell_parser::parse_and_analyze;
+use cocode_shell_parser::security::RiskKind;
+use cocode_shell_parser::security::RiskLevel;
 
 // =============================================================================
 // Parsing Tests

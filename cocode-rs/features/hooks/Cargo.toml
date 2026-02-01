@@ -15,6 +15,8 @@ regex.workspace = true
 snafu.workspace = true
 snafu-virtstack.workspace = true
 toml.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+reqwest = { workspace = true, features = ["json"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

@@ -4,7 +4,8 @@
 //! available in some providers (like Anthropic's prompt caching).
 
 use hyper_sdk::Message;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Configuration for prompt caching.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -55,7 +55,8 @@ use cocode_protocol::PathConfig;
 use cocode_protocol::PlanModeConfig;
 use cocode_protocol::ToolConfig;
 use cocode_protocol::model::ModelRoles;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 

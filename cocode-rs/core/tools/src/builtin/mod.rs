@@ -1,6 +1,6 @@
 //! Built-in tools for the agent.
 //!
-//! This module provides the standard set of 16 built-in tools:
+//! This module provides the standard set of 17 built-in tools:
 //! - [`ReadTool`] - Read file contents
 //! - [`GlobTool`] - Pattern-based file search
 //! - [`GrepTool`] - Content search with regex
@@ -17,6 +17,11 @@
 //! - [`WebFetchTool`] - Fetch and process web content
 //! - [`WebSearchTool`] - Search the web
 //! - [`SkillTool`] - Execute named skills (slash commands)
+//! - [`LspTool`] - Language Server Protocol operations (feature-gated)
+//!
+//! ## Utilities
+//!
+//! - [`path_extraction::LlmPathExtractor`] - LLM-based file path extraction from command output
 
 mod prompts;
 
@@ -28,6 +33,8 @@ mod exit_plan_mode;
 mod glob;
 mod grep;
 mod kill_shell;
+mod lsp;
+pub mod path_extraction;
 mod read;
 mod skill;
 mod task;
@@ -45,6 +52,7 @@ pub use exit_plan_mode::ExitPlanModeTool;
 pub use glob::GlobTool;
 pub use grep::GrepTool;
 pub use kill_shell::KillShellTool;
+pub use lsp::LspTool;
 pub use read::ReadTool;
 pub use skill::SkillTool;
 pub use task::TaskTool;
@@ -74,6 +82,7 @@ pub fn register_builtin_tools(registry: &mut ToolRegistry) {
     registry.register(WebFetchTool::new());
     registry.register(WebSearchTool::new());
     registry.register(SkillTool::new());
+    registry.register(LspTool::new());
 }
 
 /// Get a list of built-in tool names.
@@ -95,5 +104,6 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "WebFetch",
         "WebSearch",
         "Skill",
+        "Lsp",
     ]
 }

@@ -1,12 +1,16 @@
 //! Skill tool for executing named skills.
 
 use super::prompts;
+use crate::context::InvokedSkill;
 use crate::context::ToolContext;
-use crate::error::{Result, ToolError};
+use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
-use cocode_protocol::{ConcurrencySafety, ToolOutput};
+use cocode_protocol::ConcurrencySafety;
+use cocode_protocol::ToolOutput;
+use cocode_skill::register_skill_hooks;
 use serde_json::Value;
+use std::time::Instant;
 
 /// Tool for executing named skills (slash commands).
 ///
@@ -63,24 +67,61 @@ impl Tool for SkillTool {
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
-        let skill_name = input["skill"]
-            .as_str()
-            .ok_or_else(|| ToolError::invalid_input("skill must be a string"))?;
+        let skill_name = input["skill"].as_str().ok_or_else(|| {
+            crate::error::tool_error::InvalidInputSnafu {
+                message: "skill must be a string",
+            }
+            .build()
+        })?;
         let args = input["args"].as_str().unwrap_or("");
 
         ctx.emit_progress(format!("Executing skill: {skill_name}"))
             .await;
 
-        // Stub: SkillLoader/SkillScanner will be connected from cocode-skill crate
-        Ok(ToolOutput::text(format!(
-            "Skill '{skill_name}' invoked{}\n\n\
-             [Skill system not yet connected — this is a stub response.\n\
-             To enable, wire up the cocode-skill crate.]",
-            if args.is_empty() {
-                String::new()
-            } else {
-                format!(" with args: {args}")
+        // Get skill manager from context
+        let skill_manager = ctx.skill_manager.as_ref().ok_or_else(|| {
+            crate::error::tool_error::InternalSnafu {
+                message: "Skill manager not configured",
             }
+            .build()
+        })?;
+
+        // Look up the skill
+        let skill = skill_manager.get(skill_name).ok_or_else(|| {
+            crate::error::tool_error::NotFoundSnafu {
+                name: format!("skill '{skill_name}'"),
+            }
+            .build()
+        })?;
+
+        // Build the prompt with argument substitution
+        let prompt = if skill.prompt.contains("$ARGUMENTS") {
+            skill.prompt.replace("$ARGUMENTS", args)
+        } else if args.is_empty() {
+            skill.prompt.clone()
+        } else {
+            format!("{}\n\nArguments: {}", skill.prompt, args)
+        };
+
+        // Register skill hooks if the skill has an interface with hooks
+        if let Some(ref interface) = skill.interface {
+            if let Some(ref registry) = ctx.hook_registry {
+                let hook_count = register_skill_hooks(registry, interface);
+                if hook_count > 0 {
+                    tracing::debug!(skill_name, hook_count, "Registered skill hooks");
+                }
+            }
+
+            // Track the invoked skill for later cleanup
+            ctx.invoked_skills.lock().await.push(InvokedSkill {
+                name: skill_name.to_string(),
+                started_at: Instant::now(),
+            });
+        }
+
+        // Return the skill prompt wrapped in XML tags for the model
+        Ok(ToolOutput::text(format!(
+            "<skill-invoked name=\"{skill_name}\">\n{prompt}\n</skill-invoked>"
         )))
     }
 }
@@ -88,10 +129,33 @@ impl Tool for SkillTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cocode_skill::SkillManager;
+    use cocode_skill::SkillPromptCommand;
     use std::path::PathBuf;
+    use std::sync::Arc;
+
+    fn make_skill_manager() -> Arc<SkillManager> {
+        let mut manager = SkillManager::new();
+        manager.register(SkillPromptCommand {
+            name: "commit".to_string(),
+            description: "Generate a commit message".to_string(),
+            prompt: "Analyze the changes and generate a commit message".to_string(),
+            allowed_tools: None,
+            interface: None,
+        });
+        manager.register(SkillPromptCommand {
+            name: "review-pr".to_string(),
+            description: "Review a pull request".to_string(),
+            prompt: "Review PR #$ARGUMENTS".to_string(),
+            allowed_tools: None,
+            interface: None,
+        });
+        Arc::new(manager)
+    }
 
     fn make_context() -> ToolContext {
         ToolContext::new("call-1", "session-1", PathBuf::from("/tmp"))
+            .with_skill_manager(make_skill_manager())
     }
 
     #[tokio::test]
@@ -110,6 +174,7 @@ mod tests {
             _ => panic!("Expected text content"),
         };
         assert!(text.contains("commit"));
+        assert!(text.contains("<skill-invoked"));
     }
 
     #[tokio::test]
@@ -128,8 +193,36 @@ mod tests {
             cocode_protocol::ToolResultContent::Text(t) => t,
             _ => panic!("Expected text content"),
         };
-        assert!(text.contains("review-pr"));
-        assert!(text.contains("123"));
+        // $ARGUMENTS should be replaced with "123"
+        assert!(text.contains("Review PR #123"));
+        assert!(text.contains("<skill-invoked"));
+    }
+
+    #[tokio::test]
+    async fn test_skill_not_found() {
+        let tool = SkillTool::new();
+        let mut ctx = make_context();
+
+        let input = serde_json::json!({
+            "skill": "nonexistent"
+        });
+
+        let result = tool.execute(input, &mut ctx).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_skill_manager_not_configured() {
+        let tool = SkillTool::new();
+        // Context without skill manager
+        let mut ctx = ToolContext::new("call-1", "session-1", PathBuf::from("/tmp"));
+
+        let input = serde_json::json!({
+            "skill": "commit"
+        });
+
+        let result = tool.execute(input, &mut ctx).await;
+        assert!(result.is_err());
     }
 
     #[test]

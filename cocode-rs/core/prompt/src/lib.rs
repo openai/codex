@@ -18,8 +18,10 @@ pub mod templates;
 
 // Re-export main types at crate root
 pub use builder::SystemPromptBuilder;
-pub use error::{PromptError, Result};
+pub use error::PromptError;
+pub use error::Result;
 pub use sections::PromptSection;
-pub use summarization::{
-    ParsedSummary, build_brief_summary_prompt, build_summarization_prompt, parse_summary_response,
-};
+pub use summarization::ParsedSummary;
+pub use summarization::build_brief_summary_prompt;
+pub use summarization::build_summarization_prompt;
+pub use summarization::parse_summary_response;

@@ -1,7 +1,9 @@
 //! Shell execution type configuration.
 
-use serde::{Deserialize, Serialize};
-use strum::{Display, EnumIter};
+use serde::Deserialize;
+use serde::Serialize;
+use strum::Display;
+use strum::EnumIter;
 
 /// Shell execution capability for a model.
 #[derive(

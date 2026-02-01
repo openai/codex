@@ -1,6 +1,7 @@
 //! Sandbox mode configuration for command execution.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Sandbox mode for command execution.
 ///

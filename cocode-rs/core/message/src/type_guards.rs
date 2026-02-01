@@ -3,7 +3,10 @@
 //! These utilities help identify and extract specific content types from
 //! messages, similar to Claude Code's `type-guards.ts`.
 
-use hyper_sdk::{ContentBlock, Message, Role, ToolCall};
+use hyper_sdk::ContentBlock;
+use hyper_sdk::Message;
+use hyper_sdk::Role;
+use hyper_sdk::ToolCall;
 
 /// Check if a content block is a text block.
 pub fn is_text_block(block: &ContentBlock) -> bool {

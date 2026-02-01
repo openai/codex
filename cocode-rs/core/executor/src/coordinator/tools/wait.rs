@@ -1,4 +1,5 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Request to wait for an agent to complete.
 #[derive(Debug, Clone, Serialize, Deserialize)]

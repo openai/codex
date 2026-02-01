@@ -2,7 +2,8 @@
 //!
 //! Defines additional path settings beyond the standard cocode_home and cwd.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use std::path::PathBuf;
 
 /// Extended path configuration.

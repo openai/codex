@@ -5,7 +5,8 @@
 //! so that changes can be detected when comparing against user-overridden
 //! versions.
 
-use sha2::{Digest, Sha256};
+use sha2::Digest;
+use sha2::Sha256;
 
 /// A skill bundled with the binary.
 ///

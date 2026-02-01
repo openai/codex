@@ -10,22 +10,39 @@
 //! - **PostToolUse**: Called after successful tool execution
 //! - **PostToolUseFailure**: Called when a tool execution fails
 
-use crate::context::{ApprovalStore, FileTracker, ToolContext, ToolContextBuilder};
-use crate::error::{Result, ToolError};
+use crate::context::ApprovalStore;
+use crate::context::FileTracker;
+use crate::context::SpawnAgentFn;
+use crate::context::ToolContext;
+use crate::context::ToolContextBuilder;
+use crate::error::Result;
 use crate::registry::ToolRegistry;
-use cocode_hooks::{HookContext, HookEventType, HookRegistry, HookResult};
-use cocode_protocol::{
-    AbortReason, ConcurrencySafety, LoopEvent, PermissionMode, ToolOutput, ValidationResult,
-};
+use crate::result_persistence;
+use cocode_hooks::AsyncHookTracker;
+use cocode_hooks::HookContext;
+use cocode_hooks::HookEventType;
+use cocode_hooks::HookRegistry;
+use cocode_hooks::HookResult;
+use cocode_protocol::AbortReason;
+use cocode_protocol::ConcurrencySafety;
+use cocode_protocol::LoopEvent;
+use cocode_protocol::PermissionMode;
+use cocode_protocol::ToolOutput;
+use cocode_protocol::ValidationResult;
+use cocode_shell::BackgroundTaskRegistry;
 use hyper_sdk::ToolCall;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, warn};
+use tracing::debug;
+use tracing::error;
+use tracing::info;
+use tracing::warn;
 
 /// Configuration for the tool executor.
 #[derive(Debug, Clone)]
@@ -40,6 +57,17 @@ pub struct ExecutorConfig {
     pub permission_mode: PermissionMode,
     /// Default timeout for tool execution (seconds).
     pub default_timeout_secs: i64,
+    /// Whether plan mode is currently active.
+    pub is_plan_mode: bool,
+    /// Path to the current plan file (if in plan mode).
+    pub plan_file_path: Option<PathBuf>,
+    /// Session directory for storing large tool results.
+    ///
+    /// When set, tool results exceeding the configured size threshold are
+    /// persisted to `{session_dir}/tool-results/{call_id}.txt`.
+    pub session_dir: Option<PathBuf>,
+    /// Tool configuration for result persistence thresholds.
+    pub tool_config: cocode_protocol::ToolConfig,
 }
 
 impl Default for ExecutorConfig {
@@ -50,6 +78,10 @@ impl Default for ExecutorConfig {
             session_id: String::new(),
             permission_mode: PermissionMode::Default,
             default_timeout_secs: 120,
+            is_plan_mode: false,
+            plan_file_path: None,
+            session_dir: None,
+            tool_config: cocode_protocol::ToolConfig::default(),
         }
     }
 }
@@ -110,12 +142,20 @@ pub struct StreamingToolExecutor {
     file_tracker: Arc<Mutex<FileTracker>>,
     /// Hook registry for pre/post tool hooks.
     hooks: Option<Arc<HookRegistry>>,
+    /// Tracker for async hooks running in background.
+    async_hook_tracker: Arc<AsyncHookTracker>,
     /// Active tool execution tasks.
     active_tasks: Arc<Mutex<HashMap<String, JoinHandle<ToolExecutionResult>>>>,
     /// Pending unsafe tools waiting for sequential execution.
     pending_unsafe: Arc<Mutex<Vec<PendingToolCall>>>,
     /// Completed results waiting to be collected.
     completed_results: Arc<Mutex<Vec<ToolExecutionResult>>>,
+    /// Background task registry for Bash background execution.
+    background_registry: BackgroundTaskRegistry,
+    /// Optional callback for spawning subagents.
+    spawn_agent_fn: Option<SpawnAgentFn>,
+    /// Optional skill manager for the Skill tool.
+    skill_manager: Option<Arc<cocode_skill::SkillManager>>,
 }
 
 impl StreamingToolExecutor {
@@ -133,9 +173,13 @@ impl StreamingToolExecutor {
             approval_store: Arc::new(Mutex::new(ApprovalStore::new())),
             file_tracker: Arc::new(Mutex::new(FileTracker::new())),
             hooks: None,
+            async_hook_tracker: Arc::new(AsyncHookTracker::new()),
             active_tasks: Arc::new(Mutex::new(HashMap::new())),
             pending_unsafe: Arc::new(Mutex::new(Vec::new())),
             completed_results: Arc::new(Mutex::new(Vec::new())),
+            background_registry: BackgroundTaskRegistry::new(),
+            spawn_agent_fn: None,
+            skill_manager: None,
         }
     }
 
@@ -161,6 +205,72 @@ impl StreamingToolExecutor {
     pub fn with_file_tracker(mut self, tracker: Arc<Mutex<FileTracker>>) -> Self {
         self.file_tracker = tracker;
         self
+    }
+
+    /// Set the background task registry for Bash background execution.
+    pub fn with_background_registry(mut self, registry: BackgroundTaskRegistry) -> Self {
+        self.background_registry = registry;
+        self
+    }
+
+    /// Set the spawn agent callback for the Task tool.
+    pub fn with_spawn_agent_fn(mut self, f: SpawnAgentFn) -> Self {
+        self.spawn_agent_fn = Some(f);
+        self
+    }
+
+    /// Set a custom async hook tracker.
+    pub fn with_async_hook_tracker(mut self, tracker: Arc<AsyncHookTracker>) -> Self {
+        self.async_hook_tracker = tracker;
+        self
+    }
+
+    /// Set the skill manager for the Skill tool.
+    pub fn with_skill_manager(mut self, manager: Arc<cocode_skill::SkillManager>) -> Self {
+        // Store in a way that can be passed to tool context
+        // Note: The actual wiring happens in create_context
+        self.skill_manager = Some(manager);
+        self
+    }
+
+    /// Get the async hook tracker for collecting completed async hooks.
+    ///
+    /// Call `tracker.take_completed()` to retrieve and clear completed hooks
+    /// for injection into system reminders.
+    ///
+    /// ## Usage with System Reminders
+    ///
+    /// After each turn, collect completed async hooks and pass them to the
+    /// system reminder generator context:
+    ///
+    /// ```ignore
+    /// use cocode_system_reminder::{
+    ///     AsyncHookResponseInfo, ASYNC_HOOK_RESPONSES_KEY,
+    ///     GeneratorContextBuilder,
+    /// };
+    ///
+    /// // Collect completed hooks
+    /// let completed = executor.async_hook_tracker().take_completed();
+    ///
+    /// // Convert to system reminder format
+    /// let responses: Vec<AsyncHookResponseInfo> = completed
+    ///     .into_iter()
+    ///     .map(|h| AsyncHookResponseInfo {
+    ///         hook_name: h.hook_name,
+    ///         additional_context: h.additional_context,
+    ///         was_blocking: h.was_blocking,
+    ///         blocking_reason: h.blocking_reason,
+    ///         duration_ms: h.duration_ms,
+    ///     })
+    ///     .collect();
+    ///
+    /// // Pass to generator context
+    /// let ctx = GeneratorContextBuilder::new(&config)
+    ///     .extension(ASYNC_HOOK_RESPONSES_KEY, responses)
+    ///     .build();
+    /// ```
+    pub fn async_hook_tracker(&self) -> &Arc<AsyncHookTracker> {
+        &self.async_hook_tracker
     }
 
     /// Called when a tool_use block completes during streaming.
@@ -233,7 +343,7 @@ impl StreamingToolExecutor {
             Ok(input) => input,
             Err(reason) => {
                 // Pre-hook rejected the tool call
-                let result = Err(ToolError::hook_rejected(reason));
+                let result = Err(crate::error::tool_error::HookRejectedSnafu { reason }.build());
                 self.emit_completed(&call_id, &result).await;
                 self.completed_results
                     .lock()
@@ -269,9 +379,26 @@ impl StreamingToolExecutor {
         let session_id = self.config.session_id.clone();
         let cwd = self.config.cwd.clone();
 
+        // Clone persistence config for result handling
+        let session_dir = self.config.session_dir.clone();
+        let tool_config = self.config.tool_config.clone();
+        let call_id_for_persistence = call_id.clone();
+
         // Spawn the execution task
         let handle = tokio::spawn(async move {
-            let result = execute_tool(&registry, modified_tool_call, ctx, timeout_secs).await;
+            let mut result = execute_tool(&registry, modified_tool_call, ctx, timeout_secs).await;
+
+            // Apply large result persistence if configured
+            if let (Ok(output), Some(dir)) = (&result, &session_dir) {
+                let persisted = result_persistence::persist_if_needed(
+                    output.clone(),
+                    &call_id_for_persistence,
+                    dir,
+                    &tool_config,
+                )
+                .await;
+                result = Ok(persisted);
+            }
 
             // Execute post-hooks within the spawned task
             if let Some(hooks) = hooks {
@@ -330,7 +457,8 @@ impl StreamingToolExecutor {
                 Ok(input) => input,
                 Err(reason) => {
                     // Pre-hook rejected the tool call
-                    let result = Err(ToolError::hook_rejected(reason));
+                    let result =
+                        Err(crate::error::tool_error::HookRejectedSnafu { reason }.build());
                     self.emit_completed(&call_id, &result).await;
                     self.completed_results
                         .lock()
@@ -354,13 +482,25 @@ impl StreamingToolExecutor {
             // Create context and execute with potentially modified input
             let ctx = self.create_context(&call_id);
             let modified_tool_call = ToolCall::new(&call_id, &name, modified_input.clone());
-            let result = execute_tool(
+            let mut result = execute_tool(
                 &self.registry,
                 modified_tool_call,
                 ctx,
                 self.config.default_timeout_secs,
             )
             .await;
+
+            // Apply large result persistence if configured
+            if let (Ok(output), Some(dir)) = (&result, &self.config.session_dir) {
+                let persisted = result_persistence::persist_if_needed(
+                    output.clone(),
+                    &call_id,
+                    dir,
+                    &self.config.tool_config,
+                )
+                .await;
+                result = Ok(persisted);
+            }
 
             // Execute post-hooks
             let is_error = result.is_err();
@@ -398,9 +538,10 @@ impl StreamingToolExecutor {
                 }
                 Err(e) => {
                     error!(call_id = %call_id, error = %e, "Task panicked");
-                    let result = Err(ToolError::internal(format!(
-                        "Tool execution task panicked (call_id: {call_id}): {e}"
-                    )));
+                    let result = Err(crate::error::tool_error::InternalSnafu {
+                        message: format!("Tool execution task panicked (call_id: {call_id}): {e}"),
+                    }
+                    .build());
                     self.emit_completed(&call_id, &result).await;
                     self.completed_results
                         .lock()
@@ -467,13 +608,31 @@ impl StreamingToolExecutor {
 
     /// Create a tool context for execution.
     fn create_context(&self, call_id: &str) -> ToolContext {
-        ToolContextBuilder::new(call_id, &self.config.session_id)
+        let mut builder = ToolContextBuilder::new(call_id, &self.config.session_id)
             .cwd(&self.config.cwd)
             .permission_mode(self.config.permission_mode)
             .cancel_token(self.cancel_token.clone())
             .approval_store(self.approval_store.clone())
             .file_tracker(self.file_tracker.clone())
-            .build()
+            .plan_mode(self.config.is_plan_mode, self.config.plan_file_path.clone())
+            .background_registry(self.background_registry.clone());
+
+        // Add spawn_agent_fn if available
+        if let Some(ref spawn_fn) = self.spawn_agent_fn {
+            builder = builder.spawn_agent_fn(spawn_fn.clone());
+        }
+
+        // Add skill_manager if available
+        if let Some(ref sm) = self.skill_manager {
+            builder = builder.skill_manager(sm.clone());
+        }
+
+        // Add session_dir if available
+        if let Some(ref dir) = self.config.session_dir {
+            builder = builder.session_dir(dir.clone());
+        }
+
+        builder.build()
     }
 
     /// Emit a loop event.
@@ -535,7 +694,7 @@ impl StreamingToolExecutor {
             .await;
 
             match outcome.result {
-                HookResult::Continue => {
+                HookResult::Continue | HookResult::ContinueWithContext { .. } => {
                     // Continue with current input
                 }
                 HookResult::Reject { reason } => {
@@ -554,6 +713,17 @@ impl StreamingToolExecutor {
                         "Tool input modified by pre-hook"
                     );
                     current_input = new_input;
+                }
+                HookResult::Async { task_id, hook_name } => {
+                    // Register async hook for tracking - result will be delivered via system reminders
+                    self.async_hook_tracker
+                        .register(task_id.clone(), hook_name.clone());
+                    debug!(
+                        tool = %tool_name,
+                        task_id = %task_id,
+                        async_hook = %hook_name,
+                        "Async hook registered and running in background"
+                    );
                 }
             }
         }
@@ -625,7 +795,7 @@ async fn execute_tool(
     .await
     {
         Ok(result) => result,
-        Err(_) => Err(ToolError::timeout(timeout_secs)),
+        Err(_) => Err(crate::error::tool_error::TimeoutSnafu { timeout_secs }.build()),
     }
 }
 
@@ -641,13 +811,16 @@ async fn execute_tool_inner(
     // Get the tool
     let tool = registry
         .get(name)
-        .ok_or_else(|| ToolError::not_found(name))?;
+        .ok_or_else(|| crate::error::tool_error::NotFoundSnafu { name: name.clone() }.build())?;
 
     // Validate input
     let validation = tool.validate(&input).await;
     if let ValidationResult::Invalid { errors } = validation {
         let error_msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
-        return Err(ToolError::invalid_input(error_msgs.join(", ")));
+        return Err(crate::error::tool_error::InvalidInputSnafu {
+            message: error_msgs.join(", "),
+        }
+        .build());
     }
 
     // Check permission
@@ -655,14 +828,19 @@ async fn execute_tool_inner(
     match permission {
         cocode_protocol::PermissionResult::Allowed => {}
         cocode_protocol::PermissionResult::Denied { reason } => {
-            return Err(ToolError::permission_denied(reason));
+            return Err(
+                crate::error::tool_error::PermissionDeniedSnafu { message: reason }.build(),
+            );
         }
         cocode_protocol::PermissionResult::NeedsApproval { request } => {
             // Approval flow not yet implemented - deny with informative message
-            return Err(ToolError::permission_denied(format!(
-                "Tool '{}' requires approval: {}. Approval flow not yet implemented.",
-                name, request.description
-            )));
+            return Err(crate::error::tool_error::PermissionDeniedSnafu {
+                message: format!(
+                    "Tool '{}' requires approval: {}. Approval flow not yet implemented.",
+                    name, request.description
+                ),
+            }
+            .build());
         }
     }
 

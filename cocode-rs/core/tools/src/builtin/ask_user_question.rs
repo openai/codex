@@ -2,10 +2,11 @@
 
 use super::prompts;
 use crate::context::ToolContext;
-use crate::error::{Result, ToolError};
+use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
-use cocode_protocol::{ConcurrencySafety, ToolOutput};
+use cocode_protocol::ConcurrencySafety;
+use cocode_protocol::ToolOutput;
 use serde_json::Value;
 
 /// Tool for asking the user questions during execution.
@@ -114,33 +115,45 @@ impl Tool for AskUserQuestionTool {
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
-        let questions = input["questions"]
-            .as_array()
-            .ok_or_else(|| ToolError::invalid_input("questions must be an array"))?;
+        let questions = input["questions"].as_array().ok_or_else(|| {
+            crate::error::tool_error::InvalidInputSnafu {
+                message: "questions must be an array",
+            }
+            .build()
+        })?;
 
         if questions.is_empty() || questions.len() > 4 {
-            return Err(ToolError::invalid_input("questions must contain 1-4 items"));
+            return Err(crate::error::tool_error::InvalidInputSnafu {
+                message: "questions must contain 1-4 items",
+            }
+            .build());
         }
 
         // Validate each question
         for (i, q) in questions.iter().enumerate() {
             if q["question"].as_str().is_none() {
-                return Err(ToolError::invalid_input(format!(
-                    "questions[{i}] missing required field 'question'"
-                )));
+                return Err(crate::error::tool_error::InvalidInputSnafu {
+                    message: format!("questions[{i}] missing required field 'question'"),
+                }
+                .build());
             }
             if q["header"].as_str().is_none() {
-                return Err(ToolError::invalid_input(format!(
-                    "questions[{i}] missing required field 'header'"
-                )));
+                return Err(crate::error::tool_error::InvalidInputSnafu {
+                    message: format!("questions[{i}] missing required field 'header'"),
+                }
+                .build());
             }
             let options = q["options"].as_array().ok_or_else(|| {
-                ToolError::invalid_input(format!("questions[{i}] missing 'options' array"))
+                crate::error::tool_error::InvalidInputSnafu {
+                    message: format!("questions[{i}] missing 'options' array"),
+                }
+                .build()
             })?;
             if options.len() < 2 || options.len() > 4 {
-                return Err(ToolError::invalid_input(format!(
-                    "questions[{i}] must have 2-4 options"
-                )));
+                return Err(crate::error::tool_error::InvalidInputSnafu {
+                    message: format!("questions[{i}] must have 2-4 options"),
+                }
+                .build());
             }
         }
 

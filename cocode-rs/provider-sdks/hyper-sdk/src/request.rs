@@ -6,7 +6,6 @@ use crate::options::GeminiOptions;
 use crate::options::OpenAIOptions;
 use crate::options::ProviderOptions;
 use crate::options::ProviderOptionsData;
-use crate::options::ThinkingConfig;
 use crate::options::VolcengineOptions;
 use crate::options::ZaiOptions;
 use crate::tools::ToolChoice;
@@ -43,9 +42,6 @@ pub struct GenerateRequest {
     /// How the model should choose tools.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<ToolChoice>,
-    /// Configuration for extended thinking.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub thinking_config: Option<ThinkingConfig>,
     /// Provider-specific options.
     ///
     /// Skipped in serialization because:
@@ -84,7 +80,6 @@ impl GenerateRequest {
             frequency_penalty: None,
             tools: None,
             tool_choice: None,
-            thinking_config: None,
             provider_options: None,
         }
     }
@@ -152,18 +147,6 @@ impl GenerateRequest {
     /// Set tool choice behavior.
     pub fn tool_choice(mut self, choice: ToolChoice) -> Self {
         self.tool_choice = Some(choice);
-        self
-    }
-
-    /// Set thinking configuration.
-    pub fn thinking_config(mut self, config: ThinkingConfig) -> Self {
-        self.thinking_config = Some(config);
-        self
-    }
-
-    /// Enable extended thinking with a token budget.
-    pub fn with_thinking(mut self, budget_tokens: i32) -> Self {
-        self.thinking_config = Some(ThinkingConfig::with_budget(budget_tokens));
         self
     }
 
@@ -309,13 +292,6 @@ impl GenerateRequest {
         self.tools.as_ref().is_some_and(|t| !t.is_empty())
     }
 
-    /// Check if thinking is enabled.
-    pub fn has_thinking(&self) -> bool {
-        self.thinking_config
-            .as_ref()
-            .is_some_and(|c| c.enabled || c.budget_tokens.is_some())
-    }
-
     /// Strip thinking signatures from all messages in this request.
     ///
     /// This is useful when switching providers, as thinking signatures
@@ -370,17 +346,6 @@ mod tests {
             )]);
 
         assert!(request.has_tools());
-    }
-
-    #[test]
-    fn test_with_thinking() {
-        let request = GenerateRequest::from_text("Solve this").with_thinking(10000);
-
-        assert!(request.has_thinking());
-        assert_eq!(
-            request.thinking_config.as_ref().unwrap().budget_tokens,
-            Some(10000)
-        );
     }
 
     #[test]

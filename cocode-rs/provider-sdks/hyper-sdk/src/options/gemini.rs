@@ -65,6 +65,8 @@ pub struct SafetySetting {
 pub struct GeminiOptions {
     /// Thinking level for extended reasoning.
     pub thinking_level: Option<ThinkingLevel>,
+    /// Whether to include thoughts in the response.
+    pub include_thoughts: Option<bool>,
     /// Enable grounding with Google Search.
     pub grounding: Option<bool>,
     /// Safety settings.
@@ -82,6 +84,12 @@ impl GeminiOptions {
     /// Set thinking level.
     pub fn with_thinking_level(mut self, level: ThinkingLevel) -> Self {
         self.thinking_level = Some(level);
+        self
+    }
+
+    /// Set whether to include thoughts in the response.
+    pub fn with_include_thoughts(mut self, include: bool) -> Self {
+        self.include_thoughts = Some(include);
         self
     }
 
@@ -167,5 +175,15 @@ mod tests {
 
         assert!(opts.safety_settings.is_some());
         assert_eq!(opts.safety_settings.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_include_thoughts() {
+        let opts = GeminiOptions::new()
+            .with_thinking_level(ThinkingLevel::High)
+            .with_include_thoughts(true);
+
+        assert_eq!(opts.thinking_level, Some(ThinkingLevel::High));
+        assert_eq!(opts.include_thoughts, Some(true));
     }
 }

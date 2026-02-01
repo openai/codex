@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 cocode-error = { path = "../error" }
 cocode-protocol = { path = "../protocol" }
+hyper-sdk = { workspace = true }
 dirs = "5"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

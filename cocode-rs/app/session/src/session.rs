@@ -3,9 +3,11 @@
 //! This module defines the [`Session`] struct which holds metadata about
 //! an agent session including identity, timestamps, and configuration.
 
-use chrono::{DateTime, Utc};
+use chrono::DateTime;
+use chrono::Utc;
 use cocode_protocol::ProviderType;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use std::path::PathBuf;
 
 /// Session metadata for an agent conversation.

@@ -8,7 +8,8 @@
 //! For file loading types (with env_key, etc.), see `ProviderConfig` in config crate.
 
 use crate::ModelInfo;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use std::collections::HashMap;
 
 /// Provider type enumeration.

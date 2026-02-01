@@ -1,7 +1,8 @@
 //! Multi-model role configuration.
 
 use super::ModelSpec;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Model role identifier.
 ///
@@ -20,6 +21,8 @@ pub enum ModelRole {
     Plan,
     /// Model for codebase exploration.
     Explore,
+    /// Model for context compaction and summarization.
+    Compact,
 }
 
 impl ModelRole {
@@ -32,6 +35,7 @@ impl ModelRole {
             ModelRole::Review,
             ModelRole::Plan,
             ModelRole::Explore,
+            ModelRole::Compact,
         ]
     }
 
@@ -44,6 +48,7 @@ impl ModelRole {
             ModelRole::Review => "review",
             ModelRole::Plan => "plan",
             ModelRole::Explore => "explore",
+            ModelRole::Compact => "compact",
         }
     }
 }
@@ -99,6 +104,10 @@ pub struct ModelRoles {
     /// Model for codebase exploration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub explore: Option<ModelSpec>,
+
+    /// Model for context compaction and summarization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compact: Option<ModelSpec>,
 }
 
 impl ModelRoles {
@@ -119,6 +128,7 @@ impl ModelRoles {
             ModelRole::Review => &self.review,
             ModelRole::Plan => &self.plan,
             ModelRole::Explore => &self.explore,
+            ModelRole::Compact => &self.compact,
         };
         specific.as_ref().or(self.main.as_ref())
     }
@@ -136,6 +146,7 @@ impl ModelRoles {
             && self.review.is_none()
             && self.plan.is_none()
             && self.explore.is_none()
+            && self.compact.is_none()
     }
 
     /// Set a model for a specific role.
@@ -147,6 +158,7 @@ impl ModelRoles {
             ModelRole::Review => self.review = Some(spec),
             ModelRole::Plan => self.plan = Some(spec),
             ModelRole::Explore => self.explore = Some(spec),
+            ModelRole::Compact => self.compact = Some(spec),
         }
     }
 
@@ -172,6 +184,9 @@ impl ModelRoles {
         if other.explore.is_some() {
             self.explore = other.explore.clone();
         }
+        if other.compact.is_some() {
+            self.compact = other.compact.clone();
+        }
     }
 }
 
@@ -184,6 +199,7 @@ mod tests {
         assert_eq!(ModelRole::Main.as_str(), "main");
         assert_eq!(ModelRole::Fast.as_str(), "fast");
         assert_eq!(ModelRole::Vision.as_str(), "vision");
+        assert_eq!(ModelRole::Compact.as_str(), "compact");
     }
 
     #[test]
@@ -309,8 +325,43 @@ mod tests {
     #[test]
     fn test_model_role_all() {
         let all = ModelRole::all();
-        assert_eq!(all.len(), 6);
+        assert_eq!(all.len(), 7);
         assert!(all.contains(&ModelRole::Main));
         assert!(all.contains(&ModelRole::Explore));
+        assert!(all.contains(&ModelRole::Compact));
+    }
+
+    #[test]
+    fn test_model_roles_set_compact() {
+        let mut roles = ModelRoles::default();
+        roles.set(
+            ModelRole::Compact,
+            ModelSpec::new("anthropic", "claude-haiku"),
+        );
+
+        assert_eq!(roles.compact.as_ref().unwrap().model, "claude-haiku");
+    }
+
+    #[test]
+    fn test_model_roles_get_compact_fallback() {
+        let mut roles = ModelRoles::default();
+        roles.main = Some(ModelSpec::new("anthropic", "claude-opus-4"));
+
+        // Compact falls back to main
+        let compact = roles.get(ModelRole::Compact).unwrap();
+        assert_eq!(compact.model, "claude-opus-4");
+    }
+
+    #[test]
+    fn test_model_roles_merge_compact() {
+        let mut base = ModelRoles::default();
+        base.compact = Some(ModelSpec::new("anthropic", "claude-haiku"));
+
+        let mut other = ModelRoles::default();
+        other.compact = Some(ModelSpec::new("openai", "gpt-4o-mini"));
+
+        base.merge(&other);
+
+        assert_eq!(base.compact.as_ref().unwrap().model, "gpt-4o-mini");
     }
 }

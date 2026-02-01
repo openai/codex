@@ -3,9 +3,14 @@
 //! This module provides [`TrackedMessage`] which wraps hyper-sdk's [`Message`]
 //! with additional metadata for tracking in the agent loop.
 
-use chrono::{DateTime, Utc};
-use hyper_sdk::{ContentBlock, Message, Role, ToolResultContent};
-use serde::{Deserialize, Serialize};
+use chrono::DateTime;
+use chrono::Utc;
+use hyper_sdk::ContentBlock;
+use hyper_sdk::Message;
+use hyper_sdk::Role;
+use hyper_sdk::ToolResultContent;
+use serde::Deserialize;
+use serde::Serialize;
 use uuid::Uuid;
 
 /// Source of a message in the conversation.
@@ -34,6 +39,11 @@ pub enum MessageSource {
     },
     /// Compaction summary.
     CompactionSummary,
+    /// System reminder (dynamic context injection).
+    SystemReminder {
+        /// The type of reminder (e.g., "changed_files", "plan_mode_enter").
+        reminder_type: String,
+    },
 }
 
 impl MessageSource {
@@ -53,6 +63,13 @@ impl MessageSource {
     pub fn subagent(agent_id: impl Into<String>) -> Self {
         MessageSource::Subagent {
             agent_id: agent_id.into(),
+        }
+    }
+
+    /// Create a system reminder source with reminder type.
+    pub fn system_reminder(reminder_type: impl Into<String>) -> Self {
+        MessageSource::SystemReminder {
+            reminder_type: reminder_type.into(),
         }
     }
 }
@@ -77,6 +94,12 @@ pub struct TrackedMessage {
     /// Whether this message has been tombstoned (marked for removal).
     #[serde(default)]
     pub tombstoned: bool,
+    /// Whether this is a meta message (hidden from user, visible to model).
+    ///
+    /// Meta messages are included in API requests but not shown in user-facing
+    /// conversation history. Used for system reminders and other injected context.
+    #[serde(default)]
+    pub is_meta: bool,
 }
 
 impl TrackedMessage {
@@ -89,6 +112,20 @@ impl TrackedMessage {
             timestamp: Utc::now(),
             source,
             tombstoned: false,
+            is_meta: false,
+        }
+    }
+
+    /// Create a new meta message (hidden from user, visible to model).
+    pub fn new_meta(inner: Message, turn_id: impl Into<String>, source: MessageSource) -> Self {
+        Self {
+            inner,
+            uuid: Uuid::new_v4().to_string(),
+            turn_id: turn_id.into(),
+            timestamp: Utc::now(),
+            source,
+            tombstoned: false,
+            is_meta: true,
         }
     }
 
@@ -154,6 +191,32 @@ impl TrackedMessage {
             turn_id,
             MessageSource::tool(&call_id),
         )
+    }
+
+    /// Create a system reminder message (meta message for dynamic context).
+    ///
+    /// System reminders are injected as user messages with `is_meta: true`,
+    /// meaning they are included in API requests but not shown to the user.
+    pub fn system_reminder(
+        content: impl Into<String>,
+        reminder_type: impl Into<String>,
+        turn_id: impl Into<String>,
+    ) -> Self {
+        Self::new_meta(
+            Message::user(content),
+            turn_id,
+            MessageSource::system_reminder(reminder_type),
+        )
+    }
+
+    /// Check if this message is a meta message.
+    pub fn is_meta(&self) -> bool {
+        self.is_meta
+    }
+
+    /// Set the meta flag on this message.
+    pub fn set_meta(&mut self, is_meta: bool) {
+        self.is_meta = is_meta;
     }
 
     /// Get the message role.
@@ -279,5 +342,49 @@ mod tests {
         let msg = TrackedMessage::assistant_with_content(content, "turn-1", None);
         assert!(msg.has_tool_calls());
         assert_eq!(msg.tool_calls().len(), 1);
+    }
+
+    #[test]
+    fn test_system_reminder_message() {
+        let msg = TrackedMessage::system_reminder(
+            "<system-reminder>File changed</system-reminder>",
+            "changed_files",
+            "turn-1",
+        );
+        assert_eq!(msg.role(), Role::User); // System reminders are sent as user messages
+        assert!(msg.is_meta()); // But marked as meta
+        assert!(matches!(
+            msg.source,
+            MessageSource::SystemReminder { reminder_type: ref t } if t == "changed_files"
+        ));
+    }
+
+    #[test]
+    fn test_is_meta_default() {
+        // Regular messages should not be meta
+        let msg = TrackedMessage::user("Hello", "turn-1");
+        assert!(!msg.is_meta());
+
+        let msg = TrackedMessage::assistant("Hi", "turn-1", None);
+        assert!(!msg.is_meta());
+    }
+
+    #[test]
+    fn test_set_meta() {
+        let mut msg = TrackedMessage::user("Hello", "turn-1");
+        assert!(!msg.is_meta());
+
+        msg.set_meta(true);
+        assert!(msg.is_meta());
+
+        msg.set_meta(false);
+        assert!(!msg.is_meta());
+    }
+
+    #[test]
+    fn test_new_meta() {
+        let msg =
+            TrackedMessage::new_meta(Message::user("meta content"), "turn-1", MessageSource::User);
+        assert!(msg.is_meta());
     }
 }

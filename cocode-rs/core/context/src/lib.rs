@@ -17,11 +17,17 @@ pub mod environment;
 pub mod error;
 
 // Re-export main types at crate root
-pub use budget::{BudgetAllocation, BudgetCategory, ContextBudget};
+pub use budget::BudgetAllocation;
+pub use budget::BudgetCategory;
+pub use budget::ContextBudget;
 pub use calculator::ContextCalculator;
-pub use conversation_context::{
-    ContextInjection, ConversationContext, ConversationContextBuilder, InjectionPosition,
-    MemoryFile, SubagentType,
-};
-pub use environment::{EnvironmentInfo, EnvironmentInfoBuilder};
-pub use error::{ContextError, Result};
+pub use conversation_context::ContextInjection;
+pub use conversation_context::ConversationContext;
+pub use conversation_context::ConversationContextBuilder;
+pub use conversation_context::InjectionPosition;
+pub use conversation_context::MemoryFile;
+pub use conversation_context::SubagentType;
+pub use environment::EnvironmentInfo;
+pub use environment::EnvironmentInfoBuilder;
+pub use error::ContextError;
+pub use error::Result;

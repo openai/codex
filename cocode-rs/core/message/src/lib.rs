@@ -70,39 +70,80 @@ pub mod turn;
 pub mod type_guards;
 
 // Re-export main types at crate root
-pub use factory::{
-    MessageBuilder, create_assistant_message, create_assistant_message_with_content,
-    create_compaction_summary, create_subagent_result_message, create_system_message,
-    create_tool_error_message, create_tool_result_message, create_tool_result_structured,
-    create_tool_results_batch, create_user_message, create_user_message_with_content,
-};
-pub use history::{HistoryBuilder, HistoryConfig, MessageHistory};
-pub use normalization::{
-    NormalizationOptions, ValidationError, estimate_tokens, normalize_messages_for_api,
-    validate_messages,
-};
-pub use tracked::{MessageSource, TrackedMessage};
-pub use turn::{ToolCallStatus, TrackedToolCall, Turn};
-pub use type_guards::{
-    count_tool_results, count_tool_uses, extract_text, extract_thinking, extract_tool_result,
-    extract_tool_use, get_text_content, get_thinking_content, get_tool_calls, has_thinking,
-    has_tool_result, has_tool_use, is_assistant_message, is_empty_message, is_image_block,
-    is_system_message, is_text_block, is_thinking_block, is_tool_message, is_tool_result_block,
-    is_tool_use_block, is_user_message,
-};
+pub use factory::MessageBuilder;
+pub use factory::create_assistant_message;
+pub use factory::create_assistant_message_with_content;
+pub use factory::create_compaction_summary;
+pub use factory::create_subagent_result_message;
+pub use factory::create_system_message;
+pub use factory::create_tool_error_message;
+pub use factory::create_tool_result_message;
+pub use factory::create_tool_result_structured;
+pub use factory::create_tool_results_batch;
+pub use factory::create_user_message;
+pub use factory::create_user_message_with_content;
+pub use history::HistoryBuilder;
+pub use history::HistoryConfig;
+pub use history::MessageHistory;
+pub use normalization::NormalizationOptions;
+pub use normalization::ValidationError;
+pub use normalization::estimate_tokens;
+pub use normalization::normalize_messages_for_api;
+pub use normalization::validate_messages;
+pub use tracked::MessageSource;
+pub use tracked::TrackedMessage;
+pub use turn::ToolCallStatus;
+pub use turn::TrackedToolCall;
+pub use turn::Turn;
+pub use type_guards::count_tool_results;
+pub use type_guards::count_tool_uses;
+pub use type_guards::extract_text;
+pub use type_guards::extract_thinking;
+pub use type_guards::extract_tool_result;
+pub use type_guards::extract_tool_use;
+pub use type_guards::get_text_content;
+pub use type_guards::get_thinking_content;
+pub use type_guards::get_tool_calls;
+pub use type_guards::has_thinking;
+pub use type_guards::has_tool_result;
+pub use type_guards::has_tool_use;
+pub use type_guards::is_assistant_message;
+pub use type_guards::is_empty_message;
+pub use type_guards::is_image_block;
+pub use type_guards::is_system_message;
+pub use type_guards::is_text_block;
+pub use type_guards::is_thinking_block;
+pub use type_guards::is_tool_message;
+pub use type_guards::is_tool_result_block;
+pub use type_guards::is_tool_use_block;
+pub use type_guards::is_user_message;
 
 // Re-export commonly used types from dependencies
-pub use cocode_api::{ContentBlock, Message, Role, ToolCall, ToolResultContent};
-pub use cocode_protocol::{AbortReason, TokenUsage};
+pub use cocode_api::ContentBlock;
+pub use cocode_api::Message;
+pub use cocode_api::Role;
+pub use cocode_api::ToolCall;
+pub use cocode_api::ToolResultContent;
+pub use cocode_protocol::AbortReason;
+pub use cocode_protocol::TokenUsage;
 
 /// Prelude module for convenient imports.
 pub mod prelude {
+    pub use crate::ContentBlock;
+    pub use crate::Message;
+    pub use crate::Role;
+    pub use crate::TokenUsage;
     pub use crate::factory::MessageBuilder;
-    pub use crate::history::{HistoryBuilder, MessageHistory};
-    pub use crate::tracked::{MessageSource, TrackedMessage};
-    pub use crate::turn::{ToolCallStatus, TrackedToolCall, Turn};
-    pub use crate::type_guards::{
-        get_text_content, get_tool_calls, has_tool_use, is_assistant_message, is_user_message,
-    };
-    pub use crate::{ContentBlock, Message, Role, TokenUsage};
+    pub use crate::history::HistoryBuilder;
+    pub use crate::history::MessageHistory;
+    pub use crate::tracked::MessageSource;
+    pub use crate::tracked::TrackedMessage;
+    pub use crate::turn::ToolCallStatus;
+    pub use crate::turn::TrackedToolCall;
+    pub use crate::turn::Turn;
+    pub use crate::type_guards::get_text_content;
+    pub use crate::type_guards::get_tool_calls;
+    pub use crate::type_guards::has_tool_use;
+    pub use crate::type_guards::is_assistant_message;
+    pub use crate::type_guards::is_user_message;
 }

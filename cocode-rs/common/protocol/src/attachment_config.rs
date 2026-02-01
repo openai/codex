@@ -2,7 +2,8 @@
 //!
 //! Defines settings for response attachments.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Attachment configuration.
 ///

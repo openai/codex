@@ -1,15 +1,24 @@
 //! cocode - Multi-provider LLM CLI
 //!
 //! A command-line interface for interacting with multiple LLM providers.
+//!
+//! This binary uses the arg0 dispatcher for single-binary deployment,
+//! supporting apply_patch and sandbox invocation via PATH hijacking.
 
 mod commands;
 mod output;
 mod repl;
+mod tui_runner;
 
-use clap::{Parser, Subcommand};
+use std::path::PathBuf;
+
+use clap::Parser;
+use clap::Subcommand;
 use cocode_config::ConfigManager;
 use tracing::info;
-use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::fmt;
+use tracing_subscriber::prelude::*;
 
 /// Multi-provider LLM CLI
 #[derive(Parser)]
@@ -19,13 +28,9 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
 
-    /// Model to use (e.g., gpt-5, claude-sonnet-4)
+    /// Configuration profile to use
     #[arg(short, long, global = true)]
-    model: Option<String>,
-
-    /// Provider to use (e.g., openai, anthropic)
-    #[arg(short, long, global = true)]
-    provider: Option<String>,
+    profile: Option<String>,
 
     /// Prompt to execute (non-interactive mode)
     prompt: Option<String>,
@@ -33,6 +38,10 @@ struct Cli {
     /// Enable verbose logging
     #[arg(short, long, global = true)]
     verbose: bool,
+
+    /// Disable TUI mode (use simple REPL instead)
+    #[arg(long, global = true)]
+    no_tui: bool,
 }
 
 /// Config subcommands
@@ -88,8 +97,18 @@ enum Commands {
     Status,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
+    // Use arg0 dispatcher for single-binary deployment.
+    // This handles:
+    // - argv[0] dispatch: apply_patch, cocode-linux-sandbox
+    // - argv[1] hijack: --cocode-run-as-apply-patch
+    // - PATH setup with symlinks for subprocess integration
+    // - dotenv loading from ~/.cocode/.env
+    cocode_arg0::arg0_dispatch_or_else(cli_main)
+}
+
+/// Main CLI entry point (runs inside Tokio runtime created by arg0).
+async fn cli_main(_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // Initialize tracing
@@ -100,16 +119,30 @@ async fn main() -> anyhow::Result<()> {
     // Load configuration
     let config = ConfigManager::from_default()?;
 
+    // Apply profile if specified
+    if let Some(profile) = &cli.profile {
+        match config.set_profile(profile) {
+            Ok(true) => {
+                info!(profile = %profile, "Using profile");
+            }
+            Ok(false) => {
+                tracing::warn!(
+                    profile = %profile,
+                    "Profile not found in config, using defaults"
+                );
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to set profile");
+            }
+        }
+    }
+
     // Dispatch to appropriate command
     match cli.command {
         Some(Commands::Chat { title, max_turns }) => {
-            commands::chat::run(
-                cli.model,
-                cli.provider,
+            run_interactive(
                 None, // No initial prompt for chat mode
-                title,
-                max_turns,
-                &config,
+                title, max_turns, &config, cli.no_tui,
             )
             .await
         }
@@ -120,22 +153,38 @@ async fn main() -> anyhow::Result<()> {
         None => {
             // No subcommand - either run prompt or start interactive chat
             if let Some(prompt) = cli.prompt {
-                // Non-interactive mode: run single prompt
-                commands::chat::run(
-                    cli.model,
-                    cli.provider,
+                // Non-interactive mode: run single prompt (always uses REPL mode)
+                run_interactive(
                     Some(prompt),
                     None,
                     Some(1), // Single turn for prompt mode
                     &config,
+                    true, // Force no-tui for single prompt
                 )
                 .await
             } else {
-                // Interactive mode: start chat
-                commands::chat::run(cli.model, cli.provider, None, None, None, &config).await
+                // Interactive mode: start chat (use TUI by default)
+                run_interactive(None, None, None, &config, cli.no_tui).await
             }
         }
     }
+}
+
+/// Run interactive mode (TUI or REPL).
+async fn run_interactive(
+    initial_prompt: Option<String>,
+    title: Option<String>,
+    max_turns: Option<i32>,
+    config: &ConfigManager,
+    no_tui: bool,
+) -> anyhow::Result<()> {
+    // For single prompt, use REPL mode
+    if initial_prompt.is_some() || no_tui {
+        return commands::chat::run(initial_prompt, title, max_turns, config).await;
+    }
+
+    // Interactive mode: use TUI
+    tui_runner::run_tui(title, config).await
 }
 
 /// Initialize tracing with appropriate filters.

@@ -120,6 +120,7 @@ pub mod conversation;
 pub mod embedding;
 pub mod error;
 pub mod hooks;
+pub mod http_interceptors;
 pub mod messages;
 pub mod model;
 pub mod object;
@@ -231,7 +232,6 @@ pub use options::ProviderMarker;
 pub use options::ProviderOptions;
 pub use options::ProviderOptionsData;
 pub use options::ReasoningEffort;
-pub use options::ThinkingConfig;
 pub use options::TypedProviderOptions;
 pub use options::VolcengineOptions;
 pub use options::ZaiOptions;
@@ -252,6 +252,13 @@ pub use hooks::ResponseHook;
 pub use hooks::ResponseIdHook;
 pub use hooks::StreamHook;
 pub use hooks::UsageTrackingHook;
+
+// HTTP Interceptors
+pub use http_interceptors::BytedModelHubInterceptor;
+pub use http_interceptors::HttpInterceptor;
+pub use http_interceptors::HttpInterceptorChain;
+pub use http_interceptors::HttpInterceptorContext;
+pub use http_interceptors::HttpRequest;
 
 // Session and Conversation
 pub use conversation::ConversationContext;

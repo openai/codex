@@ -3,7 +3,8 @@
 //! Defines the ordered sections of a system prompt and provides
 //! template rendering and assembly functions.
 
-use cocode_context::{ConversationContext, InjectionPosition};
+use cocode_context::ConversationContext;
+use cocode_context::InjectionPosition;
 use cocode_protocol::PermissionMode;
 
 use crate::templates;
@@ -110,7 +111,9 @@ pub fn render_injections(ctx: &ConversationContext, position: InjectionPosition)
 
 #[cfg(test)]
 mod tests {
-    use cocode_context::{ContextInjection, EnvironmentInfo, MemoryFile};
+    use cocode_context::ContextInjection;
+    use cocode_context::EnvironmentInfo;
+    use cocode_context::MemoryFile;
 
     use super::*;
 

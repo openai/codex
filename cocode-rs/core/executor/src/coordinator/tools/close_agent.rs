@@ -1,4 +1,5 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Request to close and clean up an agent.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 cocode-protocol.workspace = true
 cocode-error.workspace = true
+cocode-hooks.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 toml.workspace = true

@@ -5,7 +5,8 @@
 //! symlink cycles via canonical path tracking.
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 use walkdir::WalkDir;
 
 /// The expected metadata file name in each skill directory.

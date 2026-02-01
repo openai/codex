@@ -11,10 +11,13 @@ path = "src/main.rs"
 
 [dependencies]
 # Internal
+cocode-arg0.workspace = true
 cocode-session = { workspace = true, features = [] }
 cocode-config.workspace = true
 cocode-protocol.workspace = true
 cocode-skill.workspace = true
+cocode-tui.workspace = true
+cocode-loop.workspace = true
 
 # External
 clap = { workspace = true, features = ["derive"] }

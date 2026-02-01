@@ -3,9 +3,13 @@
 //! This module provides convenient factory functions for creating
 //! various types of messages, similar to Claude Code's `factory.ts`.
 
-use crate::tracked::{MessageSource, TrackedMessage};
-use cocode_api::{GenerateResponse, ToolResultContent};
-use hyper_sdk::{ContentBlock, Message, Role};
+use crate::tracked::MessageSource;
+use crate::tracked::TrackedMessage;
+use cocode_api::GenerateResponse;
+use cocode_api::ToolResultContent;
+use hyper_sdk::ContentBlock;
+use hyper_sdk::Message;
+use hyper_sdk::Role;
 
 /// Create a user message.
 pub fn create_user_message(
@@ -209,7 +213,8 @@ impl MessageBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hyper_sdk::{FinishReason, TokenUsage};
+    use hyper_sdk::FinishReason;
+    use hyper_sdk::TokenUsage;
 
     fn make_response() -> GenerateResponse {
         GenerateResponse {

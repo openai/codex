@@ -45,6 +45,7 @@ pub mod builtin;
 pub mod config;
 pub mod env_loader;
 pub mod error;
+pub mod interceptors;
 pub mod json_config;
 pub mod loader;
 pub mod manager;

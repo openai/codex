@@ -2,7 +2,8 @@
 //!
 //! Defines settings for plan mode agent behavior.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Default number of agents for plan execution.
 pub const DEFAULT_PLAN_AGENT_COUNT: i32 = 1;

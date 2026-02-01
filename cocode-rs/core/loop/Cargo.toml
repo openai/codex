@@ -8,10 +8,13 @@ license.workspace = true
 cocode-protocol.workspace = true
 cocode-api.workspace = true
 cocode-tools.workspace = true
+cocode-plan-mode.workspace = true
 cocode-message.workspace = true
 cocode-context.workspace = true
 cocode-prompt.workspace = true
 cocode-hooks.workspace = true
+cocode-system-reminder.workspace = true
+cocode-skill.workspace = true
 hyper-sdk.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }
 tokio-util.workspace = true

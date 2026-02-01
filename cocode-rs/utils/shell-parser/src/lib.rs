@@ -76,13 +76,24 @@ mod tokenizer;
 pub mod security;
 
 // Re-export main types
-pub use error::{ParseError, Result};
-pub use parser::{ParsedCommand, ShellParser, ShellType, detect_shell_type, extract_shell_script};
-pub use redirects::{
-    Redirect, RedirectKind, extract_redirects_from_tokens, extract_redirects_from_tree,
-};
-pub use segments::{PipeSegment, extract_segments_from_tokens, extract_segments_from_tree};
-pub use tokenizer::{Span, Token, TokenKind, Tokenizer};
+pub use error::ParseError;
+pub use error::Result;
+pub use parser::ParsedCommand;
+pub use parser::ShellParser;
+pub use parser::ShellType;
+pub use parser::detect_shell_type;
+pub use parser::extract_shell_script;
+pub use redirects::Redirect;
+pub use redirects::RedirectKind;
+pub use redirects::extract_redirects_from_tokens;
+pub use redirects::extract_redirects_from_tree;
+pub use segments::PipeSegment;
+pub use segments::extract_segments_from_tokens;
+pub use segments::extract_segments_from_tree;
+pub use tokenizer::Span;
+pub use tokenizer::Token;
+pub use tokenizer::TokenKind;
+pub use tokenizer::Tokenizer;
 
 /// Convenience function to parse and analyze a command in one step.
 pub fn parse_and_analyze(source: &str) -> (ParsedCommand, security::SecurityAnalysis) {

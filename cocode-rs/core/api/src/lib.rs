@@ -61,32 +61,65 @@ pub mod client;
 pub mod error;
 pub mod provider_factory;
 pub mod retry;
+pub mod thinking_convert;
 pub mod unified_stream;
 
 // Re-export main types at crate root
-pub use cache::{CacheStats, Cacheable, PromptCacheConfig};
-pub use client::{ApiClient, ApiClientBuilder, ApiClientConfig, FallbackConfig, StreamOptions};
-pub use error::{ApiError, Result};
-pub use provider_factory::{create_model, create_provider};
-pub use retry::{RetryConfig, RetryContext, RetryDecision};
-pub use unified_stream::{CollectedResponse, QueryResultType, StreamingQueryResult, UnifiedStream};
+pub use cache::CacheStats;
+pub use cache::Cacheable;
+pub use cache::PromptCacheConfig;
+pub use client::ApiClient;
+pub use client::ApiClientBuilder;
+pub use client::ApiClientConfig;
+pub use client::FallbackConfig;
+pub use client::StreamOptions;
+pub use error::ApiError;
+pub use error::Result;
+pub use provider_factory::create_model;
+pub use provider_factory::create_provider;
+pub use retry::RetryConfig;
+pub use retry::RetryContext;
+pub use retry::RetryDecision;
+pub use thinking_convert::to_provider_options;
+pub use unified_stream::CollectedResponse;
+pub use unified_stream::QueryResultType;
+pub use unified_stream::StreamingQueryResult;
+pub use unified_stream::UnifiedStream;
 
 // Re-export commonly used hyper-sdk types for convenience
-pub use hyper_sdk::{
-    ContentBlock, FinishReason, GenerateRequest, GenerateResponse, Message, Role, StreamProcessor,
-    StreamSnapshot, StreamUpdate, TokenUsage, ToolCall, ToolChoice, ToolDefinition,
-    ToolResultContent,
-};
+pub use hyper_sdk::ContentBlock;
+pub use hyper_sdk::FinishReason;
+pub use hyper_sdk::GenerateRequest;
+pub use hyper_sdk::GenerateResponse;
+pub use hyper_sdk::Message;
+pub use hyper_sdk::Role;
+pub use hyper_sdk::StreamProcessor;
+pub use hyper_sdk::StreamSnapshot;
+pub use hyper_sdk::StreamUpdate;
+pub use hyper_sdk::TokenUsage;
+pub use hyper_sdk::ToolCall;
+pub use hyper_sdk::ToolChoice;
+pub use hyper_sdk::ToolDefinition;
+pub use hyper_sdk::ToolResultContent;
 
 /// Prelude module for convenient imports.
 pub mod prelude {
+    pub use crate::ContentBlock;
+    pub use crate::FinishReason;
+    pub use crate::GenerateRequest;
+    pub use crate::GenerateResponse;
+    pub use crate::Message;
+    pub use crate::Role;
+    pub use crate::ToolCall;
+    pub use crate::ToolChoice;
+    pub use crate::ToolDefinition;
     pub use crate::cache::PromptCacheConfig;
-    pub use crate::client::{ApiClient, StreamOptions};
-    pub use crate::error::{ApiError, Result};
-    pub use crate::retry::{RetryConfig, RetryContext};
-    pub use crate::unified_stream::{StreamingQueryResult, UnifiedStream};
-    pub use crate::{
-        ContentBlock, FinishReason, GenerateRequest, GenerateResponse, Message, Role, ToolCall,
-        ToolChoice, ToolDefinition,
-    };
+    pub use crate::client::ApiClient;
+    pub use crate::client::StreamOptions;
+    pub use crate::error::ApiError;
+    pub use crate::error::Result;
+    pub use crate::retry::RetryConfig;
+    pub use crate::retry::RetryContext;
+    pub use crate::unified_stream::StreamingQueryResult;
+    pub use crate::unified_stream::UnifiedStream;
 }

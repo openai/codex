@@ -1,6 +1,7 @@
 //! Global hook settings.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Global settings that control hook behavior.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -244,3 +244,35 @@ Important:\n\
 - When a skill is relevant, invoke this tool IMMEDIATELY as your first action\n\
 - NEVER just announce a skill without actually calling this tool\n\
 - Do not invoke a skill that is already running";
+
+/// Description for the LSP tool.
+pub const LSP_DESCRIPTION: &str = "\
+Language Server Protocol operations for code intelligence.\n\
+\n\
+Provides IDE-like features: go to definition, find references, hover documentation, \
+document symbols, workspace symbols, implementation, type definition, declaration, \
+call hierarchy, and diagnostics.\n\
+\n\
+Supported Operations:\n\
+- goToDefinition: Find where a symbol is defined\n\
+- findReferences: Find all usages of a symbol\n\
+- hover: Get documentation/type info for a symbol\n\
+- documentSymbol: List all symbols in a file\n\
+- workspaceSymbol: Search for symbols across the workspace\n\
+- goToImplementation: Find implementations of a trait/interface\n\
+- goToTypeDefinition: Find the type definition of a symbol\n\
+- goToDeclaration: Find the declaration of a symbol\n\
+- getCallHierarchy: Get incoming/outgoing calls for a function\n\
+- getDiagnostics: Get errors and warnings for a file\n\
+\n\
+Query Methods (use EITHER symbol_name OR line+character, not both):\n\
+- Symbol name (AI-friendly): Specify symbol_name and optionally symbol_kind\n\
+- Position (fallback): Specify line and character (both 0-indexed)\n\
+\n\
+Symbol Kinds: function, fn, method, class, struct, interface, trait, enum, \
+variable, var, let, constant, const, property, prop, field, module, mod, type\n\
+\n\
+Usage notes:\n\
+- This tool requires LSP servers to be installed and configured\n\
+- Results include file paths and line numbers for easy navigation\n\
+- For call hierarchy, use direction 'incoming' or 'outgoing'";

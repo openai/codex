@@ -2,9 +2,11 @@
 
 use super::Capability;
 use super::ConfigShellToolType;
+use super::ReasoningSummary;
 use super::TruncationPolicyConfig;
 use crate::thinking::ThinkingLevel;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use std::collections::HashMap;
 
 /// Configurable model info for merging (all fields optional).
@@ -78,6 +80,10 @@ pub struct ModelInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_thoughts: Option<bool>,
 
+    /// Reasoning summary level for OpenAI o1/o3 models.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_summary: Option<ReasoningSummary>,
+
     // === Context Management ===
     /// Token limit before auto-compaction triggers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -108,6 +114,14 @@ pub struct ModelInfo {
     /// Path to base instructions file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_instructions_file: Option<String>,
+
+    // === Provider-Specific Extensions ===
+    /// Extra provider-specific parameters (pass-through).
+    ///
+    /// These are merged across configuration layers and passed to provider SDKs.
+    /// Unknown keys from `apply_overrides()` are stored here for forward compatibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra: Option<HashMap<String, serde_json::Value>>,
 }
 
 /// Well-known override keys for `apply_overrides()`.
@@ -121,6 +135,7 @@ pub mod override_keys {
     pub const PRESENCE_PENALTY: &str = "presence_penalty";
     pub const THINKING_LEVEL: &str = "thinking_level";
     pub const INCLUDE_THOUGHTS: &str = "include_thoughts";
+    pub const REASONING_SUMMARY: &str = "reasoning_summary";
     pub const BASE_INSTRUCTIONS: &str = "base_instructions";
     pub const BASE_INSTRUCTIONS_FILE: &str = "base_instructions_file";
 }
@@ -160,6 +175,7 @@ impl ModelInfo {
         merge_field!(default_thinking_level);
         merge_field!(supported_thinking_levels);
         merge_field!(include_thoughts);
+        merge_field!(reasoning_summary);
         // Context management
         merge_field!(auto_compact_token_limit);
         merge_field!(effective_context_window_percent);
@@ -170,12 +186,20 @@ impl ModelInfo {
         // Instructions
         merge_field!(base_instructions);
         merge_field!(base_instructions_file);
+        // Extra: merge maps, other takes precedence for overlapping keys
+        if let Some(other_extra) = &other.extra {
+            let self_extra = self.extra.get_or_insert_with(HashMap::new);
+            for (key, value) in other_extra {
+                self_extra.insert(key.clone(), value.clone());
+            }
+        }
     }
 
     /// Apply overrides from a HashMap.
     ///
     /// This allows applying key-value overrides from config files where
-    /// the keys are strings. Unknown keys are silently ignored.
+    /// the keys are strings. Unknown keys are stored in the `extra` field
+    /// for pass-through to provider SDKs.
     pub fn apply_overrides(&mut self, overrides: &HashMap<String, serde_json::Value>) {
         use override_keys::*;
 
@@ -227,6 +251,12 @@ impl ModelInfo {
                         self.include_thoughts = Some(v);
                     }
                 }
+                REASONING_SUMMARY => {
+                    // ReasoningSummary supports string format (e.g., "auto", "detailed")
+                    if let Ok(summary) = serde_json::from_value(value.clone()) {
+                        self.reasoning_summary = Some(summary);
+                    }
+                }
                 BASE_INSTRUCTIONS => {
                     if let Some(s) = value.as_str() {
                         self.base_instructions = Some(s.to_string());
@@ -238,7 +268,9 @@ impl ModelInfo {
                     }
                 }
                 _ => {
-                    // Unknown keys are silently ignored for forward compatibility
+                    // Unknown keys go to extra for pass-through to provider SDKs
+                    let extra = self.extra.get_or_insert_with(HashMap::new);
+                    extra.insert(key.clone(), value.clone());
                 }
             }
         }
@@ -305,6 +337,17 @@ impl ModelInfo {
     pub fn with_supported_thinking_levels(mut self, levels: Vec<ThinkingLevel>) -> Self {
         self.supported_thinking_levels = Some(levels);
         self
+    }
+
+    /// Set extra provider-specific parameters.
+    pub fn with_extra(mut self, extra: HashMap<String, serde_json::Value>) -> Self {
+        self.extra = Some(extra);
+        self
+    }
+
+    /// Get an extra parameter value by key.
+    pub fn get_extra(&self, key: &str) -> Option<&serde_json::Value> {
+        self.extra.as_ref().and_then(|e| e.get(key))
     }
 
     /// Find nearest supported thinking level to target.
@@ -524,5 +567,183 @@ mod tests {
         let requested = ThinkingLevel::high();
         let result = config.resolve_thinking_level(&requested);
         assert_eq!(result, requested);
+    }
+
+    #[test]
+    fn test_apply_overrides_reasoning_summary() {
+        use super::ReasoningSummary;
+
+        let mut config = ModelInfo::default();
+
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            "reasoning_summary".to_string(),
+            serde_json::json!("detailed"),
+        );
+
+        config.apply_overrides(&overrides);
+
+        assert_eq!(config.reasoning_summary, Some(ReasoningSummary::Detailed));
+    }
+
+    #[test]
+    fn test_merge_reasoning_summary() {
+        use super::ReasoningSummary;
+
+        let mut base = ModelInfo {
+            reasoning_summary: Some(ReasoningSummary::Auto),
+            ..Default::default()
+        };
+
+        let other = ModelInfo {
+            reasoning_summary: Some(ReasoningSummary::Concise),
+            ..Default::default()
+        };
+
+        base.merge_from(&other);
+
+        assert_eq!(base.reasoning_summary, Some(ReasoningSummary::Concise));
+    }
+
+    #[test]
+    fn test_extra_field_serde() {
+        let mut extra = HashMap::new();
+        extra.insert(
+            "response_format".to_string(),
+            serde_json::json!({"type": "json_object"}),
+        );
+        extra.insert("seed".to_string(), serde_json::json!(42));
+
+        let config = ModelInfo {
+            slug: "test-model".to_string(),
+            extra: Some(extra),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&config).expect("serialize");
+        let parsed: ModelInfo = serde_json::from_str(&json).expect("deserialize");
+
+        assert!(parsed.extra.is_some());
+        let parsed_extra = parsed.extra.unwrap();
+        assert_eq!(parsed_extra.get("seed"), Some(&serde_json::json!(42)));
+        assert_eq!(
+            parsed_extra.get("response_format"),
+            Some(&serde_json::json!({"type": "json_object"}))
+        );
+    }
+
+    #[test]
+    fn test_merge_from_extra_maps() {
+        let mut base_extra = HashMap::new();
+        base_extra.insert("key1".to_string(), serde_json::json!("value1"));
+        base_extra.insert("key2".to_string(), serde_json::json!("base_value"));
+
+        let mut other_extra = HashMap::new();
+        other_extra.insert("key2".to_string(), serde_json::json!("other_value")); // Override
+        other_extra.insert("key3".to_string(), serde_json::json!("value3")); // New key
+
+        let mut base = ModelInfo {
+            extra: Some(base_extra),
+            ..Default::default()
+        };
+
+        let other = ModelInfo {
+            extra: Some(other_extra),
+            ..Default::default()
+        };
+
+        base.merge_from(&other);
+
+        let merged = base.extra.unwrap();
+        assert_eq!(merged.get("key1"), Some(&serde_json::json!("value1"))); // Preserved
+        assert_eq!(merged.get("key2"), Some(&serde_json::json!("other_value"))); // Overridden
+        assert_eq!(merged.get("key3"), Some(&serde_json::json!("value3"))); // Added
+    }
+
+    #[test]
+    fn test_merge_from_extra_none_to_some() {
+        let mut base = ModelInfo::default();
+        assert!(base.extra.is_none());
+
+        let mut other_extra = HashMap::new();
+        other_extra.insert("new_key".to_string(), serde_json::json!("new_value"));
+
+        let other = ModelInfo {
+            extra: Some(other_extra),
+            ..Default::default()
+        };
+
+        base.merge_from(&other);
+
+        assert!(base.extra.is_some());
+        let merged = base.extra.unwrap();
+        assert_eq!(merged.get("new_key"), Some(&serde_json::json!("new_value")));
+    }
+
+    #[test]
+    fn test_apply_overrides_unknown_keys_to_extra() {
+        let mut config = ModelInfo {
+            display_name: Some("Test Model".to_string()),
+            ..Default::default()
+        };
+
+        let mut overrides = HashMap::new();
+        // Known keys
+        overrides.insert("temperature".to_string(), serde_json::json!(0.8));
+        // Unknown keys should go to extra
+        overrides.insert(
+            "response_format".to_string(),
+            serde_json::json!({"type": "json_object"}),
+        );
+        overrides.insert("seed".to_string(), serde_json::json!(42));
+        overrides.insert("store".to_string(), serde_json::json!(true));
+
+        config.apply_overrides(&overrides);
+
+        // Known key applied to field
+        assert_eq!(config.temperature, Some(0.8));
+
+        // Unknown keys stored in extra
+        assert!(config.extra.is_some());
+        let extra = config.extra.unwrap();
+        assert_eq!(
+            extra.get("response_format"),
+            Some(&serde_json::json!({"type": "json_object"}))
+        );
+        assert_eq!(extra.get("seed"), Some(&serde_json::json!(42)));
+        assert_eq!(extra.get("store"), Some(&serde_json::json!(true)));
+    }
+
+    #[test]
+    fn test_get_extra_helper() {
+        let mut extra = HashMap::new();
+        extra.insert("key".to_string(), serde_json::json!("value"));
+
+        let config = ModelInfo {
+            extra: Some(extra),
+            ..Default::default()
+        };
+
+        assert_eq!(config.get_extra("key"), Some(&serde_json::json!("value")));
+        assert_eq!(config.get_extra("nonexistent"), None);
+
+        // None extra
+        let empty_config = ModelInfo::default();
+        assert_eq!(empty_config.get_extra("key"), None);
+    }
+
+    #[test]
+    fn test_with_extra_builder() {
+        let mut extra = HashMap::new();
+        extra.insert(
+            "response_format".to_string(),
+            serde_json::json!({"type": "json_object"}),
+        );
+
+        let config = ModelInfo::new()
+            .with_display_name("Test")
+            .with_extra(extra.clone());
+
+        assert_eq!(config.extra, Some(extra));
     }
 }

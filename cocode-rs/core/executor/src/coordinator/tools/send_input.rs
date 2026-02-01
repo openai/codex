@@ -1,4 +1,5 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Request to send input to a running agent.
 #[derive(Debug, Clone, Serialize, Deserialize)]

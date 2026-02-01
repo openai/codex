@@ -4,7 +4,8 @@
 //! capabilities with exponential backoff and retry decisions.
 
 use crate::error::ApiError;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use std::time::Duration;
 
 /// Configuration for retry behavior.
@@ -160,12 +161,14 @@ impl RetryContext {
 
     /// Create an exhausted error.
     pub fn exhausted_error(&self) -> ApiError {
-        ApiError::retries_exhausted(
-            self.current_attempt,
-            self.last_error
+        crate::error::api_error::RetriesExhaustedSnafu {
+            attempts: self.current_attempt,
+            message: self
+                .last_error
                 .clone()
                 .unwrap_or_else(|| "Unknown".to_string()),
-        )
+        }
+        .build()
     }
 
     /// Make a retry decision based on the error.
@@ -217,10 +220,15 @@ mod tests {
 
     #[test]
     fn test_should_retry() {
+        use crate::error::api_error::*;
+
         let mut ctx = RetryContext::new(RetryConfig::default().with_max_retries(3));
 
         // First attempt
-        let error = ApiError::network("connection failed");
+        let error: ApiError = NetworkSnafu {
+            message: "connection failed",
+        }
+        .build();
         assert!(ctx.should_retry(&error));
         assert_eq!(ctx.current_attempt(), 1);
 
@@ -239,21 +247,28 @@ mod tests {
 
     #[test]
     fn test_non_retryable_error() {
+        use crate::error::api_error::*;
+
         let mut ctx = RetryContext::with_defaults();
 
-        let error = ApiError::authentication("invalid key");
+        let error: ApiError = AuthenticationSnafu {
+            message: "invalid key",
+        }
+        .build();
         assert!(!ctx.should_retry(&error));
     }
 
     #[test]
     fn test_delay_calculation() {
+        use crate::error::api_error::*;
+
         let ctx = RetryContext::new(
             RetryConfig::default()
                 .with_base_delay(Duration::from_millis(100))
                 .with_multiplier(2.0),
         );
 
-        let error = ApiError::network("test");
+        let error: ApiError = NetworkSnafu { message: "test" }.build();
 
         // Note: delay calculation uses current_attempt which starts at 0
         // After first should_retry, it becomes 1
@@ -270,6 +285,8 @@ mod tests {
 
     #[test]
     fn test_delay_respects_max() {
+        use crate::error::api_error::*;
+
         let mut ctx = RetryContext::new(
             RetryConfig::default()
                 .with_base_delay(Duration::from_secs(10))
@@ -277,27 +294,35 @@ mod tests {
         );
 
         ctx.current_attempt = 1;
-        let error = ApiError::network("test");
+        let error: ApiError = NetworkSnafu { message: "test" }.build();
         // Should be capped at max_delay
         assert_eq!(ctx.calculate_delay(&error), Duration::from_secs(5));
     }
 
     #[test]
     fn test_delay_honors_retry_after() {
+        use crate::error::api_error::*;
+
         let mut ctx =
             RetryContext::new(RetryConfig::default().with_base_delay(Duration::from_secs(10)));
         ctx.current_attempt = 1;
 
-        let error = ApiError::rate_limited("test", 2000);
+        let error: ApiError = RateLimitedSnafu {
+            message: "test",
+            retry_after_ms: 2000i64,
+        }
+        .build();
         assert_eq!(ctx.calculate_delay(&error), Duration::from_millis(2000));
     }
 
     #[test]
     fn test_retry_decision() {
+        use crate::error::api_error::*;
+
         let mut ctx = RetryContext::new(RetryConfig::default().with_max_retries(3));
 
         // Network error - should retry
-        let error = ApiError::network("test");
+        let error: ApiError = NetworkSnafu { message: "test" }.build();
         match ctx.decide(&error) {
             RetryDecision::Retry { .. } => {}
             _ => panic!("Expected Retry"),
@@ -307,15 +332,17 @@ mod tests {
         ctx.reset();
 
         // Auth error - should give up
-        let error = ApiError::authentication("test");
+        let error: ApiError = AuthenticationSnafu { message: "test" }.build();
         assert_eq!(ctx.decide(&error), RetryDecision::GiveUp);
     }
 
     #[test]
     fn test_reset() {
+        use crate::error::api_error::*;
+
         let mut ctx = RetryContext::with_defaults();
 
-        let error = ApiError::network("test");
+        let error: ApiError = NetworkSnafu { message: "test" }.build();
         ctx.should_retry(&error);
         ctx.should_retry(&error);
         assert_eq!(ctx.current_attempt(), 2);

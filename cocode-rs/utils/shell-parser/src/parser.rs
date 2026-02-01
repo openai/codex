@@ -2,10 +2,15 @@
 
 use std::path::Path;
 
-use tree_sitter::{Language, Node, Parser, Tree};
+use tree_sitter::Language;
+use tree_sitter::Node;
+use tree_sitter::Parser;
+use tree_sitter::Tree;
 use tree_sitter_bash::LANGUAGE as BASH;
 
-use crate::tokenizer::{Token, TokenKind, Tokenizer};
+use crate::tokenizer::Token;
+use crate::tokenizer::TokenKind;
+use crate::tokenizer::Tokenizer;
 
 /// Get the Bash language for tree-sitter.
 fn get_bash_language() -> Language {

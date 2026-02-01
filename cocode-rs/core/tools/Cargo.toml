@@ -11,10 +11,14 @@ cocode-error.workspace = true
 cocode-hooks.workspace = true
 cocode-mcp-types.workspace = true
 cocode-rmcp-client.workspace = true
+cocode-shell.workspace = true
 cocode-shell-parser.workspace = true
 cocode-apply-patch.workspace = true
 cocode-file-ignore.workspace = true
 cocode-file-search.workspace = true
+cocode-plan-mode.workspace = true
+cocode-lsp.workspace = true
+cocode-skill.workspace = true
 hyper-sdk.workspace = true
 async-trait.workspace = true
 schemars.workspace = true
@@ -28,6 +32,7 @@ globset.workspace = true
 walkdir.workspace = true
 snafu.workspace = true
 snafu-virtstack.workspace = true
+anyhow.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

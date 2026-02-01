@@ -3,7 +3,8 @@
 //! Tracks token allocations across categories to ensure the context window
 //! is used efficiently and does not overflow.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Categories for token budget allocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

@@ -1,4 +1,5 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Describes why the agent loop stopped.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,6 +115,32 @@ impl LoopResult {
             total_output_tokens: output_tokens,
             final_text: String::new(),
             last_response_content: Vec::new(),
+        }
+    }
+
+    /// Create a result for plan mode exit.
+    pub fn plan_mode_exit(
+        turns: i32,
+        input_tokens: i32,
+        output_tokens: i32,
+        approved: bool,
+        content: Vec<hyper_sdk::ContentBlock>,
+    ) -> Self {
+        // Extract text from content blocks
+        let text: String = content
+            .iter()
+            .filter_map(|b| match b {
+                hyper_sdk::ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        Self {
+            stop_reason: StopReason::PlanModeExit { approved },
+            turns_completed: turns,
+            total_input_tokens: input_tokens,
+            total_output_tokens: output_tokens,
+            final_text: text,
+            last_response_content: content,
         }
     }
 }

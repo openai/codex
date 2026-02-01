@@ -33,6 +33,8 @@ pub use model::Capability;
 pub use model::ConfigShellToolType;
 pub use model::ModelInfo;
 pub use model::ReasoningEffort;
+pub use model::RoleSelection;
+pub use model::RoleSelections;
 pub use model::TruncationMode;
 pub use model::TruncationPolicyConfig;
 pub use model::nearest_effort;
@@ -79,15 +81,23 @@ pub use loop_config::StallRecovery;
 pub use loop_event::AbortReason;
 pub use loop_event::AgentProgress;
 pub use loop_event::ApiErrorInfo;
+pub use loop_event::AttachmentType;
+pub use loop_event::CompactBoundaryMetadata;
+pub use loop_event::CompactTelemetry;
+pub use loop_event::CompactTrigger;
+pub use loop_event::HookAdditionalContext;
 pub use loop_event::HookEventType;
 pub use loop_event::LoopError;
 pub use loop_event::LoopEvent;
 pub use loop_event::McpServerInfo;
 pub use loop_event::McpStartupStatus;
+pub use loop_event::MemoryAttachment;
+pub use loop_event::PersistedToolResult;
 pub use loop_event::RawStreamEvent;
 pub use loop_event::RetryInfo;
 pub use loop_event::TaskProgress;
 pub use loop_event::TaskType;
+pub use loop_event::TokenBreakdown;
 pub use loop_event::TokenUsage;
 pub use loop_event::TombstonedMessage;
 pub use loop_event::ToolProgressInfo;
@@ -111,11 +121,41 @@ pub use tracking::QueryTracking;
 // Extended config types
 pub use attachment_config::AttachmentConfig;
 pub use compact_config::CompactConfig;
-pub use compact_config::DEFAULT_CONTEXT_RESTORE_BUDGET;
-pub use compact_config::DEFAULT_CONTEXT_RESTORE_MAX_FILES;
+pub use compact_config::FileRestorationConfig;
+pub use compact_config::KeepWindowConfig;
+pub use compact_config::SessionMemoryExtractionConfig;
+// Keep window constants
+pub use compact_config::DEFAULT_EXCLUDED_PATTERNS;
+pub use compact_config::DEFAULT_KEEP_WINDOW_MAX_TOKENS;
+pub use compact_config::DEFAULT_KEEP_WINDOW_MIN_TEXT_MESSAGES;
+pub use compact_config::DEFAULT_KEEP_WINDOW_MIN_TOKENS;
+// Session memory constants
 pub use compact_config::DEFAULT_EXTRACTION_COOLDOWN_SECS;
 pub use compact_config::DEFAULT_SESSION_MEMORY_MAX_TOKENS;
 pub use compact_config::DEFAULT_SESSION_MEMORY_MIN_TOKENS;
+// Session memory extraction agent constants
+pub use compact_config::DEFAULT_EXTRACTION_MAX_SUMMARY_TOKENS;
+pub use compact_config::DEFAULT_EXTRACTION_MIN_TOKENS_BETWEEN;
+pub use compact_config::DEFAULT_EXTRACTION_MIN_TOKENS_TO_INIT;
+pub use compact_config::DEFAULT_EXTRACTION_TOOL_CALLS_BETWEEN;
+// Context restoration constants
+pub use compact_config::DEFAULT_CONTEXT_RESTORE_BUDGET;
+pub use compact_config::DEFAULT_CONTEXT_RESTORE_MAX_FILES;
+pub use compact_config::DEFAULT_MAX_TOKENS_PER_FILE;
+// Threshold control constants
+pub use compact_config::DEFAULT_ERROR_THRESHOLD_OFFSET;
+pub use compact_config::DEFAULT_MIN_BLOCKING_OFFSET;
+pub use compact_config::DEFAULT_MIN_TOKENS_TO_PRESERVE;
+pub use compact_config::DEFAULT_WARNING_THRESHOLD_OFFSET;
+// Micro-compact constants
+pub use compact_config::DEFAULT_MICRO_COMPACT_MIN_SAVINGS;
+pub use compact_config::DEFAULT_MICRO_COMPACT_THRESHOLD;
+pub use compact_config::DEFAULT_RECENT_TOOL_RESULTS_TO_KEEP;
+// Full compact constants
+pub use compact_config::DEFAULT_MAX_COMPACT_OUTPUT_TOKENS;
+pub use compact_config::DEFAULT_MAX_SUMMARY_RETRIES;
+pub use compact_config::DEFAULT_TOKEN_SAFETY_MARGIN;
+pub use compact_config::DEFAULT_TOKENS_PER_IMAGE;
 pub use path_config::PathConfig;
 pub use plan_config::DEFAULT_PLAN_AGENT_COUNT;
 pub use plan_config::DEFAULT_PLAN_EXPLORE_AGENT_COUNT;
@@ -123,5 +163,7 @@ pub use plan_config::MAX_AGENT_COUNT;
 pub use plan_config::MIN_AGENT_COUNT;
 pub use plan_config::PlanModeConfig;
 pub use thinking::ThinkingLevel;
+pub use tool_config::DEFAULT_MAX_RESULT_SIZE;
 pub use tool_config::DEFAULT_MAX_TOOL_CONCURRENCY;
+pub use tool_config::DEFAULT_RESULT_PREVIEW_SIZE;
 pub use tool_config::ToolConfig;

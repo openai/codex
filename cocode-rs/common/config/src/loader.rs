@@ -11,7 +11,8 @@
 //! Files are loaded in alphabetical order and merged. Duplicate slugs/names are an error.
 
 use crate::error::ConfigError;
-use crate::error::config_error::{IoSnafu, JsonParseSnafu};
+use crate::error::config_error::IoSnafu;
+use crate::error::config_error::JsonParseSnafu;
 use crate::json_config::AppConfig;
 use crate::types::ModelsFile;
 use crate::types::ProviderConfig;

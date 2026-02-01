@@ -1,4 +1,5 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Configuration for model fallback behavior.
 #[derive(Debug, Clone, Serialize, Deserialize)]

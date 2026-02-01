@@ -1,4 +1,5 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Defines when iterative execution should stop.
 #[derive(Debug, Clone, Serialize, Deserialize)]

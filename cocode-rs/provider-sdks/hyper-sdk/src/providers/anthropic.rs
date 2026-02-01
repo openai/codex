@@ -265,14 +265,6 @@ impl Model for AnthropicModel {
             params = params.tool_choice(convert_tool_choice_to_ant(choice));
         }
 
-        // Handle thinking config
-        if let Some(thinking_config) = &request.thinking_config {
-            if thinking_config.enabled {
-                let budget = thinking_config.budget_tokens.unwrap_or(10000);
-                params = params.thinking(ant::ThinkingConfig::enabled(budget));
-            }
-        }
-
         // Handle provider-specific options
         if let Some(ref options) = request.provider_options {
             if let Some(ant_opts) = downcast_options::<AnthropicOptions>(options) {
@@ -373,13 +365,6 @@ impl Model for AnthropicModel {
 
         if let Some(choice) = &request.tool_choice {
             params = params.tool_choice(convert_tool_choice_to_ant(choice));
-        }
-
-        if let Some(thinking_config) = &request.thinking_config {
-            if thinking_config.enabled {
-                let budget = thinking_config.budget_tokens.unwrap_or(10000);
-                params = params.thinking(ant::ThinkingConfig::enabled(budget));
-            }
         }
 
         if let Some(ref options) = request.provider_options {

@@ -3,13 +3,46 @@
 //! These events allow consumers to observe the progress of the agent's
 //! execution without being coupled to implementation details.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::ApprovalRequest;
+
+// ============================================================================
+// Compaction Types (defined before LoopEvent to avoid forward references)
+// ============================================================================
+
+/// Trigger type for compaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactTrigger {
+    /// Automatic compaction based on token thresholds.
+    #[default]
+    Auto,
+    /// Manual compaction triggered by user.
+    Manual,
+}
+
+impl CompactTrigger {
+    /// Get the trigger as a string.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CompactTrigger::Auto => "auto",
+            CompactTrigger::Manual => "manual",
+        }
+    }
+}
+
+impl std::fmt::Display for CompactTrigger {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
 
 /// Events emitted during loop execution.
 ///
@@ -180,19 +213,37 @@ pub enum LoopEvent {
     },
 
     // ========== Compaction ==========
-    /// Compaction has started.
+    /// Context usage warning - above warning threshold but below auto-compact.
+    ContextUsageWarning {
+        /// Current estimated tokens.
+        estimated_tokens: i32,
+        /// Warning threshold.
+        warning_threshold: i32,
+        /// Percentage of context remaining.
+        percent_left: f64,
+    },
+    /// Full compaction has started.
     CompactionStarted,
-    /// Compaction has completed.
+    /// Full compaction has completed.
     CompactionCompleted {
         /// Number of messages removed.
         removed_messages: i32,
         /// Tokens in the summary.
         summary_tokens: i32,
     },
+    /// Micro-compaction has started.
+    MicroCompactionStarted {
+        /// Number of candidates identified.
+        candidates: i32,
+        /// Potential tokens to save.
+        potential_savings: i32,
+    },
     /// Micro-compaction was applied to tool results.
     MicroCompactionApplied {
         /// Number of results compacted.
         removed_results: i32,
+        /// Tokens saved by compaction.
+        tokens_saved: i32,
     },
     /// Session memory compaction was applied.
     SessionMemoryCompactApplied {
@@ -200,6 +251,87 @@ pub enum LoopEvent {
         saved_tokens: i32,
         /// Tokens in the summary.
         summary_tokens: i32,
+    },
+    /// Compaction was skipped due to a hook rejection.
+    CompactionSkippedByHook {
+        /// Name of the hook that rejected compaction.
+        hook_name: String,
+        /// Reason provided by the hook.
+        reason: String,
+    },
+    /// Compaction is being retried after a failure.
+    CompactionRetry {
+        /// Current attempt number (1-indexed).
+        attempt: i32,
+        /// Maximum retry attempts allowed.
+        max_attempts: i32,
+        /// Delay before retry in milliseconds.
+        delay_ms: i32,
+        /// Reason for the retry.
+        reason: String,
+    },
+    /// Compaction failed after all retries exhausted.
+    CompactionFailed {
+        /// Total attempts made.
+        attempts: i32,
+        /// Last error message.
+        error: String,
+    },
+    /// Memory attachments were cleared during compaction.
+    MemoryAttachmentsCleared {
+        /// UUIDs of cleared memory attachments.
+        cleared_uuids: Vec<String>,
+        /// Total tokens reclaimed.
+        tokens_reclaimed: i32,
+    },
+    /// SessionStart hooks were executed after compaction.
+    PostCompactHooksExecuted {
+        /// Number of hooks that ran.
+        hooks_executed: i32,
+        /// Additional context provided by hooks.
+        additional_context_count: i32,
+    },
+    /// Compact boundary marker was inserted.
+    CompactBoundaryInserted {
+        /// Trigger type (auto or manual).
+        trigger: CompactTrigger,
+        /// Tokens before compaction.
+        pre_tokens: i32,
+        /// Tokens after compaction.
+        post_tokens: i32,
+    },
+    /// Invoked skills were restored after compaction.
+    InvokedSkillsRestored {
+        /// Skills that were restored.
+        skills: Vec<String>,
+    },
+
+    // ========== Session Memory Extraction ==========
+    /// Background session memory extraction has started.
+    ///
+    /// The extraction agent runs asynchronously during normal conversation to
+    /// proactively update the session memory (summary.md).
+    SessionMemoryExtractionStarted {
+        /// Current token count in the conversation.
+        current_tokens: i32,
+        /// Number of tool calls since the last extraction.
+        tool_calls_since: i32,
+    },
+    /// Background session memory extraction has completed successfully.
+    SessionMemoryExtractionCompleted {
+        /// Tokens in the new summary.
+        summary_tokens: i32,
+        /// ID of the last message that was summarized.
+        last_summarized_id: String,
+        /// Total number of messages that were summarized.
+        messages_summarized: i32,
+    },
+    /// Background session memory extraction failed.
+    SessionMemoryExtractionFailed {
+        /// Error message describing the failure.
+        error: String,
+        /// Number of attempts made before giving up.
+        attempts: i32,
     },
 
     // ========== Model Fallback ==========
@@ -555,6 +687,8 @@ pub enum HookEventType {
     SessionEnd,
     /// On user prompt submit.
     PromptSubmit,
+    /// Before context compaction.
+    PreCompact,
 }
 
 impl HookEventType {
@@ -567,6 +701,7 @@ impl HookEventType {
             HookEventType::SessionStart => "session_start",
             HookEventType::SessionEnd => "session_end",
             HookEventType::PromptSubmit => "prompt_submit",
+            HookEventType::PreCompact => "pre_compact",
         }
     }
 }
@@ -587,6 +722,184 @@ pub struct LoopError {
     /// Whether this error is recoverable.
     #[serde(default)]
     pub recoverable: bool,
+}
+
+// ============================================================================
+// Additional Compaction Types
+// ============================================================================
+
+/// Memory attachment information for tracking during compaction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryAttachment {
+    /// Unique identifier for this attachment.
+    pub uuid: String,
+    /// Type of attachment (e.g., "memory", "file", "tool_result").
+    pub attachment_type: AttachmentType,
+    /// Token count for this attachment.
+    pub token_count: i32,
+    /// Whether this attachment has been cleared.
+    #[serde(default)]
+    pub cleared: bool,
+}
+
+/// Type of attachment in the conversation.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttachmentType {
+    /// Memory attachment (session memory, context).
+    Memory,
+    /// File content attachment.
+    File,
+    /// Tool result attachment.
+    ToolResult,
+    /// Skill attachment.
+    Skill,
+    /// Task status attachment.
+    TaskStatus,
+    /// Hook output attachment.
+    HookOutput,
+    /// System reminder attachment.
+    SystemReminder,
+    /// Other attachment type.
+    Other(String),
+}
+
+impl AttachmentType {
+    /// Get the attachment type as a string.
+    pub fn as_str(&self) -> &str {
+        match self {
+            AttachmentType::Memory => "memory",
+            AttachmentType::File => "file",
+            AttachmentType::ToolResult => "tool_result",
+            AttachmentType::Skill => "skill",
+            AttachmentType::TaskStatus => "task_status",
+            AttachmentType::HookOutput => "hook_output",
+            AttachmentType::SystemReminder => "system_reminder",
+            AttachmentType::Other(s) => s,
+        }
+    }
+}
+
+/// Compact telemetry data for analytics and monitoring.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CompactTelemetry {
+    /// Tokens before compaction.
+    pub pre_tokens: i32,
+    /// Tokens after compaction.
+    pub post_tokens: i32,
+    /// Cache read tokens used.
+    #[serde(default)]
+    pub cache_read_tokens: i32,
+    /// Cache creation tokens used.
+    #[serde(default)]
+    pub cache_creation_tokens: i32,
+    /// Token breakdown by category.
+    #[serde(default)]
+    pub token_breakdown: TokenBreakdown,
+    /// Compaction trigger type.
+    pub trigger: Option<CompactTrigger>,
+    /// Whether streaming was used for summarization.
+    #[serde(default)]
+    pub has_started_streaming: bool,
+    /// Number of retry attempts made.
+    #[serde(default)]
+    pub retry_attempts: i32,
+}
+
+/// Token breakdown for telemetry.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TokenBreakdown {
+    /// Total tokens.
+    #[serde(default)]
+    pub total_tokens: i32,
+    /// Human message tokens.
+    #[serde(default)]
+    pub human_message_tokens: i32,
+    /// Human message percentage.
+    #[serde(default)]
+    pub human_message_pct: f64,
+    /// Assistant message tokens.
+    #[serde(default)]
+    pub assistant_message_tokens: i32,
+    /// Assistant message percentage.
+    #[serde(default)]
+    pub assistant_message_pct: f64,
+    /// Local command output tokens.
+    #[serde(default)]
+    pub local_command_output_tokens: i32,
+    /// Local command output percentage.
+    #[serde(default)]
+    pub local_command_output_pct: f64,
+    /// Attachment token counts by type.
+    #[serde(default)]
+    pub attachment_tokens: HashMap<String, i32>,
+    /// Tool request tokens by tool name.
+    #[serde(default)]
+    pub tool_request_tokens: HashMap<String, i32>,
+    /// Tool result tokens by tool name.
+    #[serde(default)]
+    pub tool_result_tokens: HashMap<String, i32>,
+    /// Tokens from duplicate file reads.
+    #[serde(default)]
+    pub duplicate_read_tokens: i32,
+    /// Count of duplicate file reads.
+    #[serde(default)]
+    pub duplicate_read_file_count: i32,
+}
+
+/// Compact boundary marker metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompactBoundaryMetadata {
+    /// Trigger type for this compaction.
+    pub trigger: CompactTrigger,
+    /// Tokens before compaction.
+    pub pre_tokens: i32,
+    /// Tokens after compaction.
+    #[serde(default)]
+    pub post_tokens: Option<i32>,
+    /// Transcript file path for full history.
+    #[serde(default)]
+    pub transcript_path: Option<PathBuf>,
+    /// Whether recent messages were preserved verbatim.
+    #[serde(default)]
+    pub recent_messages_preserved: bool,
+}
+
+/// Hook additional context from post-compact hooks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookAdditionalContext {
+    /// Content provided by the hook.
+    pub content: String,
+    /// Name of the hook that provided the context.
+    pub hook_name: String,
+    /// Whether to suppress output in the UI.
+    #[serde(default)]
+    pub suppress_output: bool,
+}
+
+/// Persisted tool result reference.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersistedToolResult {
+    /// Path to the persisted file.
+    pub path: PathBuf,
+    /// Original size in bytes.
+    pub original_size: i64,
+    /// Original token count.
+    pub original_tokens: i32,
+    /// Tool use ID.
+    pub tool_use_id: String,
+}
+
+impl PersistedToolResult {
+    /// Format as XML reference for injection into messages.
+    pub fn to_xml_reference(&self) -> String {
+        format!(
+            "<persisted-output path=\"{}\" original_size=\"{}\" original_tokens=\"{}\" />",
+            self.path.display(),
+            self.original_size,
+            self.original_tokens
+        )
+    }
 }
 
 #[cfg(test)]
@@ -616,6 +929,80 @@ mod tests {
         assert_eq!(HookEventType::PreToolCall.as_str(), "pre_tool_call");
         assert_eq!(HookEventType::PostToolCall.as_str(), "post_tool_call");
         assert_eq!(HookEventType::SessionStart.as_str(), "session_start");
+        assert_eq!(HookEventType::PreCompact.as_str(), "pre_compact");
+    }
+
+    #[test]
+    fn test_compaction_skipped_by_hook_event() {
+        let event = LoopEvent::CompactionSkippedByHook {
+            hook_name: "save-work-first".to_string(),
+            reason: "Unsaved changes detected".to_string(),
+        };
+
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("compaction_skipped_by_hook"));
+        assert!(json.contains("save-work-first"));
+        assert!(json.contains("Unsaved changes detected"));
+
+        let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+        match parsed {
+            LoopEvent::CompactionSkippedByHook { hook_name, reason } => {
+                assert_eq!(hook_name, "save-work-first");
+                assert_eq!(reason, "Unsaved changes detected");
+            }
+            _ => panic!("Wrong event type"),
+        }
+    }
+
+    #[test]
+    fn test_compaction_retry_event() {
+        let event = LoopEvent::CompactionRetry {
+            attempt: 1,
+            max_attempts: 3,
+            delay_ms: 1000,
+            reason: "API timeout".to_string(),
+        };
+
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("compaction_retry"));
+        assert!(json.contains("API timeout"));
+
+        let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+        match parsed {
+            LoopEvent::CompactionRetry {
+                attempt,
+                max_attempts,
+                delay_ms,
+                reason,
+            } => {
+                assert_eq!(attempt, 1);
+                assert_eq!(max_attempts, 3);
+                assert_eq!(delay_ms, 1000);
+                assert_eq!(reason, "API timeout");
+            }
+            _ => panic!("Wrong event type"),
+        }
+    }
+
+    #[test]
+    fn test_compaction_failed_event() {
+        let event = LoopEvent::CompactionFailed {
+            attempts: 3,
+            error: "All retries exhausted".to_string(),
+        };
+
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("compaction_failed"));
+        assert!(json.contains("All retries exhausted"));
+
+        let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+        match parsed {
+            LoopEvent::CompactionFailed { attempts, error } => {
+                assert_eq!(attempts, 3);
+                assert_eq!(error, "All retries exhausted");
+            }
+            _ => panic!("Wrong event type"),
+        }
     }
 
     #[test]
@@ -674,5 +1061,184 @@ mod tests {
 
         let parsed: McpStartupStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, McpStartupStatus::Ready);
+    }
+
+    #[test]
+    fn test_context_usage_warning_event() {
+        let event = LoopEvent::ContextUsageWarning {
+            estimated_tokens: 150000,
+            warning_threshold: 140000,
+            percent_left: 0.25,
+        };
+
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("context_usage_warning"));
+        assert!(json.contains("150000"));
+        assert!(json.contains("0.25"));
+
+        let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+        match parsed {
+            LoopEvent::ContextUsageWarning {
+                estimated_tokens,
+                warning_threshold,
+                percent_left,
+            } => {
+                assert_eq!(estimated_tokens, 150000);
+                assert_eq!(warning_threshold, 140000);
+                assert!((percent_left - 0.25).abs() < f64::EPSILON);
+            }
+            _ => panic!("Wrong event type"),
+        }
+    }
+
+    #[test]
+    fn test_micro_compaction_started_event() {
+        let event = LoopEvent::MicroCompactionStarted {
+            candidates: 5,
+            potential_savings: 25000,
+        };
+
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("micro_compaction_started"));
+
+        let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+        match parsed {
+            LoopEvent::MicroCompactionStarted {
+                candidates,
+                potential_savings,
+            } => {
+                assert_eq!(candidates, 5);
+                assert_eq!(potential_savings, 25000);
+            }
+            _ => panic!("Wrong event type"),
+        }
+    }
+
+    #[test]
+    fn test_micro_compaction_applied_event() {
+        let event = LoopEvent::MicroCompactionApplied {
+            removed_results: 3,
+            tokens_saved: 15000,
+        };
+
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("micro_compaction_applied"));
+        assert!(json.contains("tokens_saved"));
+
+        let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+        match parsed {
+            LoopEvent::MicroCompactionApplied {
+                removed_results,
+                tokens_saved,
+            } => {
+                assert_eq!(removed_results, 3);
+                assert_eq!(tokens_saved, 15000);
+            }
+            _ => panic!("Wrong event type"),
+        }
+    }
+
+    #[test]
+    fn test_compaction_events_serde() {
+        // Test CompactionStarted
+        let event = LoopEvent::CompactionStarted;
+        let json = serde_json::to_string(&event).unwrap();
+        let _: LoopEvent = serde_json::from_str(&json).unwrap();
+
+        // Test CompactionCompleted
+        let event = LoopEvent::CompactionCompleted {
+            removed_messages: 10,
+            summary_tokens: 2000,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+        match parsed {
+            LoopEvent::CompactionCompleted {
+                removed_messages,
+                summary_tokens,
+            } => {
+                assert_eq!(removed_messages, 10);
+                assert_eq!(summary_tokens, 2000);
+            }
+            _ => panic!("Wrong event type"),
+        }
+
+        // Test SessionMemoryCompactApplied
+        let event = LoopEvent::SessionMemoryCompactApplied {
+            saved_tokens: 50000,
+            summary_tokens: 3000,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+        match parsed {
+            LoopEvent::SessionMemoryCompactApplied {
+                saved_tokens,
+                summary_tokens,
+            } => {
+                assert_eq!(saved_tokens, 50000);
+                assert_eq!(summary_tokens, 3000);
+            }
+            _ => panic!("Wrong event type"),
+        }
+    }
+
+    #[test]
+    fn test_session_memory_extraction_events() {
+        // Test SessionMemoryExtractionStarted
+        let event = LoopEvent::SessionMemoryExtractionStarted {
+            current_tokens: 50000,
+            tool_calls_since: 15,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("session_memory_extraction_started"));
+        let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+        match parsed {
+            LoopEvent::SessionMemoryExtractionStarted {
+                current_tokens,
+                tool_calls_since,
+            } => {
+                assert_eq!(current_tokens, 50000);
+                assert_eq!(tool_calls_since, 15);
+            }
+            _ => panic!("Wrong event type"),
+        }
+
+        // Test SessionMemoryExtractionCompleted
+        let event = LoopEvent::SessionMemoryExtractionCompleted {
+            summary_tokens: 3000,
+            last_summarized_id: "msg-abc123".to_string(),
+            messages_summarized: 25,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("session_memory_extraction_completed"));
+        let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+        match parsed {
+            LoopEvent::SessionMemoryExtractionCompleted {
+                summary_tokens,
+                last_summarized_id,
+                messages_summarized,
+            } => {
+                assert_eq!(summary_tokens, 3000);
+                assert_eq!(last_summarized_id, "msg-abc123");
+                assert_eq!(messages_summarized, 25);
+            }
+            _ => panic!("Wrong event type"),
+        }
+
+        // Test SessionMemoryExtractionFailed
+        let event = LoopEvent::SessionMemoryExtractionFailed {
+            error: "API timeout".to_string(),
+            attempts: 2,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("session_memory_extraction_failed"));
+        let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+        match parsed {
+            LoopEvent::SessionMemoryExtractionFailed { error, attempts } => {
+                assert_eq!(error, "API timeout");
+                assert_eq!(attempts, 2);
+            }
+            _ => panic!("Wrong event type"),
+        }
     }
 }

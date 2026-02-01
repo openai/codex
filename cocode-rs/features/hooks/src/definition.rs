@@ -3,10 +3,12 @@
 //! A `HookDefinition` describes a single hook: when it fires (event type),
 //! what it matches against (optional matcher), and what it does (handler).
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::event::HookEventType;
 use crate::matcher::HookMatcher;
+use crate::scope::HookSource;
 
 /// Defines a single hook.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,6 +26,10 @@ pub struct HookDefinition {
     /// The handler to execute when this hook fires.
     pub handler: HookHandler,
 
+    /// The source of this hook (determines scope/priority).
+    #[serde(default)]
+    pub source: HookSource,
+
     /// Whether this hook is enabled.
     #[serde(default = "default_enabled")]
     pub enabled: bool,
@@ -31,6 +37,17 @@ pub struct HookDefinition {
     /// Timeout in seconds for hook execution.
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: i32,
+
+    /// If true, this hook is removed after a successful execution.
+    ///
+    /// One-shot hooks are useful for:
+    /// - Running a lint check only once when skill starts
+    /// - Initialization hooks that should not repeat
+    /// - Hooks that should trigger exactly once per condition
+    ///
+    /// Note: The hook is only removed on successful execution (not on timeout or failure).
+    #[serde(default)]
+    pub once: bool,
 }
 
 fn default_enabled() -> bool {
@@ -98,6 +115,56 @@ mod tests {
         assert!(def.enabled);
         assert_eq!(def.timeout_secs, 30);
         assert!(def.matcher.is_none());
+        // Source defaults to Session
+        assert_eq!(def.source, HookSource::Session);
+    }
+
+    #[test]
+    fn test_hook_definition_with_source() {
+        let json = r#"{
+            "name": "policy-hook",
+            "event_type": "pre_tool_use",
+            "handler": { "type": "command", "command": "echo", "args": [] },
+            "source": { "type": "policy" }
+        }"#;
+        let def: HookDefinition = serde_json::from_str(json).expect("parse");
+        assert_eq!(def.source, HookSource::Policy);
+
+        let json = r#"{
+            "name": "plugin-hook",
+            "event_type": "pre_tool_use",
+            "handler": { "type": "command", "command": "echo", "args": [] },
+            "source": { "type": "plugin", "name": "my-plugin" }
+        }"#;
+        let def: HookDefinition = serde_json::from_str(json).expect("parse");
+        assert_eq!(
+            def.source,
+            HookSource::Plugin {
+                name: "my-plugin".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_hook_definition_once_flag() {
+        // Default is false
+        let json = r#"{
+            "name": "regular-hook",
+            "event_type": "pre_tool_use",
+            "handler": { "type": "command", "command": "echo", "args": [] }
+        }"#;
+        let def: HookDefinition = serde_json::from_str(json).expect("parse");
+        assert!(!def.once);
+
+        // Explicit true
+        let json = r#"{
+            "name": "one-shot-hook",
+            "event_type": "pre_tool_use",
+            "handler": { "type": "command", "command": "echo", "args": [] },
+            "once": true
+        }"#;
+        let def: HookDefinition = serde_json::from_str(json).expect("parse");
+        assert!(def.once);
     }
 
     #[test]

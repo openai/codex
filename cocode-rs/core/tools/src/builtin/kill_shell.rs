@@ -2,10 +2,11 @@
 
 use super::prompts;
 use crate::context::ToolContext;
-use crate::error::{Result, ToolError};
+use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
-use cocode_protocol::{ConcurrencySafety, ToolOutput};
+use cocode_protocol::ConcurrencySafety;
+use cocode_protocol::ToolOutput;
 use serde_json::Value;
 
 /// Tool for stopping background shell processes or agents.
@@ -56,28 +57,79 @@ impl Tool for KillShellTool {
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
-        let task_id = input["task_id"]
-            .as_str()
-            .ok_or_else(|| ToolError::invalid_input("task_id must be a string"))?;
+        let task_id = input["task_id"].as_str().ok_or_else(|| {
+            crate::error::tool_error::InvalidInputSnafu {
+                message: "task_id must be a string",
+            }
+            .build()
+        })?;
 
         ctx.emit_progress(format!("Stopping task {task_id}")).await;
 
-        // Stub: BackgroundTaskRegistry will be connected in exec/shell (Step 4)
-        Ok(ToolOutput::text(format!(
-            "Task {task_id} stop requested. [BackgroundTaskRegistry not yet connected]"
-        )))
+        // Get final output before stopping
+        let final_output = ctx
+            .background_registry
+            .get_output(task_id)
+            .await
+            .unwrap_or_default();
+
+        // Stop the task
+        let was_running = ctx.background_registry.stop(task_id).await;
+
+        if was_running {
+            Ok(ToolOutput::text(format!(
+                "Task {task_id} stopped successfully.\n\nFinal output:\n{final_output}"
+            )))
+        } else {
+            Ok(ToolOutput::error(format!(
+                "Task {task_id} not found. It may have already completed or never started."
+            )))
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cocode_shell::BackgroundProcess;
     use std::path::PathBuf;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+    use tokio::sync::Notify;
 
     #[tokio::test]
-    async fn test_kill_shell_tool() {
+    async fn test_kill_shell_tool_not_found() {
         let tool = KillShellTool::new();
         let mut ctx = ToolContext::new("call-1", "session-1", PathBuf::from("/tmp"));
+
+        let input = serde_json::json!({
+            "task_id": "task-nonexistent"
+        });
+
+        let result = tool.execute(input, &mut ctx).await.unwrap();
+        // Non-existent task returns error
+        assert!(result.is_error);
+    }
+
+    #[tokio::test]
+    async fn test_kill_shell_tool_stops_task() {
+        let tool = KillShellTool::new();
+        let mut ctx = ToolContext::new("call-1", "session-1", PathBuf::from("/tmp"));
+
+        // Register a background task
+        let output = Arc::new(Mutex::new("task output".to_string()));
+        let process = BackgroundProcess {
+            id: "task-123".to_string(),
+            command: "sleep 60".to_string(),
+            output,
+            completed: Arc::new(Notify::new()),
+        };
+        ctx.background_registry
+            .register("task-123".to_string(), process)
+            .await;
+
+        // Verify task is running
+        assert!(ctx.background_registry.is_running("task-123").await);
 
         let input = serde_json::json!({
             "task_id": "task-123"
@@ -85,6 +137,16 @@ mod tests {
 
         let result = tool.execute(input, &mut ctx).await.unwrap();
         assert!(!result.is_error);
+        match &result.content {
+            cocode_protocol::ToolResultContent::Text(t) => {
+                assert!(t.contains("stopped successfully"));
+                assert!(t.contains("task output"));
+            }
+            _ => panic!("Expected text content"),
+        }
+
+        // Verify task is no longer running
+        assert!(!ctx.background_registry.is_running("task-123").await);
     }
 
     #[test]

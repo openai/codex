@@ -3,9 +3,13 @@
 use std::sync::LazyLock;
 
 use streaming_iterator::StreamingIterator;
-use tree_sitter::{Query, QueryCursor, Tree};
+use tree_sitter::Query;
+use tree_sitter::QueryCursor;
+use tree_sitter::Tree;
 
-use crate::tokenizer::{Span, Token, TokenKind};
+use crate::tokenizer::Span;
+use crate::tokenizer::Token;
+use crate::tokenizer::TokenKind;
 
 /// Types of shell redirections.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
