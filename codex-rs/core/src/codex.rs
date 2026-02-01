@@ -2709,7 +2709,9 @@ mod handlers {
         let force_inject_collaboration_instructions = {
             let mut state = sess.state.lock().await;
             let force = state.force_inject_collaboration_instructions;
-            state.force_inject_collaboration_instructions = false;
+            if next_collaboration_mode.is_some() {
+                state.force_inject_collaboration_instructions = false;
+            }
             force
         };
         let update_items = sess.build_settings_update_items(
