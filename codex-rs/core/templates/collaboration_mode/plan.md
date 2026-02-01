@@ -62,7 +62,7 @@ Do not ask questions that can be answered from the repo or system (for example, 
 Critical rules:
 
 * Strongly prefer using the `request_user_input` tool to ask any questions.
-* Propose only reasonable options to the user, never propose 'filler' options that are obviously wrong or extraneous.
+* Offer only meaningful multiple‑choice options; don’t include filler choices that are obviously wrong or irrelevant.
 * In rare cases where an unavoidable, important question can’t be expressed with reasonable multiple‑choice options (due to extreme ambiguity), you may ask it directly without the tool.
 
 You SHOULD ask many questions, but each question must:
