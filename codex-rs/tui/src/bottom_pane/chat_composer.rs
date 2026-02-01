@@ -2081,6 +2081,10 @@ impl ChatComposer {
             return Some(InputResult::None);
         }
 
+        // `/plan ...` is staged differently from other arg-taking commands:
+        // history recording + pending-paste expansion must happen only after
+        // ChatWidget confirms Plan mode actually activated. If Plan mode is
+        // unavailable, we keep the raw draft intact instead of consuming it.
         if cmd == SlashCommand::Plan {
             let mut args_elements = Self::slash_command_args_elements(
                 rest,
