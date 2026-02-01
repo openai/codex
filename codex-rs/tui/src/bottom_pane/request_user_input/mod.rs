@@ -1058,6 +1058,7 @@ impl BottomPaneView for RequestUserInputOverlay {
 
         if matches!(key_event.code, KeyCode::Esc) {
             self.submit_committed_answers_for_interrupt();
+            self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
             self.done = true;
             return;
         }
@@ -1265,6 +1266,7 @@ impl BottomPaneView for RequestUserInputOverlay {
         if self.confirm_unanswered_active() {
             self.close_unanswered_confirmation();
             self.submit_committed_answers_for_interrupt();
+            self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
             self.done = true;
             return CancellationEvent::Handled;
         }
@@ -1274,6 +1276,7 @@ impl BottomPaneView for RequestUserInputOverlay {
         }
 
         self.submit_committed_answers_for_interrupt();
+        self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
         self.done = true;
         CancellationEvent::Handled
     }
@@ -1517,7 +1520,11 @@ mod tests {
             let event = rx.try_recv().expect("expected history cell");
             assert!(matches!(event, AppEvent::InsertHistoryCell(_)));
         }
-        assert!(rx.try_recv().is_err(), "unexpected AppEvent after drain");
+        let event = rx.try_recv().expect("expected interrupt AppEvent");
+        let AppEvent::CodexOp(op) = event else {
+            panic!("expected CodexOp");
+        };
+        assert_eq!(op, Op::Interrupt);
     }
 
     #[test]
@@ -1816,10 +1823,11 @@ mod tests {
 
         let event = rx.try_recv().expect("expected history cell");
         assert!(matches!(event, AppEvent::InsertHistoryCell(_)));
-        assert!(
-            rx.try_recv().is_err(),
-            "unexpected AppEvent after history cell"
-        );
+        let event = rx.try_recv().expect("expected interrupt AppEvent");
+        let AppEvent::CodexOp(op) = event else {
+            panic!("expected CodexOp");
+        };
+        assert_eq!(op, Op::Interrupt);
     }
 
     #[test]
@@ -1845,10 +1853,11 @@ mod tests {
 
         let event = rx.try_recv().expect("expected history cell");
         assert!(matches!(event, AppEvent::InsertHistoryCell(_)));
-        assert!(
-            rx.try_recv().is_err(),
-            "unexpected AppEvent after history cell"
-        );
+        let event = rx.try_recv().expect("expected interrupt AppEvent");
+        let AppEvent::CodexOp(op) = event else {
+            panic!("expected CodexOp");
+        };
+        assert_eq!(op, Op::Interrupt);
     }
 
     #[test]
@@ -1879,10 +1888,11 @@ mod tests {
 
         let event = rx.try_recv().expect("expected history cell");
         assert!(matches!(event, AppEvent::InsertHistoryCell(_)));
-        assert!(
-            rx.try_recv().is_err(),
-            "unexpected AppEvent after history cell"
-        );
+        let event = rx.try_recv().expect("expected interrupt AppEvent");
+        let AppEvent::CodexOp(op) = event else {
+            panic!("expected CodexOp");
+        };
+        assert_eq!(op, Op::Interrupt);
     }
 
     #[test]
@@ -1913,10 +1923,11 @@ mod tests {
 
         let event = rx.try_recv().expect("expected history cell");
         assert!(matches!(event, AppEvent::InsertHistoryCell(_)));
-        assert!(
-            rx.try_recv().is_err(),
-            "unexpected AppEvent after history cell"
-        );
+        let event = rx.try_recv().expect("expected interrupt AppEvent");
+        let AppEvent::CodexOp(op) = event else {
+            panic!("expected CodexOp");
+        };
+        assert_eq!(op, Op::Interrupt);
     }
 
     #[test]
@@ -1954,10 +1965,11 @@ mod tests {
 
         let event = rx.try_recv().expect("expected history cell");
         assert!(matches!(event, AppEvent::InsertHistoryCell(_)));
-        assert!(
-            rx.try_recv().is_err(),
-            "unexpected AppEvent after history cell"
-        );
+        let event = rx.try_recv().expect("expected interrupt AppEvent");
+        let AppEvent::CodexOp(op) = event else {
+            panic!("expected CodexOp");
+        };
+        assert_eq!(op, Op::Interrupt);
     }
 
     #[test]
