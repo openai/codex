@@ -2939,6 +2939,7 @@ mod tests {
                 app.chat_widget.current_model(),
                 event,
                 is_first,
+                None,
             )) as Arc<dyn HistoryCell>
         };
 
