@@ -269,10 +269,20 @@ pub struct SandboxState {
 }
 
 /// A thin wrapper around a set of running [`RmcpClient`] instances.
-#[derive(Default)]
 pub(crate) struct McpConnectionManager {
     clients: HashMap<String, AsyncManagedClient>,
     elicitation_requests: ElicitationRequestManager,
+    sandbox_state: Arc<std::sync::RwLock<Option<SandboxState>>>,
+}
+
+impl Default for McpConnectionManager {
+    fn default() -> Self {
+        Self {
+            clients: HashMap::new(),
+            elicitation_requests: ElicitationRequestManager::default(),
+            sandbox_state: Arc::new(std::sync::RwLock::new(None)),
+        }
+    }
 }
 
 impl McpConnectionManager {
@@ -288,9 +298,17 @@ impl McpConnectionManager {
         if cancel_token.is_cancelled() {
             return;
         }
+        {
+            let mut guard = self
+                .sandbox_state
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *guard = Some(initial_sandbox_state.clone());
+        }
         let mut clients = HashMap::new();
         let mut join_set = JoinSet::new();
         let elicitation_requests = ElicitationRequestManager::default();
+        let sandbox_state = Arc::clone(&self.sandbox_state);
         for (server_name, cfg) in mcp_servers.into_iter().filter(|(_, cfg)| cfg.enabled) {
             let cancel_token = cancel_token.child_token();
             let _ = emit_update(
@@ -312,7 +330,7 @@ impl McpConnectionManager {
             clients.insert(server_name.clone(), async_managed_client.clone());
             let tx_event = tx_event.clone();
             let auth_entry = auth_entries.get(&server_name).cloned();
-            let sandbox_state = initial_sandbox_state.clone();
+            let sandbox_state = Arc::clone(&sandbox_state);
             join_set.spawn(async move {
                 let outcome = async_managed_client.client().await;
                 if cancel_token.is_cancelled() {
@@ -320,10 +338,15 @@ impl McpConnectionManager {
                 }
                 let status = match &outcome {
                     Ok(_) => {
-                        // Send sandbox state notification immediately after Ready
-                        if let Err(e) = async_managed_client
-                            .notify_sandbox_state_change(&sandbox_state)
-                            .await
+                        // Send the latest sandbox state notification immediately after Ready.
+                        let sandbox_state_snapshot = sandbox_state
+                            .read()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .clone();
+                        if let Some(sandbox_state_snapshot) = sandbox_state_snapshot
+                            && let Err(e) = async_managed_client
+                                .notify_sandbox_state_change(&sandbox_state_snapshot)
+                                .await
                         {
                             warn!(
                                 "Failed to notify sandbox state to MCP server {server_name}: {e:#}",
@@ -379,13 +402,19 @@ impl McpConnectionManager {
         });
     }
 
-    async fn client_by_name(&self, name: &str) -> Result<ManagedClient> {
-        self.clients
+    fn client_by_name_ready_only(&self, name: &str) -> Result<ManagedClient> {
+        let client = self
+            .clients
             .get(name)
-            .ok_or_else(|| anyhow!("unknown MCP server '{name}'"))?
-            .client()
-            .await
-            .context("failed to get client")
+            .ok_or_else(|| anyhow!("unknown MCP server '{name}'"))?;
+
+        match client.client.clone().now_or_never() {
+            Some(Ok(managed)) => Ok(managed),
+            Some(Err(err)) => Err(anyhow!(err)).context("failed to get client"),
+            None => Err(anyhow!(
+                "MCP server '{name}' is still starting (it may be waiting for credentials, permission, or a vault password). Complete the prompt or run `codex mcp login {name}`"
+            )),
+        }
     }
 
     pub async fn resolve_elicitation(
@@ -415,6 +444,70 @@ impl McpConnectionManager {
         tools
     }
 
+    /// Returns tools for MCP servers that become ready within `wait_for_ready`.
+    ///
+    /// Servers that are still starting (e.g. waiting on user elicitation) are
+    /// skipped once the timeout elapses. This is intended for turn startup,
+    /// where MCP startup must not block indefinitely but we still want to avoid
+    /// a race where a just-started MCP server isn't ready yet.
+    #[instrument(level = "trace", skip_all)]
+    pub async fn list_all_tools_bounded(
+        &self,
+        wait_for_ready: Duration,
+    ) -> HashMap<String, ToolInfo> {
+        if wait_for_ready.is_zero() {
+            return self.list_all_tools_ready_only();
+        }
+
+        let clients_snapshot: Vec<AsyncManagedClient> = self.clients.values().cloned().collect();
+        let mut join_set = JoinSet::new();
+        for managed_client in clients_snapshot {
+            join_set.spawn(async move {
+                tokio::time::timeout(wait_for_ready, managed_client.client.clone()).await
+            });
+        }
+
+        let mut tools = HashMap::new();
+        while let Some(join_res) = join_set.join_next().await {
+            let Ok(outcome) = join_res else {
+                continue;
+            };
+            let Ok(Ok(client)) = outcome else {
+                continue;
+            };
+            tools.extend(qualify_tools(filter_tools(
+                client.tools,
+                client.tool_filter,
+            )));
+        }
+
+        tools
+    }
+
+    /// Returns a single map that contains tools for MCP servers that have
+    /// finished starting (either successfully or with an error). Servers that
+    /// are still starting (e.g., waiting on user elicitation) are skipped.
+    ///
+    /// This is intended for latency-sensitive call sites (like building the
+    /// tool list for a turn) where MCP startup must not block progress.
+    #[instrument(level = "trace", skip_all)]
+    pub fn list_all_tools_ready_only(&self) -> HashMap<String, ToolInfo> {
+        let mut tools = HashMap::new();
+        for managed_client in self.clients.values() {
+            let Some(outcome) = managed_client.client.clone().now_or_never() else {
+                continue;
+            };
+            let Ok(client) = outcome else {
+                continue;
+            };
+            tools.extend(qualify_tools(filter_tools(
+                client.tools,
+                client.tool_filter,
+            )));
+        }
+        tools
+    }
+
     /// Returns a single map that contains all resources. Each key is the
     /// server name and the value is a vector of resources.
     pub async fn list_all_resources(&self) -> HashMap<String, Vec<Resource>> {
@@ -424,7 +517,10 @@ impl McpConnectionManager {
 
         for (server_name, async_managed_client) in clients_snapshot {
             let server_name = server_name.clone();
-            let Ok(managed_client) = async_managed_client.client().await else {
+            let Some(outcome) = async_managed_client.client.clone().now_or_never() else {
+                continue;
+            };
+            let Ok(managed_client) = outcome else {
                 continue;
             };
             let timeout = managed_client.tool_timeout;
@@ -489,7 +585,10 @@ impl McpConnectionManager {
 
         for (server_name, async_managed_client) in clients_snapshot {
             let server_name_cloned = server_name.clone();
-            let Ok(managed_client) = async_managed_client.client().await else {
+            let Some(outcome) = async_managed_client.client.clone().now_or_never() else {
+                continue;
+            };
+            let Ok(managed_client) = outcome else {
                 continue;
             };
             let client = managed_client.client.clone();
@@ -558,7 +657,7 @@ impl McpConnectionManager {
         tool: &str,
         arguments: Option<serde_json::Value>,
     ) -> Result<mcp_types::CallToolResult> {
-        let client = self.client_by_name(server).await?;
+        let client = self.client_by_name_ready_only(server)?;
         if !client.tool_filter.allows(tool) {
             return Err(anyhow!(
                 "tool '{tool}' is disabled for MCP server '{server}'"
@@ -578,7 +677,7 @@ impl McpConnectionManager {
         server: &str,
         params: Option<ListResourcesRequestParams>,
     ) -> Result<ListResourcesResult> {
-        let managed = self.client_by_name(server).await?;
+        let managed = self.client_by_name_ready_only(server)?;
         let timeout = managed.tool_timeout;
 
         managed
@@ -594,7 +693,7 @@ impl McpConnectionManager {
         server: &str,
         params: Option<ListResourceTemplatesRequestParams>,
     ) -> Result<ListResourceTemplatesResult> {
-        let managed = self.client_by_name(server).await?;
+        let managed = self.client_by_name_ready_only(server)?;
         let client = managed.client.clone();
         let timeout = managed.tool_timeout;
 
@@ -610,7 +709,7 @@ impl McpConnectionManager {
         server: &str,
         params: ReadResourceRequestParams,
     ) -> Result<ReadResourceResult> {
-        let managed = self.client_by_name(server).await?;
+        let managed = self.client_by_name_ready_only(server)?;
         let client = managed.client.clone();
         let timeout = managed.tool_timeout;
         let uri = params.uri.clone();
@@ -621,36 +720,58 @@ impl McpConnectionManager {
             .with_context(|| format!("resources/read failed for `{server}` ({uri})"))
     }
 
-    pub async fn parse_tool_name(&self, tool_name: &str) -> Option<(String, String)> {
-        self.list_all_tools()
-            .await
-            .get(tool_name)
-            .map(|tool| (tool.server_name.clone(), tool.tool_name.clone()))
+    pub fn parse_tool_name(&self, tool_name: &str) -> Option<(String, String)> {
+        if !tool_name.starts_with("mcp__") {
+            return None;
+        }
+
+        if let Some(tool) = self.list_all_tools_ready_only().get(tool_name) {
+            return Some((tool.server_name.clone(), tool.tool_name.clone()));
+        }
+
+        let mut parts = tool_name.split(MCP_TOOL_NAME_DELIMITER);
+        let prefix = parts.next()?;
+        if prefix != "mcp" {
+            return None;
+        }
+        let server_name = parts.next()?;
+        if !self.clients.contains_key(server_name) {
+            return None;
+        }
+        let tool: String = parts.collect::<Vec<_>>().join(MCP_TOOL_NAME_DELIMITER);
+        if tool.is_empty() {
+            return None;
+        }
+        Some((server_name.to_string(), tool))
     }
 
     pub async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
-        let mut join_set = JoinSet::new();
-
-        for async_managed_client in self.clients.values() {
-            let sandbox_state = sandbox_state.clone();
-            let async_managed_client = async_managed_client.clone();
-            join_set.spawn(async move {
-                async_managed_client
-                    .notify_sandbox_state_change(&sandbox_state)
-                    .await
-            });
+        {
+            let mut guard = self
+                .sandbox_state
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *guard = Some(sandbox_state.clone());
         }
 
-        while let Some(join_res) = join_set.join_next().await {
-            match join_res {
-                Ok(Ok(())) => {}
-                Ok(Err(err)) => {
+        for async_managed_client in self.clients.values() {
+            let Some(outcome) = async_managed_client.client.clone().now_or_never() else {
+                continue;
+            };
+            let Ok(_) = outcome else {
+                continue;
+            };
+
+            let sandbox_state = sandbox_state.clone();
+            let async_managed_client = async_managed_client.clone();
+            tokio::spawn(async move {
+                if let Err(err) = async_managed_client
+                    .notify_sandbox_state_change(&sandbox_state)
+                    .await
+                {
                     warn!("Failed to notify sandbox state change to MCP server: {err:#}");
                 }
-                Err(err) => {
-                    warn!("Task panic when notifying sandbox state change to MCP server: {err:#}");
-                }
-            }
+            });
         }
 
         Ok(())

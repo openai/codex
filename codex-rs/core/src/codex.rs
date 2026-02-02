@@ -1564,7 +1564,6 @@ impl Session {
             .read()
             .await
             .parse_tool_name(tool_name)
-            .await
     }
 
     pub async fn interrupt_task(self: &Arc<Self>) {
@@ -2393,7 +2392,7 @@ async fn run_turn(
         .mcp_connection_manager
         .read()
         .await
-        .list_all_tools()
+        .list_all_tools_bounded(Duration::from_secs(2))
         .or_cancel(&cancellation_token)
         .await?;
     let router = Arc::new(ToolRouter::from_config(
@@ -2604,14 +2603,23 @@ async fn try_run_turn(
             from = field::Empty,
         );
 
-        let event = match stream
-            .next()
-            .instrument(trace_span!(parent: &handle_responses, "receiving"))
-            .or_cancel(&cancellation_token)
-            .await
-        {
-            Ok(event) => event,
-            Err(codex_async_utils::CancelErr::Cancelled) => break Err(CodexErr::TurnAborted),
+        let idle_timeout = turn_context.client.get_provider().stream_idle_timeout();
+        let event = tokio::select! {
+            _ = cancellation_token.cancelled() => break Err(CodexErr::TurnAborted),
+            res = tokio::time::timeout(
+                idle_timeout,
+                stream
+                    .next()
+                    .instrument(trace_span!(parent: &handle_responses, "receiving")),
+            ) => match res {
+                Ok(event) => event,
+                Err(_) => {
+                    break Err(CodexErr::Stream(
+                        format!("idle timeout waiting for model stream event after {idle_timeout:?}"),
+                        None,
+                    ));
+                }
+            }
         };
 
         let event = match event {
