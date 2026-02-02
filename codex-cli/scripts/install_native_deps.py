@@ -23,6 +23,7 @@ CODEX_CLI_ROOT = SCRIPT_DIR.parent
 DEFAULT_WORKFLOW_URL = "https://github.com/openai/codex/actions/runs/17952349351"  # rust-v0.40.0
 VENDOR_DIR_NAME = "vendor"
 RG_MANIFEST = CODEX_CLI_ROOT / "bin" / "rg"
+NODE_VERSION_FILE = CODEX_CLI_ROOT.parent / "codex-rs" / "node-version.txt"
 BINARY_TARGETS = (
     "x86_64-unknown-linux-musl",
     "aarch64-unknown-linux-musl",
@@ -79,6 +80,41 @@ RG_TARGET_PLATFORM_PAIRS: list[tuple[str, str]] = [
 RG_TARGET_TO_PLATFORM = {target: platform for target, platform in RG_TARGET_PLATFORM_PAIRS}
 DEFAULT_RG_TARGETS = [target for target, _ in RG_TARGET_PLATFORM_PAIRS]
 
+# Node distribution asset mapping: target -> (archive_format, filename, member_path)
+NODE_ASSETS: dict[str, tuple[str, str, str]] = {
+    "x86_64-apple-darwin": (
+        "tar.gz",
+        "node-v{ver}-darwin-x64.tar.gz",
+        "node-v{ver}-darwin-x64/bin/node",
+    ),
+    "aarch64-apple-darwin": (
+        "tar.gz",
+        "node-v{ver}-darwin-arm64.tar.gz",
+        "node-v{ver}-darwin-arm64/bin/node",
+    ),
+    "x86_64-unknown-linux-musl": (
+        "tar.xz",
+        "node-v{ver}-linux-x64.tar.xz",
+        "node-v{ver}-linux-x64/bin/node",
+    ),
+    "aarch64-unknown-linux-musl": (
+        "tar.xz",
+        "node-v{ver}-linux-arm64.tar.xz",
+        "node-v{ver}-linux-arm64/bin/node",
+    ),
+    "x86_64-pc-windows-msvc": (
+        "zip",
+        "node-v{ver}-win-x64.zip",
+        "node-v{ver}-win-x64/node.exe",
+    ),
+    "aarch64-pc-windows-msvc": (
+        "zip",
+        "node-v{ver}-win-arm64.zip",
+        "node-v{ver}-win-arm64/node.exe",
+    ),
+}
+DEFAULT_NODE_TARGETS = tuple(NODE_ASSETS.keys())
+
 # urllib.request.urlopen() defaults to no timeout (can hang indefinitely), which is painful in CI.
 DOWNLOAD_TIMEOUT_SECS = 60
 
@@ -132,11 +168,11 @@ def parse_args() -> argparse.Namespace:
         "--component",
         dest="components",
         action="append",
-        choices=tuple(list(BINARY_COMPONENTS) + ["rg"]),
+        choices=tuple(list(BINARY_COMPONENTS) + ["rg", "node"]),
         help=(
             "Limit installation to the specified components."
             " May be repeated. Defaults to codex, codex-windows-sandbox-setup,"
-            " codex-command-runner, and rg."
+            " codex-command-runner, node, and rg."
         ),
     )
     parser.add_argument(
@@ -163,6 +199,7 @@ def main() -> int:
         "codex-windows-sandbox-setup",
         "codex-command-runner",
         "rg",
+        "node",
     ]
 
     workflow_url = (args.workflow_url or DEFAULT_WORKFLOW_URL).strip()
@@ -186,6 +223,11 @@ def main() -> int:
         with _gha_group("Fetch ripgrep binaries"):
             print("Fetching ripgrep binaries...")
             fetch_rg(vendor_dir, DEFAULT_RG_TARGETS, manifest_path=RG_MANIFEST)
+
+    if "node" in components:
+        with _gha_group("Fetch Node runtime"):
+            print("Fetching Node runtime...")
+            fetch_node(vendor_dir, load_node_version(), DEFAULT_NODE_TARGETS)
 
     print(f"Installed native dependencies into {vendor_dir}")
     return 0
@@ -257,6 +299,41 @@ def fetch_rg(
             print(f"  installed ripgrep for {target}")
 
     return [results[target] for target in targets]
+
+
+def fetch_node(vendor_dir: Path, version: str, targets: Sequence[str]) -> None:
+    version = version.strip().lstrip("v")
+    vendor_dir.mkdir(parents=True, exist_ok=True)
+
+    for target in targets:
+        asset = NODE_ASSETS.get(target)
+        if asset is None:
+            raise RuntimeError(f"unsupported Node target {target}")
+        archive_format, filename_tmpl, member_tmpl = asset
+        filename = filename_tmpl.format(ver=version)
+        member = member_tmpl.format(ver=version)
+        url = f"https://nodejs.org/dist/v{version}/{filename}"
+        dest_dir = vendor_dir / target / "node"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        binary_name = "node.exe" if "windows" in target else "node"
+        dest = dest_dir / binary_name
+
+        with tempfile.TemporaryDirectory() as tmp_dir_str:
+            tmp_dir = Path(tmp_dir_str)
+            download_path = tmp_dir / filename
+            print(f"  downloading node {version} for {target} from {url}", flush=True)
+            _download_file(url, download_path)
+            dest.unlink(missing_ok=True)
+            extract_archive(download_path, archive_format, member, dest)
+        if "windows" not in target:
+            dest.chmod(0o755)
+
+
+def load_node_version() -> str:
+    try:
+        return NODE_VERSION_FILE.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise RuntimeError(f"failed to read node version from {NODE_VERSION_FILE}: {exc}") from exc
 
 
 def _download_artifacts(workflow_id: str, dest_dir: Path) -> None:
@@ -426,6 +503,21 @@ def extract_archive(
         if not archive_member:
             raise RuntimeError("Missing 'path' for tar.gz archive in DotSlash manifest.")
         with tarfile.open(archive_path, "r:gz") as tar:
+            try:
+                member = tar.getmember(archive_member)
+            except KeyError as exc:
+                raise RuntimeError(
+                    f"Entry '{archive_member}' not found in archive {archive_path}."
+                ) from exc
+            tar.extract(member, path=archive_path.parent, filter="data")
+        extracted = archive_path.parent / archive_member
+        shutil.move(str(extracted), dest)
+        return
+
+    if archive_format == "tar.xz":
+        if not archive_member:
+            raise RuntimeError("Missing 'path' for tar.xz archive in archive.")
+        with tarfile.open(archive_path, "r:xz") as tar:
             try:
                 member = tar.getmember(archive_member)
             except KeyError as exc:
