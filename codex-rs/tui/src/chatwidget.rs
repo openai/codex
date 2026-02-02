@@ -2705,11 +2705,6 @@ impl ChatWidget {
                         mention_paths: self.bottom_pane.take_mention_paths(),
                     };
                     if self.is_session_configured() {
-                        // Submitted is only emitted when steer is enabled (Enter sends immediately).
-                        // Reset any reasoning header only when we are actually submitting a turn.
-                        self.reasoning_buffer.clear();
-                        self.full_reasoning_buffer.clear();
-                        self.set_status_header(String::from("Working"));
                         self.submit_user_message(user_message);
                     } else {
                         self.queue_user_message(user_message);
@@ -3193,6 +3188,13 @@ impl ChatWidget {
             return;
         }
 
+        // Submitting a message creates a pending turn before `TurnStarted`. Show a status line
+        // immediately without changing task-running state (which affects queueing).
+        self.bottom_pane.ensure_status_indicator();
+        // Esc interrupt is gated on `is_task_running`; hide the hint until `TurnStarted`.
+        self.bottom_pane.set_interrupt_hint_visible(false);
+        self.set_status_header(String::from("Working"));
+
         for image in &local_images {
             items.push(UserInput::LocalImage {
                 path: image.path.clone(),
@@ -3456,7 +3458,9 @@ impl ChatWidget {
                 self.on_entered_review_mode(review_request, from_replay)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
-            EventMsg::ContextCompacted(_) => self.on_agent_message("Context compacted".to_owned()),
+            EventMsg::ContextCompacted(_) => {
+                self.add_info_message("Context compacted".to_owned(), None);
+            }
             EventMsg::CollabAgentSpawnBegin(_) => {}
             EventMsg::CollabAgentSpawnEnd(ev) => self.on_collab_event(collab::spawn_end(ev)),
             EventMsg::CollabAgentInteractionBegin(_) => {}
