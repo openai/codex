@@ -261,6 +261,7 @@ async fn websocket_harness(server: &WebSocketTestServer) -> WebsocketTestHarness
         model_info.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
+        None,
         auth_manager.get_auth_mode(),
         false,
         "test".to_string(),

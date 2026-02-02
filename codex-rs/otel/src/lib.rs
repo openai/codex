@@ -9,6 +9,7 @@ use crate::metrics::MetricsClient;
 use crate::metrics::MetricsConfig;
 use crate::metrics::MetricsError;
 use crate::metrics::Result as MetricsResult;
+pub use codex_utils_string::sanitize_metric_tag_value;
 pub use crate::metrics::timer::Timer;
 use crate::metrics::validation::validate_tag_key;
 use crate::metrics::validation::validate_tag_value;
@@ -16,6 +17,8 @@ use crate::otel_provider::OtelProvider;
 use codex_protocol::ThreadId;
 use opentelemetry_sdk::metrics::data::ResourceMetrics;
 use serde::Serialize;
+use sha2::Digest;
+use sha2::Sha256;
 use std::time::Duration;
 use strum_macros::Display;
 use tracing::debug;
@@ -36,6 +39,7 @@ pub struct OtelEventMetadata {
     pub(crate) auth_mode: Option<String>,
     pub(crate) account_id: Option<String>,
     pub(crate) account_email: Option<String>,
+    pub(crate) user_id: Option<String>,
     pub(crate) session_source: String,
     pub(crate) model: String,
     pub(crate) slug: String,
@@ -195,6 +199,11 @@ impl OtelManager {
             "session_source",
             Some(self.metadata.session_source.as_str()),
         )?;
+        Self::push_metadata_tag(
+            &mut tags,
+            "user.id",
+            self.metadata.user_id.as_deref(),
+        )?;
         Self::push_metadata_tag(&mut tags, "model", Some(self.metadata.model.as_str()))?;
         Self::push_metadata_tag(&mut tags, "app.version", Some(self.metadata.app_version))?;
         Ok(tags)
@@ -213,6 +222,12 @@ impl OtelManager {
         tags.push((key, value));
         Ok(())
     }
+}
+
+pub fn hash_user_id(value: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(value.as_bytes());
+    format!("{:x}", hasher.finalize())
 }
 
 /// Start a metrics timer using the globally installed metrics client.

@@ -84,6 +84,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
         model_info.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
+        None,
         Some(AuthMode::ApiKey),
         false,
         "test".to_string(),

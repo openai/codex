@@ -31,6 +31,7 @@ use crate::token_data::PlanType as InternalPlanType;
 use crate::token_data::TokenData;
 use crate::token_data::parse_id_token;
 use crate::util::try_parse_error_message;
+use codex_otel::hash_user_id;
 use codex_client::CodexHttpClient;
 use codex_protocol::account::PlanType as AccountPlanType;
 use serde_json::Value;
@@ -323,6 +324,15 @@ impl CodexAuth {
     pub fn from_api_key(api_key: &str) -> Self {
         Self::from_api_key_with_client(api_key, crate::default_client::create_client())
     }
+}
+
+/// Returns a stable hashed user ID for metrics, derived from the current auth mode.
+pub fn stable_user_id(auth: Option<&CodexAuth>) -> Option<String> {
+    let auth = auth?;
+    if let Some(account_id) = auth.get_account_id() {
+        return Some(hash_user_id(&account_id));
+    }
+    auth.api_key().map(hash_user_id)
 }
 
 impl ChatgptAuth {
