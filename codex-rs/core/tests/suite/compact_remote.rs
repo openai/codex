@@ -34,6 +34,7 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
             .with_config(|config| {
                 config.features.enable(Feature::RemoteCompaction);
+                config.model_provider.force_datadog_tracing = true;
             }),
     )
     .await?;
@@ -108,6 +109,9 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
         compact_request.header("authorization").as_deref(),
         Some("Bearer Access Token")
     );
+    assert_eq!(compact_request.header("x-datadog-trace-id"), None);
+    assert_eq!(compact_request.header("x-datadog-parent-id"), None);
+    assert_eq!(compact_request.header("x-datadog-sampling-priority"), None);
     let compact_body = compact_request.body_json();
     assert_eq!(
         compact_body.get("model").and_then(|v| v.as_str()),

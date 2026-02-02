@@ -50,6 +50,7 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Error;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::warn;
+use uuid::Uuid;
 
 use crate::AuthManager;
 use crate::auth::CodexAuth;
@@ -72,6 +73,10 @@ use crate::transport_manager::TransportManager;
 
 pub const WEB_SEARCH_ELIGIBLE_HEADER: &str = "x-oai-web-search-eligible";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
+const X_DATADOG_TRACE_ID_HEADER: &str = "x-datadog-trace-id";
+const X_DATADOG_PARENT_ID_HEADER: &str = "x-datadog-parent-id";
+const X_DATADOG_SAMPLING_PRIORITY_HEADER: &str = "x-datadog-sampling-priority";
+const DATADOG_SAMPLING_PRIORITY: i32 = 2;
 
 #[derive(Debug)]
 struct ModelClientState {
@@ -380,7 +385,11 @@ impl ModelClientSession {
             store_override: None,
             conversation_id: Some(conversation_id),
             session_source: Some(self.state.session_source.clone()),
-            extra_headers: build_responses_headers(&self.state.config, Some(&self.turn_state)),
+            extra_headers: build_responses_headers(
+                &self.state.config,
+                &self.state.provider,
+                Some(&self.turn_state),
+            ),
             compression,
             turn_state: Some(Arc::clone(&self.turn_state)),
         }
@@ -712,6 +721,7 @@ fn experimental_feature_headers(config: &Config) -> ApiHeaderMap {
 
 fn build_responses_headers(
     config: &Config,
+    provider: &ModelProviderInfo,
     turn_state: Option<&Arc<OnceLock<String>>>,
 ) -> ApiHeaderMap {
     let mut headers = experimental_feature_headers(config);
@@ -725,6 +735,7 @@ fn build_responses_headers(
             },
         ),
     );
+    apply_responses_trace_headers(&mut headers, provider.force_datadog_tracing);
     if let Some(turn_state) = turn_state
         && let Some(state) = turn_state.get()
         && let Ok(header_value) = HeaderValue::from_str(state)
@@ -732,6 +743,38 @@ fn build_responses_headers(
         headers.insert(X_CODEX_TURN_STATE_HEADER, header_value);
     }
     headers
+}
+
+fn apply_responses_trace_headers(headers: &mut ApiHeaderMap, force_datadog_tracing: bool) {
+    if !force_datadog_tracing {
+        return;
+    }
+
+    apply_datadog_headers(headers);
+}
+
+fn apply_datadog_headers(headers: &mut ApiHeaderMap) {
+    let trace_id = random_datadog_id();
+    let parent_id = random_datadog_id();
+    if let Ok(trace_header) = HeaderValue::from_str(&trace_id.to_string()) {
+        let _ = headers.insert(X_DATADOG_TRACE_ID_HEADER, trace_header);
+    }
+    if let Ok(parent_header) = HeaderValue::from_str(&parent_id.to_string()) {
+        let _ = headers.insert(X_DATADOG_PARENT_ID_HEADER, parent_header);
+    }
+    let priority_value = DATADOG_SAMPLING_PRIORITY.to_string();
+    if let Ok(priority_header) = HeaderValue::from_str(&priority_value) {
+        let _ = headers.insert(X_DATADOG_SAMPLING_PRIORITY_HEADER, priority_header);
+    }
+}
+
+fn random_datadog_id() -> u64 {
+    loop {
+        let value = (Uuid::new_v4().as_u128() & u128::from(u64::MAX)) as u64;
+        if value != 0 {
+            return value;
+        }
+    }
 }
 
 fn map_response_stream<S>(api_stream: S, otel_manager: OtelManager) -> ResponseStream

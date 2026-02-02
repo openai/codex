@@ -437,6 +437,7 @@ mod tests {
             stream_idle_timeout_ms: Some(5_000),
             requires_openai_auth: false,
             supports_websockets: false,
+            force_datadog_tracing: false,
         }
     }
 
@@ -494,6 +495,42 @@ mod tests {
             models_mock.requests().len(),
             1,
             "expected a single /models request"
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_available_models_never_adds_datadog_trace_headers() {
+        let server = MockServer::start().await;
+        let models_mock = mount_models_once(&server, ModelsResponse { models: Vec::new() }).await;
+
+        let codex_home = tempdir().expect("temp dir");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load default test config");
+        config.features.enable(Feature::RemoteModels);
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+        let mut provider = provider_for(server.uri());
+        provider.force_datadog_tracing = true;
+        let manager =
+            ModelsManager::with_provider(codex_home.path().to_path_buf(), auth_manager, provider);
+
+        manager
+            .refresh_available_models(&config, RefreshStrategy::OnlineIfUncached)
+            .await
+            .expect("refresh succeeds");
+
+        let requests = models_mock.requests();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].headers.get("x-datadog-trace-id").is_none());
+        assert!(requests[0].headers.get("x-datadog-parent-id").is_none());
+        assert!(
+            requests[0]
+                .headers
+                .get("x-datadog-sampling-priority")
+                .is_none()
         );
     }
 

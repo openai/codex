@@ -35,6 +35,9 @@ use tempfile::TempDir;
 use tracing_test::traced_test;
 
 const MODEL: &str = "gpt-5.2-codex";
+const X_DATADOG_TRACE_ID_HEADER: &str = "x-datadog-trace-id";
+const X_DATADOG_PARENT_ID_HEADER: &str = "x-datadog-parent-id";
+const X_DATADOG_SAMPLING_PRIORITY_HEADER: &str = "x-datadog-sampling-priority";
 
 struct WebsocketTestHarness {
     _codex_home: TempDir,
@@ -133,6 +136,42 @@ async fn responses_websocket_emits_reasoning_included_event() {
     }
 
     assert!(saw_reasoning_included);
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_includes_datadog_trace_headers_when_enabled() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![vec![
+        ev_response_created("resp-1"),
+        ev_completed("resp-1"),
+    ]]])
+    .await;
+
+    let mut provider = websocket_provider(&server);
+    provider.force_datadog_tracing = true;
+    let harness = websocket_harness_with_provider(provider).await;
+    let mut session = harness.client.new_session();
+    let prompt = prompt_with_input(vec![message_item("hello")]);
+    stream_until_complete(&mut session, &prompt).await;
+
+    let handshake = server.single_handshake();
+    let trace_id = handshake
+        .header(X_DATADOG_TRACE_ID_HEADER)
+        .expect("trace id header");
+    let parent_id = handshake
+        .header(X_DATADOG_PARENT_ID_HEADER)
+        .expect("parent id header");
+    assert!(trace_id.parse::<u64>().is_ok_and(|id| id != 0));
+    assert!(parent_id.parse::<u64>().is_ok_and(|id| id != 0));
+    assert_eq!(
+        handshake
+            .header(X_DATADOG_SAMPLING_PRIORITY_HEADER)
+            .as_deref(),
+        Some("2")
+    );
+
     server.shutdown().await;
 }
 
@@ -236,11 +275,16 @@ fn websocket_provider(server: &WebSocketTestServer) -> ModelProviderInfo {
         stream_idle_timeout_ms: Some(5_000),
         requires_openai_auth: false,
         supports_websockets: true,
+        force_datadog_tracing: false,
     }
 }
 
 async fn websocket_harness(server: &WebSocketTestServer) -> WebsocketTestHarness {
     let provider = websocket_provider(server);
+    websocket_harness_with_provider(provider).await
+}
+
+async fn websocket_harness_with_provider(provider: ModelProviderInfo) -> WebsocketTestHarness {
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model = Some(MODEL.to_string());

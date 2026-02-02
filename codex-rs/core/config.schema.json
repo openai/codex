@@ -412,6 +412,10 @@
           "description": "Value to use with `Authorization: Bearer <token>` header. Use of this config is discouraged in favor of `env_key` for security reasons, but this may be necessary when using this programmatically.",
           "type": "string"
         },
+        "force_datadog_tracing": {
+          "description": "Whether to include Datadog tracing headers on Responses API calls.",
+          "type": "boolean"
+        },
         "http_headers": {
           "additionalProperties": {
             "type": "string"
