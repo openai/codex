@@ -8,6 +8,7 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use codex_protocol::mcp::CallToolResult;
 
 pub struct McpHandler;
 
@@ -54,7 +55,16 @@ impl ToolHandler for McpHandler {
 
         match response {
             codex_protocol::models::ResponseInputItem::McpToolCallOutput { result, .. } => {
-                Ok(ToolOutput::Mcp { result })
+                Ok(ToolOutput::Mcp {
+                    result: result.and_then(|result| {
+                        serde_json::to_value(result)
+                            .map_err(|err| err.to_string())
+                            .and_then(|value| {
+                                serde_json::from_value::<CallToolResult>(value)
+                                    .map_err(|err| err.to_string())
+                            })
+                    }),
+                })
             }
             codex_protocol::models::ResponseInputItem::FunctionCallOutput { output, .. } => {
                 let codex_protocol::models::FunctionCallOutputPayload {
