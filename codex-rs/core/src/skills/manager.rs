@@ -52,14 +52,11 @@ impl SkillsManager {
             skill_roots_from_layer_stack_with_agents(&config.config_layer_stack, &config.cwd);
         let mut outcome = load_skills_from_roots(roots);
         outcome.disabled_paths = disabled_paths_from_stack(&config.config_layer_stack);
-        match self.cache_by_cwd.write() {
-            Ok(mut cache) => {
-                cache.insert(cwd.to_path_buf(), outcome.clone());
-            }
-            Err(err) => {
-                err.into_inner().insert(cwd.to_path_buf(), outcome.clone());
-            }
-        }
+        let mut cache = match self.cache_by_cwd.write() {
+            Ok(cache) => cache,
+            Err(err) => err.into_inner(),
+        };
+        cache.insert(cwd.to_path_buf(), outcome.clone());
         outcome
     }
 
@@ -110,31 +107,22 @@ impl SkillsManager {
         let roots = skill_roots_from_layer_stack_with_agents(&config_layer_stack, cwd);
         let mut outcome = load_skills_from_roots(roots);
         outcome.disabled_paths = disabled_paths_from_stack(&config_layer_stack);
-        match self.cache_by_cwd.write() {
-            Ok(mut cache) => {
-                cache.insert(cwd.to_path_buf(), outcome.clone());
-            }
-            Err(err) => {
-                err.into_inner().insert(cwd.to_path_buf(), outcome.clone());
-            }
-        }
+        let mut cache = match self.cache_by_cwd.write() {
+            Ok(cache) => cache,
+            Err(err) => err.into_inner(),
+        };
+        cache.insert(cwd.to_path_buf(), outcome.clone());
         outcome
     }
 
     pub fn clear_cache(&self) {
-        match self.cache_by_cwd.write() {
-            Ok(mut cache) => {
-                let cleared = cache.len();
-                cache.clear();
-                info!("skills cache cleared ({} entries)", cleared);
-            }
-            Err(err) => {
-                let mut cache = err.into_inner();
-                let cleared = cache.len();
-                cache.clear();
-                info!("skills cache cleared ({} entries)", cleared);
-            }
-        }
+        let mut cache = match self.cache_by_cwd.write() {
+            Ok(cache) => cache,
+            Err(err) => err.into_inner(),
+        };
+        let cleared = cache.len();
+        cache.clear();
+        info!("skills cache cleared ({cleared} entries)");
     }
 }
 
