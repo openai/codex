@@ -155,6 +155,7 @@ impl MessageProcessor {
                     if let Ok(mut suffix) = USER_AGENT_SUFFIX.lock() {
                         *suffix = Some(user_agent_suffix);
                     }
+                    self.outgoing.set_client_version(&version).await;
 
                     let user_agent = get_codex_user_agent();
                     let response = InitializeResponse { user_agent };

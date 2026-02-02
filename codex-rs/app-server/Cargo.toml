@@ -33,6 +33,7 @@ codex-utils-json-to-toml = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+semver = { workspace = true }
 mcp-types = { workspace = true }
 tempfile = { workspace = true }
 time = { workspace = true }

@@ -1102,6 +1102,7 @@ dependencies = [
  "os_info",
  "pretty_assertions",
  "rmcp",
+ "semver",
  "serde",
  "serde_json",
  "serial_test",

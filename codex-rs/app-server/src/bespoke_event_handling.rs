@@ -1157,6 +1157,12 @@ async fn handle_turn_todo_update(
             explanation,
             todo: steps,
         };
+        if outgoing.supports_turn_todos_updated().await {
+            outgoing
+                .send_server_notification(ServerNotification::TurnTodosUpdated(notification))
+                .await;
+            return;
+        }
         let legacy_params = match serde_json::to_value(&notification) {
             Ok(params) => Some(params),
             Err(err) => {
@@ -1164,9 +1170,6 @@ async fn handle_turn_todo_update(
                 None
             }
         };
-        outgoing
-            .send_server_notification(ServerNotification::TurnTodosUpdated(notification))
-            .await;
         if let Some(params) = legacy_params {
             outgoing
                 .send_notification(OutgoingNotification {
@@ -2006,6 +2009,7 @@ mod tests {
     async fn test_handle_turn_todo_update_emits_notification_for_v2() -> Result<()> {
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = OutgoingMessageSender::new(tx);
+        outgoing.set_client_version("0.94.0").await;
         let update = UpdateTodoArgs::new(
             Some("need todo list".to_string()),
             vec![
@@ -2054,11 +2058,45 @@ mod tests {
             }
             other => bail!("unexpected message: {other:?}"),
         }
-        let legacy_msg = rx
+        assert!(rx.try_recv().is_err(), "no extra messages expected");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_turn_todo_update_emits_legacy_for_old_client() -> Result<()> {
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = OutgoingMessageSender::new(tx);
+        outgoing.set_client_version("0.93.0").await;
+        let update = UpdateTodoArgs::new(
+            Some("need todo list".to_string()),
+            vec![
+                TodoItemArg {
+                    step: "first".to_string(),
+                    status: TodoStatus::Pending,
+                },
+                TodoItemArg {
+                    step: "second".to_string(),
+                    status: TodoStatus::Completed,
+                },
+            ],
+        );
+
+        let conversation_id = ThreadId::new();
+
+        handle_turn_todo_update(
+            conversation_id,
+            "turn-123",
+            update,
+            ApiVersion::V2,
+            &outgoing,
+        )
+        .await;
+
+        let msg = rx
             .recv()
             .await
             .ok_or_else(|| anyhow!("should send legacy notification"))?;
-        match legacy_msg {
+        match msg {
             OutgoingMessage::Notification(notification) => {
                 assert_eq!(notification.method, "turn/plan/updated");
                 let params = notification
@@ -2070,7 +2108,7 @@ mod tests {
                     "legacy plan alias should mirror todo"
                 );
             }
-            other => bail!("unexpected legacy message: {other:?}"),
+            other => bail!("unexpected message: {other:?}"),
         }
         assert!(rx.try_recv().is_err(), "no extra messages expected");
         Ok(())

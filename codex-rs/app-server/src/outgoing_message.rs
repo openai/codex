@@ -8,6 +8,7 @@ use codex_app_server_protocol::Result;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestPayload;
+use semver::Version;
 use serde::Serialize;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
@@ -24,6 +25,7 @@ pub(crate) struct OutgoingMessageSender {
     next_request_id: AtomicI64,
     sender: mpsc::Sender<OutgoingMessage>,
     request_id_to_callback: Mutex<HashMap<RequestId, oneshot::Sender<Result>>>,
+    client_version: Mutex<Option<Version>>,
 }
 
 impl OutgoingMessageSender {
@@ -32,6 +34,21 @@ impl OutgoingMessageSender {
             next_request_id: AtomicI64::new(0),
             sender,
             request_id_to_callback: Mutex::new(HashMap::new()),
+            client_version: Mutex::new(None),
+        }
+    }
+
+    pub(crate) async fn set_client_version(&self, version: &str) {
+        let parsed = parse_cli_version(version);
+        let mut client_version = self.client_version.lock().await;
+        *client_version = parsed;
+    }
+
+    pub(crate) async fn supports_turn_todos_updated(&self) -> bool {
+        let client_version = self.client_version.lock().await;
+        match client_version.as_ref() {
+            Some(version) => supports_turn_todos_updated(version),
+            None => false,
         }
     }
 
@@ -154,6 +171,22 @@ pub(crate) struct OutgoingResponse {
 pub(crate) struct OutgoingError {
     pub error: JSONRPCErrorError,
     pub id: RequestId,
+}
+
+const TURN_TODOS_UPDATED_MIN_VERSION: (u64, u64, u64) = (0, 94, 0);
+
+fn parse_cli_version(raw: &str) -> Option<Version> {
+    let trimmed = raw.trim();
+    let start = trimmed.find(|ch: char| ch.is_ascii_digit())?;
+    let candidate: String = trimmed[start..]
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit() || *ch == '.')
+        .collect();
+    Version::parse(&candidate).ok()
+}
+
+fn supports_turn_todos_updated(version: &Version) -> bool {
+    (version.major, version.minor, version.patch) >= TURN_TODOS_UPDATED_MIN_VERSION
 }
 
 #[cfg(test)]
