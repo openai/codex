@@ -1984,12 +1984,14 @@ pub struct ThreadRolledBackEvent {
     /// This lets clients synchronize UI mode/model indicators with core after history rewind.
     /// Optional for backward compatibility with older persisted events.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub model_visible_state: Option<ModelVisibleState>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct ModelVisibleState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub collaboration_mode: Option<CollaborationMode>,
 }
 

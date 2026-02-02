@@ -459,12 +459,9 @@ impl App {
                 codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
                 ..
             }) => {
-                let Some(pending) = self.backtrack.pending_rollback.take() else {
+                let Some(_pending) = self.backtrack.pending_rollback.take() else {
                     return;
                 };
-                if pending.thread_id != self.chat_widget.thread_id() {
-                    return;
-                }
             }
             _ => {}
         }
