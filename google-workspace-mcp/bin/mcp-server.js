@@ -11,37 +11,28 @@ var __export = (target, all) => {
     __defProp(target, name, { get: all[name], enumerable: true });
 };
 var __copyProps = (to, from, except, desc) => {
-  if ((from && typeof from === "object") || typeof from === "function") {
+  if (from && typeof from === "object" || typeof from === "function") {
     for (let key of __getOwnPropNames(from))
       if (!__hasOwnProp.call(to, key) && key !== except)
-        __defProp(to, key, {
-          get: () => from[key],
-          enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable,
-        });
+        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
   }
   return to;
 };
-var __toESM = (mod, isNodeMode, target) => (
-  (target = mod != null ? __create(__getProtoOf(mod)) : {}),
-  __copyProps(
-    // If the importer is in node compatibility mode or this is not an ESM
-    // file that has been converted to a CommonJS file using a Babel-
-    // compatible transform (i.e. "__esModule" has not been set), then set
-    // "default" to the CommonJS "module.exports" for node compatibility.
-    isNodeMode || !mod || !mod.__esModule
-      ? __defProp(target, "default", { value: mod, enumerable: true })
-      : target,
-    mod,
-  )
-);
-var __toCommonJS = (mod) =>
-  __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+  // If the importer is in node compatibility mode or this is not an ESM
+  // file that has been converted to a CommonJS file using a Babel-
+  // compatible transform (i.e. "__esModule" has not been set), then set
+  // "default" to the CommonJS "module.exports" for node compatibility.
+  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+  mod
+));
+var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
 // src/index.ts
 var src_exports = {};
 __export(src_exports, {
   extractTextFromDocument: () => extractTextFromDocument,
-  formatSheetValues: () => formatSheetValues,
+  formatSheetValues: () => formatSheetValues
 });
 module.exports = __toCommonJS(src_exports);
 var import_promises = __toESM(require("fs/promises"));
@@ -55,32 +46,20 @@ var import_googleapis = require("googleapis");
 var z = __toESM(require("zod"));
 var PROFILE_SCOPES = {
   full: ["documents", "drive", "spreadsheets"],
-  read: ["documents.readonly", "drive.readonly", "spreadsheets.readonly"],
+  read: ["documents.readonly", "drive.readonly", "spreadsheets.readonly"]
 };
-var TOKEN_DIR =
-  import_node_os.default.homedir() &&
-  import_node_os.default.homedir().length > 0
-    ? import_node_path.default.join(import_node_os.default.homedir(), ".codex")
-    : import_node_path.default.join(
-        import_node_process.default.cwd(),
-        ".codex",
-      );
+var TOKEN_DIR = import_node_os.default.homedir() && import_node_os.default.homedir().length > 0 ? import_node_path.default.join(import_node_os.default.homedir(), ".codex") : import_node_path.default.join(import_node_process.default.cwd(), ".codex");
 var DOCS_CLIENT_CONFIG_PATH = import_node_path.default.join(
   TOKEN_DIR,
-  "google-workspace-mcp-oauth-client.json",
+  "google-workspace-mcp-oauth-client.json"
 );
 function expandScopes(scopes) {
-  return scopes.map((scope) =>
-    scope.startsWith("http")
-      ? scope
-      : `https://www.googleapis.com/auth/${scope}`,
+  return scopes.map(
+    (scope) => scope.startsWith("http") ? scope : `https://www.googleapis.com/auth/${scope}`
   );
 }
 function slugifyScopes(scopes) {
-  return scopes
-    .map((s) => s.replace(/[^a-zA-Z0-9.-]/g, "_"))
-    .join("+")
-    .slice(0, 120);
+  return scopes.map((s) => s.replace(/[^a-zA-Z0-9.-]/g, "_")).join("+").slice(0, 120);
 }
 function buildAuthContext(profile, scopesOverride) {
   if (scopesOverride && scopesOverride.length > 0) {
@@ -91,16 +70,16 @@ function buildAuthContext(profile, scopesOverride) {
       scopes: expanded,
       tokenPath: import_node_path.default.join(
         TOKEN_DIR,
-        `google-workspace-mcp-oauth-custom-${slug}.json`,
+        `google-workspace-mcp-oauth-custom-${slug}.json`
       ),
-      appName: "codex-google-workspace-mcp",
+      appName: "codex-google-workspace-mcp"
     };
   }
   const profileScopes = PROFILE_SCOPES[profile];
   if (!profileScopes) {
     const available = Object.keys(PROFILE_SCOPES).join(", ");
     throw new Error(
-      `Unknown profile "${profile}". Choose one of: ${available}.`,
+      `Unknown profile "${profile}". Choose one of: ${available}.`
     );
   }
   return {
@@ -108,21 +87,14 @@ function buildAuthContext(profile, scopesOverride) {
     scopes: expandScopes(profileScopes),
     tokenPath: import_node_path.default.join(
       TOKEN_DIR,
-      `google-workspace-mcp-oauth-${profile}.json`,
+      `google-workspace-mcp-oauth-${profile}.json`
     ),
-    appName: "codex-google-workspace-mcp",
+    appName: "codex-google-workspace-mcp"
   };
 }
 var authContext = buildAuthContext("full");
 function haveOAuthEnv() {
-  return (
-    typeof import_node_process.default.env.GOOGLE_OAUTH_CLIENT_ID ===
-      "string" &&
-    import_node_process.default.env.GOOGLE_OAUTH_CLIENT_ID.length > 0 &&
-    typeof import_node_process.default.env.GOOGLE_OAUTH_CLIENT_SECRET ===
-      "string" &&
-    import_node_process.default.env.GOOGLE_OAUTH_CLIENT_SECRET.length > 0
-  );
+  return typeof import_node_process.default.env.GOOGLE_OAUTH_CLIENT_ID === "string" && import_node_process.default.env.GOOGLE_OAUTH_CLIENT_ID.length > 0 && typeof import_node_process.default.env.GOOGLE_OAUTH_CLIENT_SECRET === "string" && import_node_process.default.env.GOOGLE_OAUTH_CLIENT_SECRET.length > 0;
 }
 async function loadStoredTokens(tokenPath) {
   try {
@@ -132,43 +104,33 @@ async function loadStoredTokens(tokenPath) {
     return null;
   }
 }
-async function getOAuthAuthorizedClient(
-  scopes,
-  tokenPath,
-  clientConfigPath,
-  appName,
-) {
+async function getOAuthAuthorizedClient(scopes, tokenPath, clientConfigPath, appName) {
   await ensureOAuthTokenFile(scopes, tokenPath, clientConfigPath, appName);
   let clientId = import_node_process.default.env.GOOGLE_OAUTH_CLIENT_ID;
   let clientSecret = import_node_process.default.env.GOOGLE_OAUTH_CLIENT_SECRET;
   if (!clientId || !clientSecret) {
     try {
-      const raw = await import_promises.default.readFile(
-        clientConfigPath,
-        "utf8",
-      );
+      const raw = await import_promises.default.readFile(clientConfigPath, "utf8");
       const parsed = JSON.parse(raw);
       if (parsed.clientId && parsed.clientSecret) {
         clientId = parsed.clientId;
         clientSecret = parsed.clientSecret;
       }
-    } catch {}
+    } catch {
+    }
   }
   if (!clientId || !clientSecret) {
     throw new Error(
-      `[${appName}] GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET must be set, or run --setup-auth to store them for reuse.`,
+      `[${appName}] GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET must be set, or run --setup-auth to store them for reuse.`
     );
   }
   const tokens = await loadStoredTokens(tokenPath);
   if (!tokens) {
     throw new Error(
-      `[${appName}] No OAuth tokens found at ${tokenPath} after attempting setup. Run with --setup-auth in an interactive shell to retry.`,
+      `[${appName}] No OAuth tokens found at ${tokenPath} after attempting setup. Run with --setup-auth in an interactive shell to retry.`
     );
   }
-  const oAuth2Client = new import_googleapis.google.auth.OAuth2(
-    clientId,
-    clientSecret,
-  );
+  const oAuth2Client = new import_googleapis.google.auth.OAuth2(clientId, clientSecret);
   oAuth2Client.setCredentials(tokens);
   if (!oAuth2Client.credentials.scope) {
     oAuth2Client.credentials.scope = scopes.join(" ");
@@ -190,37 +152,28 @@ function tryOpenInBrowser(url) {
     args = [url];
   }
   try {
-    const child = (0, import_node_child_process.spawn)(command, args, {
-      stdio: "ignore",
-      detached: true,
-    });
+    const child = (0, import_node_child_process.spawn)(command, args, { stdio: "ignore", detached: true });
     child.unref();
-  } catch {}
+  } catch {
+  }
 }
-async function runOAuthAuthorization(
-  scopes,
-  tokenPath,
-  clientConfigPath,
-  appName,
-) {
+async function runOAuthAuthorization(scopes, tokenPath, clientConfigPath, appName) {
   let clientId = import_node_process.default.env.GOOGLE_OAUTH_CLIENT_ID;
   let clientSecret = import_node_process.default.env.GOOGLE_OAUTH_CLIENT_SECRET;
   if (!clientId || !clientSecret) {
     try {
-      const raw = await import_promises.default.readFile(
-        clientConfigPath,
-        "utf8",
-      );
+      const raw = await import_promises.default.readFile(clientConfigPath, "utf8");
       const parsed = JSON.parse(raw);
       if (parsed.clientId && parsed.clientSecret) {
         clientId = parsed.clientId;
         clientSecret = parsed.clientSecret;
       }
-    } catch {}
+    } catch {
+    }
   }
   if (!clientId || !clientSecret) {
     throw new Error(
-      `[${appName}] GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET must be set, or run --setup-auth to store them before running this command.`,
+      `[${appName}] GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET must be set, or run --setup-auth to store them before running this command.`
     );
   }
   const server = import_node_http.default.createServer();
@@ -239,18 +192,18 @@ async function runOAuthAuthorization(
   const oAuth2Client = new import_googleapis.google.auth.OAuth2(
     clientId,
     clientSecret,
-    redirectUri,
+    redirectUri
   );
   const authUrl = oAuth2Client.generateAuthUrl({
     access_type: "offline",
     scope: scopes,
-    prompt: "consent",
+    prompt: "consent"
   });
   console.error(
     `[${appName}] Open this URL in a browser to authorize access:
 
 ${authUrl}
-`,
+`
   );
   tryOpenInBrowser(authUrl);
   const code = await new Promise((resolve, reject) => {
@@ -285,17 +238,10 @@ ${authUrl}
   });
   const { tokens } = await oAuth2Client.getToken(code);
   oAuth2Client.setCredentials(tokens);
-  await import_promises.default.mkdir(
-    import_node_path.default.dirname(tokenPath),
-    { recursive: true },
-  );
-  await import_promises.default.writeFile(
-    tokenPath,
-    JSON.stringify(tokens, null, 2),
-    "utf8",
-  );
+  await import_promises.default.mkdir(import_node_path.default.dirname(tokenPath), { recursive: true });
+  await import_promises.default.writeFile(tokenPath, JSON.stringify(tokens, null, 2), "utf8");
   console.error(
-    `[${appName}] OAuth tokens saved to ${tokenPath}. You can now start the MCP server normally.`,
+    `[${appName}] OAuth tokens saved to ${tokenPath}. You can now start the MCP server normally.`
   );
 }
 async function hasStoredClientCredentials(configPath) {
@@ -308,144 +254,117 @@ async function hasStoredClientCredentials(configPath) {
   }
 }
 async function setupAuthConfig(configPath, appName) {
-  const envClientId =
-    import_node_process.default.env.GOOGLE_OAUTH_CLIENT_ID?.trim();
-  const envClientSecret =
-    import_node_process.default.env.GOOGLE_OAUTH_CLIENT_SECRET?.trim();
+  const envClientId = import_node_process.default.env.GOOGLE_OAUTH_CLIENT_ID?.trim();
+  const envClientSecret = import_node_process.default.env.GOOGLE_OAUTH_CLIENT_SECRET?.trim();
   if (envClientId && envClientSecret) {
-    await import_promises.default.mkdir(
-      import_node_path.default.dirname(configPath),
-      { recursive: true },
-    );
+    await import_promises.default.mkdir(import_node_path.default.dirname(configPath), { recursive: true });
     await import_promises.default.writeFile(
       configPath,
       JSON.stringify(
         { clientId: envClientId, clientSecret: envClientSecret },
         null,
-        2,
+        2
       ),
-      "utf8",
+      "utf8"
     );
     console.error(
-      `[${appName}] Saved OAuth client credentials from environment to ${configPath}.`,
+      `[${appName}] Saved OAuth client credentials from environment to ${configPath}.`
     );
     return;
   }
   const rl = (0, import_promises2.createInterface)({
     input: import_node_process.default.stdin,
-    output: import_node_process.default.stdout,
+    output: import_node_process.default.stdout
   });
   try {
-    const clientId = (
-      await rl.question(`[${appName}] Enter Google OAuth Client ID: `)
-    ).trim();
-    const clientSecret = (
-      await rl.question(`[${appName}] Enter Google OAuth Client Secret: `)
-    ).trim();
+    const clientId = (await rl.question(`[${appName}] Enter Google OAuth Client ID: `)).trim();
+    const clientSecret = (await rl.question(`[${appName}] Enter Google OAuth Client Secret: `)).trim();
     if (!clientId || !clientSecret) {
       throw new Error(
-        `[${appName}] Both client ID and client secret are required.`,
+        `[${appName}] Both client ID and client secret are required.`
       );
     }
-    await import_promises.default.mkdir(
-      import_node_path.default.dirname(configPath),
-      { recursive: true },
-    );
+    await import_promises.default.mkdir(import_node_path.default.dirname(configPath), { recursive: true });
     await import_promises.default.writeFile(
       configPath,
       JSON.stringify({ clientId, clientSecret }, null, 2),
-      "utf8",
+      "utf8"
     );
     console.error(
-      `[${appName}] Saved OAuth client credentials to ${configPath}.`,
+      `[${appName}] Saved OAuth client credentials to ${configPath}.`
     );
   } finally {
     rl.close();
   }
 }
-async function ensureOAuthTokenFile(
-  scopes,
-  tokenPath,
-  clientConfigPath,
-  appName,
-) {
+async function ensureOAuthTokenFile(scopes, tokenPath, clientConfigPath, appName) {
   const tokens = await loadStoredTokens(tokenPath);
   if (tokens) {
     return;
   }
-  const haveCreds =
-    haveOAuthEnv() || (await hasStoredClientCredentials(clientConfigPath));
+  const haveCreds = haveOAuthEnv() || await hasStoredClientCredentials(clientConfigPath);
   if (!haveCreds) {
     if (!import_node_process.default.stdin.isTTY) {
       throw new Error(
-        `[${appName}] OAuth client credentials not found. Run with --setup-auth in an interactive shell to configure them.`,
+        `[${appName}] OAuth client credentials not found. Run with --setup-auth in an interactive shell to configure them.`
       );
     }
     await setupAuthConfig(clientConfigPath, appName);
   } else {
     console.error(
-      `[${appName}] OAuth tokens not found at ${tokenPath}; starting setup flow.`,
+      `[${appName}] OAuth tokens not found at ${tokenPath}; starting setup flow.`
     );
   }
   await runOAuthAuthorization(scopes, tokenPath, clientConfigPath, appName);
   const refreshedTokens = await loadStoredTokens(tokenPath);
   if (!refreshedTokens) {
     throw new Error(
-      `[${appName}] OAuth tokens were not saved to ${tokenPath}.`,
+      `[${appName}] OAuth tokens were not saved to ${tokenPath}.`
     );
   }
 }
 async function getDocsClient() {
-  if (
-    haveOAuthEnv() ||
-    (await hasStoredClientCredentials(DOCS_CLIENT_CONFIG_PATH))
-  ) {
+  if (haveOAuthEnv() || await hasStoredClientCredentials(DOCS_CLIENT_CONFIG_PATH)) {
     const authClient = await getOAuthAuthorizedClient(
       authContext.scopes,
       authContext.tokenPath,
       DOCS_CLIENT_CONFIG_PATH,
-      authContext.appName,
+      authContext.appName
     );
     return import_googleapis.google.docs({ version: "v1", auth: authClient });
   }
   const auth = new import_googleapis.google.auth.GoogleAuth({
-    scopes: authContext.scopes,
+    scopes: authContext.scopes
   });
   return import_googleapis.google.docs({ version: "v1", auth });
 }
 async function getDriveClient() {
-  if (
-    haveOAuthEnv() ||
-    (await hasStoredClientCredentials(DOCS_CLIENT_CONFIG_PATH))
-  ) {
+  if (haveOAuthEnv() || await hasStoredClientCredentials(DOCS_CLIENT_CONFIG_PATH)) {
     const authClient = await getOAuthAuthorizedClient(
       authContext.scopes,
       authContext.tokenPath,
       DOCS_CLIENT_CONFIG_PATH,
-      authContext.appName,
+      authContext.appName
     );
     return import_googleapis.google.drive({ version: "v3", auth: authClient });
   }
   const auth = new import_googleapis.google.auth.GoogleAuth({
-    scopes: authContext.scopes,
+    scopes: authContext.scopes
   });
   return import_googleapis.google.drive({ version: "v3", auth });
 }
 async function getSheetsClient() {
-  if (
-    haveOAuthEnv() ||
-    (await hasStoredClientCredentials(DOCS_CLIENT_CONFIG_PATH))
-  ) {
+  if (haveOAuthEnv() || await hasStoredClientCredentials(DOCS_CLIENT_CONFIG_PATH)) {
     const authClient = await getOAuthAuthorizedClient(
       authContext.scopes,
       authContext.tokenPath,
       DOCS_CLIENT_CONFIG_PATH,
-      authContext.appName,
+      authContext.appName
     );
     return import_googleapis.google.sheets({ version: "v4", auth: authClient });
   }
   const auth = new import_googleapis.google.auth.GoogleAuth({
-    scopes: authContext.scopes,
+    scopes: authContext.scopes
   });
   return import_googleapis.google.sheets({ version: "v4", auth });
 }
@@ -462,26 +381,24 @@ async function ensureTokens() {
   const tokens = await loadStoredTokens(authContext.tokenPath);
   if (tokens) {
     console.error(
-      `[${authContext.appName}] Using stored OAuth tokens at ${authContext.tokenPath}`,
+      `[${authContext.appName}] Using stored OAuth tokens at ${authContext.tokenPath}`
     );
     return;
   }
-  const haveCreds =
-    haveOAuthEnv() ||
-    (await hasStoredClientCredentials(DOCS_CLIENT_CONFIG_PATH));
+  const haveCreds = haveOAuthEnv() || await hasStoredClientCredentials(DOCS_CLIENT_CONFIG_PATH);
   if (haveCreds) {
     await ensureOAuthTokenFile(
       authContext.scopes,
       authContext.tokenPath,
       DOCS_CLIENT_CONFIG_PATH,
-      authContext.appName,
+      authContext.appName
     );
     return;
   }
   const hasAdc = await hasApplicationDefaultCredentials(authContext.scopes);
   if (hasAdc) {
     console.error(
-      `[${authContext.appName}] Using Application Default Credentials`,
+      `[${authContext.appName}] Using Application Default Credentials`
     );
     return;
   }
@@ -489,7 +406,7 @@ async function ensureTokens() {
     authContext.scopes,
     authContext.tokenPath,
     DOCS_CLIENT_CONFIG_PATH,
-    authContext.appName,
+    authContext.appName
   );
 }
 function appendLinkUrl(content, linkUrl) {
@@ -524,7 +441,7 @@ function extractTextFromDocument(document) {
       if (richLink) {
         const title = richLink.title?.trim() ?? "";
         const uri = richLink.uri;
-        const display = title.length > 0 ? title : (uri ?? "");
+        const display = title.length > 0 ? title : uri ?? "";
         if (display) {
           text += appendLinkUrl(display, uri);
         }
@@ -547,14 +464,14 @@ function formatSheetValues(values) {
     if (!Array.isArray(row)) {
       continue;
     }
-    const normalized = row.map((cell) =>
-      cell === null || cell === void 0 ? "" : String(cell),
+    const normalized = row.map(
+      (cell) => cell === null || cell === void 0 ? "" : String(cell)
     );
     rows.push(normalized);
   }
   return {
     lines: rows.map((row) => row.join("	")),
-    rows,
+    rows
   };
 }
 function makeErrorResult(message) {
@@ -562,22 +479,22 @@ function makeErrorResult(message) {
     content: [
       {
         type: "text",
-        text: message,
-      },
+        text: message
+      }
     ],
-    isError: true,
+    isError: true
   };
 }
 function logToolCall(name, requestId) {
   const id = requestId ?? "n/a";
   console.error(
-    `[${authContext.appName}] callTool name=${name} requestId=${id}`,
+    `[${authContext.appName}] callTool name=${name} requestId=${id}`
   );
 }
 function logApiActivity(toolName, requestId, message) {
   const id = requestId ?? "n/a";
   console.error(
-    `[${authContext.appName}] tool=${toolName} requestId=${id} ${message}`,
+    `[${authContext.appName}] tool=${toolName} requestId=${id} ${message}`
   );
 }
 function createMcpServer(...args) {
@@ -594,15 +511,14 @@ async function runServer() {
   const server = createMcpServer(
     {
       name: "codex-google-workspace-mcp",
-      version: "0.0.0-dev",
+      version: "0.0.0-dev"
     },
     {
       capabilities: {
-        tools: {},
+        tools: {}
       },
-      instructions:
-        "Tools for listing and reading Google Docs, listing and reading Google Sheets, and listing Google Drive files accessible to the configured Google account. Authentication can use Google Application Default Credentials or an interactive OAuth flow (see README).",
-    },
+      instructions: "Tools for listing and reading Google Docs, listing and reading Google Sheets, and listing Google Drive files accessible to the configured Google account. Authentication can use Google Application Default Credentials or an interactive OAuth flow (see README)."
+    }
   );
   server.server.onclose = () => {
     console.error(`[${authContext.appName}] Client disconnected`);
@@ -618,21 +534,11 @@ async function runServer() {
     "list_documents",
     {
       title: "List Google Docs",
-      description:
-        "List recent Google Docs files in Drive for the configured account. Results are ordered by last modified time.",
+      description: "List recent Google Docs files in Drive for the configured account. Results are ordered by last modified time.",
       inputSchema: {
-        query: z
-          .string()
-          .optional()
-          .describe("Optional substring to match against document titles."),
-        pageSize: z
-          .number()
-          .int()
-          .min(1)
-          .max(100)
-          .optional()
-          .describe("Maximum number of documents to return (default 25)."),
-      },
+        query: z.string().optional().describe("Optional substring to match against document titles."),
+        pageSize: z.number().int().min(1).max(100).optional().describe("Maximum number of documents to return (default 25).")
+      }
     },
     async ({ query, pageSize }, extra) => {
       logToolCall("list_documents", extra?.requestId);
@@ -640,7 +546,7 @@ async function runServer() {
         const drive = await getDriveClient();
         const filters = [
           "mimeType = 'application/vnd.google-apps.document'",
-          "trashed = false",
+          "trashed = false"
         ];
         if (query && query.trim().length > 0) {
           const escaped = query.replace(/'/g, "\\'");
@@ -651,28 +557,28 @@ async function runServer() {
         logApiActivity(
           "list_documents",
           extra?.requestId,
-          `drive.files.list q=${queryFilter} pageSize=${pageSizeValue}`,
+          `drive.files.list q=${queryFilter} pageSize=${pageSizeValue}`
         );
         const response = await drive.files.list({
           q: queryFilter,
           pageSize: pageSizeValue,
           fields: "files(id,name,owners(displayName),modifiedTime,webViewLink)",
-          orderBy: "modifiedTime desc",
+          orderBy: "modifiedTime desc"
         });
         const files = response.data.files ?? [];
         logApiActivity(
           "list_documents",
           extra?.requestId,
-          `drive.files.list returned ${files.length} file(s)`,
+          `drive.files.list returned ${files.length} file(s)`
         );
         if (files.length === 0) {
           return {
             content: [
               {
                 type: "text",
-                text: "No matching Google Docs documents found.",
-              },
-            ],
+                text: "No matching Google Docs documents found."
+              }
+            ]
           };
         }
         const lines = files.map((file) => {
@@ -694,41 +600,28 @@ async function runServer() {
           content: [
             {
               type: "text",
-              text: lines.join("\n"),
-            },
+              text: lines.join("\n")
+            }
           ],
           structuredContent: {
-            files,
-          },
+            files
+          }
         };
       } catch (err) {
-        const message =
-          err instanceof Error
-            ? `Failed to list Google Docs documents: ${err.message}`
-            : "Failed to list Google Docs documents.";
+        const message = err instanceof Error ? `Failed to list Google Docs documents: ${err.message}` : "Failed to list Google Docs documents.";
         return makeErrorResult(message);
       }
-    },
+    }
   );
   server.registerTool(
     "list_spreadsheets",
     {
       title: "List Google Sheets",
-      description:
-        "List recent Google Sheets spreadsheets in Drive for the configured account. Results are ordered by last modified time.",
+      description: "List recent Google Sheets spreadsheets in Drive for the configured account. Results are ordered by last modified time.",
       inputSchema: {
-        query: z
-          .string()
-          .optional()
-          .describe("Optional substring to match against spreadsheet titles."),
-        pageSize: z
-          .number()
-          .int()
-          .min(1)
-          .max(100)
-          .optional()
-          .describe("Maximum number of spreadsheets to return (default 25)."),
-      },
+        query: z.string().optional().describe("Optional substring to match against spreadsheet titles."),
+        pageSize: z.number().int().min(1).max(100).optional().describe("Maximum number of spreadsheets to return (default 25).")
+      }
     },
     async ({ query, pageSize }, extra) => {
       logToolCall("list_spreadsheets", extra?.requestId);
@@ -736,7 +629,7 @@ async function runServer() {
         const drive = await getDriveClient();
         const filters = [
           "mimeType = 'application/vnd.google-apps.spreadsheet'",
-          "trashed = false",
+          "trashed = false"
         ];
         if (query && query.trim().length > 0) {
           const escaped = query.replace(/'/g, "\\'");
@@ -747,28 +640,28 @@ async function runServer() {
         logApiActivity(
           "list_spreadsheets",
           extra?.requestId,
-          `drive.files.list q=${queryFilter} pageSize=${pageSizeValue}`,
+          `drive.files.list q=${queryFilter} pageSize=${pageSizeValue}`
         );
         const response = await drive.files.list({
           q: queryFilter,
           pageSize: pageSizeValue,
           fields: "files(id,name,owners(displayName),modifiedTime,webViewLink)",
-          orderBy: "modifiedTime desc",
+          orderBy: "modifiedTime desc"
         });
         const files = response.data.files ?? [];
         logApiActivity(
           "list_spreadsheets",
           extra?.requestId,
-          `drive.files.list returned ${files.length} file(s)`,
+          `drive.files.list returned ${files.length} file(s)`
         );
         if (files.length === 0) {
           return {
             content: [
               {
                 type: "text",
-                text: "No matching Google Sheets spreadsheets found.",
-              },
-            ],
+                text: "No matching Google Sheets spreadsheets found."
+              }
+            ]
           };
         }
         const lines = files.map((file) => {
@@ -790,43 +683,31 @@ async function runServer() {
           content: [
             {
               type: "text",
-              text: lines.join("\n"),
-            },
+              text: lines.join("\n")
+            }
           ],
           structuredContent: {
-            files,
-          },
+            files
+          }
         };
       } catch (err) {
-        const message =
-          err instanceof Error
-            ? `Failed to list Google Sheets spreadsheets: ${err.message}`
-            : "Failed to list Google Sheets spreadsheets.";
+        const message = err instanceof Error ? `Failed to list Google Sheets spreadsheets: ${err.message}` : "Failed to list Google Sheets spreadsheets.";
         return makeErrorResult(message);
       }
-    },
+    }
   );
   server.registerTool(
     "get_sheet_values",
     {
       title: "Get Google Sheet values",
-      description:
-        "Fetch values from a Google Sheet range using A1 notation (e.g. Sheet1!A1:C10).",
+      description: "Fetch values from a Google Sheet range using A1 notation (e.g. Sheet1!A1:C10).",
       inputSchema: {
-        spreadsheetId: z
-          .string()
-          .describe("The spreadsheet ID portion of the Google Sheets URL."),
-        range: z
-          .string()
-          .min(1)
-          .describe("A1 notation range to fetch (e.g. Sheet1!A1:C10)."),
-        majorDimension: z
-          .enum(["ROWS", "COLUMNS"])
-          .optional()
-          .describe(
-            "Whether to return rows or columns. Defaults to ROWS if omitted.",
-          ),
-      },
+        spreadsheetId: z.string().describe("The spreadsheet ID portion of the Google Sheets URL."),
+        range: z.string().min(1).describe("A1 notation range to fetch (e.g. Sheet1!A1:C10)."),
+        majorDimension: z.enum(["ROWS", "COLUMNS"]).optional().describe(
+          "Whether to return rows or columns. Defaults to ROWS if omitted."
+        )
+      }
     },
     async ({ spreadsheetId, range, majorDimension }, extra) => {
       logToolCall("get_sheet_values", extra?.requestId);
@@ -836,12 +717,12 @@ async function runServer() {
         logApiActivity(
           "get_sheet_values",
           extra?.requestId,
-          `sheets.spreadsheets.values.get spreadsheetId=${spreadsheetId} range=${range} majorDimension=${resolvedMajor}`,
+          `sheets.spreadsheets.values.get spreadsheetId=${spreadsheetId} range=${range} majorDimension=${resolvedMajor}`
         );
         const response = await sheets.spreadsheets.values.get({
           spreadsheetId,
           range,
-          majorDimension: resolvedMajor,
+          majorDimension: resolvedMajor
         });
         const { lines, rows } = formatSheetValues(response.data.values);
         if (rows.length === 0) {
@@ -849,33 +730,30 @@ async function runServer() {
             content: [
               {
                 type: "text",
-                text: `No values found for range ${range} in spreadsheet ${spreadsheetId}.`,
-              },
+                text: `No values found for range ${range} in spreadsheet ${spreadsheetId}.`
+              }
             ],
             structuredContent: {
-              values: [],
-            },
+              values: []
+            }
           };
         }
         return {
           content: [
             {
               type: "text",
-              text: lines.join("\n"),
-            },
+              text: lines.join("\n")
+            }
           ],
           structuredContent: {
-            values: rows,
-          },
+            values: rows
+          }
         };
       } catch (err) {
-        const message =
-          err instanceof Error
-            ? `Failed to fetch Google Sheets values: ${err.message}`
-            : "Failed to fetch Google Sheets values.";
+        const message = err instanceof Error ? `Failed to fetch Google Sheets values: ${err.message}` : "Failed to fetch Google Sheets values.";
         return makeErrorResult(message);
       }
-    },
+    }
   );
   server.registerTool(
     "get_document_text",
@@ -883,10 +761,8 @@ async function runServer() {
       title: "Get Google Doc text",
       description: "Fetch the plain text content of a Google Docs document.",
       inputSchema: {
-        documentId: z
-          .string()
-          .describe("The document ID portion of the Google Docs URL."),
-      },
+        documentId: z.string().describe("The document ID portion of the Google Docs URL.")
+      }
     },
     async ({ documentId }, extra) => {
       logToolCall("get_document_text", extra?.requestId);
@@ -895,66 +771,47 @@ async function runServer() {
         logApiActivity(
           "get_document_text",
           extra?.requestId,
-          `docs.documents.get documentId=${documentId}`,
+          `docs.documents.get documentId=${documentId}`
         );
         const response = await docs.documents.get({
-          documentId,
+          documentId
         });
         const title = response.data.title ?? "";
         logApiActivity(
           "get_document_text",
           extra?.requestId,
-          `docs.documents.get completed documentId=${documentId} title=${title || "(untitled)"}`,
+          `docs.documents.get completed documentId=${documentId} title=${title || "(untitled)"}`
         );
         const text = extractTextFromDocument(response.data);
-        const combined =
-          title.trim().length > 0
-            ? `Title: ${title}
+        const combined = title.trim().length > 0 ? `Title: ${title}
 
-${text}`
-            : text;
+${text}` : text;
         return {
           content: [
             {
               type: "text",
-              text: combined,
-            },
-          ],
+              text: combined
+            }
+          ]
         };
       } catch (err) {
-        const message =
-          err instanceof Error
-            ? `Failed to fetch Google Docs document: ${err.message}`
-            : "Failed to fetch Google Docs document.";
+        const message = err instanceof Error ? `Failed to fetch Google Docs document: ${err.message}` : "Failed to fetch Google Docs document.";
         return makeErrorResult(message);
       }
-    },
+    }
   );
   server.registerTool(
     "list_files",
     {
       title: "List Google Drive files",
-      description:
-        "List recent files in Google Drive for the configured account.",
+      description: "List recent files in Google Drive for the configured account.",
       inputSchema: {
-        query: z
-          .string()
-          .optional()
-          .describe("Optional substring to match against file names."),
-        mimeType: z
-          .string()
-          .optional()
-          .describe(
-            "Optional MIME type filter, for example 'application/pdf' or 'application/vnd.google-apps.document'.",
-          ),
-        pageSize: z
-          .number()
-          .int()
-          .min(1)
-          .max(100)
-          .optional()
-          .describe("Maximum number of files to return (default 25)."),
-      },
+        query: z.string().optional().describe("Optional substring to match against file names."),
+        mimeType: z.string().optional().describe(
+          "Optional MIME type filter, for example 'application/pdf' or 'application/vnd.google-apps.document'."
+        ),
+        pageSize: z.number().int().min(1).max(100).optional().describe("Maximum number of files to return (default 25).")
+      }
     },
     async ({ query, mimeType, pageSize }, extra) => {
       logToolCall("list_files", extra?.requestId);
@@ -974,29 +831,28 @@ ${text}`
         logApiActivity(
           "list_files",
           extra?.requestId,
-          `drive.files.list q=${queryFilter} pageSize=${pageSizeValue}`,
+          `drive.files.list q=${queryFilter} pageSize=${pageSizeValue}`
         );
         const response = await drive.files.list({
           q: queryFilter,
           pageSize: pageSizeValue,
-          fields:
-            "files(id,name,mimeType,owners(displayName),modifiedTime,webViewLink)",
-          orderBy: "modifiedTime desc",
+          fields: "files(id,name,mimeType,owners(displayName),modifiedTime,webViewLink)",
+          orderBy: "modifiedTime desc"
         });
         const files = response.data.files ?? [];
         logApiActivity(
           "list_files",
           extra?.requestId,
-          `drive.files.list returned ${files.length} file(s)`,
+          `drive.files.list returned ${files.length} file(s)`
         );
         if (files.length === 0) {
           return {
             content: [
               {
                 type: "text",
-                text: "No matching Google Drive files found.",
-              },
-            ],
+                text: "No matching Google Drive files found."
+              }
+            ]
           };
         }
         const lines = files.map((file) => {
@@ -1019,21 +875,18 @@ ${text}`
           content: [
             {
               type: "text",
-              text: lines.join("\n"),
-            },
+              text: lines.join("\n")
+            }
           ],
           structuredContent: {
-            files,
-          },
+            files
+          }
         };
       } catch (err) {
-        const message =
-          err instanceof Error
-            ? `Failed to list Google Drive files: ${err.message}`
-            : "Failed to list Google Drive files.";
+        const message = err instanceof Error ? `Failed to list Google Drive files: ${err.message}` : "Failed to list Google Drive files.";
         return makeErrorResult(message);
       }
-    },
+    }
   );
   const transport = createStdioServerTransport();
   await server.connect(transport);
@@ -1056,13 +909,10 @@ async function main() {
     const value = args[scopesFlagIndex + 1];
     if (!value) {
       throw new Error(
-        "--scopes requires a comma-separated list (e.g. documents.readonly,drive.metadata.readonly).",
+        "--scopes requires a comma-separated list (e.g. documents.readonly,drive.metadata.readonly)."
       );
     }
-    scopesOverride = value
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
+    scopesOverride = value.split(",").map((s) => s.trim()).filter(Boolean);
   }
   if (scopesOverride && profileFlagIndex !== -1) {
     throw new Error("Use either --profile or --scopes, not both.");
@@ -1074,7 +924,7 @@ async function main() {
       authContext.scopes,
       authContext.tokenPath,
       DOCS_CLIENT_CONFIG_PATH,
-      authContext.appName,
+      authContext.appName
     );
     return;
   }
@@ -1083,26 +933,20 @@ async function main() {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(
-      `[${authContext.appName}] Warning: auth precheck failed (${message}). Continuing to start; tool calls may fail until credentials are configured.`,
+      `[${authContext.appName}] Warning: auth precheck failed (${message}). Continuing to start; tool calls may fail until credentials are configured.`
     );
   }
   await runServer();
 }
-if (
-  typeof require !== "undefined" &&
-  typeof module !== "undefined" &&
-  require.main === module
-) {
+if (typeof require !== "undefined" && typeof module !== "undefined" && require.main === module) {
   void main().catch((err) => {
-    const message =
-      err instanceof Error ? err.message : "Unexpected error starting server.";
+    const message = err instanceof Error ? err.message : "Unexpected error starting server.";
     console.error(`codex-google-workspace-mcp: ${message}`);
     import_node_process.default.exit(1);
   });
 }
 // Annotate the CommonJS export names for ESM import in node:
-0 &&
-  (module.exports = {
-    extractTextFromDocument,
-    formatSheetValues,
-  });
+0 && (module.exports = {
+  extractTextFromDocument,
+  formatSheetValues
+});
