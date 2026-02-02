@@ -5533,6 +5533,8 @@ impl ChatWidget {
         } else if self.collaboration_modes_enabled() {
             self.active_collaboration_mask = self.collaboration_mask_from_mode(&collaboration_mode);
             self.update_collaboration_mode_indicator();
+        } else {
+            self.current_collaboration_mode = collaboration_mode;
         }
         self.refresh_model_display();
         self.request_redraw();
