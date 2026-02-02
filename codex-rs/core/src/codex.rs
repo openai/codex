@@ -2636,14 +2636,6 @@ mod handlers {
             _ => unreachable!(),
         };
 
-        let previous_collaboration_mode = sess
-            .state
-            .lock()
-            .await
-            .session_configuration
-            .collaboration_mode
-            .clone();
-        let next_collaboration_mode = updates.collaboration_mode.clone();
         let Ok(current_context) = sess.new_turn_with_sub_id(sub_id, updates).await else {
             // new_turn_with_sub_id already emits the error event.
             return;
