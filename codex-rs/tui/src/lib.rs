@@ -177,6 +177,26 @@ pub async fn run_main(
         }
     };
 
+    // Fail fast if CODEX_HOME/rules is malformed (e.g. a file instead of a directory).
+    // This is a common misconfiguration and should not let the TUI start.
+    let rules_path = codex_home.join("rules");
+    match std::fs::metadata(&rules_path) {
+        Ok(metadata) if !metadata.is_dir() => {
+            return Ok(AppExitInfo::fatal(format!(
+                "Failed to initialize codex: failed to load rules: failed to read rules files from {}: not a directory",
+                rules_path.display()
+            )));
+        }
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Ok(AppExitInfo::fatal(format!(
+                "Failed to initialize codex: failed to load rules: failed to read rules files from {}: {err}",
+                rules_path.display()
+            )));
+        }
+    }
+
     let cwd = cli.cwd.clone();
     let config_cwd = match cwd.as_deref() {
         Some(path) => AbsolutePathBuf::from_absolute_path(path.canonicalize()?)?,

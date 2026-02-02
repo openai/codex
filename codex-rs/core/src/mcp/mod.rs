@@ -9,9 +9,13 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use async_channel::unbounded;
+use codex_protocol::mcp::Resource;
+use codex_protocol::mcp::ResourceTemplate;
+use codex_protocol::mcp::Tool;
 use codex_protocol::protocol::McpListToolsResponseEvent;
 use codex_protocol::protocol::SandboxPolicy;
-use mcp_types::Tool as McpTool;
+use serde::Deserialize;
+use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::AuthManager;
@@ -201,8 +205,8 @@ pub fn split_qualified_tool_name(qualified_name: &str) -> Option<(String, String
 }
 
 pub fn group_tools_by_server(
-    tools: &HashMap<String, McpTool>,
-) -> HashMap<String, HashMap<String, McpTool>> {
+    tools: &HashMap<String, Tool>,
+) -> HashMap<String, HashMap<String, Tool>> {
     let mut grouped = HashMap::new();
     for (qualified_name, tool) in tools {
         if let Some((server_name, tool_name)) = split_qualified_tool_name(qualified_name) {
@@ -213,6 +217,155 @@ pub fn group_tools_by_server(
         }
     }
     grouped
+}
+
+fn deserialize_lossy_opt_i64<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let number = Option::<serde_json::Number>::deserialize(deserializer)?;
+    let Some(number) = number else {
+        return Ok(None);
+    };
+
+    if let Some(v) = number.as_i64() {
+        return Ok(Some(v));
+    }
+    if let Some(v) = number.as_u64() {
+        return Ok(i64::try_from(v).ok());
+    }
+
+    Ok(None)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ToolSerde {
+    name: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default, rename = "inputSchema", alias = "input_schema")]
+    input_schema: Value,
+    #[serde(default, rename = "outputSchema", alias = "output_schema")]
+    output_schema: Option<Value>,
+    #[serde(default)]
+    annotations: Option<Value>,
+    #[serde(default)]
+    icons: Option<Vec<Value>>,
+    #[serde(rename = "_meta", default)]
+    meta: Option<Value>,
+}
+
+impl From<ToolSerde> for Tool {
+    fn from(value: ToolSerde) -> Self {
+        let ToolSerde {
+            name,
+            title,
+            description,
+            input_schema,
+            output_schema,
+            annotations,
+            icons,
+            meta,
+        } = value;
+        Self {
+            name,
+            title,
+            description,
+            input_schema,
+            output_schema,
+            annotations,
+            icons,
+            meta,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ResourceSerde {
+    #[serde(default)]
+    annotations: Option<Value>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(rename = "mimeType", alias = "mime_type", default)]
+    mime_type: Option<String>,
+    name: String,
+    #[serde(default, deserialize_with = "deserialize_lossy_opt_i64")]
+    size: Option<i64>,
+    #[serde(default)]
+    title: Option<String>,
+    uri: String,
+    #[serde(default)]
+    icons: Option<Vec<Value>>,
+    #[serde(rename = "_meta", default)]
+    meta: Option<Value>,
+}
+
+impl From<ResourceSerde> for Resource {
+    fn from(value: ResourceSerde) -> Self {
+        let ResourceSerde {
+            annotations,
+            description,
+            mime_type,
+            name,
+            size,
+            title,
+            uri,
+            icons,
+            meta,
+        } = value;
+        Self {
+            annotations,
+            description,
+            mime_type,
+            name,
+            size,
+            title,
+            uri,
+            icons,
+            meta,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ResourceTemplateSerde {
+    #[serde(default)]
+    annotations: Option<Value>,
+    #[serde(rename = "uriTemplate", alias = "uri_template")]
+    uri_template: String,
+    name: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(rename = "mimeType", alias = "mime_type", default)]
+    mime_type: Option<String>,
+}
+
+impl From<ResourceTemplateSerde> for ResourceTemplate {
+    fn from(value: ResourceTemplateSerde) -> Self {
+        let ResourceTemplateSerde {
+            annotations,
+            uri_template,
+            name,
+            title,
+            description,
+            mime_type,
+        } = value;
+        Self {
+            annotations,
+            uri_template,
+            name,
+            title,
+            description,
+            mime_type,
+        }
+    }
 }
 
 pub(crate) async fn collect_mcp_snapshot_from_manager(
@@ -230,11 +383,98 @@ pub(crate) async fn collect_mcp_snapshot_from_manager(
         .map(|(name, entry)| (name.clone(), entry.auth_status))
         .collect();
 
+    let tools = tools
+        .into_iter()
+        .filter_map(|(name, tool)| match serde_json::to_value(tool.tool) {
+            Ok(value) => match serde_json::from_value::<ToolSerde>(value) {
+                Ok(tool) => Some((name, tool.into())),
+                Err(err) => {
+                    tracing::warn!("Failed to convert MCP tool '{name}': {err}");
+                    None
+                }
+            },
+            Err(err) => {
+                tracing::warn!("Failed to serialize MCP tool '{name}': {err}");
+                None
+            }
+        })
+        .collect();
+
+    let resources = resources
+        .into_iter()
+        .map(|(name, resources)| {
+            let resources = resources
+                .into_iter()
+                .filter_map(|resource| match serde_json::to_value(resource) {
+                    Ok(value) => match serde_json::from_value::<ResourceSerde>(value.clone()) {
+                        Ok(resource) => Some(resource.into()),
+                        Err(err) => {
+                            let (uri, resource_name) = match value {
+                                Value::Object(obj) => (
+                                    obj.get("uri")
+                                        .and_then(|v| v.as_str().map(ToString::to_string)),
+                                    obj.get("name")
+                                        .and_then(|v| v.as_str().map(ToString::to_string)),
+                                ),
+                                _ => (None, None),
+                            };
+
+                            tracing::warn!(
+                                "Failed to convert MCP resource (uri={uri:?}, name={resource_name:?}): {err}"
+                            );
+                            None
+                        }
+                    },
+                    Err(err) => {
+                        tracing::warn!("Failed to serialize MCP resource: {err}");
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            (name, resources)
+        })
+        .collect();
+
+    let resource_templates = resource_templates
+        .into_iter()
+        .map(|(name, templates)| {
+            let templates = templates
+                .into_iter()
+                .filter_map(|template| match serde_json::to_value(template) {
+                    Ok(value) => {
+                        match serde_json::from_value::<ResourceTemplateSerde>(value.clone()) {
+                            Ok(template) => Some(template.into()),
+                        Err(err) => {
+                            let (uri_template, template_name) = match value {
+                                Value::Object(obj) => (
+                                    obj.get("uriTemplate")
+                                        .or_else(|| obj.get("uri_template"))
+                                        .and_then(|v| v.as_str().map(ToString::to_string)),
+                                    obj.get("name")
+                                        .and_then(|v| v.as_str().map(ToString::to_string)),
+                                ),
+                                _ => (None, None),
+                            };
+
+                            tracing::warn!(
+                                "Failed to convert MCP resource template (uri_template={uri_template:?}, name={template_name:?}): {err}"
+                            );
+                            None
+                        }
+                        }
+                    },
+                    Err(err) => {
+                        tracing::warn!("Failed to serialize MCP resource template: {err}");
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            (name, templates)
+        })
+        .collect();
+
     McpListToolsResponseEvent {
-        tools: tools
-            .into_iter()
-            .map(|(name, tool)| (name, tool.tool))
-            .collect(),
+        tools,
         resources,
         resource_templates,
         auth_statuses,
@@ -244,21 +484,17 @@ pub(crate) async fn collect_mcp_snapshot_from_manager(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mcp_types::ToolInputSchema;
     use pretty_assertions::assert_eq;
-
-    fn make_tool(name: &str) -> McpTool {
-        McpTool {
-            annotations: None,
-            description: None,
-            input_schema: ToolInputSchema {
-                properties: None,
-                required: None,
-                r#type: "object".to_string(),
-            },
+    fn make_tool(name: &str) -> Tool {
+        Tool {
             name: name.to_string(),
-            output_schema: None,
             title: None,
+            description: None,
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+            output_schema: None,
+            annotations: None,
+            icons: None,
+            meta: None,
         }
     }
 
