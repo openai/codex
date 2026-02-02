@@ -16,5 +16,5 @@ pub struct AppCommand {
 
 pub async fn run_app(cmd: AppCommand) -> anyhow::Result<()> {
     let workspace = std::fs::canonicalize(&cmd.path).unwrap_or(cmd.path);
-    crate::upgrades_os::run_app_upgrade(workspace, cmd.download_url).await
+    crate::desktop_app::run_app_open_or_install(workspace, cmd.download_url).await
 }
