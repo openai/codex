@@ -17,12 +17,9 @@ pub async fn run_mac_app_upgrade(workspace: PathBuf, download_url: String) -> an
 }
 
 fn find_existing_codex_app_path() -> Option<PathBuf> {
-    for candidate in candidate_codex_app_paths() {
-        if candidate.is_dir() {
-            return Some(candidate);
-        }
-    }
-    None
+    candidate_codex_app_paths()
+        .into_iter()
+        .find(|candidate| candidate.is_dir())
 }
 
 fn candidate_codex_app_paths() -> Vec<PathBuf> {
