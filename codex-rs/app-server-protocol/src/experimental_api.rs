@@ -24,3 +24,44 @@ pub fn experimental_fields() -> Vec<&'static ExperimentalField> {
 pub fn experimental_required_message(reason: &str) -> String {
     format!("{reason} requires experimentalApi capability")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ExperimentalApi as ExperimentalApiTrait;
+    use codex_experimental_api_macros::ExperimentalApi;
+    use pretty_assertions::assert_eq;
+
+    #[allow(dead_code)]
+    #[derive(ExperimentalApi)]
+    enum EnumVariantShapes {
+        #[experimental("enum/unit")]
+        Unit,
+        #[experimental("enum/tuple")]
+        Tuple(u8),
+        #[experimental("enum/named")]
+        Named {
+            value: u8,
+        },
+        StableTuple(u8),
+    }
+
+    #[test]
+    fn derive_supports_all_enum_variant_shapes() {
+        assert_eq!(
+            ExperimentalApiTrait::experimental_reason(&EnumVariantShapes::Unit),
+            Some("enum/unit")
+        );
+        assert_eq!(
+            ExperimentalApiTrait::experimental_reason(&EnumVariantShapes::Tuple(1)),
+            Some("enum/tuple")
+        );
+        assert_eq!(
+            ExperimentalApiTrait::experimental_reason(&EnumVariantShapes::Named { value: 1 }),
+            Some("enum/named")
+        );
+        assert_eq!(
+            ExperimentalApiTrait::experimental_reason(&EnumVariantShapes::StableTuple(1)),
+            None
+        );
+    }
+}

@@ -145,14 +145,19 @@ fn derive_for_enum(input: &DeriveInput, data: &DataEnum) -> TokenStream {
 
     for variant in &data.variants {
         let variant_name = &variant.ident;
+        let pattern = match &variant.fields {
+            Fields::Named(_) => quote!(Self::#variant_name { .. }),
+            Fields::Unnamed(_) => quote!(Self::#variant_name ( .. )),
+            Fields::Unit => quote!(Self::#variant_name),
+        };
         let reason = experimental_reason(&variant.attrs);
         if let Some(reason) = reason {
             match_arms.push(quote! {
-                Self::#variant_name { .. } => Some(#reason),
+                #pattern => Some(#reason),
             });
         } else {
             match_arms.push(quote! {
-                Self::#variant_name { .. } => None,
+                #pattern => None,
             });
         }
     }
