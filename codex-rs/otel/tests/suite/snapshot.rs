@@ -1,8 +1,8 @@
 use crate::harness::attributes_to_map;
 use crate::harness::find_metric;
 use codex_app_server_protocol::AuthMode;
-use codex_otel::hash_user_id;
 use codex_otel::OtelManager;
+use codex_otel::hash_user_id;
 use codex_otel::metrics::MetricsClient;
 use codex_otel::metrics::MetricsConfig;
 use codex_otel::metrics::Result;

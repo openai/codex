@@ -9,12 +9,12 @@ use crate::metrics::MetricsClient;
 use crate::metrics::MetricsConfig;
 use crate::metrics::MetricsError;
 use crate::metrics::Result as MetricsResult;
-pub use codex_utils_string::sanitize_metric_tag_value;
 pub use crate::metrics::timer::Timer;
 use crate::metrics::validation::validate_tag_key;
 use crate::metrics::validation::validate_tag_value;
 use crate::otel_provider::OtelProvider;
 use codex_protocol::ThreadId;
+pub use codex_utils_string::sanitize_metric_tag_value;
 use opentelemetry_sdk::metrics::data::ResourceMetrics;
 use serde::Serialize;
 use sha2::Digest;
@@ -199,11 +199,7 @@ impl OtelManager {
             "session_source",
             Some(self.metadata.session_source.as_str()),
         )?;
-        Self::push_metadata_tag(
-            &mut tags,
-            "user.id",
-            self.metadata.user_id.as_deref(),
-        )?;
+        Self::push_metadata_tag(&mut tags, "user.id", self.metadata.user_id.as_deref())?;
         Self::push_metadata_tag(&mut tags, "model", Some(self.metadata.model.as_str()))?;
         Self::push_metadata_tag(&mut tags, "app.version", Some(self.metadata.app_version))?;
         Ok(tags)

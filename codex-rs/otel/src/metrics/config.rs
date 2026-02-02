@@ -80,5 +80,4 @@ impl MetricsConfig {
         self.default_tags.insert(key, value);
         Ok(self)
     }
-
 }
