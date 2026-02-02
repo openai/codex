@@ -21,7 +21,6 @@ disable-default-metrics-exporter = []
 
 [dependencies]
 chrono = { workspace = true }
-codex-app-server-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-string = { workspace = true }
 codex-api = { workspace = true }

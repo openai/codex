@@ -7,7 +7,6 @@ use additional_dirs::add_dir_warning_message;
 use app::App;
 pub use app::AppExitInfo;
 pub use app::ExitReason;
-use codex_app_server_protocol::AuthMode;
 use codex_cloud_requirements::cloud_requirements_loader;
 use codex_common::oss::ensure_oss_provider_ready;
 use codex_common::oss::get_default_model_for_oss_provider;
@@ -16,6 +15,7 @@ use codex_core::CodexAuth;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
 use codex_core::ThreadSortKey;
+use codex_core::auth::AuthMode;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -841,7 +841,7 @@ fn get_login_status(config: &Config) -> LoginStatus {
         // to refresh the token. Block on it.
         let codex_home = config.codex_home.clone();
         match CodexAuth::from_auth_storage(&codex_home, config.cli_auth_credentials_store_mode) {
-            Ok(Some(auth)) => LoginStatus::AuthMode(auth.api_auth_mode()),
+            Ok(Some(auth)) => LoginStatus::AuthMode(auth.auth_mode()),
             Ok(None) => LoginStatus::NotAuthenticated,
             Err(err) => {
                 error!("Failed to read auth.json: {err}");

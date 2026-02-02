@@ -1,3 +1,4 @@
+use crate::TelemetryAuthMode;
 use crate::metrics::names::API_CALL_COUNT_METRIC;
 use crate::metrics::names::API_CALL_DURATION_METRIC;
 use crate::metrics::names::RESPONSES_API_INFERENCE_TIME_DURATION_METRIC;
@@ -15,7 +16,6 @@ use chrono::SecondsFormat;
 use chrono::Utc;
 use codex_api::ApiError;
 use codex_api::ResponseEvent;
-use codex_app_server_protocol::AuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ResponseItem;
@@ -57,7 +57,7 @@ impl OtelManager {
         slug: &str,
         account_id: Option<String>,
         account_email: Option<String>,
-        auth_mode: Option<AuthMode>,
+        auth_mode: Option<TelemetryAuthMode>,
         log_user_prompts: bool,
         terminal_type: String,
         session_source: SessionSource,

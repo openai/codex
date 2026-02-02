@@ -1,7 +1,7 @@
-use codex_app_server_protocol::AuthMode;
 use codex_otel::OtelManager;
 use codex_otel::RuntimeMetricTotals;
 use codex_otel::RuntimeMetricsSummary;
+use codex_otel::TelemetryAuthMode;
 use codex_otel::metrics::MetricsClient;
 use codex_otel::metrics::MetricsConfig;
 use codex_otel::metrics::Result;
@@ -26,7 +26,7 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
         "gpt-5.1",
         Some("account-id".to_string()),
         None,
-        Some(AuthMode::ApiKey),
+        Some(TelemetryAuthMode::ApiKey),
         true,
         "tty".to_string(),
         SessionSource::Cli,

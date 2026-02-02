@@ -1,7 +1,6 @@
 use std::process::Command;
 use std::sync::Arc;
 
-use codex_app_server_protocol::AuthMode;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ContentItem;
@@ -14,6 +13,7 @@ use codex_core::WEB_SEARCH_ELIGIBLE_HEADER;
 use codex_core::WireApi;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_otel::OtelManager;
+use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::WebSearchMode;
@@ -72,7 +72,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
     let config = Arc::new(config);
 
     let conversation_id = ThreadId::new();
-    let auth_mode = AuthMode::Chatgpt;
+    let auth_mode = TelemetryAuthMode::Chatgpt;
     let session_source = SessionSource::SubAgent(SubAgentSource::Review);
     let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
     let otel_manager = OtelManager::new(
@@ -182,7 +182,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
     let config = Arc::new(config);
 
     let conversation_id = ThreadId::new();
-    let auth_mode = AuthMode::Chatgpt;
+    let auth_mode = TelemetryAuthMode::Chatgpt;
     let session_source = SessionSource::SubAgent(SubAgentSource::Other("my-task".to_string()));
     let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
 
@@ -350,8 +350,9 @@ async fn responses_respects_model_info_overrides_from_config() {
     let config = Arc::new(config);
 
     let conversation_id = ThreadId::new();
-    let auth_mode =
-        AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key")).get_auth_mode();
+    let auth_mode = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"))
+        .auth_mode()
+        .map(TelemetryAuthMode::from);
     let session_source =
         SessionSource::SubAgent(SubAgentSource::Other("override-check".to_string()));
     let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);

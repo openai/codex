@@ -152,6 +152,7 @@ use codex_core::SessionMeta;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::ThreadManager;
 use codex_core::ThreadSortKey as CoreThreadSortKey;
+use codex_core::auth::AuthMode as CoreAuthMode;
 use codex_core::auth::CLIENT_ID;
 use codex_core::auth::login_with_api_key;
 use codex_core::auth::login_with_chatgpt_auth_tokens;
@@ -1188,7 +1189,7 @@ impl CodexMessageProcessor {
             .await;
 
         let payload_v2 = AccountUpdatedNotification {
-            auth_mode: self.auth_manager.get_auth_mode(),
+            auth_mode: self.auth_manager.get_api_auth_mode(),
         };
         self.outgoing
             .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
@@ -1336,14 +1337,16 @@ impl CodexMessageProcessor {
         }
 
         let account = match self.auth_manager.auth_cached() {
-            Some(auth) => Some(match auth {
-                CodexAuth::ApiKey(_) => Account::ApiKey {},
-                CodexAuth::Chatgpt(_) | CodexAuth::ChatgptAuthTokens(_) => {
+            Some(auth) => match auth.auth_mode() {
+                CoreAuthMode::ApiKey => Some(Account::ApiKey {}),
+                CoreAuthMode::Chatgpt => {
                     let email = auth.get_account_email();
                     let plan_type = auth.account_plan_type();
 
                     match (email, plan_type) {
-                        (Some(email), Some(plan_type)) => Account::Chatgpt { email, plan_type },
+                        (Some(email), Some(plan_type)) => {
+                            Some(Account::Chatgpt { email, plan_type })
+                        }
                         _ => {
                             let error = JSONRPCErrorError {
                                 code: INVALID_REQUEST_ERROR_CODE,
@@ -1357,7 +1360,7 @@ impl CodexMessageProcessor {
                         }
                     }
                 }
-            }),
+            },
             None => None,
         };
 

@@ -31,6 +31,12 @@ pub enum ToolDecisionSource {
     User,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Display)]
+pub enum TelemetryAuthMode {
+    ApiKey,
+    Chatgpt,
+}
+
 #[derive(Debug, Clone)]
 pub struct OtelEventMetadata {
     pub(crate) conversation_id: ThreadId,

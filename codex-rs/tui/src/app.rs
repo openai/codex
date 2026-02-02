@@ -60,6 +60,7 @@ use codex_core::protocol::TokenUsage;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_otel::OtelManager;
+use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::Personality;
 #[cfg(target_os = "windows")]
@@ -975,13 +976,16 @@ impl App {
         } else {
             FeedbackAudience::External
         };
+        let auth_mode = auth_ref
+            .map(CodexAuth::auth_mode)
+            .map(TelemetryAuthMode::from);
         let otel_manager = OtelManager::new(
             ThreadId::new(),
             model.as_str(),
             model.as_str(),
             auth_ref.and_then(CodexAuth::get_account_id),
             auth_ref.and_then(CodexAuth::get_account_email),
-            auth_ref.map(CodexAuth::api_auth_mode),
+            auth_mode,
             config.otel.log_user_prompt,
             codex_core::terminal::user_agent(),
             SessionSource::Cli,
