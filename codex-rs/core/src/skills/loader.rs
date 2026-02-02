@@ -217,7 +217,6 @@ fn skill_roots(config: &Config) -> Vec<SkillRoot> {
     skill_roots_from_layer_stack_with_agents(&config.config_layer_stack, &config.cwd)
 }
 
-#[cfg(test)]
 pub(crate) fn skill_roots_from_layer_stack(
     config_layer_stack: &ConfigLayerStack,
 ) -> Vec<SkillRoot> {
