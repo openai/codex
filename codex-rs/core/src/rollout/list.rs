@@ -983,6 +983,11 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                     .created_at
                     .clone()
                     .or_else(|| Some(rollout_line.timestamp.clone()));
+                if let codex_protocol::models::ResponseItem::Message { role, .. } = &item
+                    && role == "user"
+                {
+                    summary.saw_user_event = true;
+                }
                 if summary.head.len() < head_limit
                     && let Ok(val) = serde_json::to_value(item)
                 {
