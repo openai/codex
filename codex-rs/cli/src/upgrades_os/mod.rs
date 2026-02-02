@@ -12,6 +12,7 @@ pub async fn run_app_upgrade(workspace: PathBuf, download_url: String) -> anyhow
 
     #[cfg(not(target_os = "macos"))]
     {
+        let _ = (workspace, download_url);
         anyhow::bail!(
             "`codex app` is only available on macOS right now. For the latest updates, see https://chatgpt.com/codex."
         );
