@@ -494,9 +494,6 @@ pub struct Tui {
     /// custom status line.
     #[serde(default)]
     pub status_line: Option<Vec<String>>,
-
-    /// Status line command timeout (ms). Defaults to 500ms.
-    pub status_line_timeout_ms: Option<u64>,
 }
 
 const fn default_true() -> bool {

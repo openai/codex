@@ -1054,12 +1054,6 @@
             "type": "string"
           },
           "type": "array"
-        },
-        "status_line_timeout_ms": {
-          "description": "Status line command timeout (ms). Defaults to 500ms.",
-          "format": "uint64",
-          "minimum": 0.0,
-          "type": "integer"
         }
       },
       "type": "object"

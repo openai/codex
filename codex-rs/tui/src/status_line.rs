@@ -8,7 +8,7 @@
 //! Key behaviors:
 //! - Request coalescing: only one command runs at a time; if updates arrive during execution,
 //!   the command reruns once with the latest payload after completing.
-//! - Timeout handling: commands that exceed `tui_status_line_timeout_ms` are killed and
+//! - Timeout handling: commands that exceed the fixed timeout are killed and
 //!   a warning is emitted (once per session).
 //! - Error resilience: failures are logged but don't crash the TUI; the last successful
 //!   output continues to display.
@@ -78,11 +78,7 @@ impl StatusLineRunner {
             state.in_flight = true;
         }
 
-        let timeout = self
-            .config
-            .tui_status_line_timeout_ms
-            .map(Duration::from_millis)
-            .unwrap_or(DEFAULT_STATUS_LINE_TIMEOUT);
+        let timeout = DEFAULT_STATUS_LINE_TIMEOUT;
         let config = self.config.clone();
         let state = self.state.clone();
         let app_tx = self.app_tx.clone();
@@ -155,7 +151,7 @@ impl StatusLineRunner {
                             if err == TIMEOUT_ERR && !state.warned_timeout {
                                 state.warned_timeout = true;
                                 tracing::warn!(
-                                    "status line command timed out. Consider increasing the timeout or optimizing the command."
+                                    "status line command timed out. Consider optimizing the command."
                                 );
                                 emit_timeout_warning = Some(AppEvent::StatusLineTimeoutWarning {
                                     timeout_ms: request.timeout.as_millis() as u64,

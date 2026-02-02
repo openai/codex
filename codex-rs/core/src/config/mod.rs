@@ -368,9 +368,6 @@ pub struct Config {
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
     pub otel: crate::config::types::OtelConfig,
-
-    /// Status line command timeout duration.
-    pub tui_status_line_timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1701,7 +1698,6 @@ impl Config {
                 .map(|t| t.alternate_screen)
                 .unwrap_or_default(),
             tui_status_line: cfg.tui.as_ref().and_then(|t| t.status_line.clone()),
-            tui_status_line_timeout_ms: cfg.tui.as_ref().and_then(|t| t.status_line_timeout_ms),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);
@@ -1940,7 +1936,6 @@ persistence = "none"
                 experimental_mode: None,
                 alternate_screen: AltScreenMode::Auto,
                 status_line: None,
-                status_line_timeout_ms: tui.status_line_timeout_ms,
             }
         );
     }
@@ -3891,7 +3886,6 @@ model_verbosity = "high"
                 feedback_enabled: true,
                 tui_alternate_screen: AltScreenMode::Auto,
                 tui_status_line: None,
-                tui_status_line_timeout_ms: None,
                 otel: OtelConfig::default(),
             },
             o3_profile_config
@@ -3978,7 +3972,6 @@ model_verbosity = "high"
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
-            tui_status_line_timeout_ms: None,
             otel: OtelConfig::default(),
         };
 
@@ -4080,7 +4073,6 @@ model_verbosity = "high"
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
-            tui_status_line_timeout_ms: None,
             otel: OtelConfig::default(),
         };
 
@@ -4168,7 +4160,6 @@ model_verbosity = "high"
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
-            tui_status_line_timeout_ms: None,
             otel: OtelConfig::default(),
         };
 
