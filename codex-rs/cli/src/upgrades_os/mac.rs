@@ -64,13 +64,22 @@ async fn download_and_install_codex_to_user_applications(dmg_url: &str) -> anyho
     download_dmg(dmg_url, &dmg_path).await?;
 
     let mount_point = mount_dmg(&dmg_path).await?;
-    let _dmg_guard = DmgDetachGuard::new(mount_point.clone());
-    let app_in_volume = find_codex_app_in_mount(&mount_point)
-        .context("failed to locate Codex.app in mounted dmg")?;
+    let result = async {
+        let app_in_volume = find_codex_app_in_mount(&mount_point)
+            .context("failed to locate Codex.app in mounted dmg")?;
+        install_codex_app_bundle(&app_in_volume).await
+    }
+    .await;
 
-    let dest_app = install_codex_app_bundle(&app_in_volume).await?;
+    let detach_result = detach_dmg(&mount_point).await;
+    if let Err(err) = detach_result {
+        eprintln!(
+            "warning: failed to detach dmg at {}: {err}",
+            mount_point.display()
+        );
+    }
 
-    Ok(dest_app)
+    result
 }
 
 async fn install_codex_app_bundle(app_in_volume: &Path) -> anyhow::Result<PathBuf> {
@@ -235,30 +244,6 @@ impl Drop for TempDirGuard {
                 self.path.display()
             );
         }
-    }
-}
-
-struct DmgDetachGuard {
-    mount_point: PathBuf,
-}
-
-impl DmgDetachGuard {
-    fn new(mount_point: PathBuf) -> Self {
-        Self { mount_point }
-    }
-}
-
-impl Drop for DmgDetachGuard {
-    fn drop(&mut self) {
-        let mount_point = self.mount_point.clone();
-        tokio::spawn(async move {
-            if let Err(err) = detach_dmg(&mount_point).await {
-                eprintln!(
-                    "warning: failed to detach dmg at {}: {err}",
-                    mount_point.display()
-                );
-            }
-        });
     }
 }
 
