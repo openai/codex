@@ -25,17 +25,17 @@ use mcp_types::ReadResourceResult;
 use mcp_types::RequestId;
 use mcp_types::Tool;
 use reqwest::header::HeaderMap;
-use rmcp::model::CallToolRequestParam;
+use rmcp::model::CallToolRequestParams as RmcpCallToolRequestParams;
 use rmcp::model::ClientNotification;
 use rmcp::model::ClientRequest;
-use rmcp::model::CreateElicitationRequestParam;
+use rmcp::model::CreateElicitationRequestParams;
 use rmcp::model::CreateElicitationResult;
 use rmcp::model::CustomNotification;
 use rmcp::model::CustomRequest;
 use rmcp::model::Extensions;
-use rmcp::model::InitializeRequestParam;
-use rmcp::model::PaginatedRequestParam;
-use rmcp::model::ReadResourceRequestParam;
+use rmcp::model::InitializeRequestParams as RmcpInitializeRequestParams;
+use rmcp::model::PaginatedRequestParams;
+use rmcp::model::ReadResourceRequestParams as RmcpReadResourceRequestParams;
 use rmcp::model::ServerResult;
 use rmcp::service::RoleClient;
 use rmcp::service::RunningService;
@@ -89,7 +89,7 @@ enum ClientState {
     },
 }
 
-pub type Elicitation = CreateElicitationRequestParam;
+pub type Elicitation = CreateElicitationRequestParams;
 pub type ElicitationResponse = CreateElicitationResult;
 
 /// Interface for sending elicitation requests to the UI and awaiting a response.
@@ -233,7 +233,7 @@ impl RmcpClient {
         timeout: Option<Duration>,
         send_elicitation: SendElicitation,
     ) -> Result<InitializeResult> {
-        let rmcp_params: InitializeRequestParam = convert_to_rmcp(params.clone())?;
+        let rmcp_params: RmcpInitializeRequestParams = convert_to_rmcp(params.clone())?;
         let client_handler = LoggingClientHandler::new(rmcp_params, send_elicitation);
 
         let (transport, oauth_persistor) = {
@@ -314,7 +314,7 @@ impl RmcpClient {
         self.refresh_oauth_if_needed().await;
         let service = self.service().await?;
         let rmcp_params = params
-            .map(convert_to_rmcp::<_, PaginatedRequestParam>)
+            .map(convert_to_rmcp::<_, PaginatedRequestParams>)
             .transpose()?;
 
         let fut = service.list_tools(rmcp_params);
@@ -358,7 +358,7 @@ impl RmcpClient {
         self.refresh_oauth_if_needed().await;
         let service = self.service().await?;
         let rmcp_params = params
-            .map(convert_to_rmcp::<_, PaginatedRequestParam>)
+            .map(convert_to_rmcp::<_, PaginatedRequestParams>)
             .transpose()?;
 
         let fut = service.list_resources(rmcp_params);
@@ -376,7 +376,7 @@ impl RmcpClient {
         self.refresh_oauth_if_needed().await;
         let service = self.service().await?;
         let rmcp_params = params
-            .map(convert_to_rmcp::<_, PaginatedRequestParam>)
+            .map(convert_to_rmcp::<_, PaginatedRequestParams>)
             .transpose()?;
 
         let fut = service.list_resource_templates(rmcp_params);
@@ -393,7 +393,7 @@ impl RmcpClient {
     ) -> Result<ReadResourceResult> {
         self.refresh_oauth_if_needed().await;
         let service = self.service().await?;
-        let rmcp_params: ReadResourceRequestParam = convert_to_rmcp(params)?;
+        let rmcp_params: RmcpReadResourceRequestParams = convert_to_rmcp(params)?;
         let fut = service.read_resource(rmcp_params);
         let result = run_with_timeout(fut, timeout, "resources/read").await?;
         let converted = convert_to_mcp(result)?;
@@ -410,7 +410,7 @@ impl RmcpClient {
         self.refresh_oauth_if_needed().await;
         let service = self.service().await?;
         let params = CallToolRequestParams { arguments, name };
-        let rmcp_params: CallToolRequestParam = convert_to_rmcp(params)?;
+        let rmcp_params: RmcpCallToolRequestParams = convert_to_rmcp(params)?;
         let fut = service.call_tool(rmcp_params);
         let rmcp_result = run_with_timeout(fut, timeout, "tools/call").await?;
         let converted = convert_call_tool_result(rmcp_result)?;

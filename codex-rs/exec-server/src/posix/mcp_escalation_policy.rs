@@ -88,6 +88,7 @@ impl McpEscalationPolicy {
                                     None,
                                 )
                             })?,
+                        meta: None,
                     })
                     .await
                     .map_err(|e| McpError::internal_error(e.to_string(), None))
