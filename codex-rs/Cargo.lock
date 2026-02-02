@@ -1111,7 +1111,7 @@ dependencies = [
  "tempfile",
  "time",
  "tokio",
- "toml 0.9.5",
+ "toml 0.9.11+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
  "uuid",
@@ -1266,7 +1266,7 @@ dependencies = [
  "supports-color 3.0.2",
  "tempfile",
  "tokio",
- "toml 0.9.5",
+ "toml 0.9.11+spec-1.1.0",
  "tracing",
 ]
 
@@ -1307,7 +1307,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
- "toml 0.9.5",
+ "toml 0.9.11+spec-1.1.0",
  "tracing",
 ]
 
@@ -1367,7 +1367,7 @@ dependencies = [
  "codex-utils-absolute-path",
  "pretty_assertions",
  "serde",
- "toml 0.9.5",
+ "toml 0.9.11+spec-1.1.0",
 ]
 
 [[package]]
@@ -1454,7 +1454,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tokio-util",
- "toml 0.9.5",
+ "toml 0.9.11+spec-1.1.0",
  "toml_edit 0.24.0+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
@@ -1964,7 +1964,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-util",
- "toml 0.9.5",
+ "toml 0.9.11+spec-1.1.0",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -2039,7 +2039,7 @@ version = "0.0.0"
 dependencies = [
  "pretty_assertions",
  "serde_json",
- "toml 0.9.5",
+ "toml 0.9.11+spec-1.1.0",
 ]
 
 [[package]]
@@ -7200,11 +7200,11 @@ dependencies = [
 
 [[package]]
 name = "serde_spanned"
-version = "1.0.0"
+version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "40734c41988f7306bb04f0ecf60ec0f3f1caa34290e4e8ea471dcd3346483b83"
+checksum = "f8bbf91e5a4d6315eee45e704372590b30e260ee83af6639d64557f51b067776"
 dependencies = [
- "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -8384,12 +8384,12 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "0.9.5"
+version = "0.9.11+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75129e1dc5000bfbaa9fee9d1b21f974f9fbad9daec557a521ee6e080825f6e8"
+checksum = "f3afc9a848309fe1aaffaed6e1546a7a14de1f935dc9d89d32afd9a44bab7c46"
 dependencies = [
  "indexmap 2.12.0",
- "serde",
+ "serde_core",
  "serde_spanned",
  "toml_datetime",
  "toml_parser",
