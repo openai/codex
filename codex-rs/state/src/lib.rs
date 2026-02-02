@@ -14,6 +14,8 @@ mod runtime;
 pub use model::LogEntry;
 pub use model::LogQuery;
 pub use model::LogRow;
+pub use model::MemorySummary;
+pub use model::MemorySummaryLock;
 /// Preferred entrypoint: owns configuration and metrics.
 pub use runtime::StateRuntime;
 

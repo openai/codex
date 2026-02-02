@@ -1,9 +1,12 @@
 mod log;
+mod memory_summary;
 mod thread_metadata;
 
 pub use log::LogEntry;
 pub use log::LogQuery;
 pub use log::LogRow;
+pub use memory_summary::MemorySummary;
+pub use memory_summary::MemorySummaryLock;
 pub use thread_metadata::Anchor;
 pub use thread_metadata::BackfillStats;
 pub use thread_metadata::ExtractionOutcome;
