@@ -2,13 +2,10 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde::Serialize;
-use tokio::time::Duration as TokioDuration;
 
-use crate::git_info::get_git_remote_urls_assume_git_repo_with_timeout;
+use crate::git_info::get_git_remote_urls_assume_git_repo;
 use crate::git_info::get_git_repo_root;
-use crate::git_info::get_head_commit_hash_with_timeout;
-
-const TURN_METADATA_TIMEOUT: TokioDuration = TokioDuration::from_secs(5);
+use crate::git_info::get_head_commit_hash;
 
 #[derive(Serialize)]
 struct TurnMetadataWorkspace {
@@ -28,8 +25,8 @@ pub(crate) async fn build_turn_metadata_header(cwd: &Path) -> Option<String> {
     let repo_root = get_git_repo_root(cwd)?;
 
     let (latest_git_commit_hash, associated_remote_urls) = tokio::join!(
-        get_head_commit_hash_with_timeout(cwd, TURN_METADATA_TIMEOUT),
-        get_git_remote_urls_assume_git_repo_with_timeout(cwd, TURN_METADATA_TIMEOUT)
+        get_head_commit_hash(cwd),
+        get_git_remote_urls_assume_git_repo(cwd)
     );
     if latest_git_commit_hash.is_none() && associated_remote_urls.is_none() {
         return None;
