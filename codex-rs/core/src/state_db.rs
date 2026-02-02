@@ -277,7 +277,7 @@ pub async fn apply_rollout_items(
 pub fn record_discrepancy(stage: &str, reason: &str) {
     // We access the global metric because the call sites might not have access to the broader
     // OtelManager.
-    tracing::warn!("state db record_discrepancy: {stage}{reason}");
+    tracing::warn!("state db record_discrepancy: {stage}, {reason}");
     if let Some(metric) = codex_otel::metrics::global() {
         let _ = metric.counter(
             DB_METRIC_COMPARE_ERROR,
