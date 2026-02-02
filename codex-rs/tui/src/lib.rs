@@ -494,12 +494,9 @@ async fn run_ratatui_app(
                 exit_reason: ExitReason::UserRequested,
             });
         }
-        // if the user acknowledged windows or made an explicit decision ato trust the directory, reload the config accordingly
-        if onboarding_result
-            .directory_trust_decision
-            .map(|d| d == TrustDirectorySelection::Trust)
-            .unwrap_or(false)
-        {
+        // If the user made an explicit trust decision, reload config so current
+        // process state reflects what was persisted to config.toml.
+        if onboarding_result.directory_trust_decision.is_some() {
             load_config_or_exit(
                 cli_kv_overrides.clone(),
                 overrides.clone(),
