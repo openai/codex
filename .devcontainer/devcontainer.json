@@ -7,7 +7,7 @@
     "args": {
       "TZ": "${localEnv:TZ:UTC}",
       "NODE_MAJOR": "22",
-      "RUST_TOOLCHAIN": "1.93.0"
+      "RUST_TOOLCHAIN": "1.92.0"
     }
   },
   "runArgs": [

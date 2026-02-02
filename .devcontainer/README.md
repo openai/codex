@@ -12,7 +12,7 @@ This is a Codex-focused devcontainer setup adapted for this monorepo.
 
 ## What is Codex-specific
 
-- Rust toolchain pinned to `1.93.0` with `clippy`, `rustfmt`, `rust-src`
+- Rust toolchain pinned to `1.92.0` with `clippy`, `rustfmt`, `rust-src`
 - musl targets: `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`
 - Node `22` + pnpm `10.28.2`
 - firewall setup that allowlists domains from `OPENAI_ALLOWED_DOMAINS`

@@ -3,7 +3,7 @@ FROM mcr.microsoft.com/devcontainers/base:ubuntu-24.04
 ARG TZ
 ARG DEBIAN_FRONTEND=noninteractive
 ARG NODE_MAJOR=22
-ARG RUST_TOOLCHAIN=1.93.0
+ARG RUST_TOOLCHAIN=1.92.0
 
 ENV TZ="$TZ"
 
