@@ -1,3 +1,4 @@
+use std::process::Command;
 use std::sync::Arc;
 
 use codex_app_server_protocol::AuthMode;
@@ -392,5 +393,97 @@ async fn responses_respects_model_info_overrides_from_config() {
             .and_then(|value| value.get("summary"))
             .and_then(|value| value.as_str()),
         Some("detailed")
+    );
+}
+
+#[tokio::test]
+async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() {
+    core_test_support::skip_if_no_network!();
+
+    let server = responses::start_mock_server().await;
+    let response_body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let request_recorder =
+        responses::mount_sse_sequence(&server, vec![response_body.clone(), response_body]).await;
+
+    let test = test_codex().build(&server).await.expect("build test codex");
+
+    test.submit_turn("first turn")
+        .await
+        .expect("submit first turn");
+
+    let cwd = test.cwd_path();
+    let null_device = if cfg!(windows) { "NUL" } else { "/dev/null" };
+    let run_git = |args: &[&str]| {
+        let output = Command::new("git")
+            .env("GIT_CONFIG_GLOBAL", null_device)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .expect("git command should run");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: stdout={} stderr={}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    };
+
+    run_git(&["init"]);
+    run_git(&["config", "user.name", "Test User"]);
+    run_git(&["config", "user.email", "test@example.com"]);
+    std::fs::write(cwd.join("README.md"), "hello").expect("write README");
+    run_git(&["add", "."]);
+    run_git(&["commit", "-m", "initial commit"]);
+    run_git(&["remote", "add", "origin", "https://github.com/openai/codex.git"]);
+
+    let expected_head = String::from_utf8(run_git(&["rev-parse", "HEAD"]).stdout)
+        .expect("git rev-parse output should be valid UTF-8")
+        .trim()
+        .to_string();
+    let expected_origin = String::from_utf8(run_git(&["remote", "get-url", "origin"]).stdout)
+        .expect("git remote get-url output should be valid UTF-8")
+        .trim()
+        .to_string();
+
+    test.submit_turn("second turn")
+        .await
+        .expect("submit second turn");
+
+    let requests = request_recorder.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].header("x-codex-turn-metadata"), None);
+
+    let header_value = requests[1]
+        .header("x-codex-turn-metadata")
+        .expect("second turn should include x-codex-turn-metadata header");
+    let parsed: serde_json::Value = serde_json::from_str(&header_value)
+        .expect("x-codex-turn-metadata should be valid JSON");
+    let repo_root = cwd.to_string_lossy().into_owned();
+
+    let workspace = parsed
+        .get("workspaces")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|workspaces| workspaces.get(&repo_root))
+        .expect("metadata should include cwd repo root workspace entry");
+
+    assert_eq!(
+        workspace
+            .get("latest_git_commit_hash")
+            .and_then(serde_json::Value::as_str),
+        Some(expected_head.as_str())
+    );
+    assert_eq!(
+        workspace
+            .get("associated_remote_urls")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|remotes| remotes.get("origin"))
+            .and_then(serde_json::Value::as_str),
+        Some(expected_origin.as_str())
     );
 }
