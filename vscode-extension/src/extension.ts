@@ -4399,8 +4399,14 @@ function applyServerNotification(
         streaming: true,
       }));
       const delta = (n as any).params.delta as string;
+      const opencodeSeqRaw = (n as any).params.opencodeSeq as unknown;
+      const opencodeSeq =
+        typeof opencodeSeqRaw === "number" && Number.isFinite(opencodeSeqRaw)
+          ? Math.trunc(opencodeSeqRaw)
+          : null;
       if (block.type === "assistant") {
         (block as any).streaming = true;
+        if (opencodeSeq !== null) (block as any).opencodeSeq = opencodeSeq;
       }
       rt.streamingAssistantItemIds.add(id);
       markUnreadSession(sessionId);
@@ -4755,12 +4761,18 @@ function applyItemLifecycle(
         rawParts: [...item.content],
         status: completed ? "completed" : "inProgress",
       }));
+      const opencodeSeqRaw = (item as any).opencodeSeq as unknown;
+      const opencodeSeq =
+        typeof opencodeSeqRaw === "number" && Number.isFinite(opencodeSeqRaw)
+          ? Math.trunc(opencodeSeqRaw)
+          : null;
       if (block.type === "reasoning") {
         block.status = completed ? "completed" : "inProgress";
         if (completed) {
           block.summaryParts = [...item.summary];
           block.rawParts = [...item.content];
         }
+        if (opencodeSeq !== null) (block as any).opencodeSeq = opencodeSeq;
       }
       chatView?.postBlockUpsert(sessionId, block);
       break;
@@ -5079,6 +5091,11 @@ function applyItemLifecycle(
             tokens,
             tools: [],
           }));
+          const opencodeSeqRaw = anyItem.opencodeSeq as unknown;
+          const opencodeSeq =
+            typeof opencodeSeqRaw === "number" && Number.isFinite(opencodeSeqRaw)
+              ? Math.trunc(opencodeSeqRaw)
+              : null;
           if (block.type === "step") {
             block.status = status;
             block.snapshot =
@@ -5094,6 +5111,7 @@ function applyItemLifecycle(
                 ? Number(anyItem.cost)
                 : null;
             block.tokens = tokens;
+            if (opencodeSeq !== null) (block as any).opencodeSeq = opencodeSeq;
           }
           chatView?.postBlockUpsert(sessionId, block);
           break;
@@ -5123,6 +5141,12 @@ function applyItemLifecycle(
             tools: [],
           }));
           if (container.type !== "step") break;
+          const opencodeSeqRaw = anyItem.opencodeSeq as unknown;
+          const opencodeSeq =
+            typeof opencodeSeqRaw === "number" && Number.isFinite(opencodeSeqRaw)
+              ? Math.trunc(opencodeSeqRaw)
+              : null;
+          if (opencodeSeq !== null) (container as any).opencodeSeq = opencodeSeq;
 
           const status =
             anyItem.status === "completed"

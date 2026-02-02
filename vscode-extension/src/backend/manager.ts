@@ -139,6 +139,15 @@ export class BackendManager implements vscode.Disposable {
     string,
     Map<string, Set<string>>
   >();
+  private readonly opencodeMessageSeqByMessageIdByBackendKey = new Map<
+    string,
+    Map<string, number>
+  >();
+  private readonly opencodeNextMessageSeqByBackendKey = new Map<string, number>();
+  private readonly opencodePendingAssistantMessageIdsBySessionIdByBackendKey = new Map<
+    string,
+    Map<string, Set<string>>
+  >();
 
   public onSessionAdded: ((session: Session) => void) | null = null;
   public onAssistantDelta:
@@ -1585,6 +1594,56 @@ export class BackendManager implements vscode.Disposable {
     const assistantDeltaKey = (sessionID: string, messageID: string): string =>
       `${sessionID}:${messageID}`;
 
+    const ensureOpencodeMessageSeq = (sessionID: string, messageID: string): number | null => {
+      if (!sessionID || !messageID) return null;
+      const byMsg =
+        this.opencodeMessageSeqByMessageIdByBackendKey.get(backendKey) ??
+        new Map<string, number>();
+      this.opencodeMessageSeqByMessageIdByBackendKey.set(backendKey, byMsg);
+      const existing = byMsg.get(messageID);
+      if (typeof existing === "number") return existing;
+      const next = this.opencodeNextMessageSeqByBackendKey.get(backendKey) ?? 1;
+      byMsg.set(messageID, next);
+      this.opencodeNextMessageSeqByBackendKey.set(backendKey, next + 1);
+      return next;
+    };
+
+    const getOpencodeMessageSeq = (messageID: string): number | null => {
+      const byMsg =
+        this.opencodeMessageSeqByMessageIdByBackendKey.get(backendKey) ?? null;
+      const v = byMsg?.get(messageID);
+      return typeof v === "number" ? v : null;
+    };
+
+    const setOpencodePendingAssistantMessage = (args: {
+      sessionID: string;
+      messageID: string;
+      pending: boolean;
+    }): void => {
+      const bySession =
+        this.opencodePendingAssistantMessageIdsBySessionIdByBackendKey.get(
+          backendKey,
+        ) ?? new Map<string, Set<string>>();
+      this.opencodePendingAssistantMessageIdsBySessionIdByBackendKey.set(
+        backendKey,
+        bySession,
+      );
+      const set = bySession.get(args.sessionID) ?? new Set<string>();
+      if (args.pending) set.add(args.messageID);
+      else set.delete(args.messageID);
+      if (set.size > 0) bySession.set(args.sessionID, set);
+      else bySession.delete(args.sessionID);
+    };
+
+    const hasOpencodePendingAssistantMessages = (sessionID: string): boolean => {
+      const bySession =
+        this.opencodePendingAssistantMessageIdsBySessionIdByBackendKey.get(
+          backendKey,
+        ) ?? null;
+      const set = bySession?.get(sessionID) ?? null;
+      return Boolean(set && set.size > 0);
+    };
+
     const emitToolItem = (args: {
       session: Session;
       sessionID: string;
@@ -1627,6 +1686,7 @@ export class BackendManager implements vscode.Disposable {
             : null;
 
       const completed = rawStatus === "completed";
+      const opencodeSeq = getOpencodeMessageSeq(args.messageID);
       this.emitNotification(backendKey, args.session, {
         method: completed ? "item/completed" : "item/started",
         params: {
@@ -1637,6 +1697,7 @@ export class BackendManager implements vscode.Disposable {
             id: args.toolId,
             stepId: args.stepId,
             messageID: args.messageID,
+            opencodeSeq,
             callID,
             tool: toolName,
             status,
@@ -1795,77 +1856,83 @@ export class BackendManager implements vscode.Disposable {
       return;
     }
 
-	    if (type === "session.status") {
-	      const sessionID =
-	        typeof properties?.sessionID === "string"
-	          ? (properties.sessionID as string)
-	          : null;
-	      const statusType =
-	        typeof properties?.status?.type === "string"
-	          ? String(properties.status.type)
-	          : null;
-	      if (sessionID && statusType) sessionStatusById.set(sessionID, statusType);
-	      if (sessionID && statusType === "busy") {
-	        const session = this.sessions.getByThreadId(backendKey, sessionID);
-	        if (!session) return;
-	        if (!activeTurnIdBySession.get(sessionID)) {
-	          const turnId = randomUUID();
-	          activeTurnIdBySession.set(sessionID, turnId);
-	          this.streamState.set(sessionID, { activeTurnId: turnId });
-	          this.emitNotification(backendKey, session, {
-	            method: "turn/started",
-	            params: { threadId: sessionID, turn: { id: turnId } },
-	          });
-	        }
-	        return;
-	      }
-	      if (sessionID && statusType === "idle") {
-	        // Session became idle => the current turn (if any) is finished. Finalize any in-flight
-	        // reasoning items so the UI does not show a perpetual inProgress spinner.
-	        const session = this.sessions.getByThreadId(backendKey, sessionID);
-	        if (!session) return;
-	        const turnId = activeTurnIdBySession.get(sessionID) ?? "";
-	        const idsBySession =
-	          this.opencodeReasoningItemIdsBySessionIdByBackendKey.get(backendKey) ??
-	          null;
-	        const textByItem =
-	          this.opencodeReasoningTextByItemIdByBackendKey.get(backendKey) ?? null;
-	        const ids = idsBySession?.get(sessionID) ?? null;
-	        if (ids && ids.size > 0) {
-	          for (const itemId of ids) {
-	            const text = textByItem?.get(itemId) ?? "";
-	            this.emitNotification(backendKey, session, {
-	              method: "item/completed",
-	              params: {
-	                threadId: sessionID,
-	                turnId,
-	                item: {
-	                  type: "reasoning",
-	                  id: itemId,
-	                  summary: text.trim() ? [text] : [],
-	                  content: [],
-	                },
-	              },
-	            });
-	          }
-	          idsBySession?.delete(sessionID);
-	        }
-	
-	        const activeTurnId = activeTurnIdBySession.get(sessionID) ?? null;
-	        if (activeTurnId) {
-	          this.emitNotification(backendKey, session, {
-	            method: "turn/completed",
-	            params: {
-	              threadId: sessionID,
-	              turn: { id: activeTurnId, status: "completed" },
-	            },
-	          });
-	        }
-	        this.streamState.set(sessionID, { activeTurnId: null });
-	        activeTurnIdBySession.delete(sessionID);
-	      }
-	      return;
-	    }
+    if (type === "session.status" || type === "session.idle") {
+      const sessionID =
+        typeof properties?.sessionID === "string"
+          ? (properties.sessionID as string)
+          : null;
+      const statusType =
+        type === "session.idle"
+          ? "idle"
+          : typeof properties?.status?.type === "string"
+            ? String(properties.status.type)
+            : null;
+      if (sessionID && statusType) sessionStatusById.set(sessionID, statusType);
+      if (sessionID && statusType === "busy") {
+        const session = this.sessions.getByThreadId(backendKey, sessionID);
+        if (!session) return;
+        if (!activeTurnIdBySession.get(sessionID)) {
+          const turnId = randomUUID();
+          activeTurnIdBySession.set(sessionID, turnId);
+          this.streamState.set(sessionID, { activeTurnId: turnId });
+          this.emitNotification(backendKey, session, {
+            method: "turn/started",
+            params: { threadId: sessionID, turn: { id: turnId } },
+          });
+        }
+        return;
+      }
+      if (sessionID && statusType === "idle") {
+        // IMPORTANT:
+        // In OpenCode, "session.status=idle" can be observed while a multi-message response is still ongoing.
+        // Mirror the official TUI's behavior: only complete the turn when all assistant messages have `time.completed`.
+        if (hasOpencodePendingAssistantMessages(sessionID)) return;
+
+        // Session became idle and there are no pending assistant messages => finalize the current turn.
+        const session = this.sessions.getByThreadId(backendKey, sessionID);
+        if (!session) return;
+        const turnId = activeTurnIdBySession.get(sessionID) ?? "";
+        const idsBySession =
+          this.opencodeReasoningItemIdsBySessionIdByBackendKey.get(backendKey) ??
+          null;
+        const textByItem =
+          this.opencodeReasoningTextByItemIdByBackendKey.get(backendKey) ?? null;
+        const ids = idsBySession?.get(sessionID) ?? null;
+        if (ids && ids.size > 0) {
+          for (const itemId of ids) {
+            const text = textByItem?.get(itemId) ?? "";
+            this.emitNotification(backendKey, session, {
+              method: "item/completed",
+              params: {
+                threadId: sessionID,
+                turnId,
+                item: {
+                  type: "reasoning",
+                  id: itemId,
+                  summary: text.trim() ? [text] : [],
+                  content: [],
+                },
+              },
+            });
+          }
+          idsBySession?.delete(sessionID);
+        }
+
+        const activeTurnId = activeTurnIdBySession.get(sessionID) ?? null;
+        if (activeTurnId) {
+          this.emitNotification(backendKey, session, {
+            method: "turn/completed",
+            params: {
+              threadId: sessionID,
+              turn: { id: activeTurnId, status: "completed" },
+            },
+          });
+        }
+        this.streamState.set(sessionID, { activeTurnId: null });
+        activeTurnIdBySession.delete(sessionID);
+      }
+      return;
+    }
 
     if (type === "message.updated") {
       const info = properties?.info as any;
@@ -1874,8 +1941,44 @@ export class BackendManager implements vscode.Disposable {
         typeof info?.id === "string" ? (info.id as string) : null;
       const sessionID =
         typeof info?.sessionID === "string" ? (info.sessionID as string) : null;
+      if (sessionID && messageID) {
+        ensureOpencodeMessageSeq(sessionID, messageID);
+      }
       if (messageID && (role === "user" || role === "assistant")) {
         messageRoleById.set(messageID, role);
+      }
+      if (sessionID && messageID && role === "assistant") {
+        const completed =
+          typeof info?.time?.completed === "number" &&
+          Number.isFinite(info.time.completed)
+            ? Number(info.time.completed)
+            : null;
+        setOpencodePendingAssistantMessage({
+          sessionID,
+          messageID,
+          pending: completed === null,
+        });
+
+        // If we already saw status=idle, complete the turn as soon as the final pending assistant message is done.
+        if (completed !== null && !hasOpencodePendingAssistantMessages(sessionID)) {
+          const status = sessionStatusById.get(sessionID) ?? null;
+          if (status === "idle") {
+            const session = this.sessions.getByThreadId(backendKey, sessionID);
+            if (!session) return;
+            const activeTurnId = activeTurnIdBySession.get(sessionID) ?? null;
+            if (activeTurnId) {
+              this.emitNotification(backendKey, session, {
+                method: "turn/completed",
+                params: {
+                  threadId: sessionID,
+                  turn: { id: activeTurnId, status: "completed" },
+                },
+              });
+            }
+            this.streamState.set(sessionID, { activeTurnId: null });
+            activeTurnIdBySession.delete(sessionID);
+          }
+        }
       }
       if (sessionID && messageID && role === "assistant") {
         const key = assistantDeltaKey(sessionID, messageID);
@@ -1887,7 +1990,13 @@ export class BackendManager implements vscode.Disposable {
           for (const delta of pending) {
             this.emitNotification(backendKey, session, {
               method: "item/agentMessage/delta",
-              params: { threadId: sessionID, turnId, itemId: messageID, delta },
+              params: {
+                threadId: sessionID,
+                turnId,
+                itemId: messageID,
+                delta,
+                opencodeSeq: getOpencodeMessageSeq(messageID),
+              },
             });
           }
         }
@@ -1928,7 +2037,13 @@ export class BackendManager implements vscode.Disposable {
         }
         this.emitNotification(backendKey, session, {
           method: "item/agentMessage/delta",
-          params: { threadId: sessionID, turnId, itemId: messageID, delta },
+          params: {
+            threadId: sessionID,
+            turnId,
+            itemId: messageID,
+            delta,
+            opencodeSeq: getOpencodeMessageSeq(messageID),
+          },
         });
         return;
       }
@@ -1952,6 +2067,7 @@ export class BackendManager implements vscode.Disposable {
               id: stepId,
               status: "inProgress",
               messageID,
+              opencodeSeq: getOpencodeMessageSeq(messageID),
               snapshot,
               reason: null,
               cost: null,
@@ -2011,6 +2127,7 @@ export class BackendManager implements vscode.Disposable {
               id: stepId,
               status: "completed",
               messageID,
+              opencodeSeq: getOpencodeMessageSeq(messageID),
               snapshot,
               reason,
               cost,
@@ -2090,6 +2207,7 @@ export class BackendManager implements vscode.Disposable {
               id: toolId,
               stepId,
               messageID,
+              opencodeSeq: getOpencodeMessageSeq(messageID),
               callID,
               tool: toolName,
               status,
@@ -2152,7 +2270,14 @@ export class BackendManager implements vscode.Disposable {
             params: {
               threadId: sessionID,
               turnId,
-              item: { type: "reasoning", id, summary: [], content: [] },
+              item: {
+                type: "reasoning",
+                id,
+                messageID,
+                opencodeSeq: getOpencodeMessageSeq(messageID),
+                summary: [],
+                content: [],
+              } as any,
             },
           });
           return id;
@@ -2223,9 +2348,11 @@ export class BackendManager implements vscode.Disposable {
               item: {
                 type: "reasoning",
                 id: itemId,
+                messageID,
+                opencodeSeq: getOpencodeMessageSeq(messageID),
                 summary: text.trim() ? [text] : [],
                 content: [],
-              },
+              } as any,
             },
           });
         }
@@ -2425,6 +2552,9 @@ export class BackendManager implements vscode.Disposable {
     this.modelsByBackendKey.delete(backendKey);
     this.opencodeDefaultModelKeyByBackendKey.delete(backendKey);
     this.opencodeDefaultAgentNameByBackendKey.delete(backendKey);
+    this.opencodeMessageSeqByMessageIdByBackendKey.delete(backendKey);
+    this.opencodeNextMessageSeqByBackendKey.delete(backendKey);
+    this.opencodePendingAssistantMessageIdsBySessionIdByBackendKey.delete(backendKey);
     const sessions = this.sessions.list(backendKey);
     for (const s of sessions) {
       this.itemsByThreadId.delete(s.threadId);
