@@ -6,8 +6,12 @@ use rand::Rng;
 const ANNOUNCEMENT_TIP_URL: &str =
     "https://raw.githubusercontent.com/openai/codex/main/announcement_tip.toml";
 
-const PAID_TOOLTIP: &str = "*New* You can get more credits to extend your pro plan usage!";
-const OTHER_TOOLTIP: &str = "Upgrade your ChatGPT plan to use Codex!";
+const PAID_TOOLTIP: &str =
+    "*New* Try the **Codex App** with 2x rate limits until *April 2nd*. https://chatgpt.com/codex";
+const OTHER_TOOLTIP: &str =
+    "*New* Build faster with the **Codex App**. Try it now. https://chatgpt.com/codex";
+const FREE_GO_TOOLTIP: &str =
+    "*New* Codex is included in your plan for free through *March 2nd* – let’s build together.";
 
 const RAW_TOOLTIPS: &str = include_str!("../tooltips.txt");
 
@@ -34,10 +38,6 @@ fn experimental_tooltips() -> Vec<&'static str> {
 
 /// Pick a random tooltip to show to the user when starting Codex.
 pub(crate) fn get_tooltip(plan: Option<PlanType>) -> Option<String> {
-    if let Some(announcement) = announcement::fetch_announcement_tip() {
-        return Some(announcement);
-    }
-
     let mut rng = rand::rng();
 
     // Leave small chance for a random tooltip to be shown.
@@ -50,8 +50,15 @@ pub(crate) fn get_tooltip(plan: Option<PlanType>) -> Option<String> {
             | Some(PlanType::Pro) => {
                 return Some(PAID_TOOLTIP.to_string());
             }
+            Some(PlanType::Go) | Some(PlanType::Free) => {
+                return Some(FREE_GO_TOOLTIP.to_string());
+            }
             _ => return Some(OTHER_TOOLTIP.to_string()),
         }
+    }
+
+    if let Some(announcement) = announcement::fetch_announcement_tip() {
+        return Some(announcement);
     }
 
     pick_tooltip(&mut rng).map(str::to_string)
