@@ -88,6 +88,25 @@ impl StatusLineRunner {
         let app_tx = self.app_tx.clone();
         let run = async move {
             loop {
+                let wait_for = {
+                    let state = state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if state.latest_payload.is_none() {
+                        break;
+                    }
+                    state.last_started_at.and_then(|last| {
+                        let elapsed = last.elapsed();
+                        if elapsed >= MIN_STATUS_LINE_INTERVAL {
+                            None
+                        } else {
+                            Some(MIN_STATUS_LINE_INTERVAL - elapsed)
+                        }
+                    })
+                };
+                if let Some(wait_for) = wait_for {
+                    tokio::time::sleep(wait_for).await;
+                }
                 let payload = {
                     let state = state
                         .lock()
@@ -97,6 +116,12 @@ impl StatusLineRunner {
                         None => break,
                     }
                 };
+                {
+                    let mut state = state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    state.last_started_at = Some(Instant::now());
+                }
                 let request = StatusLineRequest {
                     command: command.clone(),
                     payload,
@@ -192,6 +217,7 @@ impl StatusLineRunner {
 
 const TIMEOUT_ERR: &str = "status line command timed out";
 const DEFAULT_STATUS_LINE_TIMEOUT: Duration = Duration::from_millis(500);
+const MIN_STATUS_LINE_INTERVAL: Duration = Duration::from_millis(300);
 
 #[derive(Debug, Clone)]
 pub(crate) struct StatusLineRequest {
@@ -215,6 +241,8 @@ struct StatusLine {
     warned_timeout: bool,
     /// whether an error warning has been emitted
     warned_error: bool,
+    /// last time a status line command was started
+    last_started_at: Option<Instant>,
 }
 
 #[derive(Debug, Clone)]
@@ -346,5 +374,56 @@ mod tests {
             }
             other => panic!("expected StatusLineErrorWarning, got {other:?}"),
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn request_update_throttles_status_line_runs() {
+        let temp_home = tempdir().expect("temp home");
+        let mut config = ConfigBuilder::default()
+            .codex_home(temp_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("config");
+
+        config.tui_status_line = Some(vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "cat".to_string(),
+        ]);
+
+        let (tx, mut rx) = unbounded_channel();
+        let runner = StatusLineRunner::new(config, AppEventSender::new(tx));
+
+        let start = Instant::now();
+        runner.update_payload("first".to_string()).expect("payload");
+        runner.request_update().expect("request update");
+        runner
+            .update_payload("second".to_string())
+            .expect("payload");
+        runner.request_update().expect("request update");
+
+        let first = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timeout waiting for first status line update")
+            .expect("missing event");
+        match first {
+            AppEvent::StatusLineUpdated(_value) => {}
+            other => panic!("expected StatusLineUpdated, got {other:?}"),
+        }
+
+        let second = timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timeout waiting for second status line update")
+            .expect("missing event");
+        match second {
+            AppEvent::StatusLineUpdated(_value) => {}
+            other => panic!("expected StatusLineUpdated, got {other:?}"),
+        }
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed >= MIN_STATUS_LINE_INTERVAL,
+            "status line throttle elapsed too short: {elapsed:?}"
+        );
     }
 }
