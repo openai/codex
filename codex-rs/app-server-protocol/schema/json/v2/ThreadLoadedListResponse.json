@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "data": {
+      "description": "Thread ids for sessions currently loaded in memory.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "nextCursor": {
+      "description": "Opaque cursor to pass to the next call to continue after the last item. if None, there are no more items to return.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "data"
+  ],
+  "title": "ThreadLoadedListResponse",
+  "type": "object"
+}

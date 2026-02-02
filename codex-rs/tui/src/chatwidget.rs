@@ -815,6 +815,9 @@ impl ChatWidget {
             &model_for_header,
             event,
             self.show_welcome_banner,
+            self.auth_manager
+                .auth_cached()
+                .and_then(|auth| auth.account_plan_type()),
         );
         self.apply_session_info_cell(session_info_cell);
 
@@ -2732,8 +2735,8 @@ impl ChatWidget {
                 InputResult::Command(cmd) => {
                     self.dispatch_command(cmd);
                 }
-                InputResult::CommandWithArgs(cmd, args) => {
-                    self.dispatch_command_with_args(cmd, args);
+                InputResult::CommandWithArgs(cmd, args, text_elements) => {
+                    self.dispatch_command_with_args(cmd, args, text_elements);
                 }
                 InputResult::None => {}
             },
@@ -2783,6 +2786,7 @@ impl ChatWidget {
                 cmd.command()
             );
             self.add_to_history(history_cell::new_error_event(message));
+            self.bottom_pane.drain_pending_submission_state();
             self.request_redraw();
             return;
         }
@@ -3019,7 +3023,16 @@ impl ChatWidget {
         }
     }
 
-    fn dispatch_command_with_args(&mut self, cmd: SlashCommand, args: String) {
+    fn dispatch_command_with_args(
+        &mut self,
+        cmd: SlashCommand,
+        args: String,
+        _text_elements: Vec<TextElement>,
+    ) {
+        if !cmd.supports_inline_args() {
+            self.dispatch_command(cmd);
+            return;
+        }
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
@@ -3033,7 +3046,12 @@ impl ChatWidget {
         let trimmed = args.trim();
         match cmd {
             SlashCommand::Rename if !trimmed.is_empty() => {
-                let Some(name) = codex_core::util::normalize_thread_name(trimmed) else {
+                let Some((prepared_args, _prepared_elements)) =
+                    self.bottom_pane.prepare_inline_args_submission(false)
+                else {
+                    return;
+                };
+                let Some(name) = codex_core::util::normalize_thread_name(&prepared_args) else {
                     self.add_error_message("Thread name cannot be empty.".to_string());
                     return;
                 };
@@ -3042,20 +3060,50 @@ impl ChatWidget {
                 self.request_redraw();
                 self.app_event_tx
                     .send(AppEvent::CodexOp(Op::SetThreadName { name }));
+                self.bottom_pane.drain_pending_submission_state();
             }
-            SlashCommand::Collab | SlashCommand::Plan => {
-                let _ = trimmed;
+            SlashCommand::Plan if !trimmed.is_empty() => {
                 self.dispatch_command(cmd);
+                if self.active_mode_kind() != ModeKind::Plan {
+                    return;
+                }
+                let Some((prepared_args, prepared_elements)) =
+                    self.bottom_pane.prepare_inline_args_submission(true)
+                else {
+                    return;
+                };
+                let user_message = UserMessage {
+                    text: prepared_args,
+                    local_images: self
+                        .bottom_pane
+                        .take_recent_submission_images_with_placeholders(),
+                    text_elements: prepared_elements,
+                    mention_paths: self.bottom_pane.take_mention_paths(),
+                };
+                if self.is_session_configured() {
+                    self.reasoning_buffer.clear();
+                    self.full_reasoning_buffer.clear();
+                    self.set_status_header(String::from("Working"));
+                    self.submit_user_message(user_message);
+                } else {
+                    self.queue_user_message(user_message);
+                }
             }
             SlashCommand::Review if !trimmed.is_empty() => {
+                let Some((prepared_args, _prepared_elements)) =
+                    self.bottom_pane.prepare_inline_args_submission(false)
+                else {
+                    return;
+                };
                 self.submit_op(Op::Review {
                     review_request: ReviewRequest {
                         target: ReviewTarget::Custom {
-                            instructions: trimmed.to_string(),
+                            instructions: prepared_args,
                         },
                         user_facing_hint: None,
                     },
                 });
+                self.bottom_pane.drain_pending_submission_state();
             }
             _ => self.dispatch_command(cmd),
         }

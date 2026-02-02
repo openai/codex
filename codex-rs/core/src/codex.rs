@@ -51,6 +51,7 @@ use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
@@ -212,7 +213,6 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::models::render_command_prefix_list;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
@@ -490,7 +490,7 @@ pub(crate) struct TurnContext {
     pub(crate) developer_instructions: Option<String>,
     pub(crate) compact_prompt: Option<String>,
     pub(crate) user_instructions: Option<String>,
-    pub(crate) collaboration_mode_kind: ModeKind,
+    pub(crate) collaboration_mode: CollaborationMode,
     pub(crate) personality: Option<Personality>,
     pub(crate) approval_policy: AskForApproval,
     pub(crate) sandbox_policy: SandboxPolicy,
@@ -692,7 +692,7 @@ impl Session {
             developer_instructions: session_configuration.developer_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
-            collaboration_mode_kind: session_configuration.collaboration_mode.mode,
+            collaboration_mode: session_configuration.collaboration_mode.clone(),
             personality: session_configuration.personality,
             approval_policy: session_configuration.approval_policy.value(),
             sandbox_policy: session_configuration.sandbox_policy.get().clone(),
@@ -1356,16 +1356,14 @@ impl Session {
 
     fn build_collaboration_mode_update_item(
         &self,
-        previous_collaboration_mode: &CollaborationMode,
-        next_collaboration_mode: Option<&CollaborationMode>,
+        previous: Option<&Arc<TurnContext>>,
+        next: &TurnContext,
     ) -> Option<ResponseItem> {
-        if let Some(next_mode) = next_collaboration_mode {
-            if previous_collaboration_mode == next_mode {
-                return None;
-            }
+        let prev = previous?;
+        if prev.collaboration_mode != next.collaboration_mode {
             // If the next mode has empty developer instructions, this returns None and we emit no
             // update, so prior collaboration instructions remain in the prompt history.
-            Some(DeveloperInstructions::from_collaboration_mode(next_mode)?.into())
+            Some(DeveloperInstructions::from_collaboration_mode(&next.collaboration_mode)?.into())
         } else {
             None
         }
@@ -1375,8 +1373,6 @@ impl Session {
         &self,
         previous_context: Option<&Arc<TurnContext>>,
         current_context: &TurnContext,
-        previous_collaboration_mode: &CollaborationMode,
-        next_collaboration_mode: Option<&CollaborationMode>,
     ) -> Vec<ResponseItem> {
         let mut update_items = Vec::new();
         if let Some(env_item) =
@@ -1389,10 +1385,9 @@ impl Session {
         {
             update_items.push(permissions_item);
         }
-        if let Some(collaboration_mode_item) = self.build_collaboration_mode_update_item(
-            previous_collaboration_mode,
-            next_collaboration_mode,
-        ) {
+        if let Some(collaboration_mode_item) =
+            self.build_collaboration_mode_update_item(previous_context, current_context)
+        {
             update_items.push(collaboration_mode_item);
         }
         if let Some(personality_item) =
@@ -1522,7 +1517,7 @@ impl Session {
         sub_id: &str,
         amendment: &ExecPolicyAmendment,
     ) {
-        let Some(prefixes) = render_command_prefix_list([amendment.command.as_slice()]) else {
+        let Some(prefixes) = format_allow_prefixes(vec![amendment.command.clone()]) else {
             warn!("execpolicy amendment for {sub_id} had no command prefix");
             return;
         };
@@ -2573,18 +2568,6 @@ mod handlers {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) {
-        let previous_context = sess
-            .new_default_turn_with_sub_id(sess.next_internal_sub_id())
-            .await;
-        let previous_collaboration_mode = sess
-            .state
-            .lock()
-            .await
-            .session_configuration
-            .collaboration_mode
-            .clone();
-        let next_collaboration_mode = updates.collaboration_mode.clone();
-
         if let Err(err) = sess.update_settings(updates).await {
             sess.send_event_raw(Event {
                 id: sub_id,
@@ -2594,24 +2577,6 @@ mod handlers {
                 }),
             })
             .await;
-            return;
-        }
-
-        let initial_context_seeded = sess.state.lock().await.initial_context_seeded;
-        if !initial_context_seeded {
-            return;
-        }
-
-        let current_context = sess.new_default_turn_with_sub_id(sub_id).await;
-        let update_items = sess.build_settings_update_items(
-            Some(&previous_context),
-            &current_context,
-            &previous_collaboration_mode,
-            next_collaboration_mode.as_ref(),
-        );
-        if !update_items.is_empty() {
-            sess.record_conversation_items(&current_context, &update_items)
-                .await;
         }
     }
 
@@ -2671,14 +2636,6 @@ mod handlers {
             _ => unreachable!(),
         };
 
-        let previous_collaboration_mode = sess
-            .state
-            .lock()
-            .await
-            .session_configuration
-            .collaboration_mode
-            .clone();
-        let next_collaboration_mode = updates.collaboration_mode.clone();
         let Ok(current_context) = sess.new_turn_with_sub_id(sub_id, updates).await else {
             // new_turn_with_sub_id already emits the error event.
             return;
@@ -2691,12 +2648,8 @@ mod handlers {
         // Attempt to inject input into current task
         if let Err(items) = sess.inject_input(items).await {
             sess.seed_initial_context_if_needed(&current_context).await;
-            let update_items = sess.build_settings_update_items(
-                previous_context.as_ref(),
-                &current_context,
-                &previous_collaboration_mode,
-                next_collaboration_mode.as_ref(),
-            );
+            let update_items =
+                sess.build_settings_update_items(previous_context.as_ref(), &current_context);
             if !update_items.is_empty() {
                 sess.record_conversation_items(&current_context, &update_items)
                     .await;
@@ -3211,7 +3164,7 @@ async fn spawn_review_thread(
         developer_instructions: None,
         user_instructions: None,
         compact_prompt: parent_turn_context.compact_prompt.clone(),
-        collaboration_mode_kind: parent_turn_context.collaboration_mode_kind,
+        collaboration_mode: parent_turn_context.collaboration_mode.clone(),
         personality: parent_turn_context.personality,
         approval_policy: parent_turn_context.approval_policy,
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
@@ -3326,7 +3279,7 @@ pub(crate) async fn run_turn(
     let total_usage_tokens = sess.get_total_token_usage().await;
     let event = EventMsg::TurnStarted(TurnStartedEvent {
         model_context_window: turn_context.client.get_model_context_window(),
-        collaboration_mode_kind: turn_context.collaboration_mode_kind,
+        collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, event).await;
     if total_usage_tokens >= auto_compact_limit {
@@ -4239,7 +4192,7 @@ async fn try_run_sampling_request(
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
     let mut should_emit_turn_diff = false;
-    let plan_mode = turn_context.collaboration_mode_kind == ModeKind::Plan;
+    let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
     let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
     let receiving_span = trace_span!("receiving_stream");
     let outcome: CodexResult<SamplingRequestResult> = loop {

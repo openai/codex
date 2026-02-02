@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::fs;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -10,10 +11,12 @@ use codex_execpolicy::Policy;
 use codex_execpolicy::PolicyParser;
 use codex_execpolicy::RuleMatch;
 use codex_execpolicy::RuleRef;
+use codex_execpolicy::blocking_append_allow_prefix_rule;
 use codex_execpolicy::rule::PatternToken;
 use codex_execpolicy::rule::PrefixPattern;
 use codex_execpolicy::rule::PrefixRule;
 use pretty_assertions::assert_eq;
+use tempfile::tempdir;
 
 fn tokens(cmd: &[&str]) -> Vec<String> {
     cmd.iter().map(std::string::ToString::to_string).collect()
@@ -44,6 +47,24 @@ fn rule_snapshots(rules: &[RuleRef]) -> Vec<RuleSnapshot> {
             }
         })
         .collect()
+}
+
+#[test]
+fn append_allow_prefix_rule_dedupes_existing_rule() -> Result<()> {
+    let tmp = tempdir().context("create temp dir")?;
+    let policy_path = tmp.path().join("rules").join("default.rules");
+    let prefix = tokens(&["python3"]);
+
+    blocking_append_allow_prefix_rule(&policy_path, &prefix)?;
+    blocking_append_allow_prefix_rule(&policy_path, &prefix)?;
+
+    let contents = fs::read_to_string(&policy_path).context("read policy")?;
+    assert_eq!(
+        contents,
+        r#"prefix_rule(pattern=["python3"], decision="allow")
+"#
+    );
+    Ok(())
 }
 
 #[test]
