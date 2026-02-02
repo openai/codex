@@ -69,8 +69,8 @@ write-config-schema:
     cargo run -p codex-core --bin codex-write-config-schema
 
 # Regenerate vendored app-server protocol schema artifacts.
-write-app-server-schema:
-    cargo run -p codex-app-server-protocol --bin write_schema_fixtures
+write-app-server-schema *args:
+    cargo run -p codex-app-server-protocol --bin write_schema_fixtures -- "$@"
 
 # Tail logs from the state SQLite database
 log *args:
