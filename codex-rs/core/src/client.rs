@@ -196,27 +196,7 @@ impl ModelClient {
                     cache.header = header;
                 }
             });
-            return;
         }
-
-        let _task = std::thread::spawn(move || {
-            let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            else {
-                return;
-            };
-
-            let header = runtime
-                .block_on(build_turn_metadata_header(cwd.as_path()))
-                .and_then(|value| HeaderValue::from_str(value.as_str()).ok());
-
-            if let Ok(mut cache) = turn_metadata_cache.write()
-                && cache.cwd.as_ref() == Some(&cwd)
-            {
-                cache.header = header;
-            }
-        });
     }
 }
 
