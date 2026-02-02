@@ -219,7 +219,7 @@ fn total_token_usage_includes_only_trailing_codex_generated_items() {
     let mut history = create_history_with_items(vec![
         non_trailing_output,
         user_msg("boundary"),
-        trailing_assistant.clone(),
+        trailing_assistant,
         trailing_output.clone(),
     ]);
     history.update_token_info(

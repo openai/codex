@@ -1025,6 +1025,11 @@ impl Session {
         state.get_total_token_usage(state.server_reasoning_included())
     }
 
+    async fn get_estimated_token_count(&self, turn_context: &TurnContext) -> Option<i64> {
+        let state = self.state.lock().await;
+        state.history.estimate_token_count(turn_context)
+    }
+
     pub(crate) async fn get_base_instructions(&self) -> BaseInstructions {
         let state = self.state.lock().await;
         BaseInstructions {
@@ -3324,17 +3329,7 @@ pub(crate) async fn run_turn(
     let model_info = turn_context.client.get_model_info();
     let auto_compact_limit = model_info.auto_compact_token_limit().unwrap_or(i64::MAX);
     let total_usage_tokens = sess.get_total_token_usage().await;
-    let estimated_token_count = sess
-        .clone_history()
-        .await
-        .estimate_token_count(turn_context.as_ref());
-    info!(
-        turn_id = %turn_context.sub_id,
-        total_usage_tokens,
-        estimated_token_count = ?estimated_token_count,
-        auto_compact_limit,
-        "between-turn token usage snapshot"
-    );
+
     let event = EventMsg::TurnStarted(TurnStartedEvent {
         model_context_window: turn_context.client.get_model_context_window(),
         collaboration_mode_kind: turn_context.collaboration_mode_kind,
@@ -3487,6 +3482,19 @@ pub(crate) async fn run_turn(
                 } = sampling_request_output;
                 let total_usage_tokens = sess.get_total_token_usage().await;
                 let token_limit_reached = total_usage_tokens >= auto_compact_limit;
+
+                let estimated_token_count =
+                    sess.get_estimated_token_count(turn_context.as_ref()).await;
+
+                info!(
+                    turn_id = %turn_context.sub_id,
+                    total_usage_tokens,
+                    estimated_token_count = ?estimated_token_count,
+                    auto_compact_limit,
+                    token_limit_reached,
+                    needs_follow_up,
+                    "post sampling token usage"
+                );
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if token_limit_reached && needs_follow_up {
