@@ -7,6 +7,7 @@ use app_test_support::to_response;
 use codex_app_server_protocol::DynamicToolCallOutputContentItem;
 use codex_app_server_protocol::DynamicToolCallParams;
 use codex_app_server_protocol::DynamicToolCallResponse;
+use codex_app_server_protocol::DynamicToolCallResult;
 use codex_app_server_protocol::DynamicToolSpec;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
@@ -203,9 +204,10 @@ async fn dynamic_tool_call_round_trip_sends_output_to_model() -> Result<()> {
 
     // Respond to the tool call so the model receives a function_call_output.
     let response = DynamicToolCallResponse {
-        output: Some("dynamic-ok".to_string()),
+        result: DynamicToolCallResult::Output {
+            output: "dynamic-ok".to_string(),
+        },
         success: true,
-        content_items: None,
     };
     mcp.send_response(request_id, serde_json::to_value(response)?)
         .await?;
@@ -331,9 +333,10 @@ async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<(
         .map(Into::into)
         .collect::<Vec<FunctionCallOutputContentItem>>();
     let response = DynamicToolCallResponse {
-        output: None,
+        result: DynamicToolCallResult::ContentItems {
+            content_items: response_content_items,
+        },
         success: true,
-        content_items: Some(response_content_items),
     };
     mcp.send_response(request_id, serde_json::to_value(response)?)
         .await?;

@@ -2671,16 +2671,23 @@ pub struct DynamicToolCallParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct DynamicToolCallResponse {
+    #[serde(flatten)]
+    pub result: DynamicToolCallResult,
+    pub success: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(untagged, rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum DynamicToolCallResult {
     /// Preferred structured tool output (for example text + images) that is
     /// forwarded directly to the model as content items.
-    ///
-    /// At least one of `content_items` or `output` must be set.
-    pub content_items: Option<Vec<DynamicToolCallOutputContentItem>>,
+    ContentItems {
+        #[serde(rename = "contentItems")]
+        content_items: Vec<DynamicToolCallOutputContentItem>,
+    },
     /// Legacy plain-text tool output.
-    ///
-    /// At least one of `content_items` or `output` must be set.
-    pub output: Option<String>,
-    pub success: bool,
+    Output { output: String },
 }
 
 /// App-server-facing dynamic tool output items.
@@ -3089,10 +3096,11 @@ mod tests {
     #[test]
     fn dynamic_tool_response_serializes_content_items() {
         let value = serde_json::to_value(DynamicToolCallResponse {
-            content_items: Some(vec![DynamicToolCallOutputContentItem::InputText {
-                text: "dynamic-ok".to_string(),
-            }]),
-            output: None,
+            result: DynamicToolCallResult::ContentItems {
+                content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                    text: "dynamic-ok".to_string(),
+                }],
+            },
             success: true,
         })
         .unwrap();
@@ -3100,7 +3108,6 @@ mod tests {
         assert_eq!(
             value,
             json!({
-                "output": null,
                 "success": true,
                 "contentItems": [
                     {
