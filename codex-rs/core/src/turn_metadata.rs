@@ -8,7 +8,7 @@ use crate::git_info::get_git_remote_urls_assume_git_repo_with_timeout;
 use crate::git_info::get_git_repo_root;
 use crate::git_info::get_head_commit_hash_with_timeout;
 
-const TURN_METADATA_TIMEOUT: TokioDuration = TokioDuration::from_millis(150);
+const TURN_METADATA_TIMEOUT: TokioDuration = TokioDuration::from_secs(5);
 
 #[derive(Serialize)]
 struct TurnMetadataWorkspace {

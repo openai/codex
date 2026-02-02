@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::RwLock;
 
 use crate::api_bridge::CoreAuthProvider;
 use crate::api_bridge::auth_provider_from_auth;
@@ -76,6 +77,12 @@ pub const WEB_SEARCH_ELIGIBLE_HEADER: &str = "x-oai-web-search-eligible";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 pub const X_CODEX_TURN_METADATA_HEADER: &str = "x-codex-turn-metadata";
 
+#[derive(Debug, Default)]
+struct TurnMetadataCache {
+    cwd: Option<PathBuf>,
+    header: Option<HeaderValue>,
+}
+
 #[derive(Debug)]
 struct ModelClientState {
     config: Arc<Config>,
@@ -88,6 +95,7 @@ struct ModelClientState {
     summary: ReasoningSummaryConfig,
     session_source: SessionSource,
     transport_manager: TransportManager,
+    turn_metadata_cache: Arc<RwLock<TurnMetadataCache>>,
 }
 
 #[derive(Debug, Clone)]
@@ -111,8 +119,6 @@ pub struct ModelClientSession {
     /// keep sending it unchanged between turn requests (e.g., for retries, incremental
     /// appends, or continuation requests), and must not send it between different turns.
     turn_state: Arc<OnceLock<String>>,
-    /// Working directory used to lazily compute turn metadata at send time.
-    turn_metadata_cwd: Option<PathBuf>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -141,19 +147,76 @@ impl ModelClient {
                 summary,
                 session_source,
                 transport_manager,
+                turn_metadata_cache: Arc::new(RwLock::new(TurnMetadataCache::default())),
             }),
         }
     }
 
     pub fn new_session(&self, turn_metadata_cwd: Option<PathBuf>) -> ModelClientSession {
+        self.prewarm_turn_metadata_header(turn_metadata_cwd);
         ModelClientSession {
             state: Arc::clone(&self.state),
             connection: None,
             websocket_last_items: Vec::new(),
             transport_manager: self.state.transport_manager.clone(),
             turn_state: Arc::new(OnceLock::new()),
-            turn_metadata_cwd,
         }
+    }
+
+    /// Refresh turn metadata in the background and update a cached header that request
+    /// builders can read without blocking.
+    fn prewarm_turn_metadata_header(&self, turn_metadata_cwd: Option<PathBuf>) {
+        if self.state.provider.wire_api != WireApi::Responses {
+            return;
+        }
+
+        let turn_metadata_cwd =
+            turn_metadata_cwd.map(|cwd| std::fs::canonicalize(&cwd).unwrap_or(cwd));
+
+        if let Ok(mut cache) = self.state.turn_metadata_cache.write()
+            && cache.cwd != turn_metadata_cwd
+        {
+            cache.cwd = turn_metadata_cwd.clone();
+            cache.header = None;
+        }
+
+        let Some(cwd) = turn_metadata_cwd else {
+            return;
+        };
+        let turn_metadata_cache = Arc::clone(&self.state.turn_metadata_cache);
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let _task = handle.spawn(async move {
+                let header = build_turn_metadata_header(cwd.as_path())
+                    .await
+                    .and_then(|value| HeaderValue::from_str(value.as_str()).ok());
+
+                if let Ok(mut cache) = turn_metadata_cache.write()
+                    && cache.cwd.as_ref() == Some(&cwd)
+                {
+                    cache.header = header;
+                }
+            });
+            return;
+        }
+
+        let _task = std::thread::spawn(move || {
+            let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            else {
+                return;
+            };
+
+            let header = runtime
+                .block_on(build_turn_metadata_header(cwd.as_path()))
+                .and_then(|value| HeaderValue::from_str(value.as_str()).ok());
+
+            if let Ok(mut cache) = turn_metadata_cache.write()
+                && cache.cwd.as_ref() == Some(&cwd)
+            {
+                cache.header = header;
+            }
+        });
     }
 }
 
@@ -263,10 +326,12 @@ impl ModelClient {
 }
 
 impl ModelClientSession {
-    async fn turn_metadata_header(&self) -> Option<HeaderValue> {
-        let cwd = self.turn_metadata_cwd.as_deref()?;
-        let value = build_turn_metadata_header(cwd).await?;
-        HeaderValue::from_str(value.as_str()).ok()
+    fn turn_metadata_header(&self) -> Option<HeaderValue> {
+        self.state
+            .turn_metadata_cache
+            .try_read()
+            .ok()
+            .and_then(|cache| cache.header.clone())
     }
 
     /// Streams a single model turn using either the Responses or Chat
@@ -339,12 +404,12 @@ impl ModelClientSession {
         Ok(build_api_prompt(prompt, instructions, tools_json))
     }
 
-    async fn build_responses_options(
+    fn build_responses_options(
         &self,
         prompt: &Prompt,
         compression: Compression,
     ) -> ApiResponsesOptions {
-        let turn_metadata_header = self.turn_metadata_header().await;
+        let turn_metadata_header = self.turn_metadata_header();
         let model_info = &self.state.model_info;
 
         let default_reasoning_effort = model_info.default_reasoning_level;
@@ -597,7 +662,7 @@ impl ModelClientSession {
             let client = ApiResponsesClient::new(transport, api_provider, api_auth)
                 .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
 
-            let options = self.build_responses_options(prompt, compression).await;
+            let options = self.build_responses_options(prompt, compression);
 
             let stream_result = client
                 .stream_prompt(&self.state.model_info.slug, &api_prompt, options)
@@ -638,7 +703,7 @@ impl ModelClientSession {
             let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
             let compression = self.responses_request_compression(auth.as_ref());
 
-            let options = self.build_responses_options(prompt, compression).await;
+            let options = self.build_responses_options(prompt, compression);
             let request = self.prepare_websocket_request(&api_prompt, &options);
 
             let connection = match self

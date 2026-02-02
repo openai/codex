@@ -405,16 +405,94 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
         responses::ev_response_created("resp-1"),
         responses::ev_completed("resp-1"),
     ]);
-    let request_recorder =
-        responses::mount_sse_sequence(&server, vec![response_body.clone(), response_body]).await;
+    let provider = ModelProviderInfo {
+        name: "mock".into(),
+        base_url: Some(format!("{}/v1", server.uri())),
+        env_key: None,
+        env_key_instructions: None,
+        experimental_bearer_token: None,
+        wire_api: WireApi::Responses,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: Some(0),
+        stream_max_retries: Some(0),
+        stream_idle_timeout_ms: Some(5_000),
+        requires_openai_auth: false,
+        supports_websockets: false,
+    };
 
-    let test = test_codex().build(&server).await.expect("build test codex");
+    let codex_home = TempDir::new().expect("failed to create TempDir");
+    let mut config = load_default_config_for_test(&codex_home).await;
+    config.model_provider_id = provider.name.clone();
+    config.model_provider = provider.clone();
+    let effort = config.model_reasoning_effort;
+    let summary = config.model_reasoning_summary;
+    let model = ModelsManager::get_model_offline(config.model.as_deref());
+    config.model = Some(model.clone());
+    let config = Arc::new(config);
 
-    test.submit_turn("first turn")
+    let conversation_id = ThreadId::new();
+    let auth_mode = AuthMode::Chatgpt;
+    let session_source =
+        SessionSource::SubAgent(SubAgentSource::Other("turn-metadata-e2e".to_string()));
+    let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
+    let otel_manager = OtelManager::new(
+        conversation_id,
+        model.as_str(),
+        model_info.slug.as_str(),
+        None,
+        Some("test@test.com".to_string()),
+        Some(auth_mode),
+        false,
+        "test".to_string(),
+        session_source.clone(),
+    );
+
+    let client = ModelClient::new(
+        Arc::clone(&config),
+        None,
+        model_info,
+        otel_manager,
+        provider,
+        effort,
+        summary,
+        conversation_id,
+        session_source,
+        TransportManager::new(),
+    );
+
+    let workspace = TempDir::new().expect("workspace tempdir");
+    let cwd = workspace.path();
+
+    let mut prompt = Prompt::default();
+    prompt.input = vec![ResponseItem::Message {
+        id: None,
+        role: "user".into(),
+        content: vec![ContentItem::InputText {
+            text: "hello".into(),
+        }],
+        end_turn: None,
+    }];
+
+    let first_request = responses::mount_sse_once(&server, response_body.clone()).await;
+    let mut first_session = client.new_session(Some(cwd.to_path_buf()));
+    let mut first_stream = first_session
+        .stream(&prompt)
         .await
-        .expect("submit first turn");
+        .expect("stream first turn");
+    while let Some(event) = first_stream.next().await {
+        if matches!(event, Ok(ResponseEvent::Completed { .. })) {
+            break;
+        }
+    }
+    assert_eq!(
+        first_request
+            .single_request()
+            .header("x-codex-turn-metadata"),
+        None
+    );
 
-    let cwd = test.cwd_path();
     let null_device = if cfg!(windows) { "NUL" } else { "/dev/null" };
     let run_git = |args: &[&str]| {
         let output = Command::new("git")
@@ -440,7 +518,12 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
     std::fs::write(cwd.join("README.md"), "hello").expect("write README");
     run_git(&["add", "."]);
     run_git(&["commit", "-m", "initial commit"]);
-    run_git(&["remote", "add", "origin", "https://github.com/openai/codex.git"]);
+    run_git(&[
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/openai/codex.git",
+    ]);
 
     let expected_head = String::from_utf8(run_git(&["rev-parse", "HEAD"]).stdout)
         .expect("git rev-parse output should be valid UTF-8")
@@ -451,39 +534,52 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
         .trim()
         .to_string();
 
-    test.submit_turn("second turn")
-        .await
-        .expect("submit second turn");
+    let repo_root = std::fs::canonicalize(cwd)
+        .unwrap_or_else(|_| cwd.to_path_buf())
+        .to_string_lossy()
+        .into_owned();
+    for _attempt in 0..10 {
+        let request_recorder = responses::mount_sse_once(&server, response_body.clone()).await;
+        let mut session = client.new_session(Some(cwd.to_path_buf()));
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let mut stream = session.stream(&prompt).await.expect("stream post-git turn");
+        while let Some(event) = stream.next().await {
+            if matches!(event, Ok(ResponseEvent::Completed { .. })) {
+                break;
+            }
+        }
 
-    let requests = request_recorder.requests();
-    assert_eq!(requests.len(), 2);
-    assert_eq!(requests[0].header("x-codex-turn-metadata"), None);
+        let maybe_header = request_recorder
+            .single_request()
+            .header("x-codex-turn-metadata");
+        if let Some(header_value) = maybe_header {
+            let parsed: serde_json::Value = serde_json::from_str(&header_value)
+                .expect("x-codex-turn-metadata should be valid JSON");
+            let workspace = parsed
+                .get("workspaces")
+                .and_then(serde_json::Value::as_object)
+                .and_then(|workspaces| workspaces.get(&repo_root))
+                .expect("metadata should include cwd repo root workspace entry");
 
-    let header_value = requests[1]
-        .header("x-codex-turn-metadata")
-        .expect("second turn should include x-codex-turn-metadata header");
-    let parsed: serde_json::Value = serde_json::from_str(&header_value)
-        .expect("x-codex-turn-metadata should be valid JSON");
-    let repo_root = cwd.to_string_lossy().into_owned();
+            assert_eq!(
+                workspace
+                    .get("latest_git_commit_hash")
+                    .and_then(serde_json::Value::as_str),
+                Some(expected_head.as_str())
+            );
+            assert_eq!(
+                workspace
+                    .get("associated_remote_urls")
+                    .and_then(serde_json::Value::as_object)
+                    .and_then(|remotes| remotes.get("origin"))
+                    .and_then(serde_json::Value::as_str),
+                Some(expected_origin.as_str())
+            );
+            return;
+        }
 
-    let workspace = parsed
-        .get("workspaces")
-        .and_then(serde_json::Value::as_object)
-        .and_then(|workspaces| workspaces.get(&repo_root))
-        .expect("metadata should include cwd repo root workspace entry");
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
 
-    assert_eq!(
-        workspace
-            .get("latest_git_commit_hash")
-            .and_then(serde_json::Value::as_str),
-        Some(expected_head.as_str())
-    );
-    assert_eq!(
-        workspace
-            .get("associated_remote_urls")
-            .and_then(serde_json::Value::as_object)
-            .and_then(|remotes| remotes.get("origin"))
-            .and_then(serde_json::Value::as_str),
-        Some(expected_origin.as_str())
-    );
+    panic!("x-codex-turn-metadata was never observed after git setup");
 }
