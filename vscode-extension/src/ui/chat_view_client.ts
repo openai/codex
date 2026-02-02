@@ -4269,52 +4269,35 @@ function main(): void {
     const forceScrollToBottom = forceScrollToBottomNextRender;
     forceScrollToBottomNextRender = false;
 
-    const normalizeOpencodeMessageId = (id: string): string | null => {
-      const stepIdx = id.indexOf(":step:");
-      if (stepIdx > 0) return id.slice(0, stepIdx);
-      const partIdx = id.indexOf(":part:");
-      if (partIdx > 0) return id.slice(0, partIdx);
-      const reasoningIdx = id.indexOf(":reasoning");
-      if (reasoningIdx > 0) return id.slice(0, reasoningIdx);
-      return null;
-    };
-
     const reorderBlocksForOpencode = (blocks: ChatBlock[]): ChatBlock[] => {
-      const assistantIndexById = new Map<string, number>();
-      for (let i = 0; i < blocks.length; i++) {
-        const b = blocks[i];
-        if (b?.type === "assistant" && typeof b.id === "string") {
-          assistantIndexById.set(b.id, i);
-        }
-      }
-
-      const scored = blocks.map((b, originalIndex) => {
-        // Default: keep original order.
-        let base = originalIndex * 10 + 9;
-
-        if (b && typeof b.id === "string") {
-          if (b.type === "assistant") {
-            const ai = assistantIndexById.get(b.id);
-            if (typeof ai === "number") base = ai * 10 + 9;
-          } else if (b.type === "reasoning" || b.type === "step") {
-            const msgId = normalizeOpencodeMessageId(b.id);
-            const ai = msgId ? assistantIndexById.get(msgId) : undefined;
-            if (typeof ai === "number") {
-              // Ensure reasoning/steps appear immediately before their assistant message.
-              const offset = b.type === "reasoning" ? 0 : 5;
-              base = ai * 10 + offset;
-            }
-          }
-        }
-
-        return { b, base, originalIndex };
-      });
-
+      const getSeq = (b: ChatBlock): number | null => {
+        const raw = (b as any)?.opencodeSeq;
+        if (typeof raw !== "number" || !Number.isFinite(raw)) return null;
+        return Math.trunc(raw);
+      };
+      const offsetFor = (b: ChatBlock): number => {
+        if (b.type === "reasoning") return 0;
+        if (b.type === "step") return 5;
+        if (b.type === "assistant") return 9;
+        return 9;
+      };
+      const scored = blocks.map((b, originalIndex) => ({
+        b,
+        originalIndex,
+        seq: getSeq(b),
+        offset: offsetFor(b),
+      }));
       scored.sort((a, b) => {
-        if (a.base !== b.base) return a.base - b.base;
+        // Only reorder blocks when both sides have a known OpenCode message sequence.
+        // This avoids reordering unrelated blocks (e.g. user messages) while still fixing
+        // the common issue where Step/Reasoning arrive after the final response.
+        if (a.seq === null || b.seq === null) {
+          return a.originalIndex - b.originalIndex;
+        }
+        if (a.seq !== b.seq) return a.seq - b.seq;
+        if (a.offset !== b.offset) return a.offset - b.offset;
         return a.originalIndex - b.originalIndex;
       });
-
       return scored.map((x) => x.b);
     };
 
