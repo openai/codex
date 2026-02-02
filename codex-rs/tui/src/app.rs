@@ -2526,7 +2526,16 @@ impl App {
     }
 
     fn refresh_status_line(&mut self) {
-        let payload = build_status_line_payload(&self.chat_widget, &self.config).to_string();
+        let payload = match serde_json::to_string(&build_status_line_payload(
+            &self.chat_widget,
+            &self.config,
+        )) {
+            Ok(payload) => payload,
+            Err(err) => {
+                tracing::warn!(error = %err, "status line: failed to serialize payload");
+                return;
+            }
+        };
         if let Err(err) = self.status_line_runner.update_payload(payload) {
             tracing::warn!(error = %err, "status line: update_payload failed");
             return;
