@@ -96,7 +96,7 @@ impl NetworkProxy {
     pub async fn run(&self) -> Result<NetworkProxyHandle> {
         let current_cfg = self.state.current_cfg().await?;
         if !current_cfg.network_proxy.enabled {
-            warn!("network_proxy.enabled is false; skipping proxy listeners");
+            warn!("network.enabled is false; skipping proxy listeners");
             return Ok(NetworkProxyHandle::noop());
         }
 

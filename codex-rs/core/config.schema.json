@@ -457,7 +457,7 @@
     },
     "NetworkConfigToml": {
       "additionalProperties": false,
-      "description": "Network proxy configuration layer from `[[network]]` entries in `config.toml`.\n\nMultiple `[[network]]` entries are merged in order (later entries win).",
+      "description": "Network proxy configuration from the `[network]` table in `config.toml`.",
       "properties": {
         "allow_upstream_proxy": {
           "description": "Allow upstream proxy env vars to be honored by the network proxy.",
@@ -1484,12 +1484,13 @@
       "description": "Optional verbosity control for GPT-5 models (Responses API `text.verbosity`)."
     },
     "network": {
-      "default": [],
-      "description": "Ordered proxy config layers. Later entries win.",
-      "items": {
-        "$ref": "#/definitions/NetworkConfigToml"
-      },
-      "type": "array"
+      "allOf": [
+        {
+          "$ref": "#/definitions/NetworkConfigToml"
+        }
+      ],
+      "default": null,
+      "description": "Network proxy configuration."
     },
     "notice": {
       "allOf": [

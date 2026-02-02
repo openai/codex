@@ -556,9 +556,7 @@ impl From<SandboxWorkspaceWrite> for codex_app_server_protocol::SandboxSettings 
     }
 }
 
-/// Network proxy configuration layer from `[[network]]` entries in `config.toml`.
-///
-/// Multiple `[[network]]` entries are merged in order (later entries win).
+/// Network proxy configuration from the `[network]` table in `config.toml`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct NetworkConfigToml {

@@ -152,7 +152,7 @@ pub struct Config {
 
     pub shell_environment_policy: ShellEnvironmentPolicy,
 
-    /// Resolved network proxy configuration from `[[network]]` entries.
+    /// Resolved network proxy configuration from the `[network]` table.
     pub network: NetworkConfig,
 
     /// When `true`, `AgentReasoning` events emitted by the backend will be
@@ -787,9 +787,9 @@ pub struct ConfigToml {
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,
 
-    /// Ordered proxy config layers. Later entries win.
+    /// Network proxy configuration.
     #[serde(default)]
-    pub network: Vec<NetworkConfigToml>,
+    pub network: Option<NetworkConfigToml>,
 
     /// Sandbox mode to use.
     pub sandbox_mode: Option<SandboxMode>,
@@ -1248,10 +1248,10 @@ pub(crate) fn resolve_web_search_mode_for_turn(
     }
 }
 
-fn resolve_network_config(entries: &[NetworkConfigToml]) -> std::io::Result<NetworkConfig> {
+fn resolve_network_config(entry: Option<&NetworkConfigToml>) -> NetworkConfig {
     let mut resolved = NetworkConfig::default();
 
-    for entry in entries {
+    if let Some(entry) = entry {
         if let Some(enabled) = entry.enabled {
             resolved.enabled = enabled;
         }
@@ -1289,7 +1289,7 @@ fn resolve_network_config(entries: &[NetworkConfigToml]) -> std::io::Result<Netw
         }
     }
 
-    Ok(resolved)
+    resolved
 }
 
 impl Config {
@@ -1451,7 +1451,7 @@ impl Config {
             .clone();
 
         let shell_environment_policy = cfg.shell_environment_policy.into();
-        let network = resolve_network_config(&cfg.network)?;
+        let network = resolve_network_config(cfg.network.as_ref());
 
         let history = cfg.history.unwrap_or_default();
 
@@ -1913,29 +1913,22 @@ persistence = "none"
     }
 
     #[test]
-    fn network_config_last_entry_wins() {
+    fn network_config_parses_network_table() {
         let cfg = r#"
-[[network]]
-enabled = false
-allow_upstream_proxy = false
-http_port = 8080
-[network.policy]
-allowed_domains = ["example.com"]
-allow_local_binding = false
-
-[[network]]
+[network]
 enabled = true
 mode = "limited"
 allow_upstream_proxy = true
+http_port = 8080
 socks_port = 1080
 [network.policy]
+allowed_domains = ["example.com"]
 denied_domains = ["internal.local"]
 allow_unix_sockets = ["/var/run/docker.sock"]
 "#;
 
         let parsed = toml::from_str::<ConfigToml>(cfg).expect("network config should parse");
-        let resolved =
-            resolve_network_config(&parsed.network).expect("network config should resolve");
+        let resolved = resolve_network_config(parsed.network.as_ref());
 
         assert_eq!(
             resolved,
@@ -1960,13 +1953,12 @@ allow_unix_sockets = ["/var/run/docker.sock"]
     #[test]
     fn network_config_defaults_mode_to_full() {
         let cfg = r#"
-[[network]]
+[network]
 enabled = true
 "#;
 
         let parsed = toml::from_str::<ConfigToml>(cfg).expect("network config should parse");
-        let resolved =
-            resolve_network_config(&parsed.network).expect("network config should resolve");
+        let resolved = resolve_network_config(parsed.network.as_ref());
         assert_eq!(resolved.mode, crate::config::types::NetworkMode::Full);
     }
 

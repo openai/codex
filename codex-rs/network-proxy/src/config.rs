@@ -70,6 +70,35 @@ pub struct NetworkPolicy {
     pub allow_local_binding: bool,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct NetworkConfigTable {
+    pub enabled: Option<bool>,
+    pub mode: Option<NetworkMode>,
+    pub allow_upstream_proxy: Option<bool>,
+    pub dangerously_allow_non_loopback_proxy: Option<bool>,
+    pub dangerously_allow_non_loopback_admin: Option<bool>,
+    pub http_port: Option<u16>,
+    pub socks_port: Option<u16>,
+    #[serde(default)]
+    pub policy: Option<NetworkPolicyTable>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct NetworkPolicyTable {
+    pub allowed_domains: Option<Vec<String>>,
+    pub denied_domains: Option<Vec<String>>,
+    pub allow_unix_sockets: Option<Vec<String>>,
+    pub allow_local_binding: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct RawNetworkProxyConfig {
+    #[serde(default)]
+    network: Option<NetworkConfigTable>,
+    #[serde(default)]
+    network_proxy: NetworkProxySettings,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum NetworkMode {
@@ -101,6 +130,63 @@ fn default_admin_url() -> String {
 
 fn default_socks_url() -> String {
     "http://127.0.0.1:8081".to_string()
+}
+
+pub fn deserialize_network_proxy_config(value: toml::Value) -> Result<NetworkProxyConfig> {
+    let parsed: RawNetworkProxyConfig = value
+        .try_into()
+        .context("failed to deserialize network proxy config")?;
+
+    let network_proxy = parsed
+        .network
+        .as_ref()
+        .map(resolve_network_table)
+        .unwrap_or(parsed.network_proxy);
+
+    Ok(NetworkProxyConfig { network_proxy })
+}
+
+fn resolve_network_table(entry: &NetworkConfigTable) -> NetworkProxySettings {
+    let mut resolved = NetworkProxySettings::default();
+
+    if let Some(enabled) = entry.enabled {
+        resolved.enabled = enabled;
+    }
+    if let Some(mode) = entry.mode {
+        resolved.mode = mode;
+    }
+    if let Some(allow_upstream_proxy) = entry.allow_upstream_proxy {
+        resolved.allow_upstream_proxy = allow_upstream_proxy;
+    }
+    if let Some(value) = entry.dangerously_allow_non_loopback_proxy {
+        resolved.dangerously_allow_non_loopback_proxy = value;
+    }
+    if let Some(value) = entry.dangerously_allow_non_loopback_admin {
+        resolved.dangerously_allow_non_loopback_admin = value;
+    }
+    if let Some(http_port) = entry.http_port {
+        resolved.proxy_url = format!("http://127.0.0.1:{http_port}");
+    }
+    if let Some(socks_port) = entry.socks_port {
+        resolved.enable_socks5 = true;
+        resolved.socks_url = format!("http://127.0.0.1:{socks_port}");
+    }
+    if let Some(policy) = entry.policy.as_ref() {
+        if let Some(allowed_domains) = policy.allowed_domains.as_ref() {
+            resolved.policy.allowed_domains = allowed_domains.clone();
+        }
+        if let Some(denied_domains) = policy.denied_domains.as_ref() {
+            resolved.policy.denied_domains = denied_domains.clone();
+        }
+        if let Some(allow_unix_sockets) = policy.allow_unix_sockets.as_ref() {
+            resolved.policy.allow_unix_sockets = allow_unix_sockets.clone();
+        }
+        if let Some(allow_local_binding) = policy.allow_local_binding {
+            resolved.policy.allow_local_binding = allow_local_binding;
+        }
+    }
+
+    resolved
 }
 
 /// Clamp non-loopback bind addresses to loopback unless explicitly allowed.
@@ -469,5 +555,75 @@ mod tests {
         assert_eq!(http_addr, "127.0.0.1:3128".parse::<SocketAddr>().unwrap());
         assert_eq!(socks_addr, "127.0.0.1:8081".parse::<SocketAddr>().unwrap());
         assert_eq!(admin_addr, "127.0.0.1:8080".parse::<SocketAddr>().unwrap());
+    }
+
+    #[test]
+    fn deserialize_network_proxy_config_from_network_table() {
+        let value: toml::Value = toml::from_str(
+            r#"
+[network]
+enabled = true
+mode = "limited"
+allow_upstream_proxy = true
+http_port = 9000
+socks_port = 1901
+[network.policy]
+allowed_domains = ["example.com"]
+"#,
+        )
+        .expect("parse config");
+
+        let parsed = deserialize_network_proxy_config(value).expect("deserialize config");
+
+        assert!(parsed.network_proxy.enabled);
+        assert_eq!(parsed.network_proxy.mode, NetworkMode::Limited);
+        assert!(parsed.network_proxy.allow_upstream_proxy);
+        assert_eq!(parsed.network_proxy.proxy_url, "http://127.0.0.1:9000");
+        assert!(parsed.network_proxy.enable_socks5);
+        assert_eq!(parsed.network_proxy.socks_url, "http://127.0.0.1:1901");
+        assert_eq!(
+            parsed.network_proxy.policy.allowed_domains,
+            vec!["example.com".to_string()]
+        );
+    }
+
+    #[test]
+    fn deserialize_network_proxy_config_falls_back_to_legacy_network_proxy() {
+        let value: toml::Value = toml::from_str(
+            r#"
+[network_proxy]
+enabled = true
+mode = "limited"
+proxy_url = "http://127.0.0.1:3328"
+"#,
+        )
+        .expect("parse config");
+
+        let parsed = deserialize_network_proxy_config(value).expect("deserialize config");
+
+        assert!(parsed.network_proxy.enabled);
+        assert_eq!(parsed.network_proxy.mode, NetworkMode::Limited);
+        assert_eq!(parsed.network_proxy.proxy_url, "http://127.0.0.1:3328");
+    }
+
+    #[test]
+    fn deserialize_network_proxy_config_prefers_network_when_both_exist() {
+        let value: toml::Value = toml::from_str(
+            r#"
+[network]
+enabled = true
+http_port = 8777
+
+[network_proxy]
+enabled = false
+proxy_url = "http://127.0.0.1:4444"
+"#,
+        )
+        .expect("parse config");
+
+        let parsed = deserialize_network_proxy_config(value).expect("deserialize config");
+
+        assert!(parsed.network_proxy.enabled);
+        assert_eq!(parsed.network_proxy.proxy_url, "http://127.0.0.1:8777");
     }
 }
