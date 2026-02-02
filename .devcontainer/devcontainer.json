@@ -1,27 +1,74 @@
 {
-  "name": "Codex",
+  "$schema": "https://raw.githubusercontent.com/devcontainers/spec/main/schemas/devContainer.schema.json",
+  "name": "Codex Dev",
   "build": {
     "dockerfile": "Dockerfile",
     "context": "..",
-    "platform": "linux/arm64"
+    "args": {
+      "TZ": "${localEnv:TZ:UTC}",
+      "NODE_MAJOR": "22",
+      "RUST_TOOLCHAIN": "1.93.0"
+    }
   },
-
-  /* Force VS Code to run the container as arm64 in
-     case your host is x86 (or vice-versa). */
-  "runArgs": ["--platform=linux/arm64"],
-
+  "runArgs": [
+    "--cap-add=NET_ADMIN",
+    "--cap-add=NET_RAW"
+  ],
+  "init": true,
+  "updateRemoteUserUID": true,
+  "remoteUser": "vscode",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
+  "workspaceFolder": "/workspace",
+  "mounts": [
+    "source=codex-commandhistory-${devcontainerId},target=/commandhistory,type=volume",
+    "source=codex-home-${devcontainerId},target=/home/vscode/.codex,type=volume",
+    "source=codex-gh-${devcontainerId},target=/home/vscode/.config/gh,type=volume",
+    "source=codex-cargo-registry-${devcontainerId},target=/home/vscode/.cargo/registry,type=volume",
+    "source=codex-cargo-git-${devcontainerId},target=/home/vscode/.cargo/git,type=volume",
+    "source=codex-rustup-${devcontainerId},target=/home/vscode/.rustup,type=volume",
+    "source=${localEnv:HOME}/.gitconfig,target=/home/vscode/.gitconfig,type=bind,readonly"
+  ],
   "containerEnv": {
     "RUST_BACKTRACE": "1",
-    "CARGO_TARGET_DIR": "${containerWorkspaceFolder}/codex-rs/target-arm64"
+    "CODEX_UNSAFE_ALLOW_NO_SANDBOX": "1",
+    "CODEX_ENABLE_FIREWALL": "1",
+    "CODEX_INCLUDE_GITHUB_META_RANGES": "1",
+    "OPENAI_ALLOWED_DOMAINS": "api.openai.com auth.openai.com github.com api.github.com codeload.github.com raw.githubusercontent.com objects.githubusercontent.com crates.io index.crates.io static.crates.io static.rust-lang.org registry.npmjs.org",
+    "CARGO_TARGET_DIR": "/workspace/codex-rs/target/devcontainer",
+    "GIT_CONFIG_GLOBAL": "/home/vscode/.gitconfig.local",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "PIP_DISABLE_PIP_VERSION_CHECK": "1"
   },
-
-  "remoteUser": "ubuntu",
+  "remoteEnv": {
+    "OPENAI_API_KEY": "${localEnv:OPENAI_API_KEY}"
+  },
+  "postCreateCommand": "python3 /opt/post_install.py",
+  "postStartCommand": "bash /opt/post_start.sh",
+  "waitFor": "postStartCommand",
   "customizations": {
     "vscode": {
       "settings": {
-        "terminal.integrated.defaultProfile.linux": "bash"
+        "terminal.integrated.defaultProfile.linux": "zsh",
+        "terminal.integrated.profiles.linux": {
+          "bash": {
+            "path": "bash",
+            "icon": "terminal-bash"
+          },
+          "zsh": {
+            "path": "zsh"
+          }
+        },
+        "files.trimTrailingWhitespace": true,
+        "files.insertFinalNewline": true,
+        "files.trimFinalNewlines": true
       },
-      "extensions": ["rust-lang.rust-analyzer", "tamasfe.even-better-toml"]
+      "extensions": [
+        "openai.chatgpt",
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml",
+        "vadimcn.vscode-lldb",
+        "ms-azuretools.vscode-docker"
+      ]
     }
   }
 }

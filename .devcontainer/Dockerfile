@@ -1,27 +1,70 @@
-FROM ubuntu:24.04
+FROM mcr.microsoft.com/devcontainers/base:ubuntu-24.04
 
+ARG TZ
 ARG DEBIAN_FRONTEND=noninteractive
-# enable 'universe' because musl-tools & clang live there
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    software-properties-common && \
-    add-apt-repository --yes universe
+ARG NODE_MAJOR=22
+ARG RUST_TOOLCHAIN=1.93.0
 
-# now install build deps
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    build-essential curl git ca-certificates \
-    pkg-config clang musl-tools libssl-dev just && \
-    rm -rf /var/lib/apt/lists/*
+ENV TZ="$TZ"
 
-# Ubuntu 24.04 ships with user 'ubuntu' already created with UID 1000.
-USER ubuntu
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# install Rust + musl target as dev user
-RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal && \
-    ~/.cargo/bin/rustup target add aarch64-unknown-linux-musl && \
-    ~/.cargo/bin/rustup component add clippy rustfmt
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        curl \
+        git \
+        ca-certificates \
+        pkg-config \
+        clang \
+        musl-tools \
+        libssl-dev \
+        libsqlite3-dev \
+        just \
+        python3 \
+        python3-pip \
+        jq \
+        less \
+        man-db \
+        unzip \
+        ripgrep \
+        fzf \
+        fd-find \
+        zsh \
+        dnsutils \
+        iproute2 \
+        ipset \
+        iptables \
+        aggregate \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
-ENV PATH="/home/ubuntu/.cargo/bin:${PATH}"
+RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends nodejs \
+    && npm install -g corepack@latest \
+    && corepack enable \
+    && corepack prepare pnpm@10.28.2 --activate \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
+COPY .devcontainer/init-firewall.sh /usr/local/bin/init-firewall.sh
+COPY .devcontainer/post_install.py /opt/post_install.py
+COPY .devcontainer/post-start.sh /opt/post_start.sh
+
+RUN chmod 500 /usr/local/bin/init-firewall.sh \
+    && chmod 755 /opt/post_start.sh \
+    && chmod 644 /opt/post_install.py \
+    && chown vscode:vscode /opt/post_install.py
+
+RUN install -d -m 0775 -o vscode -g vscode /commandhistory /workspace \
+    && touch /commandhistory/.bash_history /commandhistory/.zsh_history \
+    && chown vscode:vscode /commandhistory/.bash_history /commandhistory/.zsh_history
+
+USER vscode
+ENV PATH="/home/vscode/.cargo/bin:${PATH}"
 WORKDIR /workspace
+
+RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain "${RUST_TOOLCHAIN}" \
+    && rustup component add clippy rustfmt rust-src \
+    && rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
