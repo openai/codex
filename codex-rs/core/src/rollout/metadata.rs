@@ -189,12 +189,19 @@ pub(crate) async fn backfill_sessions(
                     stats.upserted = stats.upserted.saturating_add(1);
                     if let Ok(meta_line) = rollout::list::read_session_meta_line(&path).await {
                         if let Err(err) = runtime
-                            .replace_dynamic_tools(
+                            .persist_dynamic_tools(
                                 meta_line.meta.id,
                                 meta_line.meta.dynamic_tools.as_deref(),
                             )
                             .await
                         {
+                            if let Some(otel) = otel {
+                                otel.counter(
+                                    DB_ERROR_METRIC,
+                                    1,
+                                    &[("stage", "backfill_dynamic_tools")],
+                                );
+                            }
                             warn!("failed to backfill dynamic tools {}: {err}", path.display());
                         }
                     } else {

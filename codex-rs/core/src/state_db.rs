@@ -213,8 +213,8 @@ pub async fn get_dynamic_tools(
     }
 }
 
-/// Replace dynamic tools for a thread id using SQLite.
-pub async fn replace_dynamic_tools(
+/// Persist dynamic tools for a thread id using SQLite, if none exist yet.
+pub async fn persist_dynamic_tools(
     context: Option<&codex_state::StateRuntime>,
     thread_id: ThreadId,
     tools: Option<&[DynamicToolSpec]>,
@@ -223,8 +223,8 @@ pub async fn replace_dynamic_tools(
     let Some(ctx) = context else {
         return;
     };
-    if let Err(err) = ctx.replace_dynamic_tools(thread_id, tools).await {
-        warn!("state db replace_dynamic_tools failed during {stage}: {err}");
+    if let Err(err) = ctx.persist_dynamic_tools(thread_id, tools).await {
+        warn!("state db persist_dynamic_tools failed during {stage}: {err}");
     }
 }
 
@@ -270,7 +270,7 @@ pub async fn reconcile_rollout(
         return;
     }
     if let Ok(meta_line) = crate::rollout::list::read_session_meta_line(rollout_path).await {
-        replace_dynamic_tools(
+        persist_dynamic_tools(
             Some(ctx),
             meta_line.meta.id,
             meta_line.meta.dynamic_tools.as_deref(),

@@ -403,24 +403,37 @@ ON CONFLICT(id) DO UPDATE SET
         Ok(())
     }
 
-    /// Replace dynamic tools for a thread.
-    pub async fn replace_dynamic_tools(
+    /// Persist dynamic tools for a thread if none have been stored yet.
+    ///
+    /// Dynamic tools are defined at thread start and should not change afterward.
+    /// This only writes the first time we see tools for a given thread.
+    pub async fn persist_dynamic_tools(
         &self,
         thread_id: ThreadId,
         tools: Option<&[DynamicToolSpec]>,
     ) -> anyhow::Result<()> {
+        let Some(tools) = tools else {
+            return Ok(());
+        };
+        if tools.is_empty() {
+            return Ok(());
+        }
         let mut tx = self.pool.begin().await?;
         let thread_id = thread_id.to_string();
-        sqlx::query("DELETE FROM thread_dynamic_tools WHERE thread_id = ?")
-            .bind(thread_id.as_str())
-            .execute(&mut *tx)
-            .await?;
-        if let Some(tools) = tools {
-            for (idx, tool) in tools.iter().enumerate() {
-                let position = i64::try_from(idx).unwrap_or(i64::MAX);
-                let input_schema = serde_json::to_string(&tool.input_schema)?;
-                sqlx::query(
-                    r#"
+        let existing: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM thread_dynamic_tools WHERE thread_id = ? LIMIT 1")
+                .bind(thread_id.as_str())
+                .fetch_optional(&mut *tx)
+                .await?;
+        if existing.is_some() {
+            tx.commit().await?;
+            return Ok(());
+        }
+        for (idx, tool) in tools.iter().enumerate() {
+            let position = i64::try_from(idx).unwrap_or(i64::MAX);
+            let input_schema = serde_json::to_string(&tool.input_schema)?;
+            sqlx::query(
+                r#"
 INSERT INTO thread_dynamic_tools (
     thread_id,
     position,
@@ -428,16 +441,15 @@ INSERT INTO thread_dynamic_tools (
     description,
     input_schema
 ) VALUES (?, ?, ?, ?, ?)
-                    "#,
-                )
-                .bind(thread_id.as_str())
-                .bind(position)
-                .bind(tool.name.as_str())
-                .bind(tool.description.as_str())
-                .bind(input_schema)
-                .execute(&mut *tx)
-                .await?;
-            }
+                "#,
+            )
+            .bind(thread_id.as_str())
+            .bind(position)
+            .bind(tool.name.as_str())
+            .bind(tool.description.as_str())
+            .bind(input_schema)
+            .execute(&mut *tx)
+            .await?;
         }
         tx.commit().await?;
         Ok(())
@@ -475,11 +487,11 @@ INSERT INTO thread_dynamic_tools (
         let dynamic_tools = extract_dynamic_tools(items);
         if let Some(dynamic_tools) = dynamic_tools
             && let Err(err) = self
-                .replace_dynamic_tools(builder.id, dynamic_tools.as_deref())
+                .persist_dynamic_tools(builder.id, dynamic_tools.as_deref())
                 .await
         {
             if let Some(otel) = otel {
-                otel.counter(DB_ERROR_METRIC, 1, &[("stage", "replace_dynamic_tools")]);
+                otel.counter(DB_ERROR_METRIC, 1, &[("stage", "persist_dynamic_tools")]);
             }
             return Err(err);
         }

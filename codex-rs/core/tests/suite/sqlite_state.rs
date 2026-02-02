@@ -177,10 +177,15 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
     assert_eq!(metadata.model_provider, default_provider);
     assert!(metadata.has_user_event);
 
-    let stored_tools = db
-        .get_dynamic_tools(thread_id)
-        .await?
-        .expect("dynamic tools should be stored");
+    let mut stored_tools = None;
+    for _ in 0..40 {
+        stored_tools = db.get_dynamic_tools(thread_id).await?;
+        if stored_tools.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let stored_tools = stored_tools.expect("dynamic tools should be stored");
     assert_eq!(stored_tools, dynamic_tools);
 
     Ok(())
