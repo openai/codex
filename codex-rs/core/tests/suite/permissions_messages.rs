@@ -34,7 +34,7 @@ fn permissions_texts(input: &[serde_json::Value]) -> Vec<String> {
                 .first()?
                 .get("text")?
                 .as_str()?;
-            if text.contains("`approval_policy`") {
+            if text.contains("<permissions instructions>") {
                 Some(text.to_string())
             } else {
                 None
@@ -136,7 +136,7 @@ async fn permissions_message_added_on_override_change() -> Result<()> {
     let permissions_2 = permissions_texts(input2);
 
     assert_eq!(permissions_1.len(), 1);
-    assert_eq!(permissions_2.len(), 3);
+    assert_eq!(permissions_2.len(), 2);
     let unique = permissions_2.into_iter().collect::<HashSet<String>>();
     assert_eq!(unique.len(), 2);
 
@@ -267,7 +267,7 @@ async fn resume_replays_permissions_messages() -> Result<()> {
     let body3 = req3.single_request().body_json();
     let input = body3["input"].as_array().expect("input array");
     let permissions = permissions_texts(input);
-    assert_eq!(permissions.len(), 4);
+    assert_eq!(permissions.len(), 3);
     let unique = permissions.into_iter().collect::<HashSet<String>>();
     assert_eq!(unique.len(), 2);
 
@@ -337,7 +337,7 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
     let body2 = req2.single_request().body_json();
     let input2 = body2["input"].as_array().expect("input array");
     let permissions_base = permissions_texts(input2);
-    assert_eq!(permissions_base.len(), 3);
+    assert_eq!(permissions_base.len(), 2);
 
     builder = builder.with_config(|config| {
         config.approval_policy = Constrained::allow_any(AskForApproval::UnlessTrusted);
@@ -439,7 +439,7 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
         &sandbox_policy,
         AskForApproval::OnRequest,
         &Policy::empty(),
-        false,
+        true,
         test.config.cwd.as_path(),
     )
     .into_text();

@@ -5,6 +5,7 @@
 // the TUI or the tracing stack).
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+mod analytics_client;
 pub mod api_bridge;
 mod apply_patch;
 pub mod auth;
@@ -48,10 +49,13 @@ mod message_history;
 mod model_provider_info;
 pub mod parse_command;
 pub mod path_utils;
+pub mod personality_migration;
 pub mod powershell;
+mod proposed_plan_parser;
 pub mod sandboxing;
 mod session_prefix;
 mod stream_events_utils;
+mod tagged_block_parser;
 mod text_encoding;
 pub mod token_data;
 mod truncate;
@@ -100,12 +104,14 @@ pub mod turn_diff_tracker;
 pub use rollout::ARCHIVED_SESSIONS_SUBDIR;
 pub use rollout::INTERACTIVE_SESSION_SOURCES;
 pub use rollout::RolloutRecorder;
+pub use rollout::RolloutRecorderParams;
 pub use rollout::SESSIONS_SUBDIR;
 pub use rollout::SessionMeta;
 pub use rollout::find_archived_thread_path_by_id_str;
 #[deprecated(note = "use find_thread_path_by_id_str")]
 pub use rollout::find_conversation_path_by_id_str;
 pub use rollout::find_thread_path_by_id_str;
+pub use rollout::find_thread_path_by_name_str;
 pub use rollout::list::Cursor;
 pub use rollout::list::ThreadItem;
 pub use rollout::list::ThreadSortKey;
@@ -114,6 +120,7 @@ pub use rollout::list::parse_cursor;
 pub use rollout::list::read_head_for_summary;
 pub use rollout::list::read_session_meta_line;
 pub use rollout::rollout_date_parts;
+pub use rollout::session_index::find_thread_names_by_ids;
 pub use transport_manager::TransportManager;
 mod function_tool;
 mod state;

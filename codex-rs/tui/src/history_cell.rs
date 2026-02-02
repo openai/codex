@@ -25,6 +25,7 @@ use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
 use crate::render::renderable::Renderable;
+use crate::style::proposed_plan_style;
 use crate::style::user_message_style;
 use crate::text_formatting::format_and_truncate_tool_result;
 use crate::text_formatting::truncate_text;
@@ -44,6 +45,8 @@ use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::web_search::web_search_detail;
+use codex_otel::RuntimeMetricsSummary;
+use codex_protocol::account::PlanType;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::PlanItemArg;
@@ -558,13 +561,19 @@ pub(crate) fn new_unified_exec_interaction(
 
 #[derive(Debug)]
 struct UnifiedExecProcessesCell {
-    processes: Vec<String>,
+    processes: Vec<UnifiedExecProcessDetails>,
 }
 
 impl UnifiedExecProcessesCell {
-    fn new(processes: Vec<String>) -> Self {
+    fn new(processes: Vec<UnifiedExecProcessDetails>) -> Self {
         Self { processes }
     }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct UnifiedExecProcessDetails {
+    pub(crate) command_display: String,
+    pub(crate) recent_chunks: Vec<String>,
 }
 
 impl HistoryCell for UnifiedExecProcessesCell {
@@ -589,10 +598,11 @@ impl HistoryCell for UnifiedExecProcessesCell {
         let truncation_suffix = " [...]";
         let truncation_suffix_width = UnicodeWidthStr::width(truncation_suffix);
         let mut shown = 0usize;
-        for command in &self.processes {
+        for process in &self.processes {
             if shown >= max_processes {
                 break;
             }
+            let command = &process.command_display;
             let (snippet, snippet_truncated) = {
                 let (first_line, has_more_lines) = match command.split_once('\n') {
                     Some((first, _)) => (first, true),
@@ -627,6 +637,32 @@ impl HistoryCell for UnifiedExecProcessesCell {
                 let (truncated, _, _) = take_prefix_by_width(&snippet, budget);
                 out.push(vec![prefix.dim(), truncated.cyan()].into());
             }
+
+            let chunk_prefix_first = "    ↳ ";
+            let chunk_prefix_next = "      ";
+            for (idx, chunk) in process.recent_chunks.iter().enumerate() {
+                let chunk_prefix = if idx == 0 {
+                    chunk_prefix_first
+                } else {
+                    chunk_prefix_next
+                };
+                let chunk_prefix_width = UnicodeWidthStr::width(chunk_prefix);
+                if wrap_width <= chunk_prefix_width {
+                    out.push(Line::from(chunk_prefix.dim()));
+                    continue;
+                }
+                let budget = wrap_width.saturating_sub(chunk_prefix_width);
+                let (truncated, remainder, _) = take_prefix_by_width(chunk, budget);
+                if !remainder.is_empty() && budget > truncation_suffix_width {
+                    let available = budget.saturating_sub(truncation_suffix_width);
+                    let (shorter, _, _) = take_prefix_by_width(chunk, available);
+                    out.push(
+                        vec![chunk_prefix.dim(), shorter.dim(), truncation_suffix.dim()].into(),
+                    );
+                } else {
+                    out.push(vec![chunk_prefix.dim(), truncated.dim()].into());
+                }
+            }
             shown += 1;
         }
 
@@ -650,7 +686,9 @@ impl HistoryCell for UnifiedExecProcessesCell {
     }
 }
 
-pub(crate) fn new_unified_exec_processes_output(processes: Vec<String>) -> CompositeHistoryCell {
+pub(crate) fn new_unified_exec_processes_output(
+    processes: Vec<UnifiedExecProcessDetails>,
+) -> CompositeHistoryCell {
     let command = PlainHistoryCell::new(vec!["/ps".magenta().into()]);
     let summary = UnifiedExecProcessesCell::new(processes);
     CompositeHistoryCell::new(vec![Box::new(command), Box::new(summary)])
@@ -690,16 +728,17 @@ pub fn new_approval_decision_cell(
                 ],
             )
         }
-        ApprovedExecpolicyAmendment { .. } => {
-            let snippet = Span::from(exec_snippet(&command)).dim();
+        ApprovedExecpolicyAmendment {
+            proposed_execpolicy_amendment,
+        } => {
+            let snippet = Span::from(exec_snippet(&proposed_execpolicy_amendment.command)).dim();
             (
                 "✔ ".green(),
                 vec![
                     "You ".into(),
                     "approved".bold(),
-                    " codex to run ".into(),
+                    " codex to always run commands that start with ".into(),
                     snippet,
-                    " and applied the execpolicy amendment".bold(),
                 ],
             )
         }
@@ -905,6 +944,7 @@ pub(crate) fn new_session_info(
     requested_model: &str,
     event: SessionConfiguredEvent,
     is_first_event: bool,
+    auth_plan: Option<PlanType>,
 ) -> SessionInfoCell {
     let SessionConfiguredEvent {
         model,
@@ -939,11 +979,6 @@ pub(crate) fn new_session_info(
             ]),
             Line::from(vec![
                 "  ".into(),
-                "/approvals".into(),
-                " - choose what Codex can do without approval".dim(),
-            ]),
-            Line::from(vec![
-                "  ".into(),
                 "/permissions".into(),
                 " - choose what Codex is allowed to do".dim(),
             ]),
@@ -962,7 +997,7 @@ pub(crate) fn new_session_info(
         parts.push(Box::new(PlainHistoryCell { lines: help_lines }));
     } else {
         if config.show_tooltips
-            && let Some(tooltips) = tooltips::random_tooltip().map(TooltipHistoryCell::new)
+            && let Some(tooltips) = tooltips::get_tooltip(auth_plan).map(TooltipHistoryCell::new)
         {
             parts.push(Box::new(tooltips));
         }
@@ -1733,6 +1768,63 @@ pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlanUpdateCell {
     PlanUpdateCell { explanation, plan }
 }
 
+pub(crate) fn new_proposed_plan(plan_markdown: String) -> ProposedPlanCell {
+    ProposedPlanCell { plan_markdown }
+}
+
+pub(crate) fn new_proposed_plan_stream(
+    lines: Vec<Line<'static>>,
+    is_stream_continuation: bool,
+) -> ProposedPlanStreamCell {
+    ProposedPlanStreamCell {
+        lines,
+        is_stream_continuation,
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct ProposedPlanCell {
+    plan_markdown: String,
+}
+
+#[derive(Debug)]
+pub(crate) struct ProposedPlanStreamCell {
+    lines: Vec<Line<'static>>,
+    is_stream_continuation: bool,
+}
+
+impl HistoryCell for ProposedPlanCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(vec!["• ".dim(), "Proposed Plan".bold()].into());
+        lines.push(Line::from(" "));
+
+        let mut plan_lines: Vec<Line<'static>> = vec![Line::from(" ")];
+        let plan_style = proposed_plan_style();
+        let wrap_width = width.saturating_sub(4).max(1) as usize;
+        let mut body: Vec<Line<'static>> = Vec::new();
+        append_markdown(&self.plan_markdown, Some(wrap_width), &mut body);
+        if body.is_empty() {
+            body.push(Line::from("(empty)".dim().italic()));
+        }
+        plan_lines.extend(prefix_lines(body, "  ".into(), "  ".into()));
+        plan_lines.push(Line::from(" "));
+
+        lines.extend(plan_lines.into_iter().map(|line| line.style(plan_style)));
+        lines
+    }
+}
+
+impl HistoryCell for ProposedPlanStreamCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        self.lines.clone()
+    }
+
+    fn is_stream_continuation(&self) -> bool {
+        self.is_stream_continuation
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct PlanUpdateCell {
     explanation: Option<String>,
@@ -1877,32 +1969,108 @@ pub(crate) fn new_reasoning_summary_block(full_reasoning_buffer: String) -> Box<
 /// divider.
 pub struct FinalMessageSeparator {
     elapsed_seconds: Option<u64>,
+    runtime_metrics: Option<RuntimeMetricsSummary>,
 }
 impl FinalMessageSeparator {
     /// Creates a separator; `elapsed_seconds` typically comes from the status indicator timer.
-    pub(crate) fn new(elapsed_seconds: Option<u64>) -> Self {
-        Self { elapsed_seconds }
+    pub(crate) fn new(
+        elapsed_seconds: Option<u64>,
+        runtime_metrics: Option<RuntimeMetricsSummary>,
+    ) -> Self {
+        Self {
+            elapsed_seconds,
+            runtime_metrics,
+        }
     }
 }
 impl HistoryCell for FinalMessageSeparator {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let elapsed_seconds = self
+        let mut label_parts = Vec::new();
+        if let Some(elapsed_seconds) = self
             .elapsed_seconds
-            .map(super::status_indicator_widget::fmt_elapsed_compact);
-        if let Some(elapsed_seconds) = elapsed_seconds {
-            let worked_for = format!("─ Worked for {elapsed_seconds} ─");
-            let worked_for_width = worked_for.width();
-            vec![
-                Line::from_iter([
-                    worked_for,
-                    "─".repeat((width as usize).saturating_sub(worked_for_width)),
-                ])
-                .dim(),
-            ]
-        } else {
-            vec![Line::from_iter(["─".repeat(width as usize).dim()])]
+            .map(super::status_indicator_widget::fmt_elapsed_compact)
+        {
+            label_parts.push(format!("Worked for {elapsed_seconds}"));
         }
+        if let Some(metrics_label) = self.runtime_metrics.and_then(runtime_metrics_label) {
+            label_parts.push(metrics_label);
+        }
+
+        if label_parts.is_empty() {
+            return vec![Line::from_iter(["─".repeat(width as usize).dim()])];
+        }
+
+        let label = format!("─ {} ─", label_parts.join(" • "));
+        let (label, _suffix, label_width) = take_prefix_by_width(&label, width as usize);
+        vec![
+            Line::from_iter([
+                label,
+                "─".repeat((width as usize).saturating_sub(label_width)),
+            ])
+            .dim(),
+        ]
     }
+}
+
+fn runtime_metrics_label(summary: RuntimeMetricsSummary) -> Option<String> {
+    let mut parts = Vec::new();
+    if summary.tool_calls.count > 0 {
+        let duration = format_duration_ms(summary.tool_calls.duration_ms);
+        let calls = pluralize(summary.tool_calls.count, "call", "calls");
+        parts.push(format!(
+            "Local tools: {} {calls} ({duration})",
+            summary.tool_calls.count
+        ));
+    }
+    if summary.api_calls.count > 0 {
+        let duration = format_duration_ms(summary.api_calls.duration_ms);
+        let calls = pluralize(summary.api_calls.count, "call", "calls");
+        parts.push(format!(
+            "Inference: {} {calls} ({duration})",
+            summary.api_calls.count
+        ));
+    }
+    if summary.websocket_calls.count > 0 {
+        let duration = format_duration_ms(summary.websocket_calls.duration_ms);
+        parts.push(format!(
+            "WebSocket: {} events send ({duration})",
+            summary.websocket_calls.count
+        ));
+    }
+    if summary.streaming_events.count > 0 {
+        let duration = format_duration_ms(summary.streaming_events.duration_ms);
+        let stream_label = pluralize(summary.streaming_events.count, "Stream", "Streams");
+        let events = pluralize(summary.streaming_events.count, "event", "events");
+        parts.push(format!(
+            "{stream_label}: {} {events} ({duration})",
+            summary.streaming_events.count
+        ));
+    }
+    if summary.websocket_events.count > 0 {
+        let duration = format_duration_ms(summary.websocket_events.duration_ms);
+        parts.push(format!(
+            "{} events received ({duration})",
+            summary.websocket_events.count
+        ));
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" • "))
+    }
+}
+
+fn format_duration_ms(duration_ms: u64) -> String {
+    if duration_ms >= 1_000 {
+        let seconds = duration_ms as f64 / 1_000.0;
+        format!("{seconds:.1}s")
+    } else {
+        format!("{duration_ms}ms")
+    }
+}
+
+fn pluralize(count: u64, singular: &'static str, plural: &'static str) -> &'static str {
+    if count == 1 { singular } else { plural }
 }
 
 fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
@@ -1937,6 +2105,8 @@ mod tests {
     use codex_core::config::types::McpServerConfig;
     use codex_core::config::types::McpServerTransportConfig;
     use codex_core::protocol::McpAuthStatus;
+    use codex_otel::RuntimeMetricTotals;
+    use codex_otel::RuntimeMetricsSummary;
     use codex_protocol::models::WebSearchAction;
     use codex_protocol::parse_command::ParsedCommand;
     use dirs::home_dir;
@@ -2013,6 +2183,42 @@ mod tests {
     }
 
     #[test]
+    fn final_message_separator_includes_runtime_metrics() {
+        let summary = RuntimeMetricsSummary {
+            tool_calls: RuntimeMetricTotals {
+                count: 3,
+                duration_ms: 2_450,
+            },
+            api_calls: RuntimeMetricTotals {
+                count: 2,
+                duration_ms: 1_200,
+            },
+            streaming_events: RuntimeMetricTotals {
+                count: 6,
+                duration_ms: 900,
+            },
+            websocket_calls: RuntimeMetricTotals {
+                count: 1,
+                duration_ms: 700,
+            },
+            websocket_events: RuntimeMetricTotals {
+                count: 4,
+                duration_ms: 1_200,
+            },
+        };
+        let cell = FinalMessageSeparator::new(Some(12), Some(summary));
+        let rendered = render_lines(&cell.display_lines(200));
+
+        assert_eq!(rendered.len(), 1);
+        assert!(rendered[0].contains("Worked for 12s"));
+        assert!(rendered[0].contains("Local tools: 3 calls (2.5s)"));
+        assert!(rendered[0].contains("Inference: 2 calls (1.2s)"));
+        assert!(rendered[0].contains("WebSocket: 1 events send (700ms)"));
+        assert!(rendered[0].contains("Streams: 6 events (900ms)"));
+        assert!(rendered[0].contains("4 events received (1.2s)"));
+    }
+
+    #[test]
     fn ps_output_empty_snapshot() {
         let cell = new_unified_exec_processes_output(Vec::new());
         let rendered = render_lines(&cell.display_lines(60)).join("\n");
@@ -2022,8 +2228,14 @@ mod tests {
     #[test]
     fn ps_output_multiline_snapshot() {
         let cell = new_unified_exec_processes_output(vec![
-            "echo hello\nand then some extra text".to_string(),
-            "rg \"foo\" src".to_string(),
+            UnifiedExecProcessDetails {
+                command_display: "echo hello\nand then some extra text".to_string(),
+                recent_chunks: vec!["hello".to_string(), "done".to_string()],
+            },
+            UnifiedExecProcessDetails {
+                command_display: "rg \"foo\" src".to_string(),
+                recent_chunks: vec!["src/main.rs:12:foo".to_string()],
+            },
         ]);
         let rendered = render_lines(&cell.display_lines(40)).join("\n");
         insta::assert_snapshot!(rendered);
@@ -2031,9 +2243,12 @@ mod tests {
 
     #[test]
     fn ps_output_long_command_snapshot() {
-        let cell = new_unified_exec_processes_output(vec![String::from(
-            "rg \"foo\" src --glob '**/*.rs' --max-count 1000 --no-ignore --hidden --follow --glob '!target/**'",
-        )]);
+        let cell = new_unified_exec_processes_output(vec![UnifiedExecProcessDetails {
+            command_display: String::from(
+                "rg \"foo\" src --glob '**/*.rs' --max-count 1000 --no-ignore --hidden --follow --glob '!target/**'",
+            ),
+            recent_chunks: vec!["searching...".to_string()],
+        }]);
         let rendered = render_lines(&cell.display_lines(36)).join("\n");
         insta::assert_snapshot!(rendered);
     }
@@ -2041,9 +2256,27 @@ mod tests {
     #[test]
     fn ps_output_many_sessions_snapshot() {
         let cell = new_unified_exec_processes_output(
-            (0..20).map(|idx| format!("command {idx}")).collect(),
+            (0..20)
+                .map(|idx| UnifiedExecProcessDetails {
+                    command_display: format!("command {idx}"),
+                    recent_chunks: Vec::new(),
+                })
+                .collect(),
         );
         let rendered = render_lines(&cell.display_lines(32)).join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn ps_output_chunk_leading_whitespace_snapshot() {
+        let cell = new_unified_exec_processes_output(vec![UnifiedExecProcessDetails {
+            command_display: "just fix".to_string(),
+            recent_chunks: vec![
+                "  indented first".to_string(),
+                "    more indented".to_string(),
+            ],
+        }]);
+        let rendered = render_lines(&cell.display_lines(60)).join("\n");
         insta::assert_snapshot!(rendered);
     }
 
@@ -2178,7 +2411,10 @@ mod tests {
         let cell = new_web_search_call(
             "call-1".to_string(),
             query.clone(),
-            WebSearchAction::Search { query: Some(query) },
+            WebSearchAction::Search {
+                query: Some(query),
+                queries: None,
+            },
         );
         let rendered = render_lines(&cell.display_lines(64)).join("\n");
 
@@ -2192,7 +2428,10 @@ mod tests {
         let cell = new_web_search_call(
             "call-1".to_string(),
             query.clone(),
-            WebSearchAction::Search { query: Some(query) },
+            WebSearchAction::Search {
+                query: Some(query),
+                queries: None,
+            },
         );
         let rendered = render_lines(&cell.display_lines(64));
 
@@ -2211,7 +2450,10 @@ mod tests {
         let cell = new_web_search_call(
             "call-1".to_string(),
             query.clone(),
-            WebSearchAction::Search { query: Some(query) },
+            WebSearchAction::Search {
+                query: Some(query),
+                queries: None,
+            },
         );
         let rendered = render_lines(&cell.display_lines(64));
 
@@ -2225,7 +2467,10 @@ mod tests {
         let cell = new_web_search_call(
             "call-1".to_string(),
             query.clone(),
-            WebSearchAction::Search { query: Some(query) },
+            WebSearchAction::Search {
+                query: Some(query),
+                queries: None,
+            },
         );
         let rendered = render_lines(&cell.transcript_lines(64)).join("\n");
 

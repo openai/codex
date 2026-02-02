@@ -114,7 +114,7 @@ pub enum Command {
 struct ResumeArgsRaw {
     // Note: This is the direct clap shape. We reinterpret the positional when --last is set
     // so "codex resume --last <prompt>" treats the positional as a prompt, not a session id.
-    /// Conversation/session id (UUID). When provided, resumes this session.
+    /// Conversation/session id (UUID) or thread name. UUIDs take precedence if it parses.
     /// If omitted, use --last to pick the most recent recorded session.
     #[arg(value_name = "SESSION_ID")]
     session_id: Option<String>,
@@ -144,7 +144,7 @@ struct ResumeArgsRaw {
 
 #[derive(Debug)]
 pub struct ResumeArgs {
-    /// Conversation/session id (UUID). When provided, resumes this session.
+    /// Conversation/session id (UUID) or thread name. UUIDs take precedence if it parses.
     /// If omitted, use --last to pick the most recent recorded session.
     pub session_id: Option<String>,
 

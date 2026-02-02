@@ -67,6 +67,7 @@ mod slash_commands;
 pub(crate) use footer::CollaborationModeIndicator;
 pub(crate) use list_selection_view::SelectionViewParams;
 mod feedback_view;
+pub(crate) use feedback_view::FeedbackAudience;
 pub(crate) use feedback_view::feedback_disabled_params;
 pub(crate) use feedback_view::feedback_selection_params;
 pub(crate) use feedback_view::feedback_upload_consent_params;
@@ -215,6 +216,12 @@ impl BottomPane {
 
     pub fn take_mention_paths(&mut self) -> HashMap<String, String> {
         self.composer.take_mention_paths()
+    }
+
+    /// Clear pending attachments and mention paths e.g. when a slash command doesn't submit text.
+    pub(crate) fn drain_pending_submission_state(&mut self) {
+        let _ = self.take_recent_submission_images_with_placeholders();
+        let _ = self.take_mention_paths();
     }
 
     pub fn set_steer_enabled(&mut self, enabled: bool) {
@@ -403,6 +410,7 @@ impl BottomPane {
     ) {
         self.composer
             .set_text_content(text, text_elements, local_image_paths);
+        self.composer.move_cursor_to_end();
         self.request_redraw();
     }
 
@@ -784,6 +792,13 @@ impl BottomPane {
     ) -> Vec<LocalImageAttachment> {
         self.composer
             .take_recent_submission_images_with_placeholders()
+    }
+
+    pub(crate) fn prepare_inline_args_submission(
+        &mut self,
+        record_history: bool,
+    ) -> Option<(String, Vec<TextElement>)> {
+        self.composer.prepare_inline_args_submission(record_history)
     }
 
     fn as_renderable(&'_ self) -> RenderableItem<'_> {

@@ -14,12 +14,14 @@ use std::time::Duration;
 use crate::ThreadId;
 use crate::approvals::ElicitationRequestEvent;
 use crate::config_types::CollaborationMode;
+use crate::config_types::ModeKind;
 use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::config_types::WindowsSandboxLevel;
 use crate::custom_prompts::CustomPrompt;
 use crate::dynamic_tools::DynamicToolCallRequest;
 use crate::dynamic_tools::DynamicToolResponse;
+use crate::dynamic_tools::DynamicToolSpec;
 use crate::items::TurnItem;
 use crate::message_history::HistoryEntry;
 use crate::models::BaseInstructions;
@@ -271,6 +273,11 @@ pub enum Op {
     /// The agent will use its existing context (either conversation history or previous response id)
     /// to generate a summary which will be returned as an AgentMessage event.
     Compact,
+
+    /// Set a user-facing thread name in the persisted rollout metadata.
+    /// This is a local-only operation handled by codex-core; it does not
+    /// involve the model.
+    SetThreadName { name: String },
 
     /// Request Codex to undo a turn (turn are stacked so it is the same effect as CMD + Z).
     Undo,
@@ -734,6 +741,9 @@ pub enum EventMsg {
     /// Ack the client's configure message.
     SessionConfigured(SessionConfiguredEvent),
 
+    /// Updated session metadata (e.g., thread name changes).
+    ThreadNameUpdated(ThreadNameUpdatedEvent),
+
     /// Incremental MCP startup progress updates.
     McpStartupUpdate(McpStartupUpdateEvent),
 
@@ -829,6 +839,7 @@ pub enum EventMsg {
     ItemCompleted(ItemCompletedEvent),
 
     AgentMessageContentDelta(AgentMessageContentDeltaEvent),
+    PlanDelta(PlanDeltaEvent),
     ReasoningContentDelta(ReasoningContentDeltaEvent),
     ReasoningRawContentDelta(ReasoningRawContentDeltaEvent),
 
@@ -925,6 +936,10 @@ pub enum AgentStatus {
 pub enum CodexErrorInfo {
     ContextWindowExceeded,
     UsageLimitExceeded,
+    ModelCap {
+        model: String,
+        reset_after_seconds: Option<u64>,
+    },
     HttpConnectionFailed {
         http_status_code: Option<u16>,
     },
@@ -1002,6 +1017,14 @@ impl HasLegacyEvent for AgentMessageContentDeltaEvent {
             delta: self.delta.clone(),
         })]
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+pub struct PlanDeltaEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub delta: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -1094,6 +1117,8 @@ pub struct TurnCompleteEvent {
 pub struct TurnStartedEvent {
     // TODO(aibrahim): make this not optional
     pub model_context_window: Option<i64>,
+    #[serde(default)]
+    pub collaboration_mode_kind: ModeKind,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, JsonSchema, TS)]
@@ -1509,6 +1534,22 @@ impl InitialHistory {
             }),
         }
     }
+
+    pub fn get_dynamic_tools(&self) -> Option<Vec<DynamicToolSpec>> {
+        match self {
+            InitialHistory::New => None,
+            InitialHistory::Resumed(resumed) => {
+                resumed.history.iter().find_map(|item| match item {
+                    RolloutItem::SessionMeta(meta_line) => meta_line.meta.dynamic_tools.clone(),
+                    _ => None,
+                })
+            }
+            InitialHistory::Forked(items) => items.iter().find_map(|item| match item {
+                RolloutItem::SessionMeta(meta_line) => meta_line.meta.dynamic_tools.clone(),
+                _ => None,
+            }),
+        }
+    }
 }
 
 fn session_cwd_from_items(items: &[RolloutItem]) -> Option<PathBuf> {
@@ -1595,6 +1636,8 @@ pub struct SessionMeta {
     /// but may be missing for older sessions. If not present, fall back to rendering the base_instructions
     /// from ModelsManager.
     pub base_instructions: Option<BaseInstructions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
 }
 
 impl Default for SessionMeta {
@@ -1609,6 +1652,7 @@ impl Default for SessionMeta {
             source: SessionSource::default(),
             model_provider: None,
             base_instructions: None,
+            dynamic_tools: None,
         }
     }
 }
@@ -2162,10 +2206,14 @@ pub struct SkillsListEntry {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct SessionConfiguredEvent {
-    /// Name left as session_id instead of thread_id for backwards compatibility.
     pub session_id: ThreadId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forked_from_id: Option<ThreadId>,
+
+    /// Optional user-facing thread name (may be unset).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub thread_name: Option<String>,
 
     /// Tell the client what model is being queried.
     pub model: String,
@@ -2200,6 +2248,14 @@ pub struct SessionConfiguredEvent {
     /// Path in which the rollout is stored. Can be `None` for ephemeral threads
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rollout_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ThreadNameUpdatedEvent {
+    pub thread_id: ThreadId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub thread_name: Option<String>,
 }
 
 /// User's decision in response to an ExecApprovalRequest.
@@ -2413,6 +2469,7 @@ mod tests {
                 query: "find docs".into(),
                 action: WebSearchAction::Search {
                     query: Some("find docs".into()),
+                    queries: None,
                 },
             }),
         };
@@ -2545,6 +2602,7 @@ mod tests {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
                 forked_from_id: None,
+                thread_name: None,
                 model: "codex-mini-latest".to_string(),
                 model_provider_id: "openai".to_string(),
                 approval_policy: AskForApproval::Never,

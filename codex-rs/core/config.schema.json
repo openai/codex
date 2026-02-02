@@ -111,6 +111,13 @@
             "auto"
           ],
           "type": "string"
+        },
+        {
+          "description": "Store credentials in memory only for the current process.",
+          "enum": [
+            "ephemeral"
+          ],
+          "type": "string"
         }
       ]
     },
@@ -201,10 +208,16 @@
             "responses_websockets": {
               "type": "boolean"
             },
+            "runtime_metrics": {
+              "type": "boolean"
+            },
             "shell_snapshot": {
               "type": "boolean"
             },
             "shell_tool": {
+              "type": "boolean"
+            },
+            "skill_env_var_dependency_prompt": {
               "type": "boolean"
             },
             "skill_mcp_dependency_install": {
@@ -248,9 +261,6 @@
           ],
           "description": "Optional path to a file containing model instructions."
         },
-        "model_personality": {
-          "$ref": "#/definitions/Personality"
-        },
         "model_provider": {
           "description": "The key in the `model_providers` map identifying the [`ModelProviderInfo`] to use.",
           "type": "string"
@@ -266,6 +276,9 @@
         },
         "oss_provider": {
           "type": "string"
+        },
+        "personality": {
+          "$ref": "#/definitions/Personality"
         },
         "sandbox_mode": {
           "$ref": "#/definitions/SandboxMode"
@@ -439,6 +452,11 @@
           "format": "uint64",
           "minimum": 0.0,
           "type": "integer"
+        },
+        "supports_websockets": {
+          "default": false,
+          "description": "Whether this provider supports the Responses API WebSocket transport.",
+          "type": "boolean"
         },
         "wire_api": {
           "allOf": [
@@ -1079,13 +1097,6 @@
           "type": "string"
         },
         {
-          "description": "Experimental: Responses API over WebSocket transport.",
-          "enum": [
-            "responses_websocket"
-          ],
-          "type": "string"
-        },
-        {
           "description": "Regular Chat Completions compatible with `/v1/chat/completions`.",
           "enum": [
             "chat"
@@ -1225,10 +1236,16 @@
         "responses_websockets": {
           "type": "boolean"
         },
+        "runtime_metrics": {
+          "type": "boolean"
+        },
         "shell_snapshot": {
           "type": "boolean"
         },
         "shell_tool": {
+          "type": "boolean"
+        },
+        "skill_env_var_dependency_prompt": {
           "type": "boolean"
         },
         "skill_mcp_dependency_install": {
@@ -1359,14 +1376,6 @@
       ],
       "description": "Optional path to a file containing model instructions that will override the built-in instructions for the selected model. Users are STRONGLY DISCOURAGED from using this field, as deviating from the instructions sanctioned by Codex will likely degrade model performance."
     },
-    "model_personality": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/Personality"
-        }
-      ],
-      "description": "EXPERIMENTAL Optionally specify a personality for the model"
-    },
     "model_provider": {
       "description": "Provider to use from the model_providers map.",
       "type": "string"
@@ -1424,6 +1433,14 @@
         }
       ],
       "description": "OTEL configuration."
+    },
+    "personality": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/Personality"
+        }
+      ],
+      "description": "Optionally specify a personality for the model"
     },
     "profile": {
       "description": "Profile to use from the `profiles` map.",

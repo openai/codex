@@ -221,7 +221,11 @@ fn normalize_connector_value(value: Option<&str>) -> Option<String> {
 }
 
 const ALLOWED_APPS_SDK_APPS: &[&str] = &["asdk_app_69781557cc1481919cf5e9824fa2e792"];
-const DISALLOWED_CONNECTOR_IDS: &[&str] = &["asdk_app_6938a94a61d881918ef32cb999ff937c"];
+const DISALLOWED_CONNECTOR_IDS: &[&str] = &[
+    "asdk_app_6938a94a61d881918ef32cb999ff937c",
+    "connector_2b0a9009c9c64bf9933a3dae3f2b1254",
+    "connector_68de829bf7648191acd70a907364c67c",
+];
 const DISALLOWED_CONNECTOR_PREFIX: &str = "connector_openai_";
 
 fn filter_disallowed_connectors(connectors: Vec<AppInfo>) -> Vec<AppInfo> {

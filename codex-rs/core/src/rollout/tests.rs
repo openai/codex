@@ -873,6 +873,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
                 source: SessionSource::VSCode,
                 model_provider: Some("test-provider".into()),
                 base_instructions: None,
+                dynamic_tools: None,
             },
             git: None,
         }),

@@ -57,6 +57,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         stream_max_retries: Some(0),
         stream_idle_timeout_ms: Some(5_000),
         requires_openai_auth: false,
+        supports_websockets: false,
     };
 
     let codex_home = TempDir::new().expect("failed to create TempDir");
@@ -70,7 +71,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
     let config = Arc::new(config);
 
     let conversation_id = ThreadId::new();
-    let auth_mode = AuthMode::ChatGPT;
+    let auth_mode = AuthMode::Chatgpt;
     let session_source = SessionSource::SubAgent(SubAgentSource::Review);
     let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
     let otel_manager = OtelManager::new(
@@ -154,6 +155,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
         stream_max_retries: Some(0),
         stream_idle_timeout_ms: Some(5_000),
         requires_openai_auth: false,
+        supports_websockets: false,
     };
 
     let codex_home = TempDir::new().expect("failed to create TempDir");
@@ -167,7 +169,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
     let config = Arc::new(config);
 
     let conversation_id = ThreadId::new();
-    let auth_mode = AuthMode::ChatGPT;
+    let auth_mode = AuthMode::Chatgpt;
     let session_source = SessionSource::SubAgent(SubAgentSource::Other("my-task".to_string()));
     let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
 
@@ -307,6 +309,7 @@ async fn responses_respects_model_info_overrides_from_config() {
         stream_max_retries: Some(0),
         stream_idle_timeout_ms: Some(5_000),
         requires_openai_auth: false,
+        supports_websockets: false,
     };
 
     let codex_home = TempDir::new().expect("failed to create TempDir");

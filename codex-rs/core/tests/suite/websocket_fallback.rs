@@ -1,5 +1,5 @@
 use anyhow::Result;
-use codex_core::WireApi;
+use codex_core::features::Feature;
 use core_test_support::responses;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
@@ -26,7 +26,8 @@ async fn websocket_fallback_switches_to_http_after_retries_exhausted() -> Result
         let base_url = format!("{}/v1", server.uri());
         move |config| {
             config.model_provider.base_url = Some(base_url);
-            config.model_provider.wire_api = WireApi::ResponsesWebsocket;
+            config.model_provider.wire_api = codex_core::WireApi::Responses;
+            config.features.enable(Feature::ResponsesWebsockets);
             config.model_provider.stream_max_retries = Some(0);
             config.model_provider.request_max_retries = Some(0);
         }
@@ -70,7 +71,8 @@ async fn websocket_fallback_is_sticky_across_turns() -> Result<()> {
         let base_url = format!("{}/v1", server.uri());
         move |config| {
             config.model_provider.base_url = Some(base_url);
-            config.model_provider.wire_api = WireApi::ResponsesWebsocket;
+            config.model_provider.wire_api = codex_core::WireApi::Responses;
+            config.features.enable(Feature::ResponsesWebsockets);
             config.model_provider.stream_max_retries = Some(0);
             config.model_provider.request_max_retries = Some(0);
         }

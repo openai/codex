@@ -414,7 +414,14 @@ impl RequestUserInputOverlay {
         if area.width == 0 || area.height == 0 {
             return;
         }
-        self.composer.render(area, buf);
+        let is_secret = self
+            .current_question()
+            .is_some_and(|question| question.is_secret);
+        if is_secret {
+            self.composer.render_with_mask(area, buf, Some('*'));
+        } else {
+            self.composer.render(area, buf);
+        }
     }
 }
 

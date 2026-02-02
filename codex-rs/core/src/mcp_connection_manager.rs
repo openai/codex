@@ -769,6 +769,32 @@ fn filter_tools(tools: Vec<ToolInfo>, filter: ToolFilter) -> Vec<ToolInfo> {
         .collect()
 }
 
+fn normalize_codex_apps_tool_title(
+    server_name: &str,
+    connector_name: Option<&str>,
+    value: &str,
+) -> String {
+    if server_name != CODEX_APPS_MCP_SERVER_NAME {
+        return value.to_string();
+    }
+
+    let Some(connector_name) = connector_name
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    else {
+        return value.to_string();
+    };
+
+    let prefix = format!("{connector_name}_");
+    if let Some(stripped) = value.strip_prefix(&prefix)
+        && !stripped.is_empty()
+    {
+        return stripped.to_string();
+    }
+
+    value.to_string()
+}
+
 fn resolve_bearer_token(
     server_name: &str,
     bearer_token_env_var: Option<&str>,
@@ -926,12 +952,23 @@ async fn list_tools_for_client(
     Ok(resp
         .tools
         .into_iter()
-        .map(|tool| ToolInfo {
-            server_name: server_name.to_owned(),
-            tool_name: tool.tool.name.clone(),
-            tool: tool.tool,
-            connector_id: tool.connector_id,
-            connector_name: tool.connector_name,
+        .map(|tool| {
+            let connector_name = tool.connector_name;
+            let mut tool_def = tool.tool;
+            if let Some(title) = tool_def.title.as_deref() {
+                let normalized_title =
+                    normalize_codex_apps_tool_title(server_name, connector_name.as_deref(), title);
+                if tool_def.title.as_deref() != Some(normalized_title.as_str()) {
+                    tool_def.title = Some(normalized_title);
+                }
+            }
+            ToolInfo {
+                server_name: server_name.to_owned(),
+                tool_name: tool_def.name.clone(),
+                tool: tool_def,
+                connector_id: tool.connector_id,
+                connector_name,
+            }
         })
         .collect())
 }
