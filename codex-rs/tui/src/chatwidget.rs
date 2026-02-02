@@ -6291,6 +6291,7 @@ pub struct StatusLineCurrentUsage {
 pub struct StatusLineUsageLimit {
     pub percent_left: f64,
     pub resets_at: Option<String>,
+    pub resets_at_raw: Option<String>,
     pub window_minutes: Option<i64>,
 }
 
@@ -6303,11 +6304,13 @@ pub struct StatusLineUsage {
 fn status_line_usage_limit(
     used_percent: f64,
     resets_at: Option<String>,
+    resets_at_raw: Option<String>,
     window_minutes: Option<i64>,
 ) -> StatusLineUsageLimit {
     StatusLineUsageLimit {
         percent_left: (100.0f64 - used_percent).clamp(0.0f64, 100.0f64),
         resets_at,
+        resets_at_raw,
         window_minutes,
     }
 }
@@ -6324,6 +6327,7 @@ fn status_line_usage_payload(chat: &ChatWidget) -> Option<StatusLineUsage> {
             status_line_usage_limit(
                 window.used_percent,
                 window.resets_at.clone(),
+                window.resets_at_raw.clone(),
                 window.window_minutes,
             )
         }),
@@ -6331,6 +6335,7 @@ fn status_line_usage_payload(chat: &ChatWidget) -> Option<StatusLineUsage> {
             status_line_usage_limit(
                 window.used_percent,
                 window.resets_at.clone(),
+                window.resets_at_raw.clone(),
                 window.window_minutes,
             )
         }),
