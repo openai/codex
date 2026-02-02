@@ -4529,17 +4529,29 @@ function applyServerNotification(
     case "item/mcpToolCall/progress": {
       const id = (n as any).params.itemId as string;
       const server = String((n as any).params.server ?? "");
+      const tool = String((n as any).params.tool ?? "");
       const block = getOrCreateBlock(rt, id, () => ({
         id,
         type: "mcp",
         title: server === "opencode" ? "OpenCode Tool" : "MCP Tool",
         status: "inProgress",
         server,
-        tool: "",
+        tool,
         detail: "",
       }));
-      if (block.type === "mcp")
+      const opencodeSeqRaw = (n as any).params.opencodeSeq as unknown;
+      const opencodeSeq =
+        typeof opencodeSeqRaw === "number" && Number.isFinite(opencodeSeqRaw)
+          ? Math.trunc(opencodeSeqRaw)
+          : null;
+      if (block.type === "mcp") {
+        block.tool = tool;
         block.detail += `${String((n as any).params.message ?? "")}\n`;
+        if (server === "opencode" && opencodeSeq !== null) {
+          (block as any).opencodeSeq = opencodeSeq;
+          (block as any).opencodeOffset = 7;
+        }
+      }
       chatView?.postBlockUpsert(sessionId, block);
       return;
     }
@@ -4862,6 +4874,15 @@ function applyItemLifecycle(
           block.detail += `\nresult: ${JSON.stringify(item.result)}\n`;
         if (completed && item.error)
           block.detail += `\nerror: ${JSON.stringify(item.error)}\n`;
+        const opencodeSeqRaw = (item as any).opencodeSeq as unknown;
+        const opencodeSeq =
+          typeof opencodeSeqRaw === "number" && Number.isFinite(opencodeSeqRaw)
+            ? Math.trunc(opencodeSeqRaw)
+            : null;
+        if (item.server === "opencode" && opencodeSeq !== null) {
+          (block as any).opencodeSeq = opencodeSeq;
+          (block as any).opencodeOffset = 7;
+        }
       }
       chatView?.postBlockUpsert(sessionId, block);
       if (completed && item.result?.content) {
@@ -5205,6 +5226,196 @@ function applyItemLifecycle(
           }
 
           chatView?.postBlockUpsert(sessionId, container);
+          break;
+        }
+
+        const opencodeSeqRaw = anyItem?.opencodeSeq as unknown;
+        const opencodeSeq =
+          typeof opencodeSeqRaw === "number" && Number.isFinite(opencodeSeqRaw)
+            ? Math.trunc(opencodeSeqRaw)
+            : null;
+        const setOpencodeOrdering = (block: ChatBlock): void => {
+          if (opencodeSeq === null) return;
+          (block as any).opencodeSeq = opencodeSeq;
+          // Place opencode "part" cards between Step and Assistant for the same message.
+          (block as any).opencodeOffset = 7;
+        };
+
+        const upsertOpencodeInfo = (args: {
+          id: string;
+          title: string;
+          text: string;
+        }): void => {
+          const block = getOrCreateBlock(rt, args.id, () => ({
+            id: args.id,
+            type: "info",
+            title: args.title,
+            text: args.text,
+          }));
+          if (block.type !== "info") return;
+          block.title = args.title;
+          block.text = args.text;
+          setOpencodeOrdering(block);
+          chatView?.postBlockUpsert(sessionId, block);
+        };
+
+        if (anyItem?.type === "opencodeFile") {
+          const id = String(anyItem.id ?? "");
+          if (!id) break;
+          const filename =
+            typeof anyItem.filename === "string" && anyItem.filename.trim()
+              ? String(anyItem.filename).trim()
+              : null;
+          const mime =
+            typeof anyItem.mime === "string" && anyItem.mime.trim()
+              ? String(anyItem.mime).trim()
+              : null;
+          const url =
+            typeof anyItem.url === "string" && anyItem.url.trim()
+              ? String(anyItem.url).trim()
+              : null;
+          const lines: string[] = [];
+          lines.push(filename ? `**${filename}**` : "**File**");
+          if (mime) lines.push(`- mime: \`${mime}\``);
+          if (url) lines.push(`- url: ${url}`);
+          upsertOpencodeInfo({ id, title: "OpenCode File", text: lines.join("\n") });
+          break;
+        }
+
+        if (anyItem?.type === "opencodePatch") {
+          const id = String(anyItem.id ?? "");
+          if (!id) break;
+          const hash =
+            typeof anyItem.hash === "string" && anyItem.hash.trim()
+              ? String(anyItem.hash).trim()
+              : null;
+          const files = Array.isArray(anyItem.files)
+            ? (anyItem.files as unknown[]).map((x) => String(x ?? "")).filter(Boolean)
+            : [];
+          const lines: string[] = [];
+          lines.push(hash ? `hash: \`${hash.slice(0, 12)}\`` : "hash: —");
+          if (files.length > 0) {
+            lines.push("");
+            lines.push("files:");
+            for (const f of files) lines.push(`- ${f}`);
+          }
+          upsertOpencodeInfo({ id, title: "OpenCode Patch", text: lines.join("\n") });
+          break;
+        }
+
+        if (anyItem?.type === "opencodeAgent") {
+          const id = String(anyItem.id ?? "");
+          if (!id) break;
+          const name =
+            typeof anyItem.name === "string" && anyItem.name.trim()
+              ? String(anyItem.name).trim()
+              : "agent";
+          const source =
+            typeof anyItem.source === "object" && anyItem.source !== null
+              ? (anyItem.source as any)
+              : null;
+          const lines: string[] = [];
+          lines.push(`name: \`${name}\``);
+          if (typeof source?.value === "string" && source.value.trim()) {
+            const start = typeof source.start === "number" ? Math.trunc(source.start) : null;
+            const end = typeof source.end === "number" ? Math.trunc(source.end) : null;
+            const range =
+              start !== null && end !== null ? ` (${start}-${end})` : "";
+            lines.push("");
+            lines.push(`source${range}:`);
+            lines.push("```");
+            lines.push(String(source.value).trimEnd());
+            lines.push("```");
+          }
+          upsertOpencodeInfo({ id, title: "OpenCode Agent", text: lines.join("\n") });
+          break;
+        }
+
+        if (anyItem?.type === "opencodeSnapshot") {
+          const id = String(anyItem.id ?? "");
+          if (!id) break;
+          const snapshot =
+            typeof anyItem.snapshot === "string" && anyItem.snapshot.trim()
+              ? String(anyItem.snapshot).trim()
+              : null;
+          const text = snapshot ? `snapshot: \`${snapshot.slice(0, 12)}\`` : "snapshot: —";
+          upsertOpencodeInfo({ id, title: "OpenCode Snapshot", text });
+          break;
+        }
+
+        if (anyItem?.type === "opencodeRetry") {
+          const id = String(anyItem.id ?? "");
+          if (!id) break;
+          const attempt =
+            typeof anyItem.attempt === "number" && Number.isFinite(anyItem.attempt)
+              ? Math.trunc(anyItem.attempt)
+              : 1;
+          const err =
+            typeof anyItem.error === "string" && anyItem.error.trim()
+              ? String(anyItem.error).trim()
+              : "Retry";
+          upsertOpencodeInfo({
+            id,
+            title: "OpenCode Retry",
+            text: `attempt: \`${String(attempt)}\`\nerror: ${err}`,
+          });
+          break;
+        }
+
+        if (anyItem?.type === "opencodeCompaction") {
+          const id = String(anyItem.id ?? "");
+          if (!id) break;
+          const auto = Boolean(anyItem.auto);
+          upsertOpencodeInfo({
+            id,
+            title: "OpenCode Compaction",
+            text: `auto: \`${auto ? "true" : "false"}\``,
+          });
+          break;
+        }
+
+        if (anyItem?.type === "opencodeSubtask") {
+          const id = String(anyItem.id ?? "");
+          if (!id) break;
+          const description =
+            typeof anyItem.description === "string" && anyItem.description.trim()
+              ? String(anyItem.description).trim()
+              : null;
+          const agent =
+            typeof anyItem.agent === "string" && anyItem.agent.trim()
+              ? String(anyItem.agent).trim()
+              : null;
+          const model =
+            typeof anyItem.model === "object" && anyItem.model !== null
+              ? (anyItem.model as any)
+              : null;
+          const command =
+            typeof anyItem.command === "string" && anyItem.command.trim()
+              ? String(anyItem.command).trim()
+              : null;
+          const prompt =
+            typeof anyItem.prompt === "string" && anyItem.prompt.trim()
+              ? String(anyItem.prompt).trim()
+              : null;
+          const lines: string[] = [];
+          if (description) lines.push(`**${description}**`);
+          if (agent) lines.push(`- agent: \`${agent}\``);
+          if (model && typeof model.providerID === "string" && typeof model.modelID === "string") {
+            lines.push(`- model: \`${String(model.providerID)}/${String(model.modelID)}\``);
+          }
+          if (command) lines.push(`- command: \`${command}\``);
+          if (prompt) {
+            lines.push("");
+            lines.push("prompt:");
+            lines.push("```");
+            lines.push(prompt);
+            lines.push("```");
+          }
+          upsertOpencodeInfo({
+            id,
+            title: "OpenCode Subtask",
+            text: lines.join("\n").trim(),
+          });
           break;
         }
       }

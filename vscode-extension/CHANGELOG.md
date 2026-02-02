@@ -31,6 +31,7 @@
   - OpenCode サーバへの接続エラー時に opencode backend を破棄してキャッシュをクリーンアップ（次の操作で再起動できる状態に）
   - delta が空の unknown part で空カード（黒いカード）が出る問題を修正
   - カードの並び替えが UI 上で反映されない問題を修正（OpenCodeブロックのみ順序に追従して再配置）
+  - OpenCode の Part（file/patch/agent/snapshot/retry/compaction/subtask）をカード表示し、複数パートでIDが衝突して潰れる問題を修正
   - Notice（起動時カード）が更新のたびに末尾へ移動してしまう問題を修正（Noticeは先頭に固定）
 - **OpenCode / Permissions**
   - permission.asked を UI に表示し、Allow once / Always allow / Reject の応答をサポート（これが無いとツールが待ち状態で止まり得る）

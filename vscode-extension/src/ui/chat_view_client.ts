@@ -4276,6 +4276,9 @@ function main(): void {
         return Math.trunc(raw);
       };
       const offsetFor = (b: ChatBlock): number => {
+        const explicit = (b as any)?.opencodeOffset;
+        if (typeof explicit === "number" && Number.isFinite(explicit))
+          return Math.trunc(explicit);
         if (b.type === "reasoning") return 0;
         if (b.type === "step") return 5;
         if (b.type === "assistant") return 9;
