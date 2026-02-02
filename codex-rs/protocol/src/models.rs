@@ -233,10 +233,13 @@ impl DeveloperInstructions {
                 if !request_rule_enabled {
                     APPROVAL_POLICY_ON_REQUEST.to_string()
                 } else {
-                    let command_prefixes = format_allow_prefixes(exec_policy);
+                    let command_prefixes =
+                        format_allow_prefixes(exec_policy.get_allowed_prefixes());
                     match command_prefixes {
                         Some(prefixes) => {
-                            format!("{APPROVAL_POLICY_ON_REQUEST_RULE}\n{prefixes}")
+                            format!(
+                                "{APPROVAL_POLICY_ON_REQUEST_RULE}\nApproved command prefixes:\n{prefixes}"
+                            )
                         }
                         None => APPROVAL_POLICY_ON_REQUEST_RULE.to_string(),
                     }
@@ -372,29 +375,49 @@ impl DeveloperInstructions {
 }
 
 const MAX_RENDERED_PREFIXES: usize = 100;
-const MAX_ALLOW_PREFIX_TEXT_BYTES: usize = 1000;
+const MAX_ALLOW_PREFIX_TEXT_BYTES: usize = 5000;
+const TRUNCATED_MARKER: &str = "...\n[Some commands were truncated]";
 
-pub fn render_command_prefix_list(mut prefixes: Vec<Vec<String>>) -> Option<String> {
+pub fn format_allow_prefixes(prefixes: Vec<Vec<String>>) -> Option<String> {
+    let mut truncated = false;
+    if prefixes.len() > MAX_RENDERED_PREFIXES {
+        truncated = true;
+    }
+
+    let mut prefixes = prefixes;
     prefixes.sort_by(|a, b| {
         a.len()
             .cmp(&b.len())
-            .then_with(|| prefix_total_token_len(a).cmp(&prefix_total_token_len(b)))
+            .then_with(|| prefix_combined_str_len(a).cmp(&prefix_combined_str_len(b)))
             .then_with(|| a.cmp(b))
     });
 
-    let lines = prefixes
+    let full_text = prefixes
         .into_iter()
         .take(MAX_RENDERED_PREFIXES)
         .map(|prefix| format!("- {}", render_command_prefix(&prefix)))
-        .collect::<Vec<_>>();
-    if lines.is_empty() {
-        return None;
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // truncate to last UTF8 char
+    let mut output = full_text;
+    let byte_idx = output
+        .char_indices()
+        .nth(MAX_ALLOW_PREFIX_TEXT_BYTES)
+        .map(|(i, _)| i);
+    if let Some(byte_idx) = byte_idx {
+        truncated = true;
+        output = output[..byte_idx].to_string();
     }
 
-    Some(lines.join("\n"))
+    if truncated {
+        Some(format!("{output}{TRUNCATED_MARKER}"))
+    } else {
+        Some(output)
+    }
 }
 
-fn prefix_total_token_len(prefix: &[String]) -> usize {
+fn prefix_combined_str_len(prefix: &[String]) -> usize {
     prefix.iter().map(String::len).sum()
 }
 
@@ -405,24 +428,6 @@ fn render_command_prefix(prefix: &[String]) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!("[{tokens}]")
-}
-
-fn format_allow_prefixes(exec_policy: &Policy) -> Option<String> {
-    let prefixes = exec_policy.get_allowed_prefixes();
-    let lines = render_command_prefix_list(prefixes)?;
-    let output = format!("Approved command prefixes:\n{lines}");
-    if output.len() <= MAX_ALLOW_PREFIX_TEXT_BYTES {
-        return Some(output);
-    }
-
-    let mut cutoff = MAX_ALLOW_PREFIX_TEXT_BYTES;
-    while !output.is_char_boundary(cutoff) {
-        cutoff -= 1;
-    }
-
-    let bounded = &output[..cutoff];
-    let newline_cutoff = bounded.rfind('\n').unwrap_or(cutoff);
-    Some(output[..newline_cutoff].to_string())
 }
 
 impl From<DeveloperInstructions> for ResponseItem {
@@ -1034,19 +1039,16 @@ mod tests {
             vec!["b".to_string(), "a".to_string()],
         ];
 
-        let output = render_command_prefix_list(prefixes).expect("rendered list");
-        let lines = output.lines().collect::<Vec<_>>();
-
+        let output = format_allow_prefixes(prefixes).expect("rendered list");
         assert_eq!(
-            lines,
-            vec![
-                r#"- ["a"]"#,
-                r#"- ["b"]"#,
-                r#"- ["aa"]"#,
-                r#"- ["b", "a"]"#,
-                r#"- ["b", "zz"]"#,
-                r#"- ["a", "b", "c"]"#,
-            ]
+            output,
+            r#"- ["a"]
+- ["b"]
+- ["aa"]
+- ["b", "a"]
+- ["b", "zz"]
+- ["a", "b", "c"]"#
+                .to_string(),
         );
     }
 
@@ -1056,29 +1058,29 @@ mod tests {
             .map(|i| vec![format!("{i:03}")])
             .collect::<Vec<_>>();
 
-        let output = render_command_prefix_list(prefixes).expect("rendered list");
-        assert_eq!(output.lines().count(), MAX_RENDERED_PREFIXES);
+        let output = format_allow_prefixes(prefixes).expect("rendered list");
+        assert_eq!(output.ends_with(TRUNCATED_MARKER), true);
+        eprintln!("output: {output}");
+        assert_eq!(output.lines().count(), MAX_RENDERED_PREFIXES + 1);
     }
 
     #[test]
-    fn format_allow_prefixes_limits_output_and_clamps_on_newline() {
+    fn format_allow_prefixes_limits_output() {
         let mut exec_policy = Policy::empty();
         for i in 0..200 {
             exec_policy
                 .add_prefix_rule(
-                    &[format!("tool-{i:03}"), "x".repeat(40)],
+                    &[format!("tool-{i:03}"), "x".repeat(500)],
                     codex_execpolicy::Decision::Allow,
                 )
                 .expect("add rule");
         }
 
-        let output = format_allow_prefixes(&exec_policy).expect("formatted prefixes");
-        assert!(output.len() <= MAX_ALLOW_PREFIX_TEXT_BYTES);
-
-        let last_line = output.lines().last().expect("has at least one line");
+        let output =
+            format_allow_prefixes(exec_policy.get_allowed_prefixes()).expect("formatted prefixes");
         assert!(
-            last_line == "Approved command prefixes:"
-                || (last_line.starts_with("- [") && last_line.ends_with(']'))
+            output.len() <= MAX_ALLOW_PREFIX_TEXT_BYTES + TRUNCATED_MARKER.len(),
+            "output length exceeds expected limit: {output}",
         );
     }
 
