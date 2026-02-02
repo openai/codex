@@ -17,7 +17,6 @@ pub async fn run_mac_app_open_or_install(
         return Ok(());
     }
 
-    eprintln!("Codex Desktop not found; downloading installer...");
     let installed_app = download_and_install_codex_to_user_applications(&download_url)
         .await
         .context("failed to download/install Codex Desktop")?;
