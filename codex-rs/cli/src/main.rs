@@ -27,8 +27,12 @@ use codex_tui::Cli as TuiCli;
 use codex_tui::ExitReason;
 use codex_tui::update_action::UpdateAction;
 use owo_colors::OwoColorize;
+use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::io::IsTerminal;
+use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
 use supports_color::Stream;
 
 mod mcp_cmd;
@@ -105,6 +109,10 @@ enum Subcommand {
     #[clap(visible_alias = "debug")]
     Sandbox(SandboxArgs),
 
+    /// Tooling: helps debug the app server.
+    #[clap(hide = true, name = "debug-app-server")]
+    DebugAppServer(DebugAppServerCommand),
+
     /// Execpolicy tooling.
     #[clap(hide = true)]
     Execpolicy(ExecpolicyCommand),
@@ -140,6 +148,13 @@ struct CompletionCommand {
     /// Shell to generate completions for
     #[clap(value_enum, default_value_t = Shell::Bash)]
     shell: Shell,
+}
+
+#[derive(Debug, Parser)]
+struct DebugAppServerCommand {
+    /// Message to send through codex-app-server-test-client send-message-v2.
+    #[arg(value_name = "USER_MESSAGE", required = true, num_args = 1.., trailing_var_arg = true)]
+    user_message_parts: Vec<String>,
 }
 
 #[derive(Debug, Parser)]
@@ -417,6 +432,64 @@ fn run_execpolicycheck(cmd: ExecPolicyCheckCommand) -> anyhow::Result<()> {
     cmd.run()
 }
 
+fn is_codex_rs_workspace_dir(dir: &Path) -> bool {
+    dir.join("Cargo.toml").is_file()
+        && dir
+            .join("app-server-test-client")
+            .join("Cargo.toml")
+            .is_file()
+}
+
+fn resolve_codex_rs_dir() -> anyhow::Result<PathBuf> {
+    let cwd = std::env::current_dir()?;
+    if is_codex_rs_workspace_dir(&cwd) {
+        return Ok(cwd);
+    }
+
+    let codex_rs = cwd.join("codex-rs");
+    if is_codex_rs_workspace_dir(&codex_rs) {
+        return Ok(codex_rs);
+    }
+
+    anyhow::bail!("could not locate codex-rs workspace from {}", cwd.display());
+}
+
+fn run_debug_app_server_command(cmd: DebugAppServerCommand) -> anyhow::Result<()> {
+    let codex_rs_dir = resolve_codex_rs_dir()?;
+    let user_message = cmd.user_message_parts.join(" ");
+    let status = Command::new("cargo")
+        .arg("run")
+        .arg("-p")
+        .arg("codex-app-server-test-client")
+        .arg("--")
+        .arg("send-message-v2")
+        .arg(user_message)
+        .current_dir(codex_rs_dir)
+        .status()?;
+
+    if !status.success() {
+        anyhow::bail!("debug command failed with status {status}");
+    }
+
+    Ok(())
+}
+
+fn remap_debug_app_server_args(args: Vec<OsString>) -> Vec<OsString> {
+    if args.get(1).is_some_and(|arg| arg == OsStr::new("debug"))
+        && args
+            .get(2)
+            .is_some_and(|arg| arg == OsStr::new("app-server"))
+    {
+        let mut remapped = Vec::with_capacity(args.len().saturating_sub(1));
+        remapped.push(args[0].clone());
+        remapped.push(OsString::from("debug-app-server"));
+        remapped.extend(args.into_iter().skip(3));
+        return remapped;
+    }
+
+    args
+}
+
 #[derive(Debug, Default, Parser, Clone)]
 struct FeatureToggles {
     /// Enable a feature (repeatable). Equivalent to `-c features.<name>=true`.
@@ -492,12 +565,13 @@ fn main() -> anyhow::Result<()> {
 }
 
 async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
+    let parsed_args = remap_debug_app_server_args(std::env::args_os().collect());
     let MultitoolCli {
         config_overrides: mut root_config_overrides,
         feature_toggles,
         mut interactive,
         subcommand,
-    } = MultitoolCli::parse();
+    } = MultitoolCli::parse_from(parsed_args);
 
     // Fold --enable/--disable into config overrides so they flow to all subcommands.
     let toggle_overrides = feature_toggles.to_overrides()?;
@@ -681,6 +755,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 .await?;
             }
         },
+        Some(Subcommand::DebugAppServer(cmd)) => {
+            run_debug_app_server_command(cmd)?;
+        }
         Some(Subcommand::Execpolicy(ExecpolicyCommand { sub })) => match sub {
             ExecpolicySubcommand::Check(cmd) => run_execpolicycheck(cmd)?,
         },
@@ -968,6 +1045,7 @@ mod tests {
     use codex_core::protocol::TokenUsage;
     use codex_protocol::ThreadId;
     use pretty_assertions::assert_eq;
+    use std::ffi::OsString;
 
     fn finalize_resume_from_args(args: &[&str]) -> TuiCli {
         let cli = MultitoolCli::try_parse_from(args).expect("parse");
@@ -1277,6 +1355,37 @@ mod tests {
         let app_server =
             app_server_from_args(["codex", "app-server", "--analytics-default-enabled"].as_ref());
         assert!(app_server.analytics_default_enabled);
+    }
+
+    #[test]
+    fn remap_debug_app_server_args_rewrites_app_server_form() {
+        let input = vec![
+            OsString::from("codex"),
+            OsString::from("debug"),
+            OsString::from("app-server"),
+            OsString::from("hello"),
+            OsString::from("world"),
+        ];
+        let remapped = remap_debug_app_server_args(input);
+        let expected = vec![
+            OsString::from("codex"),
+            OsString::from("debug-app-server"),
+            OsString::from("hello"),
+            OsString::from("world"),
+        ];
+        assert_eq!(remapped, expected);
+    }
+
+    #[test]
+    fn remap_debug_app_server_args_keeps_legacy_debug_sandbox_form() {
+        let input = vec![
+            OsString::from("codex"),
+            OsString::from("debug"),
+            OsString::from("landlock"),
+            OsString::from("pwd"),
+        ];
+        let remapped = remap_debug_app_server_args(input.clone());
+        assert_eq!(remapped, input);
     }
 
     #[test]
