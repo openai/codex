@@ -9,6 +9,7 @@ use crate::auth::AuthMode;
 use crate::error::EnvVarError;
 use codex_api::Provider as ApiProvider;
 use codex_api::WireApi as ApiWireApi;
+use codex_api::is_azure_responses_wire_base_url;
 use codex_api::provider::RetryConfig as ApiRetryConfig;
 use http::HeaderMap;
 use http::header::HeaderName;
@@ -168,6 +169,15 @@ impl ModelProviderInfo {
             retry,
             stream_idle_timeout: self.stream_idle_timeout(),
         })
+    }
+
+    pub(crate) fn is_azure_responses_endpoint(&self) -> bool {
+        let wire = match self.wire_api {
+            WireApi::Responses => ApiWireApi::Responses,
+            WireApi::Chat => ApiWireApi::Chat,
+        };
+
+        is_azure_responses_wire_base_url(wire, &self.name, self.base_url.as_deref())
     }
 
     /// If `env_key` is Some, returns the API key for this provider if present
@@ -431,88 +441,5 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
         assert_eq!(expected_provider, provider);
-    }
-
-    #[test]
-    fn detects_azure_responses_base_urls() {
-        let positive_cases = [
-            "https://foo.openai.azure.com/openai",
-            "https://foo.openai.azure.us/openai/deployments/bar",
-            "https://foo.cognitiveservices.azure.cn/openai",
-            "https://foo.aoai.azure.com/openai",
-            "https://foo.openai.azure-api.net/openai",
-            "https://foo.z01.azurefd.net/",
-        ];
-        for base_url in positive_cases {
-            let provider = ModelProviderInfo {
-                name: "test".into(),
-                base_url: Some(base_url.into()),
-                env_key: None,
-                env_key_instructions: None,
-                experimental_bearer_token: None,
-                wire_api: WireApi::Responses,
-                query_params: None,
-                http_headers: None,
-                env_http_headers: None,
-                request_max_retries: None,
-                stream_max_retries: None,
-                stream_idle_timeout_ms: None,
-                requires_openai_auth: false,
-                supports_websockets: false,
-            };
-            let api = provider.to_api_provider(None).expect("api provider");
-            assert!(
-                api.is_azure_responses_endpoint(),
-                "expected {base_url} to be detected as Azure"
-            );
-        }
-
-        let named_provider = ModelProviderInfo {
-            name: "Azure".into(),
-            base_url: Some("https://example.com".into()),
-            env_key: None,
-            env_key_instructions: None,
-            experimental_bearer_token: None,
-            wire_api: WireApi::Responses,
-            query_params: None,
-            http_headers: None,
-            env_http_headers: None,
-            request_max_retries: None,
-            stream_max_retries: None,
-            stream_idle_timeout_ms: None,
-            requires_openai_auth: false,
-            supports_websockets: false,
-        };
-        let named_api = named_provider.to_api_provider(None).expect("api provider");
-        assert!(named_api.is_azure_responses_endpoint());
-
-        let negative_cases = [
-            "https://api.openai.com/v1",
-            "https://example.com/openai",
-            "https://myproxy.azurewebsites.net/openai",
-        ];
-        for base_url in negative_cases {
-            let provider = ModelProviderInfo {
-                name: "test".into(),
-                base_url: Some(base_url.into()),
-                env_key: None,
-                env_key_instructions: None,
-                experimental_bearer_token: None,
-                wire_api: WireApi::Responses,
-                query_params: None,
-                http_headers: None,
-                env_http_headers: None,
-                request_max_retries: None,
-                stream_max_retries: None,
-                stream_idle_timeout_ms: None,
-                requires_openai_auth: false,
-                supports_websockets: false,
-            };
-            let api = provider.to_api_provider(None).expect("api provider");
-            assert!(
-                !api.is_azure_responses_endpoint(),
-                "expected {base_url} not to be detected as Azure"
-            );
-        }
     }
 }

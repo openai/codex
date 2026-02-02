@@ -1370,10 +1370,7 @@ impl App {
                                 self.shutdown_current_thread().await;
                                 self.config = resume_config;
                                 tui.set_notification_method(self.config.tui_notification_method);
-                                self.file_search = FileSearchManager::new(
-                                    self.config.cwd.clone(),
-                                    self.app_event_tx.clone(),
-                                );
+                                self.file_search.update_search_dir(self.config.cwd.clone());
                                 let init = self.chatwidget_init_for_forked_or_resumed_thread(
                                     tui,
                                     self.config.clone(),
@@ -1878,7 +1875,7 @@ impl App {
                 let profile = self.active_profile.as_deref();
                 match ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_profile(profile)
-                    .set_model_personality(Some(personality))
+                    .set_personality(Some(personality))
                     .apply()
                     .await
                 {
@@ -2328,7 +2325,7 @@ impl App {
     }
 
     fn on_update_personality(&mut self, personality: Personality) {
-        self.config.model_personality = Some(personality);
+        self.config.personality = Some(personality);
         self.chat_widget.set_personality(personality);
     }
 
@@ -2942,6 +2939,7 @@ mod tests {
                 app.chat_widget.current_model(),
                 event,
                 is_first,
+                None,
             )) as Arc<dyn HistoryCell>
         };
 

@@ -815,6 +815,9 @@ impl ChatWidget {
             &model_for_header,
             event,
             self.show_welcome_banner,
+            self.auth_manager
+                .auth_cached()
+                .and_then(|auth| auth.account_plan_type()),
         );
         self.apply_session_info_cell(session_info_cell);
 
@@ -1017,6 +1020,7 @@ impl ChatWidget {
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
         self.plan_stream_controller = None;
+        self.otel_manager.reset_runtime_metrics();
         self.bottom_pane.clear_quit_shortcut_hint();
         self.quit_shortcut_expires_at = None;
         self.quit_shortcut_key = None;
@@ -1038,6 +1042,21 @@ impl ChatWidget {
             self.add_boxed_history(cell);
         }
         self.flush_unified_exec_wait_streak();
+        if !from_replay {
+            let runtime_metrics = self.otel_manager.runtime_metrics_summary();
+            if runtime_metrics.is_some() {
+                let elapsed_seconds = self
+                    .bottom_pane
+                    .status_widget()
+                    .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds);
+                self.add_to_history(history_cell::FinalMessageSeparator::new(
+                    elapsed_seconds,
+                    runtime_metrics,
+                ));
+            }
+            self.needs_final_message_separator = false;
+            self.had_work_activity = false;
+        }
         // Mark task stopped and request redraw now that all content is in history.
         self.agent_turn_running = false;
         self.update_task_running_state();
@@ -1887,7 +1906,10 @@ impl ChatWidget {
                     .status_widget()
                     .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds)
                     .map(|current| self.worked_elapsed_from(current));
-                self.add_to_history(history_cell::FinalMessageSeparator::new(elapsed_seconds));
+                self.add_to_history(history_cell::FinalMessageSeparator::new(
+                    elapsed_seconds,
+                    None,
+                ));
                 self.needs_final_message_separator = false;
                 self.had_work_activity = false;
             } else if self.needs_final_message_separator {
@@ -2713,8 +2735,8 @@ impl ChatWidget {
                 InputResult::Command(cmd) => {
                     self.dispatch_command(cmd);
                 }
-                InputResult::CommandWithArgs(cmd, args) => {
-                    self.dispatch_command_with_args(cmd, args);
+                InputResult::CommandWithArgs(cmd, args, text_elements) => {
+                    self.dispatch_command_with_args(cmd, args, text_elements);
                 }
                 InputResult::None => {}
             },
@@ -2764,6 +2786,7 @@ impl ChatWidget {
                 cmd.command()
             );
             self.add_to_history(history_cell::new_error_event(message));
+            self.bottom_pane.drain_pending_submission_state();
             self.request_redraw();
             return;
         }
@@ -3000,7 +3023,16 @@ impl ChatWidget {
         }
     }
 
-    fn dispatch_command_with_args(&mut self, cmd: SlashCommand, args: String) {
+    fn dispatch_command_with_args(
+        &mut self,
+        cmd: SlashCommand,
+        args: String,
+        _text_elements: Vec<TextElement>,
+    ) {
+        if !cmd.supports_inline_args() {
+            self.dispatch_command(cmd);
+            return;
+        }
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
@@ -3014,7 +3046,12 @@ impl ChatWidget {
         let trimmed = args.trim();
         match cmd {
             SlashCommand::Rename if !trimmed.is_empty() => {
-                let Some(name) = codex_core::util::normalize_thread_name(trimmed) else {
+                let Some((prepared_args, _prepared_elements)) =
+                    self.bottom_pane.prepare_inline_args_submission(false)
+                else {
+                    return;
+                };
+                let Some(name) = codex_core::util::normalize_thread_name(&prepared_args) else {
                     self.add_error_message("Thread name cannot be empty.".to_string());
                     return;
                 };
@@ -3023,20 +3060,50 @@ impl ChatWidget {
                 self.request_redraw();
                 self.app_event_tx
                     .send(AppEvent::CodexOp(Op::SetThreadName { name }));
+                self.bottom_pane.drain_pending_submission_state();
             }
-            SlashCommand::Collab | SlashCommand::Plan => {
-                let _ = trimmed;
+            SlashCommand::Plan if !trimmed.is_empty() => {
                 self.dispatch_command(cmd);
+                if self.active_mode_kind() != ModeKind::Plan {
+                    return;
+                }
+                let Some((prepared_args, prepared_elements)) =
+                    self.bottom_pane.prepare_inline_args_submission(true)
+                else {
+                    return;
+                };
+                let user_message = UserMessage {
+                    text: prepared_args,
+                    local_images: self
+                        .bottom_pane
+                        .take_recent_submission_images_with_placeholders(),
+                    text_elements: prepared_elements,
+                    mention_paths: self.bottom_pane.take_mention_paths(),
+                };
+                if self.is_session_configured() {
+                    self.reasoning_buffer.clear();
+                    self.full_reasoning_buffer.clear();
+                    self.set_status_header(String::from("Working"));
+                    self.submit_user_message(user_message);
+                } else {
+                    self.queue_user_message(user_message);
+                }
             }
             SlashCommand::Review if !trimmed.is_empty() => {
+                let Some((prepared_args, _prepared_elements)) =
+                    self.bottom_pane.prepare_inline_args_submission(false)
+                else {
+                    return;
+                };
                 self.submit_op(Op::Review {
                     review_request: ReviewRequest {
                         target: ReviewTarget::Custom {
-                            instructions: trimmed.to_string(),
+                            instructions: prepared_args,
                         },
                         user_facing_hint: None,
                     },
                 });
+                self.bottom_pane.drain_pending_submission_state();
             }
             _ => self.dispatch_command(cmd),
         }
@@ -3225,7 +3292,7 @@ impl ChatWidget {
         };
         let personality = self
             .config
-            .model_personality
+            .personality
             .filter(|_| self.config.features.enabled(Feature::Personality))
             .filter(|_| self.current_model_supports_personality());
         let op = Op::UserTurn {
@@ -3861,10 +3928,7 @@ impl ChatWidget {
     }
 
     fn open_personality_popup_for_current_model(&mut self) {
-        let current_personality = self
-            .config
-            .model_personality
-            .unwrap_or(Personality::Friendly);
+        let current_personality = self.config.personality.unwrap_or(Personality::Friendly);
         let personalities = [Personality::Friendly, Personality::Pragmatic];
         let supports_personality = self.current_model_supports_personality();
 
@@ -5165,7 +5229,7 @@ impl ChatWidget {
 
     /// Set the personality in the widget's config copy.
     pub(crate) fn set_personality(&mut self, personality: Personality) {
-        self.config.model_personality = Some(personality);
+        self.config.personality = Some(personality);
     }
 
     /// Set the model in the widget's config copy and stored collaboration mode.
