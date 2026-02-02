@@ -35,7 +35,10 @@ model_provider = "ollama"
     std::fs::write(codex_home.join("config.toml"), config_contents)?;
 
     let CodexCliOutput { exit_code, output } = run_codex_cli(codex_home, cwd).await?;
-    assert_ne!(0, exit_code, "Codex CLI should exit nonzero.");
+    assert_ne!(
+        0, exit_code,
+        "Codex CLI should exit nonzero. Output was:\n{output}"
+    );
     assert!(
         output.contains("ERROR: Failed to initialize codex:"),
         "expected startup error in output, got: {output}"

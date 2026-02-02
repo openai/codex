@@ -375,7 +375,8 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 ts_msg!(self, "{}", title.style(title_style));
 
                 if let Ok(res) = result {
-                    let val: serde_json::Value = res.into();
+                    let val = serde_json::to_value(res)
+                        .unwrap_or_else(|_| serde_json::Value::String("<result>".to_string()));
                     let pretty =
                         serde_json::to_string_pretty(&val).unwrap_or_else(|_| val.to_string());
 
