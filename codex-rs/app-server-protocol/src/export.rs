@@ -329,10 +329,30 @@ where
 }
 
 fn write_pretty_json(path: PathBuf, value: &impl Serialize) -> Result<()> {
-    let json = serde_json::to_vec_pretty(value)
+    let json_value = serde_json::to_value(value)
+        .with_context(|| format!("Failed to serialize JSON schema to {}", path.display()))?;
+    let json_value = canonicalize(&json_value);
+    let json = serde_json::to_vec_pretty(&json_value)
         .with_context(|| format!("Failed to serialize JSON schema to {}", path.display()))?;
     fs::write(&path, json).with_context(|| format!("Failed to write {}", path.display()))?;
     Ok(())
+}
+
+/// Canonicalize a JSON value by sorting its keys.
+fn canonicalize(value: &Value) -> Value {
+    match value {
+        Value::Array(items) => Value::Array(items.iter().map(canonicalize).collect()),
+        Value::Object(map) => {
+            let mut entries: Vec<_> = map.iter().collect();
+            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+            let mut sorted = Map::with_capacity(map.len());
+            for (key, child) in entries {
+                sorted.insert(key.clone(), canonicalize(child));
+            }
+            Value::Object(sorted)
+        }
+        _ => value.clone(),
+    }
 }
 
 /// Split a fully-qualified type name like "v2::Type" into its namespace and logical name.
