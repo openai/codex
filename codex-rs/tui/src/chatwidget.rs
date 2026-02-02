@@ -6399,84 +6399,175 @@ async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Option<RateLimi
     }
 }
 
-pub fn build_status_line_payload(chat: &ChatWidget, config: &Config) -> serde_json::Value {
-    let mut payload = serde_json::Map::new();
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StatusLineInfo {
+    pub session_id: Option<ThreadId>,
+    pub transcript_path: Option<PathBuf>,
+    pub cwd: PathBuf,
+    pub workspace: StatusLineWorkspace,
+    pub model: StatusLineModel,
+    pub version: String,
+    pub cost: StatusLineCost,
+    pub context_window: StatusLineContextWindow,
+    pub usage: Option<StatusLineUsage>,
+}
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StatusLineWorkspace {
+    pub project_dir: PathBuf,
+    pub current_dir: PathBuf,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StatusLineModel {
+    pub id: String,
+    pub display_name: String,
+    pub reasoning_level: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StatusLineCost {
+    pub total_lines_added: usize,
+    pub total_lines_removed: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StatusLineContextWindow {
+    pub total_input_tokens: i64,
+    pub total_output_tokens: i64,
+    pub context_window_size: Option<i64>,
+    pub used_percentage: Option<f64>,
+    pub remaining_percentage: Option<f64>,
+    pub current_usage: StatusLineCurrentUsage,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StatusLineCurrentUsage {
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_input_tokens: i64,
+    pub reasoning_output_tokens: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StatusLineUsageLimit {
+    pub percent_left: f64,
+    pub resets_at: Option<String>,
+    pub window_minutes: Option<i64>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StatusLineUsage {
+    pub limit_5h: Option<StatusLineUsageLimit>,
+    pub limit_7d: Option<StatusLineUsageLimit>,
+}
+
+fn status_line_usage_limit(
+    used_percent: f64,
+    resets_at: Option<String>,
+    window_minutes: Option<i64>,
+) -> StatusLineUsageLimit {
+    StatusLineUsageLimit {
+        percent_left: (100.0f64 - used_percent).clamp(0.0f64, 100.0f64),
+        resets_at,
+        window_minutes,
+    }
+}
+
+fn status_line_usage_payload(chat: &ChatWidget) -> Option<StatusLineUsage> {
+    let auth = chat.auth_manager.auth_cached()?;
+    if !auth.is_chatgpt_auth() {
+        return None;
+    }
+
+    let snapshot = chat.rate_limit_snapshot.as_ref()?;
+    let payload = StatusLineUsage {
+        limit_5h: snapshot.primary.as_ref().map(|window| {
+            status_line_usage_limit(
+                window.used_percent,
+                window.resets_at.clone(),
+                window.window_minutes,
+            )
+        }),
+        limit_7d: snapshot.secondary.as_ref().map(|window| {
+            status_line_usage_limit(
+                window.used_percent,
+                window.resets_at.clone(),
+                window.window_minutes,
+            )
+        }),
+    };
+
+    if payload.limit_5h.is_none() && payload.limit_7d.is_none() {
+        return None;
+    }
+
+    Some(payload)
+}
+
+pub fn build_status_line_payload(chat: &ChatWidget, config: &Config) -> StatusLineInfo {
+    let session_id = chat.thread_id;
+    let transcript_path = chat.current_rollout_path.clone();
     let cwd = chat.current_cwd.as_ref().unwrap_or(&config.cwd);
-
-    payload.insert(
-        "session_id".to_string(),
-        chat.thread_id
-            .map(|id| id.to_string().into())
-            .unwrap_or(serde_json::Value::Null),
-    );
-    payload.insert(
-        "transcript_path".to_string(),
-        chat.current_rollout_path
-            .as_ref()
-            .map(|path| path.to_string_lossy().to_string().into())
-            .unwrap_or(serde_json::Value::Null),
-    );
-    payload.insert("cwd".to_string(), cwd.to_string_lossy().to_string().into());
-
     let project_dir = codex_core::git_info::resolve_root_git_project_for_trust(cwd)
         .unwrap_or_else(|| cwd.clone());
-
-    let workspace = serde_json::json!({
-        "project_dir": project_dir.to_string_lossy(),
-        "current_dir": cwd.to_string_lossy(),
-    });
-
-    payload.insert("workspace".to_string(), workspace);
-
-    let model = serde_json::json!({
-        "id": chat.current_model(),
-        "display_name": chat.models_manager.try_list_models(&chat.config).ok()
-            .and_then(|models| models.into_iter().find(|m| m.model == chat.current_model()))
-            .map(|m| m.display_name)
-            .unwrap_or_else(|| chat.current_model().to_string()),
-        "reasoning_level": chat.effective_reasoning_effort(),
-    });
-
-    payload.insert("model".to_string(), model);
-    payload.insert("version".to_string(), CODEX_CLI_VERSION.into());
-
-    let cost = serde_json::json!({
-        "total_lines_added": chat.total_lines_added,
-        "total_lines_removed": chat.total_lines_removed,
-    });
-
-    payload.insert("cost".to_string(), cost);
-
-    let context_window_size = chat
-        .token_info
-        .as_ref()
-        .and_then(|ti| ti.model_context_window);
+    let reasoning_level = chat
+        .effective_reasoning_effort()
+        .map(|effort| effort.to_string())
+        .unwrap_or_else(|| "none".to_string());
+    let version = CODEX_CLI_VERSION.to_string();
+    let default_usage = TokenUsage::default();
+    let (context_usage, context_window_size) = match chat.token_info.as_ref() {
+        Some(info) => (&info.last_token_usage, info.model_context_window),
+        None => (&default_usage, config.model_context_window),
+    };
     let remaining_percentage = context_window_size
-        .map(|cws| chat.token_usage().percent_of_context_window_remaining(cws) as f64);
+        .map(|cws| context_usage.percent_of_context_window_remaining(cws) as f64);
     let used_percentage = remaining_percentage.map(|rp| 100f64 - rp);
-    let input_tokens = chat.token_usage().input_tokens;
-    let output_tokens = chat.token_usage().output_tokens;
-    let cache_read_input_tokens = chat.token_usage().cached_input_tokens;
-    let reasoning_output_tokens = chat.token_usage().reasoning_output_tokens;
+    let model_display_name = chat
+        .models_manager
+        .try_list_models(&chat.config)
+        .ok()
+        .and_then(|models| models.into_iter().find(|m| m.model == chat.current_model()))
+        .map(|m| m.display_name)
+        .unwrap_or_else(|| chat.current_model().to_string());
 
-    let context_window = serde_json::json!({
-        "total_input_tokens": chat.token_usage().input_tokens,
-        "total_output_tokens": chat.token_usage().output_tokens,
-        "context_window_size": context_window_size,
-        "used_percentage": used_percentage,
-        "remaining_percentage": remaining_percentage,
-        "current_usage": {
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "cache_read_input_tokens": cache_read_input_tokens,
-            "reasoning_output_tokens": reasoning_output_tokens,
-        }
-    });
-    payload.insert("context_window".to_string(), context_window);
+    let payload = StatusLineInfo {
+        session_id,
+        transcript_path,
+        cwd: cwd.clone(),
+        workspace: StatusLineWorkspace {
+            project_dir,
+            current_dir: cwd.clone(),
+        },
+        model: StatusLineModel {
+            id: chat.current_model().to_string(),
+            display_name: model_display_name,
+            reasoning_level,
+        },
+        version,
+        cost: StatusLineCost {
+            total_lines_added: chat.total_lines_added,
+            total_lines_removed: chat.total_lines_removed,
+        },
+        context_window: StatusLineContextWindow {
+            total_input_tokens: context_usage.input_tokens,
+            total_output_tokens: context_usage.output_tokens,
+            context_window_size,
+            used_percentage,
+            remaining_percentage,
+            current_usage: StatusLineCurrentUsage {
+                input_tokens: context_usage.input_tokens,
+                output_tokens: context_usage.output_tokens,
+                cache_read_input_tokens: context_usage.cached_input_tokens,
+                reasoning_output_tokens: context_usage.reasoning_output_tokens,
+            },
+        },
+        usage: status_line_usage_payload(chat),
+    };
 
     tracing::debug!("status line payload: {:#?}", payload);
-    serde_json::Value::Object(payload)
+    payload
 }
 
 #[cfg(test)]
