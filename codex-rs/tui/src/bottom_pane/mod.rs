@@ -218,6 +218,12 @@ impl BottomPane {
         self.composer.take_mention_paths()
     }
 
+    /// Clear pending attachments and mention paths e.g. when a slash command doesn't submit text.
+    pub(crate) fn drain_pending_submission_state(&mut self) {
+        let _ = self.take_recent_submission_images_with_placeholders();
+        let _ = self.take_mention_paths();
+    }
+
     pub fn set_steer_enabled(&mut self, enabled: bool) {
         self.composer.set_steer_enabled(enabled);
     }
@@ -404,6 +410,7 @@ impl BottomPane {
     ) {
         self.composer
             .set_text_content(text, text_elements, local_image_paths);
+        self.composer.move_cursor_to_end();
         self.request_redraw();
     }
 
@@ -785,6 +792,13 @@ impl BottomPane {
     ) -> Vec<LocalImageAttachment> {
         self.composer
             .take_recent_submission_images_with_placeholders()
+    }
+
+    pub(crate) fn prepare_inline_args_submission(
+        &mut self,
+        record_history: bool,
+    ) -> Option<(String, Vec<TextElement>)> {
+        self.composer.prepare_inline_args_submission(record_history)
     }
 
     fn as_renderable(&'_ self) -> RenderableItem<'_> {
