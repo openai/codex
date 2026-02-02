@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::DateTime;
 use chrono::Utc;
+use codex_common::fuzzy_match::fuzzy_match;
 use codex_core::Cursor;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
@@ -37,11 +39,18 @@ use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
 use codex_protocol::ThreadId;
+use codex_protocol::items::AgentMessageContent;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMetaLine;
 
 const PAGE_SIZE: usize = 25;
 const LOAD_NEAR_THRESHOLD: usize = 5;
+const MAX_SEARCH_LOADS: usize = 4;
+const PREVIEW_SCORE_BOOST: i32 = -20;
+const THREAD_NAME_SCORE_BOOST: i32 = -40;
 #[derive(Debug, Clone)]
 pub enum SessionSelection {
     StartFresh,
@@ -90,11 +99,22 @@ struct PageLoadRequest {
 
 type PageLoader = Arc<dyn Fn(PageLoadRequest) + Send + Sync>;
 
+#[derive(Clone)]
+struct SearchLoadRequest {
+    path: PathBuf,
+}
+
+type SearchLoader = Arc<dyn Fn(SearchLoadRequest) + Send + Sync>;
+
 enum BackgroundEvent {
     PageLoaded {
         request_token: usize,
         search_token: Option<usize>,
         page: std::io::Result<ThreadsPage>,
+    },
+    SearchLoaded {
+        path: PathBuf,
+        text: std::io::Result<String>,
     },
 }
 
@@ -174,10 +194,22 @@ async fn run_session_picker(
         });
     });
 
+    let search_loader: SearchLoader = Arc::new(move |request: SearchLoadRequest| {
+        let tx = bg_tx.clone();
+        tokio::spawn(async move {
+            let text = load_rollout_search_text(&request.path).await;
+            let _ = tx.send(BackgroundEvent::SearchLoaded {
+                path: request.path,
+                text,
+            });
+        });
+    });
+
     let mut state = PickerState::new(
         codex_home.to_path_buf(),
         alt.tui.frame_requester(),
         page_loader,
+        search_loader,
         default_provider.clone(),
         show_all,
         filter_cwd,
@@ -255,12 +287,16 @@ struct PickerState {
     next_request_token: usize,
     next_search_token: usize,
     page_loader: PageLoader,
+    search_loader: SearchLoader,
     view_rows: Option<usize>,
     default_provider: String,
     show_all: bool,
     filter_cwd: Option<PathBuf>,
     action: SessionPickerAction,
     thread_name_cache: HashMap<ThreadId, Option<String>>,
+    pending_search_paths: HashSet<PathBuf>,
+    search_queue: VecDeque<PathBuf>,
+    active_search_loads: usize,
 }
 
 struct PaginationState {
@@ -322,6 +358,8 @@ struct Row {
     updated_at: Option<DateTime<Utc>>,
     cwd: Option<PathBuf>,
     git_branch: Option<String>,
+    search_text: Option<String>,
+    search_failed: bool,
 }
 
 impl Row {
@@ -329,16 +367,22 @@ impl Row {
         self.thread_name.as_deref().unwrap_or(&self.preview)
     }
 
-    fn matches_query(&self, query: &str) -> bool {
-        if self.preview.to_lowercase().contains(query) {
-            return true;
-        }
-        if let Some(thread_name) = self.thread_name.as_ref()
-            && thread_name.to_lowercase().contains(query)
+    fn fuzzy_score(&self, query: &str) -> Option<i32> {
+        let mut best = None;
+        if let Some(thread_name) = self.thread_name.as_deref()
+            && let Some((_, score)) = fuzzy_match(thread_name, query)
         {
-            return true;
+            best = best_score(best, score.saturating_add(THREAD_NAME_SCORE_BOOST));
         }
-        false
+        if let Some((_, score)) = fuzzy_match(self.preview.as_str(), query) {
+            best = best_score(best, score.saturating_add(PREVIEW_SCORE_BOOST));
+        }
+        if let Some(search_text) = self.search_text.as_deref()
+            && let Some((_, score)) = fuzzy_match(search_text, query)
+        {
+            best = best_score(best, score);
+        }
+        best
     }
 }
 
@@ -347,6 +391,7 @@ impl PickerState {
         codex_home: PathBuf,
         requester: FrameRequester,
         page_loader: PageLoader,
+        search_loader: SearchLoader,
         default_provider: String,
         show_all: bool,
         filter_cwd: Option<PathBuf>,
@@ -371,12 +416,16 @@ impl PickerState {
             next_request_token: 0,
             next_search_token: 0,
             page_loader,
+            search_loader,
             view_rows: None,
             default_provider,
             show_all,
             filter_cwd,
             action,
             thread_name_cache: HashMap::new(),
+            pending_search_paths: HashSet::new(),
+            search_queue: VecDeque::new(),
+            active_search_loads: 0,
         }
     }
 
@@ -461,6 +510,9 @@ impl PickerState {
         self.seen_paths.clear();
         self.search_state = SearchState::Idle;
         self.selected = 0;
+        self.pending_search_paths.clear();
+        self.search_queue.clear();
+        self.active_search_loads = 0;
 
         let request_token = self.allocate_request_token();
         self.pagination.loading = LoadingState::Pending(PendingLoad {
@@ -498,6 +550,35 @@ impl PickerState {
                 self.update_thread_names().await;
                 let completed_token = pending.search_token.or(search_token);
                 self.continue_search_if_token_matches(completed_token);
+            }
+            BackgroundEvent::SearchLoaded { path, text } => {
+                self.active_search_loads = self.active_search_loads.saturating_sub(1);
+                self.pending_search_paths.remove(&path);
+                match text {
+                    Ok(text) => {
+                        let mut updated = false;
+                        for row in &mut self.all_rows {
+                            if row.path == path {
+                                row.search_text = Some(text.clone());
+                                row.search_failed = false;
+                                updated = true;
+                                break;
+                            }
+                        }
+                        if updated && !self.query.is_empty() {
+                            self.apply_filter();
+                        }
+                    }
+                    Err(_) => {
+                        for row in &mut self.all_rows {
+                            if row.path == path {
+                                row.search_failed = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                self.drain_search_queue();
             }
         }
         Ok(())
@@ -577,15 +658,40 @@ impl PickerState {
     }
 
     fn apply_filter(&mut self) {
-        let base_iter = self
+        let base_rows: Vec<Row> = self
             .all_rows
             .iter()
-            .filter(|row| self.row_matches_filter(row));
+            .filter(|row| self.row_matches_filter(row))
+            .cloned()
+            .collect();
         if self.query.is_empty() {
-            self.filtered_rows = base_iter.cloned().collect();
+            self.filtered_rows = base_rows;
         } else {
-            let q = self.query.to_lowercase();
-            self.filtered_rows = base_iter.filter(|r| r.matches_query(&q)).cloned().collect();
+            let q = self.query.clone();
+            let mut matches: Vec<(i32, Row)> = Vec::new();
+            let mut pending_paths = Vec::new();
+            for row in &base_rows {
+                if row.search_text.is_none()
+                    && !row.search_failed
+                    && !self.pending_search_paths.contains(&row.path)
+                {
+                    pending_paths.push(row.path.clone());
+                }
+                if let Some(score) = row.fuzzy_score(&q) {
+                    matches.push((score, row.clone()));
+                }
+            }
+            for path in pending_paths {
+                self.queue_search_load(path);
+            }
+            matches.sort_by(|(score_a, row_a), (score_b, row_b)| {
+                score_a
+                    .cmp(score_b)
+                    .then_with(|| row_b.updated_at.cmp(&row_a.updated_at))
+                    .then_with(|| row_b.created_at.cmp(&row_a.created_at))
+                    .then_with(|| row_a.path.cmp(&row_b.path))
+            });
+            self.filtered_rows = matches.into_iter().map(|(_, row)| row).collect();
         }
         if self.selected >= self.filtered_rows.len() {
             self.selected = self.filtered_rows.len().saturating_sub(1);
@@ -595,6 +701,24 @@ impl PickerState {
         }
         self.ensure_selected_visible();
         self.request_frame();
+    }
+
+    fn queue_search_load(&mut self, path: PathBuf) {
+        if !self.pending_search_paths.insert(path.clone()) {
+            return;
+        }
+        self.search_queue.push_back(path);
+        self.drain_search_queue();
+    }
+
+    fn drain_search_queue(&mut self) {
+        while self.active_search_loads < MAX_SEARCH_LOADS {
+            let Some(path) = self.search_queue.pop_front() else {
+                break;
+            };
+            self.active_search_loads = self.active_search_loads.saturating_add(1);
+            (self.search_loader)(SearchLoadRequest { path });
+        }
     }
 
     fn row_matches_filter(&self, row: &Row) -> bool {
@@ -792,6 +916,8 @@ fn head_to_row(item: &ThreadItem) -> Row {
         updated_at,
         cwd,
         git_branch,
+        search_text: None,
+        search_failed: false,
     }
 }
 
@@ -840,6 +966,127 @@ fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {
             Some(TurnItem::UserMessage(user)) => Some(user.message()),
             _ => None,
         })
+}
+
+async fn load_rollout_search_text(path: &Path) -> std::io::Result<String> {
+    let text = tokio::fs::read_to_string(path).await?;
+    if text.trim().is_empty() {
+        return Ok(String::new());
+    }
+    let mut messages: Vec<String> = Vec::new();
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let rollout_line: RolloutLine = match serde_json::from_str(line) {
+            Ok(line) => line,
+            Err(_) => continue,
+        };
+        match rollout_line.item {
+            RolloutItem::ResponseItem(item) => {
+                if let Some(turn_item) = codex_core::parse_turn_item(&item) {
+                    collect_turn_item_text(turn_item, &mut messages);
+                }
+            }
+            RolloutItem::Compacted(item) => {
+                messages.push(item.message);
+            }
+            RolloutItem::EventMsg(event) => match event {
+                EventMsg::UserMessage(user) => messages.push(user.message),
+                EventMsg::AgentMessage(agent) => messages.push(agent.message),
+                EventMsg::Error(_)
+                | EventMsg::Warning(_)
+                | EventMsg::ContextCompacted(_)
+                | EventMsg::ThreadRolledBack(_)
+                | EventMsg::TurnStarted(_)
+                | EventMsg::TurnComplete(_)
+                | EventMsg::TokenCount(_)
+                | EventMsg::AgentMessageDelta(_)
+                | EventMsg::AgentReasoning(_)
+                | EventMsg::AgentReasoningDelta(_)
+                | EventMsg::AgentReasoningRawContent(_)
+                | EventMsg::AgentReasoningRawContentDelta(_)
+                | EventMsg::AgentReasoningSectionBreak(_)
+                | EventMsg::SessionConfigured(_)
+                | EventMsg::ThreadNameUpdated(_)
+                | EventMsg::McpStartupUpdate(_)
+                | EventMsg::McpStartupComplete(_)
+                | EventMsg::McpToolCallBegin(_)
+                | EventMsg::McpToolCallEnd(_)
+                | EventMsg::WebSearchBegin(_)
+                | EventMsg::WebSearchEnd(_)
+                | EventMsg::ExecCommandBegin(_)
+                | EventMsg::ExecCommandOutputDelta(_)
+                | EventMsg::TerminalInteraction(_)
+                | EventMsg::ExecCommandEnd(_)
+                | EventMsg::ViewImageToolCall(_)
+                | EventMsg::ExecApprovalRequest(_)
+                | EventMsg::RequestUserInput(_)
+                | EventMsg::DynamicToolCallRequest(_)
+                | EventMsg::ElicitationRequest(_)
+                | EventMsg::ApplyPatchApprovalRequest(_)
+                | EventMsg::DeprecationNotice(_)
+                | EventMsg::BackgroundEvent(_)
+                | EventMsg::UndoStarted(_)
+                | EventMsg::UndoCompleted(_)
+                | EventMsg::StreamError(_)
+                | EventMsg::PatchApplyBegin(_)
+                | EventMsg::PatchApplyEnd(_)
+                | EventMsg::TurnDiff(_)
+                | EventMsg::GetHistoryEntryResponse(_)
+                | EventMsg::McpListToolsResponse(_)
+                | EventMsg::ListCustomPromptsResponse(_)
+                | EventMsg::ListSkillsResponse(_)
+                | EventMsg::PlanUpdate(_)
+                | EventMsg::TurnAborted(_)
+                | EventMsg::EnteredReviewMode(_)
+                | EventMsg::ExitedReviewMode(_)
+                | EventMsg::RawResponseItem(_)
+                | EventMsg::ItemStarted(_)
+                | EventMsg::ItemCompleted(_)
+                | EventMsg::AgentMessageContentDelta(_)
+                | EventMsg::PlanDelta(_)
+                | EventMsg::ReasoningContentDelta(_)
+                | EventMsg::ReasoningRawContentDelta(_)
+                | EventMsg::CollabAgentSpawnBegin(_)
+                | EventMsg::CollabAgentSpawnEnd(_)
+                | EventMsg::CollabAgentInteractionBegin(_)
+                | EventMsg::CollabAgentInteractionEnd(_)
+                | EventMsg::CollabWaitingBegin(_)
+                | EventMsg::CollabWaitingEnd(_)
+                | EventMsg::CollabCloseBegin(_)
+                | EventMsg::CollabCloseEnd(_)
+                | EventMsg::SkillsUpdateAvailable
+                | EventMsg::ShutdownComplete => {}
+            },
+            RolloutItem::SessionMeta(_) => {}
+            RolloutItem::TurnContext(_) => {}
+        }
+    }
+    Ok(messages.join("\n"))
+}
+
+fn collect_turn_item_text(item: TurnItem, out: &mut Vec<String>) {
+    match item {
+        TurnItem::UserMessage(user) => out.push(user.message()),
+        TurnItem::AgentMessage(agent) => {
+            for content in agent.content {
+                let AgentMessageContent::Text { text } = content;
+                out.push(text);
+            }
+        }
+        TurnItem::Plan(_)
+        | TurnItem::Reasoning(_)
+        | TurnItem::WebSearch(_)
+        | TurnItem::ContextCompaction(_) => {}
+    }
+}
+
+fn best_score(current: Option<i32>, candidate: i32) -> Option<i32> {
+    match current {
+        Some(existing) => Some(existing.min(candidate)),
+        None => Some(candidate),
+    }
 }
 
 fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
@@ -1014,6 +1261,7 @@ fn render_list(
 fn render_empty_state_line(state: &PickerState) -> Line<'static> {
     if !state.query.is_empty() {
         if state.search_state.is_active()
+            || !state.pending_search_paths.is_empty()
             || (state.pagination.loading.is_pending() && state.pagination.next_cursor.is_some())
         {
             return vec!["Searching…".italic().dim()].into();
@@ -1333,6 +1581,8 @@ mod tests {
             updated_at: None,
             cwd: None,
             git_branch: None,
+            search_text: None,
+            search_failed: false,
         };
 
         assert_eq!(row.display_preview(), "My session");
@@ -1346,10 +1596,12 @@ mod tests {
         use ratatui::layout::Layout;
 
         let loader: PageLoader = Arc::new(|_| {});
+        let search_loader: SearchLoader = Arc::new(|_| {});
         let mut state = PickerState::new(
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
+            search_loader,
             String::from("openai"),
             true,
             None,
@@ -1367,6 +1619,8 @@ mod tests {
                 updated_at: Some(now - Duration::seconds(42)),
                 cwd: None,
                 git_branch: None,
+                search_text: None,
+                search_failed: false,
             },
             Row {
                 path: PathBuf::from("/tmp/b.jsonl"),
@@ -1377,6 +1631,8 @@ mod tests {
                 updated_at: Some(now - Duration::minutes(35)),
                 cwd: None,
                 git_branch: None,
+                search_text: None,
+                search_failed: false,
             },
             Row {
                 path: PathBuf::from("/tmp/c.jsonl"),
@@ -1387,6 +1643,8 @@ mod tests {
                 updated_at: Some(now - Duration::hours(2)),
                 cwd: None,
                 git_branch: None,
+                search_text: None,
+                search_failed: false,
             },
         ];
         state.all_rows = rows.clone();
@@ -1501,10 +1759,12 @@ mod tests {
         );
 
         let loader: PageLoader = Arc::new(|_| {});
+        let search_loader: SearchLoader = Arc::new(|_| {});
         let mut state = PickerState::new(
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
+            search_loader,
             String::from("openai"),
             true,
             None,
@@ -1614,10 +1874,12 @@ mod tests {
         std::fs::write(&session_index_path, out).expect("write session index");
 
         let loader: PageLoader = Arc::new(|_| {});
+        let search_loader: SearchLoader = Arc::new(|_| {});
         let mut state = PickerState::new(
             tempdir.path().to_path_buf(),
             FrameRequester::test_dummy(),
             loader,
+            search_loader,
             String::from("openai"),
             true,
             None,
@@ -1635,6 +1897,8 @@ mod tests {
                 updated_at: Some(now - Duration::days(2)),
                 cwd: None,
                 git_branch: None,
+                search_text: None,
+                search_failed: false,
             },
             Row {
                 path: PathBuf::from("/tmp/b.jsonl"),
@@ -1645,6 +1909,8 @@ mod tests {
                 updated_at: Some(now - Duration::days(3)),
                 cwd: None,
                 git_branch: None,
+                search_text: None,
+                search_failed: false,
             },
         ];
         state.all_rows = rows.clone();
@@ -1681,10 +1947,12 @@ mod tests {
     #[test]
     fn pageless_scrolling_deduplicates_and_keeps_order() {
         let loader: PageLoader = Arc::new(|_| {});
+        let search_loader: SearchLoader = Arc::new(|_| {});
         let mut state = PickerState::new(
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
+            search_loader,
             String::from("openai"),
             true,
             None,
@@ -1749,11 +2017,13 @@ mod tests {
         let loader: PageLoader = Arc::new(move |req: PageLoadRequest| {
             request_sink.lock().unwrap().push(req);
         });
+        let search_loader: SearchLoader = Arc::new(|_| {});
 
         let mut state = PickerState::new(
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
+            search_loader,
             String::from("openai"),
             true,
             None,
@@ -1782,10 +2052,12 @@ mod tests {
     #[tokio::test]
     async fn page_navigation_uses_view_rows() {
         let loader: PageLoader = Arc::new(|_| {});
+        let search_loader: SearchLoader = Arc::new(|_| {});
         let mut state = PickerState::new(
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
+            search_loader,
             String::from("openai"),
             true,
             None,
@@ -1827,10 +2099,12 @@ mod tests {
     #[tokio::test]
     async fn up_at_bottom_does_not_scroll_when_visible() {
         let loader: PageLoader = Arc::new(|_| {});
+        let search_loader: SearchLoader = Arc::new(|_| {});
         let mut state = PickerState::new(
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
+            search_loader,
             String::from("openai"),
             true,
             None,
@@ -1871,11 +2145,13 @@ mod tests {
         let loader: PageLoader = Arc::new(move |req: PageLoadRequest| {
             request_sink.lock().unwrap().push(req);
         });
+        let search_loader: SearchLoader = Arc::new(|_| {});
 
         let mut state = PickerState::new(
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
+            search_loader,
             String::from("openai"),
             true,
             None,
