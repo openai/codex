@@ -101,6 +101,7 @@ use crate::client::ModelClient;
 use crate::client::ModelClientSession;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
+use crate::client_common::tools::ToolSpec;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::compact::collect_user_messages;
 use crate::config::Config;
@@ -3795,6 +3796,21 @@ fn codex_apps_connector_id(tool: &crate::mcp_connection_manager::ToolInfo) -> Op
     tool.connector_id.as_deref()
 }
 
+fn js_repl_tool_list_for_prompt(tools: &[ToolSpec]) -> String {
+    let mut names: Vec<String> = tools.iter().map(|tool| tool.name().to_string()).collect();
+    names.sort();
+    names.dedup();
+    names.retain(|name| !matches!(name.as_str(), "js_repl" | "js_repl_reset"));
+    if names.is_empty() {
+        return "none".to_string();
+    }
+    names
+        .into_iter()
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 struct SamplingRequestToolSelection<'a> {
     explicit_app_paths: &'a [String],
     skill_name_counts_lower: &'a HashMap<String, usize>,
@@ -3852,11 +3868,20 @@ async fn run_sampling_request(
 
     let model_supports_parallel = turn_context.model_info.supports_parallel_tool_calls;
 
-    let base_instructions = sess.get_base_instructions().await;
+    let all_tools = router.specs();
+    let tools =
+        crate::tools::spec::filter_tools_for_model(all_tools.clone(), &turn_context.tools_config);
+    let mut base_instructions = sess.get_base_instructions().await;
+    if turn_context.tools_config.js_repl_tools_only {
+        let tool_list = js_repl_tool_list_for_prompt(&all_tools);
+        base_instructions.text = base_instructions
+            .text
+            .replace("{{JS_REPL_TOOL_LIST}}", &tool_list);
+    }
 
     let prompt = Prompt {
         input,
-        tools: router.specs(),
+        tools,
         parallel_tool_calls: model_supports_parallel,
         base_instructions,
         personality: turn_context.personality,
@@ -5992,6 +6017,7 @@ mod tests {
                 Arc::clone(&turn_context),
                 tracker,
                 call,
+                crate::tools::router::ToolCallSource::Model,
             )
             .await
             .expect_err("expected fatal error");

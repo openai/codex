@@ -193,6 +193,9 @@
             "js_repl": {
               "type": "boolean"
             },
+            "js_repl_tools_only": {
+              "type": "boolean"
+            },
             "personality": {
               "type": "boolean"
             },
@@ -1215,6 +1218,9 @@
           "type": "boolean"
         },
         "js_repl": {
+          "type": "boolean"
+        },
+        "js_repl_tools_only": {
           "type": "boolean"
         },
         "personality": {

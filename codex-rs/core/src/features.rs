@@ -80,6 +80,8 @@ pub enum Feature {
     // Experimental
     /// Enable JavaScript REPL tools backed by a persistent Node kernel.
     JsRepl,
+    /// Only expose js_repl tools directly to the model.
+    JsReplToolsOnly,
     /// Use the single unified PTY-backed exec tool.
     UnifiedExec,
     /// Include the freeform apply_patch tool.
@@ -318,6 +320,10 @@ impl Features {
         }
 
         overrides.apply(&mut features);
+        if features.enabled(Feature::JsReplToolsOnly) && !features.enabled(Feature::JsRepl) {
+            tracing::warn!("js_repl_tools_only requires js_repl; disabling js_repl_tools_only");
+            features.disable(Feature::JsReplToolsOnly);
+        }
 
         features
     }
@@ -421,6 +427,16 @@ pub const FEATURES: &[FeatureSpec] = &[
             name: "JavaScript REPL",
             menu_description: "Run JavaScript cells with a persistent Node-backed kernel.",
             announcement: "NEW! Try the JavaScript REPL for persistent JS execution. Enable in /experimental!",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::JsReplToolsOnly,
+        key: "js_repl_tools_only",
+        stage: Stage::Experimental {
+            name: "JS REPL tool-only",
+            menu_description: "Require direct model tool calls to go through js_repl.",
+            announcement: "NEW! Route tool usage through JavaScript REPL with js_repl_tools_only.",
         },
         default_enabled: false,
     },
