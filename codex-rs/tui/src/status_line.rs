@@ -304,12 +304,18 @@ async fn run_request(request: &StatusLineRequest) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use codex_core::config::ConfigBuilder;
+    #[cfg(unix)]
     use pretty_assertions::assert_eq;
+    #[cfg(unix)]
     use tempfile::tempdir;
+    #[cfg(unix)]
     use tokio::sync::mpsc::unbounded_channel;
+    #[cfg(unix)]
     use tokio::time::timeout;
 
+    #[cfg(unix)]
     fn request(command: &[&str], payload: &str) -> StatusLineRequest {
         StatusLineRequest {
             command: command.iter().map(|v| (*v).to_string()).collect(),
