@@ -58,24 +58,17 @@ async fn download_and_install_codex_to_user_applications(dmg_url: &str) -> anyho
     let tmp_root = std::env::temp_dir().join(format!("codex-app-installer-{}", std::process::id()));
     std::fs::create_dir_all(&tmp_root)
         .with_context(|| format!("failed to create temp dir {}", tmp_root.display()))?;
+    let _tmp_guard = TempDirGuard::new(tmp_root.clone());
 
     let dmg_path = tmp_root.join("Codex.dmg");
     download_dmg(dmg_url, &dmg_path).await?;
 
     let mount_point = mount_dmg(&dmg_path).await?;
+    let _dmg_guard = DmgDetachGuard::new(mount_point.clone());
     let app_in_volume = find_codex_app_in_mount(&mount_point)
         .context("failed to locate Codex.app in mounted dmg")?;
 
     let dest_app = install_codex_app_bundle(&app_in_volume).await?;
-
-    let detach_result = detach_dmg(&mount_point).await;
-    let _ = std::fs::remove_dir_all(&tmp_root);
-    if let Err(err) = detach_result {
-        eprintln!(
-            "warning: failed to detach dmg at {}: {err}",
-            mount_point.display()
-        );
-    }
 
     Ok(dest_app)
 }
@@ -222,6 +215,51 @@ fn parse_hdiutil_attach_mount_point(output: &str) -> Option<String> {
             .find(|field| field.starts_with("/Volumes/"))
             .map(str::to_string)
     })
+}
+
+struct TempDirGuard {
+    path: PathBuf,
+}
+
+impl TempDirGuard {
+    fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+}
+
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        if let Err(err) = std::fs::remove_dir_all(&self.path) {
+            eprintln!(
+                "warning: failed to remove temp dir {}: {err}",
+                self.path.display()
+            );
+        }
+    }
+}
+
+struct DmgDetachGuard {
+    mount_point: PathBuf,
+}
+
+impl DmgDetachGuard {
+    fn new(mount_point: PathBuf) -> Self {
+        Self { mount_point }
+    }
+}
+
+impl Drop for DmgDetachGuard {
+    fn drop(&mut self) {
+        let mount_point = self.mount_point.clone();
+        tokio::spawn(async move {
+            if let Err(err) = detach_dmg(&mount_point).await {
+                eprintln!(
+                    "warning: failed to detach dmg at {}: {err}",
+                    mount_point.display()
+                );
+            }
+        });
+    }
 }
 
 #[cfg(test)]
