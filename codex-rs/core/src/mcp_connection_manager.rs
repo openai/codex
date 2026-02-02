@@ -23,6 +23,8 @@ use async_channel::Sender;
 use codex_async_utils::CancelErr;
 use codex_async_utils::OrCancelExt;
 use codex_protocol::approvals::ElicitationRequestEvent;
+use codex_protocol::mcp::CallToolResult;
+use codex_protocol::mcp::RequestId as ProtocolRequestId;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::McpStartupCompleteEvent;
@@ -37,22 +39,23 @@ use codex_rmcp_client::SendElicitation;
 use futures::future::BoxFuture;
 use futures::future::FutureExt;
 use futures::future::Shared;
-use mcp_types::ClientCapabilities;
-use mcp_types::Implementation;
-use mcp_types::ListResourceTemplatesRequestParams;
-use mcp_types::ListResourceTemplatesResult;
-use mcp_types::ListResourcesRequestParams;
-use mcp_types::ListResourcesResult;
-use mcp_types::ReadResourceRequestParams;
-use mcp_types::ReadResourceResult;
-use mcp_types::RequestId;
-use mcp_types::Resource;
-use mcp_types::ResourceTemplate;
-use mcp_types::Tool;
+use rmcp::model::ClientCapabilities;
+use rmcp::model::ElicitationCapability;
+use rmcp::model::Implementation;
+use rmcp::model::InitializeRequestParam;
+use rmcp::model::ListResourceTemplatesResult;
+use rmcp::model::ListResourcesResult;
+use rmcp::model::PaginatedRequestParam;
+use rmcp::model::ProtocolVersion;
+use rmcp::model::ReadResourceRequestParam;
+use rmcp::model::ReadResourceResult;
+use rmcp::model::RequestId;
+use rmcp::model::Resource;
+use rmcp::model::ResourceTemplate;
+use rmcp::model::Tool;
 
 use serde::Deserialize;
 use serde::Serialize;
-use serde_json::json;
 use sha1::Digest;
 use sha1::Sha1;
 use tokio::sync::Mutex;
@@ -198,7 +201,14 @@ impl ElicitationRequestManager {
                         id: "mcp_elicitation_request".to_string(),
                         msg: EventMsg::ElicitationRequest(ElicitationRequestEvent {
                             server_name,
-                            id,
+                            id: match id.clone() {
+                                rmcp::model::NumberOrString::String(value) => {
+                                    ProtocolRequestId::String(value.to_string())
+                                }
+                                rmcp::model::NumberOrString::Number(value) => {
+                                    ProtocolRequestId::Integer(value)
+                                }
+                            },
                             message: elicitation.message,
                         }),
                     })
@@ -493,7 +503,7 @@ impl McpConnectionManager {
                 let mut cursor: Option<String> = None;
 
                 loop {
-                    let params = cursor.as_ref().map(|next| ListResourcesRequestParams {
+                    let params = cursor.as_ref().map(|next| PaginatedRequestParam {
                         cursor: Some(next.clone()),
                     });
                     let response = match client.list_resources(params, timeout).await {
@@ -558,11 +568,9 @@ impl McpConnectionManager {
                 let mut cursor: Option<String> = None;
 
                 loop {
-                    let params = cursor
-                        .as_ref()
-                        .map(|next| ListResourceTemplatesRequestParams {
-                            cursor: Some(next.clone()),
-                        });
+                    let params = cursor.as_ref().map(|next| PaginatedRequestParam {
+                        cursor: Some(next.clone()),
+                    });
                     let response = match client.list_resource_templates(params, timeout).await {
                         Ok(result) => result,
                         Err(err) => return (server_name_cloned, Err(err)),
@@ -615,7 +623,7 @@ impl McpConnectionManager {
         server: &str,
         tool: &str,
         arguments: Option<serde_json::Value>,
-    ) -> Result<mcp_types::CallToolResult> {
+    ) -> Result<CallToolResult> {
         let client = self.client_by_name(server).await?;
         if !client.tool_filter.allows(tool) {
             return Err(anyhow!(
@@ -623,18 +631,34 @@ impl McpConnectionManager {
             ));
         }
 
-        client
+        let result: rmcp::model::CallToolResult = client
             .client
             .call_tool(tool.to_string(), arguments, client.tool_timeout)
             .await
-            .with_context(|| format!("tool call failed for `{server}/{tool}`"))
+            .with_context(|| format!("tool call failed for `{server}/{tool}`"))?;
+
+        let content = result
+            .content
+            .into_iter()
+            .map(|content| {
+                serde_json::to_value(content)
+                    .unwrap_or_else(|_| serde_json::Value::String("<content>".to_string()))
+            })
+            .collect();
+
+        Ok(CallToolResult {
+            content,
+            structured_content: result.structured_content,
+            is_error: result.is_error,
+            meta: result.meta.and_then(|meta| serde_json::to_value(meta).ok()),
+        })
     }
 
     /// List resources from the specified server.
     pub async fn list_resources(
         &self,
         server: &str,
-        params: Option<ListResourcesRequestParams>,
+        params: Option<PaginatedRequestParam>,
     ) -> Result<ListResourcesResult> {
         let managed = self.client_by_name(server).await?;
         let timeout = managed.tool_timeout;
@@ -650,7 +674,7 @@ impl McpConnectionManager {
     pub async fn list_resource_templates(
         &self,
         server: &str,
-        params: Option<ListResourceTemplatesRequestParams>,
+        params: Option<PaginatedRequestParam>,
     ) -> Result<ListResourceTemplatesResult> {
         let managed = self.client_by_name(server).await?;
         let client = managed.client.clone();
@@ -666,7 +690,7 @@ impl McpConnectionManager {
     pub async fn read_resource(
         &self,
         server: &str,
-        params: ReadResourceRequestParams,
+        params: ReadResourceRequestParam,
     ) -> Result<ReadResourceResult> {
         let managed = self.client_by_name(server).await?;
         let client = managed.client.clone();
@@ -849,25 +873,25 @@ async fn start_server_task(
     tx_event: Sender<Event>,
     elicitation_requests: ElicitationRequestManager,
 ) -> Result<ManagedClient, StartupOutcomeError> {
-    let params = mcp_types::InitializeRequestParams {
+    let params = InitializeRequestParam {
         capabilities: ClientCapabilities {
             experimental: None,
             roots: None,
             sampling: None,
             // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
             // indicates this should be an empty object.
-            elicitation: Some(json!({})),
+            elicitation: Some(ElicitationCapability {
+                schema_validation: None,
+            }),
         },
         client_info: Implementation {
             name: "codex-mcp-client".to_owned(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
             title: Some("Codex".into()),
-            // This field is used by Codex when it is an MCP
-            // server: it should not be used when Codex is
-            // an MCP client.
-            user_agent: None,
+            icons: None,
+            website_url: None,
         },
-        protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_owned(),
+        protocol_version: ProtocolVersion::V_2025_06_18,
     };
 
     let send_elicitation = elicitation_requests.make_sender(server_name.clone(), tx_event);
@@ -964,7 +988,7 @@ async fn list_tools_for_client(
             }
             ToolInfo {
                 server_name: server_name.to_owned(),
-                tool_name: tool_def.name.clone(),
+                tool_name: tool_def.name.to_string(),
                 tool: tool_def,
                 connector_id: tool.connector_id,
                 connector_name,
@@ -1047,24 +1071,23 @@ mod mcp_init_error_display_tests {}
 mod tests {
     use super::*;
     use codex_protocol::protocol::McpAuthStatus;
-    use mcp_types::ToolInputSchema;
+    use rmcp::model::JsonObject;
     use std::collections::HashSet;
+    use std::sync::Arc;
 
     fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
         ToolInfo {
             server_name: server_name.to_string(),
             tool_name: tool_name.to_string(),
             tool: Tool {
-                annotations: None,
-                description: Some(format!("Test tool: {tool_name}")),
-                input_schema: ToolInputSchema {
-                    properties: None,
-                    required: None,
-                    r#type: "object".to_string(),
-                },
-                name: tool_name.to_string(),
-                output_schema: None,
+                name: tool_name.to_string().into(),
                 title: None,
+                description: Some(format!("Test tool: {tool_name}").into()),
+                input_schema: Arc::new(JsonObject::default()),
+                output_schema: None,
+                annotations: None,
+                icons: None,
+                meta: None,
             },
             connector_id: None,
             connector_name: None,
