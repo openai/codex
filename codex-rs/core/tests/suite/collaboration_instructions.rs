@@ -427,7 +427,8 @@ async fn collaboration_mode_update_emits_new_instruction_message_when_mode_chang
     let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
 
     let test = test_codex().build(&server).await?;
-    let collab_text = "mode-sensitive instructions";
+    let code_text = "code mode instructions";
+    let plan_text = "plan mode instructions";
 
     test.codex
         .submit(Op::OverrideTurnContext {
@@ -440,7 +441,7 @@ async fn collaboration_mode_update_emits_new_instruction_message_when_mode_chang
             summary: None,
             collaboration_mode: Some(collab_mode_with_mode_and_instructions(
                 ModeKind::Code,
-                Some(collab_text),
+                Some(code_text),
             )),
             personality: None,
         })
@@ -468,7 +469,7 @@ async fn collaboration_mode_update_emits_new_instruction_message_when_mode_chang
             summary: None,
             collaboration_mode: Some(collab_mode_with_mode_and_instructions(
                 ModeKind::Plan,
-                Some(collab_text),
+                Some(plan_text),
             )),
             personality: None,
         })
@@ -487,8 +488,10 @@ async fn collaboration_mode_update_emits_new_instruction_message_when_mode_chang
 
     let input = req2.single_request().input();
     let dev_texts = developer_texts(&input);
-    let collab_text = collab_xml(collab_text);
-    assert_eq!(count_exact(&dev_texts, &collab_text), 2);
+    let code_text = collab_xml(code_text);
+    let plan_text = collab_xml(plan_text);
+    assert_eq!(count_exact(&dev_texts, &code_text), 1);
+    assert_eq!(count_exact(&dev_texts, &plan_text), 1);
 
     Ok(())
 }
