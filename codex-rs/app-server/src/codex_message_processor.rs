@@ -202,6 +202,8 @@ use codex_utils_json_to_toml::json_to_toml;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::OsStr;
+use std::fs::FileTimes;
+use std::fs::OpenOptions;
 use std::io::Error as IoError;
 use std::path::Path;
 use std::path::PathBuf;
@@ -209,6 +211,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::SystemTime;
 use tokio::sync::Mutex;
 use tokio::sync::broadcast;
 use tokio::sync::oneshot;
@@ -1978,6 +1981,28 @@ impl CodexMessageProcessor {
                     message: format!("failed to unarchive thread: {err}"),
                     data: None,
                 })?;
+            tokio::task::spawn_blocking({
+                let restored_path = restored_path.clone();
+                move || -> std::io::Result<()> {
+                    let times = FileTimes::new().set_modified(SystemTime::now());
+                    OpenOptions::new()
+                        .append(true)
+                        .open(&restored_path)?
+                        .set_times(times)?;
+                    Ok(())
+                }
+            })
+            .await
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to update unarchived thread timestamp: {err}"),
+                data: None,
+            })?
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to update unarchived thread timestamp: {err}"),
+                data: None,
+            })?;
             if let Some(ctx) = state_db_ctx {
                 let _ = ctx
                     .mark_unarchived(thread_id, restored_path.as_path())
