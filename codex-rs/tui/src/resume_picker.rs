@@ -1580,6 +1580,104 @@ mod tests {
         assert_snapshot!("resume_picker_screen", snapshot);
     }
 
+    #[tokio::test]
+    async fn resume_picker_thread_names_snapshot() {
+        use crate::custom_terminal::Terminal;
+        use crate::test_backend::VT100Backend;
+        use ratatui::layout::Constraint;
+        use ratatui::layout::Layout;
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let session_index_path = tempdir.path().join("session_index.jsonl");
+
+        let id1 =
+            ThreadId::from_string("11111111-1111-1111-1111-111111111111").expect("thread id 1");
+        let id2 =
+            ThreadId::from_string("22222222-2222-2222-2222-222222222222").expect("thread id 2");
+        let entries = vec![
+            json!({
+                "id": id1,
+                "thread_name": "Keep this for now",
+                "updated_at": "2025-01-01T00:00:00Z",
+            }),
+            json!({
+                "id": id2,
+                "thread_name": "Named thread",
+                "updated_at": "2025-01-01T00:00:00Z",
+            }),
+        ];
+        let mut out = String::new();
+        for entry in entries {
+            out.push_str(&serde_json::to_string(&entry).expect("session index entry"));
+            out.push('\n');
+        }
+        std::fs::write(&session_index_path, out).expect("write session index");
+
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state = PickerState::new(
+            tempdir.path().to_path_buf(),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+            true,
+            None,
+            SessionPickerAction::Resume,
+        );
+
+        let now = Utc::now();
+        let rows = vec![
+            Row {
+                path: PathBuf::from("/tmp/a.jsonl"),
+                preview: String::from("First message preview"),
+                thread_id: Some(id1),
+                thread_name: None,
+                created_at: None,
+                updated_at: Some(now - Duration::days(2)),
+                cwd: None,
+                git_branch: None,
+            },
+            Row {
+                path: PathBuf::from("/tmp/b.jsonl"),
+                preview: String::from("Second message preview"),
+                thread_id: Some(id2),
+                thread_name: None,
+                created_at: None,
+                updated_at: Some(now - Duration::days(3)),
+                cwd: None,
+                git_branch: None,
+            },
+        ];
+        state.all_rows = rows.clone();
+        state.filtered_rows = rows;
+        state.view_rows = Some(2);
+        state.selected = 0;
+        state.scroll_top = 0;
+        state.update_view_rows(2);
+
+        state.update_thread_names().await;
+
+        let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all);
+
+        let width: u16 = 80;
+        let height: u16 = 5;
+        let backend = VT100Backend::new(width, height);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, width, height));
+
+        {
+            let mut frame = terminal.get_frame();
+            let area = frame.area();
+            let segments =
+                Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(area);
+            render_column_headers(&mut frame, segments[0], &metrics);
+            render_list(&mut frame, segments[1], &state, &metrics);
+        }
+        terminal.flush().expect("flush");
+
+        let snapshot = terminal.backend().to_string();
+        assert_snapshot!("resume_picker_thread_names", snapshot);
+    }
+
     #[test]
     fn pageless_scrolling_deduplicates_and_keeps_order() {
         let loader: PageLoader = Arc::new(|_| {});
