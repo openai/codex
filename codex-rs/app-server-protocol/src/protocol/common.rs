@@ -182,7 +182,7 @@ client_request_definitions! {
 
     /// NEW APIs
     // Thread lifecycle
-    /// Uses `inspect_params` because only some fields are experimental.
+    // Uses `inspect_params` because only some fields are experimental.
     ThreadStart => "thread/start" {
         params: v2::ThreadStartParams,
         inspect_params: true,

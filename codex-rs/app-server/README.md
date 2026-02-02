@@ -15,6 +15,7 @@
 - [Skills](#skills)
 - [Apps](#apps)
 - [Auth endpoints](#auth-endpoints)
+- [Adding an experimental field](#adding-an-experimental-field)
 
 ## Protocol
 
@@ -768,3 +769,29 @@ Field notes:
 - `usedPercent` is current usage within the OpenAI quota window.
 - `windowDurationMins` is the quota window length.
 - `resetsAt` is a Unix timestamp (seconds) for the next reset.
+
+## Adding an experimental field
+Use this checklist when introducing a field/method that should only be available when the client opts into experimental APIs.
+
+At runtime, clients must send `initialize` with `capabilities.experimentalApi = true` to use experimental methods or fields.
+
+1. Annotate the field in the protocol type (usually `app-server-protocol/src/protocol/v2.rs`) with:
+   ```rust
+   #[experimental("thread/start.myField")]
+   pub my_field: Option<String>,
+   ```
+2. Ensure the params type derives `ExperimentalApi` so field-level gating can be detected at runtime.
+
+3. In `app-server-protocol/src/protocol/common.rs`, keep the method stable and use `inspect_params: true` when only some fields are experimental (like `thread/start`). If the entire method is experimental, annotate the method variant with `#[experimental("method/name")]`.
+
+4. Regenerate protocol fixtures:
+
+   ```bash
+   just write-app-server-schema
+   ```
+    
+5. Verify the protocol crate:
+
+   ```bash
+   cargo test -p codex-app-server-protocol
+   ```

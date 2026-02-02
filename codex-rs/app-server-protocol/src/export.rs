@@ -202,10 +202,11 @@ fn filter_experimental_ts(out_dir: &Path) -> Result<()> {
     let registered_fields = experimental_fields();
     let experimental_method_types = experimental_method_types();
     // Most generated TS files are filtered by schema processing, but
-    // `ClientRequest.ts` and `v2/ThreadStartParams.ts` need direct post-processing
-    // because they encode method/field information in file-local unions/interfaces.
+    // `ClientRequest.ts` and any type with `#[experimental(...)]` fields need
+    // direct post-processing because they encode method/field information in
+    // file-local unions/interfaces.
     filter_client_request_ts(out_dir, EXPERIMENTAL_CLIENT_METHODS)?;
-    filter_thread_start_params_ts(out_dir, &registered_fields)?;
+    filter_experimental_type_fields_ts(out_dir, &registered_fields)?;
     remove_generated_type_files(out_dir, &experimental_method_types, "ts")?;
     Ok(())
 }
@@ -243,27 +244,45 @@ fn filter_client_request_ts(out_dir: &Path, experimental_methods: &[&str]) -> Re
     Ok(())
 }
 
-/// Removes experimental properties from `v2/ThreadStartParams.ts`.
-fn filter_thread_start_params_ts(
+/// Removes experimental properties from generated TypeScript type files.
+fn filter_experimental_type_fields_ts(
     out_dir: &Path,
     experimental_fields: &[&'static crate::experimental_api::ExperimentalField],
 ) -> Result<()> {
-    let path = out_dir.join("v2").join("ThreadStartParams.ts");
-    if !path.exists() {
+    let mut fields_by_type_name: HashMap<String, HashSet<String>> = HashMap::new();
+    for field in experimental_fields {
+        fields_by_type_name
+            .entry(field.type_name.to_string())
+            .or_default()
+            .insert(field.field_name.to_string());
+    }
+    if fields_by_type_name.is_empty() {
         return Ok(());
     }
-    let mut content =
-        fs::read_to_string(&path).with_context(|| format!("Failed to read {}", path.display()))?;
 
+    for path in ts_files_in_recursive(out_dir)? {
+        let Some(type_name) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        let Some(experimental_field_names) = fields_by_type_name.get(type_name) else {
+            continue;
+        };
+        filter_experimental_fields_in_ts_file(&path, experimental_field_names)?;
+    }
+
+    Ok(())
+}
+
+fn filter_experimental_fields_in_ts_file(
+    path: &Path,
+    experimental_field_names: &HashSet<String>,
+) -> Result<()> {
+    let mut content =
+        fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
     let Some((open_brace, close_brace)) = type_body_brace_span(&content) else {
         return Ok(());
     };
     let inner = &content[open_brace + 1..close_brace];
-    let experimental_field_names: HashSet<&str> = experimental_fields
-        .iter()
-        .filter(|field| field.type_name == "ThreadStartParams")
-        .map(|field| field.field_name)
-        .collect();
     let fields = split_top_level_multi(inner, &[',', ';']);
     let filtered_fields: Vec<String> = fields
         .into_iter()
@@ -277,8 +296,7 @@ fn filter_thread_start_params_ts(
     let prefix = &content[..open_brace + 1];
     let suffix = &content[close_brace..];
     content = format!("{prefix}{new_inner}{suffix}");
-
-    fs::write(&path, content).with_context(|| format!("Failed to write {}", path.display()))?;
+    fs::write(path, content).with_context(|| format!("Failed to write {}", path.display()))?;
     Ok(())
 }
 
@@ -1680,10 +1698,9 @@ mod tests {
     }
 
     #[test]
-    fn thread_start_ts_filter_handles_interface_shape() -> Result<()> {
+    fn experimental_type_fields_ts_filter_handles_interface_shape() -> Result<()> {
         let output_dir = std::env::temp_dir().join(format!("codex_ts_filter_{}", Uuid::now_v7()));
-        let v2_dir = output_dir.join("v2");
-        fs::create_dir_all(&v2_dir)?;
+        fs::create_dir_all(&output_dir)?;
 
         struct TempDirGuard(PathBuf);
 
@@ -1694,20 +1711,27 @@ mod tests {
         }
 
         let _guard = TempDirGuard(output_dir.clone());
-        let path = v2_dir.join("ThreadStartParams.ts");
-        let content = r#"export interface ThreadStartParams {
-  model: string | null;
-  mockExperimentalField: string | null;
-  experimentalRawEvents: boolean;
+        let path = output_dir.join("CustomParams.ts");
+        let content = r#"export interface CustomParams {
+  stableField: string | null;
+  unstableField: string | null;
+  otherStableField: boolean;
 }
 "#;
         fs::write(&path, content)?;
 
-        let registered_fields = experimental_fields();
-        filter_thread_start_params_ts(&output_dir, &registered_fields)?;
+        static CUSTOM_FIELD: crate::experimental_api::ExperimentalField =
+            crate::experimental_api::ExperimentalField {
+                type_name: "CustomParams",
+                field_name: "unstableField",
+                reason: "custom/unstableField",
+            };
+        filter_experimental_type_fields_ts(&output_dir, &[&CUSTOM_FIELD])?;
 
         let filtered = fs::read_to_string(&path)?;
-        assert_eq!(filtered.contains("mockExperimentalField"), false);
+        assert_eq!(filtered.contains("unstableField"), false);
+        assert_eq!(filtered.contains("stableField"), true);
+        assert_eq!(filtered.contains("otherStableField"), true);
         Ok(())
     }
 

@@ -3034,7 +3034,7 @@
       "type": "object"
     },
     {
-      "description": "NEW APIs Uses `inspect_params` because only some fields are experimental.",
+      "description": "NEW APIs",
       "properties": {
         "id": {
           "$ref": "#/definitions/RequestId"
