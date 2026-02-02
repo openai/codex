@@ -28,9 +28,7 @@ use codex_tui::ExitReason;
 use codex_tui::update_action::UpdateAction;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
-use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
 use supports_color::Stream;
 
 mod mcp_cmd;
@@ -440,46 +438,10 @@ fn run_execpolicycheck(cmd: ExecPolicyCheckCommand) -> anyhow::Result<()> {
     cmd.run()
 }
 
-fn is_codex_rs_workspace_dir(dir: &Path) -> bool {
-    dir.join("Cargo.toml").is_file()
-        && dir
-            .join("app-server-test-client")
-            .join("Cargo.toml")
-            .is_file()
-}
-
-fn resolve_codex_rs_dir() -> anyhow::Result<PathBuf> {
-    let cwd = std::env::current_dir()?;
-    if is_codex_rs_workspace_dir(&cwd) {
-        return Ok(cwd);
-    }
-
-    let codex_rs = cwd.join("codex-rs");
-    if is_codex_rs_workspace_dir(&codex_rs) {
-        return Ok(codex_rs);
-    }
-
-    anyhow::bail!("could not locate codex-rs workspace from {}", cwd.display());
-}
-
 fn run_debug_app_server_command(cmd: DebugAppServerCommand) -> anyhow::Result<()> {
-    let codex_rs_dir = resolve_codex_rs_dir()?;
     let user_message = cmd.user_message_parts.join(" ");
-    let status = Command::new("cargo")
-        .arg("run")
-        .arg("-p")
-        .arg("codex-app-server-test-client")
-        .arg("--")
-        .arg("send-message-v2")
-        .arg(user_message)
-        .current_dir(codex_rs_dir)
-        .status()?;
-
-    if !status.success() {
-        anyhow::bail!("debug command failed with status {status}");
-    }
-
-    Ok(())
+    let codex_bin = std::env::current_exe()?;
+    codex_app_server_test_client::send_message_v2(&codex_bin, &[], user_message, &None)
 }
 
 #[derive(Debug, Default, Parser, Clone)]
