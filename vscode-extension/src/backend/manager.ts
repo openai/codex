@@ -105,12 +105,16 @@ export class BackendManager implements vscode.Disposable {
       sessionStatusById: Map<string, string>;
     }
   >();
-  private opencodeServer:
-    | { proc: OpencodeServerProcess; command: string; args: string[] }
-    | null = null;
-  private opencodeServerInFlight:
-    | Promise<{ proc: OpencodeServerProcess; command: string; args: string[] }>
-    | null = null;
+  private opencodeServer: {
+    proc: OpencodeServerProcess;
+    command: string;
+    args: string[];
+  } | null = null;
+  private opencodeServerInFlight: Promise<{
+    proc: OpencodeServerProcess;
+    command: string;
+    args: string[];
+  }> | null = null;
   private readonly startInFlight = new Map<string, Promise<void>>();
   private readonly streamState = new Map<
     string,
@@ -143,11 +147,12 @@ export class BackendManager implements vscode.Disposable {
     string,
     Map<string, number>
   >();
-  private readonly opencodeNextMessageSeqByBackendKey = new Map<string, number>();
-  private readonly opencodePendingAssistantMessageIdsBySessionIdByBackendKey = new Map<
+  private readonly opencodeNextMessageSeqByBackendKey = new Map<
     string,
-    Map<string, Set<string>>
+    number
   >();
+  private readonly opencodePendingAssistantMessageIdsBySessionIdByBackendKey =
+    new Map<string, Map<string, Set<string>>>();
 
   public onSessionAdded: ((session: Session) => void) | null = null;
   public onAssistantDelta:
@@ -1308,7 +1313,9 @@ export class BackendManager implements vscode.Disposable {
         if (isOpencodeFetchConnectionFailure(err)) {
           const baseUrl = (() => {
             try {
-              return this.opencodeServer?.proc.getBaseUrl().toString() ?? "(unknown)";
+              return (
+                this.opencodeServer?.proc.getBaseUrl().toString() ?? "(unknown)"
+              );
             } catch {
               return "(unknown)";
             }
@@ -1594,7 +1601,10 @@ export class BackendManager implements vscode.Disposable {
     const assistantDeltaKey = (sessionID: string, messageID: string): string =>
       `${sessionID}:${messageID}`;
 
-    const ensureOpencodeMessageSeq = (sessionID: string, messageID: string): number | null => {
+    const ensureOpencodeMessageSeq = (
+      sessionID: string,
+      messageID: string,
+    ): number | null => {
       if (!sessionID || !messageID) return null;
       const byMsg =
         this.opencodeMessageSeqByMessageIdByBackendKey.get(backendKey) ??
@@ -1635,7 +1645,9 @@ export class BackendManager implements vscode.Disposable {
       else bySession.delete(args.sessionID);
     };
 
-    const hasOpencodePendingAssistantMessages = (sessionID: string): boolean => {
+    const hasOpencodePendingAssistantMessages = (
+      sessionID: string,
+    ): boolean => {
       const bySession =
         this.opencodePendingAssistantMessageIdsBySessionIdByBackendKey.get(
           backendKey,
@@ -1734,10 +1746,14 @@ export class BackendManager implements vscode.Disposable {
           ? String(properties.permission)
           : null;
       const patterns = Array.isArray(properties?.patterns)
-        ? (properties.patterns as unknown[]).map((p) => String(p ?? "")).filter(Boolean)
+        ? (properties.patterns as unknown[])
+            .map((p) => String(p ?? ""))
+            .filter(Boolean)
         : [];
       const always = Array.isArray(properties?.always)
-        ? (properties.always as unknown[]).map((p) => String(p ?? "")).filter(Boolean)
+        ? (properties.always as unknown[])
+            .map((p) => String(p ?? ""))
+            .filter(Boolean)
         : [];
       const metadata =
         typeof properties?.metadata === "object" && properties.metadata !== null
@@ -1835,8 +1851,13 @@ export class BackendManager implements vscode.Disposable {
         questions.push({ question, header, options, multiple, custom });
       }
       const tool =
-        toolRaw && typeof toolRaw.messageID === "string" && typeof toolRaw.callID === "string"
-          ? { messageID: String(toolRaw.messageID), callID: String(toolRaw.callID) }
+        toolRaw &&
+        typeof toolRaw.messageID === "string" &&
+        typeof toolRaw.callID === "string"
+          ? {
+              messageID: String(toolRaw.messageID),
+              callID: String(toolRaw.callID),
+            }
           : undefined;
 
       const session = this.sessions.getByThreadId(backendKey, sessionID);
@@ -1893,10 +1914,12 @@ export class BackendManager implements vscode.Disposable {
         if (!session) return;
         const turnId = activeTurnIdBySession.get(sessionID) ?? "";
         const idsBySession =
-          this.opencodeReasoningItemIdsBySessionIdByBackendKey.get(backendKey) ??
-          null;
+          this.opencodeReasoningItemIdsBySessionIdByBackendKey.get(
+            backendKey,
+          ) ?? null;
         const textByItem =
-          this.opencodeReasoningTextByItemIdByBackendKey.get(backendKey) ?? null;
+          this.opencodeReasoningTextByItemIdByBackendKey.get(backendKey) ??
+          null;
         const ids = idsBySession?.get(sessionID) ?? null;
         if (ids && ids.size > 0) {
           for (const itemId of ids) {
@@ -1960,7 +1983,10 @@ export class BackendManager implements vscode.Disposable {
         });
 
         // If we already saw status=idle, complete the turn as soon as the final pending assistant message is done.
-        if (completed !== null && !hasOpencodePendingAssistantMessages(sessionID)) {
+        if (
+          completed !== null &&
+          !hasOpencodePendingAssistantMessages(sessionID)
+        ) {
           const status = sessionStatusById.get(sessionID) ?? null;
           if (status === "idle") {
             const session = this.sessions.getByThreadId(backendKey, sessionID);
@@ -2175,11 +2201,13 @@ export class BackendManager implements vscode.Disposable {
             : null;
         const status = opencodeToolUiStatus(rawStatus);
         const title =
-          typeof part?.state?.input?.description === "string"
-            ? (part.state.input.description as string)
-            : typeof part?.title === "string"
-              ? (part.title as string)
-              : null;
+          typeof part?.state?.title === "string"
+            ? (part.state.title as string)
+            : typeof part?.state?.input?.description === "string"
+              ? (part.state.input.description as string)
+              : typeof part?.title === "string"
+                ? (part.title as string)
+                : null;
 
         const input =
           typeof part?.state?.input !== "undefined" ? part.state.input : null;
@@ -2227,6 +2255,236 @@ export class BackendManager implements vscode.Disposable {
         return;
       }
 
+      if (partType === "file") {
+        const fileId = opencodePartItemIdFromPart({
+          messageID,
+          partType,
+          partId: typeof part?.id === "string" ? (part.id as string) : null,
+          index: 0,
+        });
+        const filename =
+          typeof part?.filename === "string" ? (part.filename as string) : null;
+        const mime =
+          typeof part?.mime === "string"
+            ? (part.mime as string)
+            : "application/octet-stream";
+        const url = typeof part?.url === "string" ? (part.url as string) : null;
+        this.emitNotification(backendKey, session, {
+          method: "item/completed",
+          params: {
+            threadId: sessionID,
+            turnId,
+            item: {
+              type: "opencodeFile",
+              id: fileId,
+              messageID,
+              opencodeSeq: getOpencodeMessageSeq(messageID),
+              filename,
+              mime,
+              url,
+              raw: part,
+            },
+          },
+        });
+        return;
+      }
+
+      if (partType === "patch") {
+        const patchId = opencodePartItemIdFromPart({
+          messageID,
+          partType,
+          partId: typeof part?.id === "string" ? (part.id as string) : null,
+          index: 0,
+        });
+        const hash =
+          typeof part?.hash === "string" ? (part.hash as string) : null;
+        const files = Array.isArray(part?.files)
+          ? (part.files as string[])
+          : [];
+        this.emitNotification(backendKey, session, {
+          method: "item/completed",
+          params: {
+            threadId: sessionID,
+            turnId,
+            item: {
+              type: "opencodePatch",
+              id: patchId,
+              messageID,
+              opencodeSeq: getOpencodeMessageSeq(messageID),
+              hash,
+              files,
+              raw: part,
+            },
+          },
+        });
+        return;
+      }
+
+      if (partType === "agent") {
+        const agentId = opencodePartItemIdFromPart({
+          messageID,
+          partType,
+          partId: typeof part?.id === "string" ? (part.id as string) : null,
+          index: 0,
+        });
+        const agentName =
+          typeof part?.name === "string" ? (part.name as string) : "agent";
+        const source =
+          typeof part?.source === "object" && part.source !== null
+            ? (part.source as { value?: string; start?: number; end?: number })
+            : null;
+        this.emitNotification(backendKey, session, {
+          method: "item/completed",
+          params: {
+            threadId: sessionID,
+            turnId,
+            item: {
+              type: "opencodeAgent",
+              id: agentId,
+              messageID,
+              opencodeSeq: getOpencodeMessageSeq(messageID),
+              name: agentName,
+              source,
+              raw: part,
+            },
+          },
+        });
+        return;
+      }
+
+      if (partType === "snapshot") {
+        const snapshotId = opencodePartItemIdFromPart({
+          messageID,
+          partType,
+          partId: typeof part?.id === "string" ? (part.id as string) : null,
+          index: 0,
+        });
+        const snapshot =
+          typeof part?.snapshot === "string" ? (part.snapshot as string) : null;
+        this.emitNotification(backendKey, session, {
+          method: "item/completed",
+          params: {
+            threadId: sessionID,
+            turnId,
+            item: {
+              type: "opencodeSnapshot",
+              id: snapshotId,
+              messageID,
+              opencodeSeq: getOpencodeMessageSeq(messageID),
+              snapshot,
+              raw: part,
+            },
+          },
+        });
+        return;
+      }
+
+      if (partType === "retry") {
+        const retryId = opencodePartItemIdFromPart({
+          messageID,
+          partType,
+          partId: typeof part?.id === "string" ? (part.id as string) : null,
+          index: 0,
+        });
+        const attempt =
+          typeof part?.attempt === "number" && Number.isFinite(part.attempt)
+            ? Math.trunc(part.attempt as number)
+            : 1;
+        const errorMessage =
+          typeof part?.error?.message === "string"
+            ? (part.error.message as string)
+            : typeof part?.error === "string"
+              ? (part.error as string)
+              : "Retry failed";
+        this.emitNotification(backendKey, session, {
+          method: "item/completed",
+          params: {
+            threadId: sessionID,
+            turnId,
+            item: {
+              type: "opencodeRetry",
+              id: retryId,
+              messageID,
+              opencodeSeq: getOpencodeMessageSeq(messageID),
+              attempt,
+              error: errorMessage,
+              raw: part,
+            },
+          },
+        });
+        return;
+      }
+
+      if (partType === "compaction") {
+        const compactionId = opencodePartItemIdFromPart({
+          messageID,
+          partType,
+          partId: typeof part?.id === "string" ? (part.id as string) : null,
+          index: 0,
+        });
+        const auto =
+          typeof part?.auto === "boolean" ? Boolean(part.auto) : false;
+        this.emitNotification(backendKey, session, {
+          method: "item/completed",
+          params: {
+            threadId: sessionID,
+            turnId,
+            item: {
+              type: "opencodeCompaction",
+              id: compactionId,
+              messageID,
+              opencodeSeq: getOpencodeMessageSeq(messageID),
+              auto,
+              raw: part,
+            },
+          },
+        });
+        return;
+      }
+
+      if (partType === "subtask") {
+        const subtaskId = opencodePartItemIdFromPart({
+          messageID,
+          partType,
+          partId: typeof part?.id === "string" ? (part.id as string) : null,
+          index: 0,
+        });
+        const prompt =
+          typeof part?.prompt === "string" ? (part.prompt as string) : null;
+        const description =
+          typeof part?.description === "string"
+            ? (part.description as string)
+            : null;
+        const agent =
+          typeof part?.agent === "string" ? (part.agent as string) : null;
+        const model =
+          typeof part?.model === "object" && part.model !== null
+            ? (part.model as { providerID?: string; modelID?: string })
+            : null;
+        const command =
+          typeof part?.command === "string" ? (part.command as string) : null;
+        this.emitNotification(backendKey, session, {
+          method: "item/completed",
+          params: {
+            threadId: sessionID,
+            turnId,
+            item: {
+              type: "opencodeSubtask",
+              id: subtaskId,
+              messageID,
+              opencodeSeq: getOpencodeMessageSeq(messageID),
+              prompt,
+              description,
+              agent,
+              model,
+              command,
+              raw: part,
+            },
+          },
+        });
+        return;
+      }
+
       // For unknown/other part types, only surface a UI item if we actually have new text.
       // Otherwise we'd create empty "black cards" (started without any progress content).
       const fullText =
@@ -2241,9 +2499,13 @@ export class BackendManager implements vscode.Disposable {
       const itemId = (() => {
         if (partType === "reasoning") {
           const byMsg =
-            this.opencodeReasoningItemIdByMessageIdByBackendKey.get(backendKey) ??
-            new Map<string, string>();
-          this.opencodeReasoningItemIdByMessageIdByBackendKey.set(backendKey, byMsg);
+            this.opencodeReasoningItemIdByMessageIdByBackendKey.get(
+              backendKey,
+            ) ?? new Map<string, string>();
+          this.opencodeReasoningItemIdByMessageIdByBackendKey.set(
+            backendKey,
+            byMsg,
+          );
           const existing = byMsg.get(messageID) ?? null;
           if (existing) return existing;
           const id = `${messageID}:reasoning`;
@@ -2252,11 +2514,15 @@ export class BackendManager implements vscode.Disposable {
           const byItem =
             this.opencodeReasoningTextByItemIdByBackendKey.get(backendKey) ??
             new Map<string, string>();
-          this.opencodeReasoningTextByItemIdByBackendKey.set(backendKey, byItem);
+          this.opencodeReasoningTextByItemIdByBackendKey.set(
+            backendKey,
+            byItem,
+          );
 
           const bySession =
-            this.opencodeReasoningItemIdsBySessionIdByBackendKey.get(backendKey) ??
-            new Map<string, Set<string>>();
+            this.opencodeReasoningItemIdsBySessionIdByBackendKey.get(
+              backendKey,
+            ) ?? new Map<string, Set<string>>();
           this.opencodeReasoningItemIdsBySessionIdByBackendKey.set(
             backendKey,
             bySession,
@@ -2287,7 +2553,12 @@ export class BackendManager implements vscode.Disposable {
           partItemIdByKey.get(partKey) ??
           (() => {
             const index = partIndex ?? partItemIdByKey.size;
-            const id = opencodePartItemId({ messageID, partType, index });
+            const id = opencodePartItemIdFromPart({
+              messageID,
+              partType,
+              partId: typeof part?.id === "string" ? (part.id as string) : null,
+              index,
+            });
             partItemIdByKey.set(partKey, id);
             this.emitNotification(backendKey, session, {
               method: "item/started",
@@ -2299,6 +2570,7 @@ export class BackendManager implements vscode.Disposable {
                   id,
                   server: "opencode",
                   tool: partType,
+                  opencodeSeq: getOpencodeMessageSeq(messageID),
                   status: "inProgress",
                   result: null,
                   error: null,
@@ -2364,6 +2636,9 @@ export class BackendManager implements vscode.Disposable {
           threadId: sessionID,
           turnId,
           itemId,
+          server: "opencode",
+          tool: partType,
+          opencodeSeq: getOpencodeMessageSeq(messageID),
           message: delta ?? fullText ?? "",
         },
       });
@@ -2411,7 +2686,9 @@ export class BackendManager implements vscode.Disposable {
       throw new Error("onAskUserQuestionRequest handler is not set");
     }
 
-    const callId = args.tool?.callID?.trim() ? args.tool.callID : args.requestID;
+    const callId = args.tool?.callID?.trim()
+      ? args.tool.callID
+      : args.requestID;
     const request = {
       title:
         args.questions[0] && typeof args.questions[0].header === "string"
@@ -2554,7 +2831,9 @@ export class BackendManager implements vscode.Disposable {
     this.opencodeDefaultAgentNameByBackendKey.delete(backendKey);
     this.opencodeMessageSeqByMessageIdByBackendKey.delete(backendKey);
     this.opencodeNextMessageSeqByBackendKey.delete(backendKey);
-    this.opencodePendingAssistantMessageIdsBySessionIdByBackendKey.delete(backendKey);
+    this.opencodePendingAssistantMessageIdsBySessionIdByBackendKey.delete(
+      backendKey,
+    );
     const sessions = this.sessions.list(backendKey);
     for (const s of sessions) {
       this.itemsByThreadId.delete(s.threadId);
@@ -2806,7 +3085,10 @@ export class BackendManager implements vscode.Disposable {
     this.itemsByThreadId.set(threadId, map);
   }
 
-  private disposeOpencodeBackend(backendKey: string, info: BackendTermination): void {
+  private disposeOpencodeBackend(
+    backendKey: string,
+    info: BackendTermination,
+  ): void {
     const current = this.opencode.get(backendKey);
     if (!current) return;
     try {
@@ -2837,7 +3119,11 @@ export class BackendManager implements vscode.Disposable {
     folder: vscode.WorkspaceFolder;
     command: string;
     args: string[];
-  }): Promise<{ proc: OpencodeServerProcess; command: string; args: string[] }> {
+  }): Promise<{
+    proc: OpencodeServerProcess;
+    command: string;
+    args: string[];
+  }> {
     if (this.opencodeServer) {
       const sameCommand = this.opencodeServer.command === args.command;
       const sameArgs =
@@ -2865,7 +3151,11 @@ export class BackendManager implements vscode.Disposable {
         // Shared opencode server died unexpectedly. Tear down every per-workspace SSE stream.
         const backendKeys = [...this.opencode.keys()];
         for (const backendKey of backendKeys) {
-          this.disposeOpencodeBackend(backendKey, { reason: "exit", code, signal });
+          this.disposeOpencodeBackend(backendKey, {
+            reason: "exit",
+            code,
+            signal,
+          });
         }
         this.disposeOpencodeServerIfRunning();
       });
@@ -2927,6 +3217,26 @@ function opencodePartItemId(args: {
   return `${args.messageID}:part:${args.partType}:${String(args.index)}`;
 }
 
+function opencodePartItemIdKey(args: {
+  messageID: string;
+  partType: string;
+  key: string;
+}): string {
+  const cleaned = args.key.trim() || "unknown";
+  return `${args.messageID}:part:${args.partType}:${cleaned}`;
+}
+
+function opencodePartItemIdFromPart(args: {
+  messageID: string;
+  partType: string;
+  partId: string | null;
+  index: number;
+}): string {
+  const key = args.partId?.trim() ?? "";
+  if (key) return opencodePartItemIdKey({ messageID: args.messageID, partType: args.partType, key });
+  return opencodePartItemId({ messageID: args.messageID, partType: args.partType, index: args.index });
+}
+
 function opencodeStepItemId(args: {
   messageID: string;
   snapshot: string | null;
@@ -2959,7 +3269,9 @@ function opencodePartToThreadItem(
   const type = String(part.type ?? "part");
   if (type === "reasoning") {
     const summaryRaw =
-      typeof (part as any).summary === "string" ? String((part as any).summary) : "";
+      typeof (part as any).summary === "string"
+        ? String((part as any).summary)
+        : "";
     const contentRaw =
       typeof (part as any).text === "string" ? String((part as any).text) : "";
     const merged = contentRaw.trim() ? contentRaw : summaryRaw;
@@ -3125,7 +3437,9 @@ function buildOpencodeItemsFromParts(
       const text =
         typeof (p as any).text === "string" ? String((p as any).text) : "";
       const summary =
-        typeof (p as any).summary === "string" ? String((p as any).summary) : "";
+        typeof (p as any).summary === "string"
+          ? String((p as any).summary)
+          : "";
       const merged = text.trim() ? text : summary;
       if (!merged.trim()) continue;
 
