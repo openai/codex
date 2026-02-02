@@ -233,10 +233,13 @@ impl DeveloperInstructions {
                 if !request_rule_enabled {
                     APPROVAL_POLICY_ON_REQUEST.to_string()
                 } else {
-                    let command_prefixes = format_allow_prefixes(exec_policy);
+                    let command_prefixes =
+                        format_allow_prefixes(exec_policy.get_allowed_prefixes());
                     match command_prefixes {
                         Some(prefixes) => {
-                            format!("{APPROVAL_POLICY_ON_REQUEST_RULE}\n{prefixes}")
+                            format!(
+                                "{APPROVAL_POLICY_ON_REQUEST_RULE}\nApproved command prefixes:\n{prefixes}"
+                            )
                         }
                         None => APPROVAL_POLICY_ON_REQUEST_RULE.to_string(),
                     }
@@ -371,20 +374,51 @@ impl DeveloperInstructions {
     }
 }
 
-pub fn render_command_prefix_list<I, P>(prefixes: I) -> Option<String>
-where
-    I: IntoIterator<Item = P>,
-    P: AsRef<[String]>,
-{
-    let lines = prefixes
-        .into_iter()
-        .map(|prefix| format!("- {}", render_command_prefix(prefix.as_ref())))
-        .collect::<Vec<_>>();
-    if lines.is_empty() {
-        return None;
+const MAX_RENDERED_PREFIXES: usize = 100;
+const MAX_ALLOW_PREFIX_TEXT_BYTES: usize = 5000;
+const TRUNCATED_MARKER: &str = "...\n[Some commands were truncated]";
+
+pub fn format_allow_prefixes(prefixes: Vec<Vec<String>>) -> Option<String> {
+    let mut truncated = false;
+    if prefixes.len() > MAX_RENDERED_PREFIXES {
+        truncated = true;
     }
 
-    Some(lines.join("\n"))
+    let mut prefixes = prefixes;
+    prefixes.sort_by(|a, b| {
+        a.len()
+            .cmp(&b.len())
+            .then_with(|| prefix_combined_str_len(a).cmp(&prefix_combined_str_len(b)))
+            .then_with(|| a.cmp(b))
+    });
+
+    let full_text = prefixes
+        .into_iter()
+        .take(MAX_RENDERED_PREFIXES)
+        .map(|prefix| format!("- {}", render_command_prefix(&prefix)))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // truncate to last UTF8 char
+    let mut output = full_text;
+    let byte_idx = output
+        .char_indices()
+        .nth(MAX_ALLOW_PREFIX_TEXT_BYTES)
+        .map(|(i, _)| i);
+    if let Some(byte_idx) = byte_idx {
+        truncated = true;
+        output = output[..byte_idx].to_string();
+    }
+
+    if truncated {
+        Some(format!("{output}{TRUNCATED_MARKER}"))
+    } else {
+        Some(output)
+    }
+}
+
+fn prefix_combined_str_len(prefix: &[String]) -> usize {
+    prefix.iter().map(String::len).sum()
 }
 
 fn render_command_prefix(prefix: &[String]) -> String {
@@ -394,12 +428,6 @@ fn render_command_prefix(prefix: &[String]) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!("[{tokens}]")
-}
-
-fn format_allow_prefixes(exec_policy: &Policy) -> Option<String> {
-    let prefixes = exec_policy.get_allowed_prefixes();
-    let lines = render_command_prefix_list(prefixes)?;
-    Some(format!("Approved command prefixes:\n{lines}"))
 }
 
 impl From<DeveloperInstructions> for ResponseItem {
@@ -998,6 +1026,62 @@ mod tests {
         assert!(text.contains("prefix_rule"));
         assert!(text.contains("Approved command prefixes"));
         assert!(text.contains(r#"["git", "pull"]"#));
+    }
+
+    #[test]
+    fn render_command_prefix_list_sorts_by_len_then_total_len_then_alphabetical() {
+        let prefixes = vec![
+            vec!["b".to_string(), "zz".to_string()],
+            vec!["aa".to_string()],
+            vec!["b".to_string()],
+            vec!["a".to_string(), "b".to_string(), "c".to_string()],
+            vec!["a".to_string()],
+            vec!["b".to_string(), "a".to_string()],
+        ];
+
+        let output = format_allow_prefixes(prefixes).expect("rendered list");
+        assert_eq!(
+            output,
+            r#"- ["a"]
+- ["b"]
+- ["aa"]
+- ["b", "a"]
+- ["b", "zz"]
+- ["a", "b", "c"]"#
+                .to_string(),
+        );
+    }
+
+    #[test]
+    fn render_command_prefix_list_limits_output_to_max_prefixes() {
+        let prefixes = (0..(MAX_RENDERED_PREFIXES + 5))
+            .map(|i| vec![format!("{i:03}")])
+            .collect::<Vec<_>>();
+
+        let output = format_allow_prefixes(prefixes).expect("rendered list");
+        assert_eq!(output.ends_with(TRUNCATED_MARKER), true);
+        eprintln!("output: {output}");
+        assert_eq!(output.lines().count(), MAX_RENDERED_PREFIXES + 1);
+    }
+
+    #[test]
+    fn format_allow_prefixes_limits_output() {
+        let mut exec_policy = Policy::empty();
+        for i in 0..200 {
+            exec_policy
+                .add_prefix_rule(
+                    &[format!("tool-{i:03}"), "x".repeat(500)],
+                    codex_execpolicy::Decision::Allow,
+                )
+                .expect("add rule");
+        }
+
+        let output =
+            format_allow_prefixes(exec_policy.get_allowed_prefixes()).expect("formatted prefixes");
+        assert!(
+            output.len() <= MAX_ALLOW_PREFIX_TEXT_BYTES + TRUNCATED_MARKER.len(),
+            "output length exceeds expected limit: {output}",
+        );
     }
 
     #[test]

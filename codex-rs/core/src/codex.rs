@@ -51,6 +51,7 @@ use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
@@ -213,7 +214,6 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::models::render_command_prefix_list;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
@@ -1525,7 +1525,7 @@ impl Session {
         sub_id: &str,
         amendment: &ExecPolicyAmendment,
     ) {
-        let Some(prefixes) = render_command_prefix_list([amendment.command.as_slice()]) else {
+        let Some(prefixes) = format_allow_prefixes(vec![amendment.command.clone()]) else {
             warn!("execpolicy amendment for {sub_id} had no command prefix");
             return;
         };
