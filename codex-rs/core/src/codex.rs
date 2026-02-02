@@ -1522,7 +1522,7 @@ impl Session {
         sub_id: &str,
         amendment: &ExecPolicyAmendment,
     ) {
-        let Some(prefixes) = render_command_prefix_list([amendment.command.as_slice()]) else {
+        let Some(prefixes) = render_command_prefix_list(vec![amendment.command.clone()]) else {
             warn!("execpolicy amendment for {sub_id} had no command prefix");
             return;
         };

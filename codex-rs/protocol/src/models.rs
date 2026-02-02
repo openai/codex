@@ -371,20 +371,31 @@ impl DeveloperInstructions {
     }
 }
 
-pub fn render_command_prefix_list<I, P>(prefixes: I) -> Option<String>
-where
-    I: IntoIterator<Item = P>,
-    P: AsRef<[String]>,
-{
+const MAX_RENDERED_PREFIXES: usize = 100;
+const MAX_ALLOW_PREFIX_TEXT_BYTES: usize = 1000;
+
+pub fn render_command_prefix_list(mut prefixes: Vec<Vec<String>>) -> Option<String> {
+    prefixes.sort_by(|a, b| {
+        a.len()
+            .cmp(&b.len())
+            .then_with(|| prefix_total_token_len(a).cmp(&prefix_total_token_len(b)))
+            .then_with(|| a.cmp(b))
+    });
+
     let lines = prefixes
         .into_iter()
-        .map(|prefix| format!("- {}", render_command_prefix(prefix.as_ref())))
+        .take(MAX_RENDERED_PREFIXES)
+        .map(|prefix| format!("- {}", render_command_prefix(&prefix)))
         .collect::<Vec<_>>();
     if lines.is_empty() {
         return None;
     }
 
     Some(lines.join("\n"))
+}
+
+fn prefix_total_token_len(prefix: &[String]) -> usize {
+    prefix.iter().map(String::len).sum()
 }
 
 fn render_command_prefix(prefix: &[String]) -> String {
@@ -399,7 +410,19 @@ fn render_command_prefix(prefix: &[String]) -> String {
 fn format_allow_prefixes(exec_policy: &Policy) -> Option<String> {
     let prefixes = exec_policy.get_allowed_prefixes();
     let lines = render_command_prefix_list(prefixes)?;
-    Some(format!("Approved command prefixes:\n{lines}"))
+    let output = format!("Approved command prefixes:\n{lines}");
+    if output.len() <= MAX_ALLOW_PREFIX_TEXT_BYTES {
+        return Some(output);
+    }
+
+    let mut cutoff = MAX_ALLOW_PREFIX_TEXT_BYTES;
+    while !output.is_char_boundary(cutoff) {
+        cutoff -= 1;
+    }
+
+    let bounded = &output[..cutoff];
+    let newline_cutoff = bounded.rfind('\n').unwrap_or(cutoff);
+    Some(output[..newline_cutoff].to_string())
 }
 
 impl From<DeveloperInstructions> for ResponseItem {
@@ -998,6 +1021,65 @@ mod tests {
         assert!(text.contains("prefix_rule"));
         assert!(text.contains("Approved command prefixes"));
         assert!(text.contains(r#"["git", "pull"]"#));
+    }
+
+    #[test]
+    fn render_command_prefix_list_sorts_by_len_then_total_len_then_alphabetical() {
+        let prefixes = vec![
+            vec!["b".to_string(), "zz".to_string()],
+            vec!["aa".to_string()],
+            vec!["b".to_string()],
+            vec!["a".to_string(), "b".to_string(), "c".to_string()],
+            vec!["a".to_string()],
+            vec!["b".to_string(), "a".to_string()],
+        ];
+
+        let output = render_command_prefix_list(prefixes).expect("rendered list");
+        let lines = output.lines().collect::<Vec<_>>();
+
+        assert_eq!(
+            lines,
+            vec![
+                r#"- ["a"]"#,
+                r#"- ["b"]"#,
+                r#"- ["aa"]"#,
+                r#"- ["b", "a"]"#,
+                r#"- ["b", "zz"]"#,
+                r#"- ["a", "b", "c"]"#,
+            ]
+        );
+    }
+
+    #[test]
+    fn render_command_prefix_list_limits_output_to_max_prefixes() {
+        let prefixes = (0..(MAX_RENDERED_PREFIXES + 5))
+            .map(|i| vec![format!("{i:03}")])
+            .collect::<Vec<_>>();
+
+        let output = render_command_prefix_list(prefixes).expect("rendered list");
+        assert_eq!(output.lines().count(), MAX_RENDERED_PREFIXES);
+    }
+
+    #[test]
+    fn format_allow_prefixes_limits_output_and_clamps_on_newline() {
+        let mut exec_policy = Policy::empty();
+        for i in 0..200 {
+            exec_policy
+                .add_prefix_rule(
+                    &[format!("tool-{i:03}"), "x".repeat(40)],
+                    codex_execpolicy::Decision::Allow,
+                )
+                .expect("add rule");
+        }
+
+        let output = format_allow_prefixes(&exec_policy).expect("formatted prefixes");
+        assert!(output.len() <= MAX_ALLOW_PREFIX_TEXT_BYTES);
+
+        let last_line = output.lines().last().expect("has at least one line");
+        assert!(
+            last_line == "Approved command prefixes:"
+                || (last_line.starts_with("- [") && last_line.ends_with(']'))
+        );
     }
 
     #[test]
