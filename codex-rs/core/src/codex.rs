@@ -5344,13 +5344,15 @@ mod tests {
                 developer_instructions: None,
             },
         };
+        let model = collaboration_mode.settings.model.clone();
+        let expected_mode = collaboration_mode.clone();
         let turn_context = TurnContextItem {
             cwd: PathBuf::from("/tmp"),
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::ReadOnly,
-            model: collaboration_mode.settings.model.clone(),
+            model,
             personality: None,
-            collaboration_mode: Some(collaboration_mode.clone()),
+            collaboration_mode: Some(collaboration_mode),
             effort: None,
             summary: ReasoningSummaryConfig::Auto,
             user_instructions: None,
@@ -5392,7 +5394,7 @@ mod tests {
             .collect();
 
         assert_eq!(history.len(), 2);
-        assert_eq!(modes, vec![Some(collaboration_mode), None]);
+        assert_eq!(modes, vec![Some(expected_mode), None]);
     }
 
     #[test]
@@ -5422,13 +5424,14 @@ mod tests {
                 developer_instructions: None,
             },
         };
+        let model = collaboration_mode.settings.model.clone();
         let turn_context = TurnContextItem {
             cwd: PathBuf::from("/tmp"),
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::ReadOnly,
-            model: collaboration_mode.settings.model.clone(),
+            model,
             personality: None,
-            collaboration_mode: Some(collaboration_mode.clone()),
+            collaboration_mode: Some(collaboration_mode),
             effort: None,
             summary: ReasoningSummaryConfig::Auto,
             user_instructions: None,
