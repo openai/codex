@@ -1,5 +1,7 @@
 use crate::DB_ERROR_METRIC;
 use crate::LogEntry;
+use crate::LogQuery;
+use crate::LogRow;
 use crate::SortKey;
 use crate::ThreadMetadata;
 use crate::ThreadMetadataBuilder;
@@ -15,6 +17,8 @@ use chrono::Utc;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::RolloutItem;
+use log::LevelFilter;
+use sqlx::ConnectOptions;
 use sqlx::QueryBuilder;
 use sqlx::Row;
 use sqlx::Sqlite;
@@ -214,7 +218,7 @@ FROM threads
         }
 
         let mut builder = QueryBuilder::<Sqlite>::new(
-            "INSERT INTO logs (ts, ts_nanos, level, target, message, module_path, file, line) ",
+            "INSERT INTO logs (ts, ts_nanos, level, target, message, thread_id, module_path, file, line) ",
         );
         builder.push_values(entries, |mut row, entry| {
             row.push_bind(entry.ts)
@@ -222,12 +226,53 @@ FROM threads
                 .push_bind(&entry.level)
                 .push_bind(&entry.target)
                 .push_bind(&entry.message)
+                .push_bind(&entry.thread_id)
                 .push_bind(&entry.module_path)
                 .push_bind(&entry.file)
                 .push_bind(entry.line);
         });
         builder.build().execute(self.pool.as_ref()).await?;
         Ok(())
+    }
+
+    pub(crate) async fn delete_logs_before(&self, cutoff_ts: i64) -> anyhow::Result<u64> {
+        let result = sqlx::query("DELETE FROM logs WHERE ts < ?")
+            .bind(cutoff_ts)
+            .execute(self.pool.as_ref())
+            .await?;
+        Ok(result.rows_affected())
+    }
+
+    /// Query logs with optional filters.
+    pub async fn query_logs(&self, query: &LogQuery) -> anyhow::Result<Vec<LogRow>> {
+        let mut builder = QueryBuilder::<Sqlite>::new(
+            "SELECT id, ts, ts_nanos, level, target, message, thread_id, file, line FROM logs WHERE 1 = 1",
+        );
+        push_log_filters(&mut builder, query);
+        if query.descending {
+            builder.push(" ORDER BY id DESC");
+        } else {
+            builder.push(" ORDER BY id ASC");
+        }
+        if let Some(limit) = query.limit {
+            builder.push(" LIMIT ").push_bind(limit as i64);
+        }
+
+        let rows = builder
+            .build_query_as::<LogRow>()
+            .fetch_all(self.pool.as_ref())
+            .await?;
+        Ok(rows)
+    }
+
+    /// Return the max log id matching optional filters.
+    pub async fn max_log_id(&self, query: &LogQuery) -> anyhow::Result<i64> {
+        let mut builder =
+            QueryBuilder::<Sqlite>::new("SELECT MAX(id) AS max_id FROM logs WHERE 1 = 1");
+        push_log_filters(&mut builder, query);
+        let row = builder.build().fetch_one(self.pool.as_ref()).await?;
+        let max_id: Option<i64> = row.try_get("max_id")?;
+        Ok(max_id.unwrap_or(0))
     }
 
     /// List thread ids using the underlying database (no rollout scanning).
@@ -402,13 +447,74 @@ ON CONFLICT(id) DO UPDATE SET
     }
 }
 
+fn push_log_filters<'a>(builder: &mut QueryBuilder<'a, Sqlite>, query: &'a LogQuery) {
+    if let Some(level_upper) = query.level_upper.as_ref() {
+        builder
+            .push(" AND UPPER(level) = ")
+            .push_bind(level_upper.as_str());
+    }
+    if let Some(from_ts) = query.from_ts {
+        builder.push(" AND ts >= ").push_bind(from_ts);
+    }
+    if let Some(to_ts) = query.to_ts {
+        builder.push(" AND ts <= ").push_bind(to_ts);
+    }
+    push_like_filters(builder, "module_path", &query.module_like);
+    push_like_filters(builder, "file", &query.file_like);
+    let has_thread_filter = !query.thread_ids.is_empty() || query.include_threadless;
+    if has_thread_filter {
+        builder.push(" AND (");
+        let mut needs_or = false;
+        for thread_id in &query.thread_ids {
+            if needs_or {
+                builder.push(" OR ");
+            }
+            builder.push("thread_id = ").push_bind(thread_id.as_str());
+            needs_or = true;
+        }
+        if query.include_threadless {
+            if needs_or {
+                builder.push(" OR ");
+            }
+            builder.push("thread_id IS NULL");
+        }
+        builder.push(")");
+    }
+    if let Some(after_id) = query.after_id {
+        builder.push(" AND id > ").push_bind(after_id);
+    }
+}
+
+fn push_like_filters<'a>(
+    builder: &mut QueryBuilder<'a, Sqlite>,
+    column: &str,
+    filters: &'a [String],
+) {
+    if filters.is_empty() {
+        return;
+    }
+    builder.push(" AND (");
+    for (idx, filter) in filters.iter().enumerate() {
+        if idx > 0 {
+            builder.push(" OR ");
+        }
+        builder
+            .push(column)
+            .push(" LIKE '%' || ")
+            .push_bind(filter.as_str())
+            .push(" || '%'");
+    }
+    builder.push(")");
+}
+
 async fn open_sqlite(path: &Path) -> anyhow::Result<SqlitePool> {
     let options = SqliteConnectOptions::new()
         .filename(path)
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
         .synchronous(SqliteSynchronous::Normal)
-        .busy_timeout(Duration::from_secs(5));
+        .busy_timeout(Duration::from_secs(5))
+        .log_statements(LevelFilter::Off);
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
         .connect_with(options)

@@ -225,7 +225,7 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
 
     match CodexAuth::from_auth_storage(&config.codex_home, config.cli_auth_credentials_store_mode) {
-        Ok(Some(auth)) => match auth.mode {
+        Ok(Some(auth)) => match auth.api_auth_mode() {
             AuthMode::ApiKey => match auth.get_token() {
                 Ok(api_key) => {
                     eprintln!("Logged in using an API key - {}", safe_format_key(&api_key));
@@ -236,8 +236,12 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
                     std::process::exit(1);
                 }
             },
-            AuthMode::ChatGPT => {
+            AuthMode::Chatgpt => {
                 eprintln!("Logged in using ChatGPT");
+                std::process::exit(0);
+            }
+            AuthMode::ChatgptAuthTokens => {
+                eprintln!("Logged in using ChatGPT (external tokens)");
                 std::process::exit(0);
             }
         },

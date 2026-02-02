@@ -11,6 +11,7 @@ members = [
     "arg0",
     "feedback",
     "codex-backend-openapi-models",
+    "cloud-requirements",
     "cloud-tasks",
     "cloud-tasks-client",
     "cli",
@@ -42,12 +43,14 @@ members = [
     "utils/cache",
     "utils/image",
     "utils/json-to-toml",
+    "utils/home-dir",
     "utils/pty",
     "utils/readiness",
     "utils/string",
     "codex-client",
     "codex-api",
     "state",
+    "codex-experimental-api-macros",
 ]
 resolver = "2"
 
@@ -71,6 +74,7 @@ codex-apply-patch = { path = "apply-patch" }
 codex-arg0 = { path = "arg0" }
 codex-async-utils = { path = "async-utils" }
 codex-backend-client = { path = "backend-client" }
+codex-cloud-requirements = { path = "cloud-requirements" }
 codex-chatgpt = { path = "chatgpt" }
 codex-cli = { path = "cli"}
 codex-client = { path = "codex-client" }
@@ -78,6 +82,7 @@ codex-common = { path = "common" }
 codex-core = { path = "core" }
 codex-exec = { path = "exec" }
 codex-execpolicy = { path = "execpolicy" }
+codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
 codex-feedback = { path = "feedback" }
 codex-file-search = { path = "file-search" }
 codex-git = { path = "utils/git" }
@@ -100,6 +105,7 @@ codex-utils-cache = { path = "utils/cache" }
 codex-utils-cargo-bin = { path = "utils/cargo-bin" }
 codex-utils-image = { path = "utils/image" }
 codex-utils-json-to-toml = { path = "utils/json-to-toml" }
+codex-utils-home-dir = { path = "utils/home-dir" }
 codex-utils-pty = { path = "utils/pty" }
 codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-string = { path = "utils/string" }
@@ -151,6 +157,7 @@ image = { version = "^0.25.9", default-features = false }
 include_dir = "0.7.4"
 indexmap = "2.12.0"
 insta = "1.46.0"
+inventory = "0.3.19"
 itertools = "0.14.0"
 keyring = { version = "3.6", default-features = false }
 landlock = "0.4.4"

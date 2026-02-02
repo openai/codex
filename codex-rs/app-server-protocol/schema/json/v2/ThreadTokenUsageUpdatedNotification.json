@@ -1,0 +1,77 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ThreadTokenUsage": {
+      "properties": {
+        "last": {
+          "$ref": "#/definitions/TokenUsageBreakdown"
+        },
+        "modelContextWindow": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "total": {
+          "$ref": "#/definitions/TokenUsageBreakdown"
+        }
+      },
+      "required": [
+        "last",
+        "total"
+      ],
+      "type": "object"
+    },
+    "TokenUsageBreakdown": {
+      "properties": {
+        "cachedInputTokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "inputTokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "outputTokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "reasoningOutputTokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "totalTokens": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cachedInputTokens",
+        "inputTokens",
+        "outputTokens",
+        "reasoningOutputTokens",
+        "totalTokens"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "threadId": {
+      "type": "string"
+    },
+    "tokenUsage": {
+      "$ref": "#/definitions/ThreadTokenUsage"
+    },
+    "turnId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "threadId",
+    "tokenUsage",
+    "turnId"
+  ],
+  "title": "ThreadTokenUsageUpdatedNotification",
+  "type": "object"
+}

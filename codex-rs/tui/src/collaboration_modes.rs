@@ -59,3 +59,7 @@ pub(crate) fn next_mask(
 pub(crate) fn code_mask(models_manager: &ModelsManager) -> Option<CollaborationModeMask> {
     mask_for_kind(models_manager, ModeKind::Code)
 }
+
+pub(crate) fn plan_mask(models_manager: &ModelsManager) -> Option<CollaborationModeMask> {
+    mask_for_kind(models_manager, ModeKind::Plan)
+}

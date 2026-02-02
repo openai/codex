@@ -11,6 +11,7 @@ use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::ThreadManager;
+use codex_core::TransportManager;
 use codex_core::WireApi;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::built_in_model_providers;
@@ -319,7 +320,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         .expect("prior assistant message");
     let pos_permissions = messages
         .iter()
-        .position(|(role, text)| role == "developer" && text.contains("`approval_policy`"))
+        .position(|(role, text)| role == "developer" && text.contains("<permissions instructions>"))
         .expect("permissions message");
     let pos_user_instructions = messages
         .iter()
@@ -1150,6 +1151,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         stream_max_retries: Some(0),
         stream_idle_timeout_ms: Some(5_000),
         requires_openai_auth: false,
+        supports_websockets: false,
     };
 
     let codex_home = TempDir::new().unwrap();
@@ -1186,6 +1188,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         summary,
         conversation_id,
         SessionSource::Exec,
+        TransportManager::new(),
     )
     .new_session();
 
@@ -1213,6 +1216,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         status: Some("completed".into()),
         action: Some(WebSearchAction::Search {
             query: Some("weather".into()),
+            queries: None,
         }),
     });
     prompt.input.push(ResponseItem::FunctionCall {
@@ -1669,6 +1673,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
         requires_openai_auth: false,
+        supports_websockets: false,
     };
 
     // Init session
@@ -1749,6 +1754,7 @@ async fn env_var_overrides_loaded_auth() {
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
         requires_openai_auth: false,
+        supports_websockets: false,
     };
 
     // Init session

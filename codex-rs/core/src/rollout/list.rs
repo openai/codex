@@ -6,8 +6,6 @@ use std::num::NonZero;
 use std::ops::ControlFlow;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use time::OffsetDateTime;
 use time::PrimitiveDateTime;
 use time::format_description::FormatItem;
@@ -17,7 +15,9 @@ use uuid::Uuid;
 
 use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
+use crate::instructions::UserInstructions;
 use crate::protocol::EventMsg;
+use crate::session_prefix::is_session_prefix_content;
 use crate::state_db;
 use codex_file_search as file_search;
 use codex_protocol::ThreadId;
@@ -245,9 +245,7 @@ impl serde::Serialize for Cursor {
     {
         let ts_str = self
             .ts
-            .format(&format_description!(
-                "[year]-[month]-[day]T[hour]-[minute]-[second]"
-            ))
+            .format(&Rfc3339)
             .map_err(|e| serde::ser::Error::custom(format!("format error: {e}")))?;
         serializer.serialize_str(&format!("{ts_str}|{}", self.id))
     }
@@ -630,9 +628,13 @@ pub fn parse_cursor(token: &str) -> Option<Cursor> {
         return None;
     };
 
-    let format: &[FormatItem] =
-        format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
-    let ts = PrimitiveDateTime::parse(file_ts, format).ok()?.assume_utc();
+    let ts = OffsetDateTime::parse(file_ts, &Rfc3339).ok().or_else(|| {
+        let format: &[FormatItem] =
+            format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
+        PrimitiveDateTime::parse(file_ts, format)
+            .ok()
+            .map(PrimitiveDateTime::assume_utc)
+    })?;
 
     Some(Cursor::new(ts, uuid))
 }
@@ -969,10 +971,7 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
             RolloutItem::SessionMeta(session_meta_line) => {
                 summary.source = Some(session_meta_line.meta.source.clone());
                 summary.model_provider = session_meta_line.meta.model_provider.clone();
-                summary.created_at = summary
-                    .created_at
-                    .clone()
-                    .or_else(|| Some(rollout_line.timestamp.clone()));
+                summary.created_at = Some(session_meta_line.meta.timestamp.clone());
                 summary.saw_session_meta = true;
                 if summary.head.len() < head_limit
                     && let Ok(val) = serde_json::to_value(session_meta_line)
@@ -985,6 +984,14 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                     .created_at
                     .clone()
                     .or_else(|| Some(rollout_line.timestamp.clone()));
+                if let codex_protocol::models::ResponseItem::Message { role, content, .. } = &item
+                    && role == "user"
+                    && !UserInstructions::is_user_instructions(content.as_slice())
+                    && !is_session_prefix_content(content.as_slice())
+                {
+                    tracing::warn!("Item: {item:#?}");
+                    summary.saw_user_event = true;
+                }
                 if summary.head.len() < head_limit
                     && let Ok(val) = serde_json::to_value(item)
                 {
@@ -1075,30 +1082,17 @@ async fn find_thread_path_by_id_str_in_subdir(
     // This is safe because we know the values are valid.
     #[allow(clippy::unwrap_used)]
     let limit = NonZero::new(1).unwrap();
-    // This is safe because we know the values are valid.
-    #[allow(clippy::unwrap_used)]
-    let threads = NonZero::new(2).unwrap();
-    let cancel = Arc::new(AtomicBool::new(false));
-    let exclude: Vec<String> = Vec::new();
-    let compute_indices = false;
-
-    let results = file_search::run(
-        id_str,
+    let options = file_search::FileSearchOptions {
         limit,
-        &root,
-        exclude,
-        threads,
-        cancel,
-        compute_indices,
-        false,
-    )
-    .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
+        compute_indices: false,
+        respect_gitignore: false,
+        ..Default::default()
+    };
 
-    let found = results
-        .matches
-        .into_iter()
-        .next()
-        .map(|m| root.join(m.path));
+    let results = file_search::run(id_str, vec![root], options, None)
+        .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
+
+    let found = results.matches.into_iter().next().map(|m| m.full_path());
 
     // Checking if DB is at parity.
     // TODO(jif): sqlite migration phase 1

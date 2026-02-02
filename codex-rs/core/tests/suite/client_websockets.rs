@@ -8,10 +8,14 @@ use codex_core::ModelProviderInfo;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
+use codex_core::TransportManager;
 use codex_core::WireApi;
+use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::SessionSource;
 use codex_otel::OtelManager;
+use codex_otel::metrics::MetricsClient;
+use codex_otel::metrics::MetricsConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use core_test_support::load_default_config_for_test;
@@ -23,15 +27,19 @@ use core_test_support::responses::start_websocket_server;
 use core_test_support::responses::start_websocket_server_with_headers;
 use core_test_support::skip_if_no_network;
 use futures::StreamExt;
+use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
+use std::time::Duration;
 use tempfile::TempDir;
+use tracing_test::traced_test;
 
 const MODEL: &str = "gpt-5.2-codex";
 
 struct WebsocketTestHarness {
     _codex_home: TempDir,
     client: ModelClient,
+    otel_manager: OtelManager,
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -58,6 +66,38 @@ async fn responses_websocket_streams_request() {
     assert_eq!(body["model"].as_str(), Some(MODEL));
     assert_eq!(body["stream"], serde_json::Value::Bool(true));
     assert_eq!(body["input"].as_array().map(Vec::len), Some(1));
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[traced_test]
+async fn responses_websocket_emits_websocket_telemetry_events() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![vec![
+        ev_response_created("resp-1"),
+        ev_completed("resp-1"),
+    ]]])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    harness.otel_manager.reset_runtime_metrics();
+    let mut session = harness.client.new_session();
+    let prompt = prompt_with_input(vec![message_item("hello")]);
+
+    stream_until_complete(&mut session, &prompt).await;
+
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    let summary = harness
+        .otel_manager
+        .runtime_metrics_summary()
+        .expect("runtime metrics summary");
+    assert_eq!(summary.api_calls.count, 0);
+    assert_eq!(summary.streaming_events.count, 0);
+    assert_eq!(summary.websocket_calls.count, 1);
+    assert_eq!(summary.websocket_events.count, 2);
 
     server.shutdown().await;
 }
@@ -187,7 +227,7 @@ fn websocket_provider(server: &WebSocketTestServer) -> ModelProviderInfo {
         env_key: None,
         env_key_instructions: None,
         experimental_bearer_token: None,
-        wire_api: WireApi::ResponsesWebsocket,
+        wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -195,6 +235,7 @@ fn websocket_provider(server: &WebSocketTestServer) -> ModelProviderInfo {
         stream_max_retries: Some(0),
         stream_idle_timeout_ms: Some(5_000),
         requires_openai_auth: false,
+        supports_websockets: true,
     }
 }
 
@@ -203,10 +244,17 @@ async fn websocket_harness(server: &WebSocketTestServer) -> WebsocketTestHarness
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model = Some(MODEL.to_string());
+    config.features.enable(Feature::ResponsesWebsockets);
     let config = Arc::new(config);
     let model_info = ModelsManager::construct_model_info_offline(MODEL, &config);
     let conversation_id = ThreadId::new();
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let exporter = InMemoryMetricExporter::default();
+    let metrics = MetricsClient::new(
+        MetricsConfig::in_memory("test", "codex-core", env!("CARGO_PKG_VERSION"), exporter)
+            .with_runtime_reader(),
+    )
+    .expect("in-memory metrics client");
     let otel_manager = OtelManager::new(
         conversation_id,
         MODEL,
@@ -217,22 +265,25 @@ async fn websocket_harness(server: &WebSocketTestServer) -> WebsocketTestHarness
         false,
         "test".to_string(),
         SessionSource::Exec,
-    );
+    )
+    .with_metrics(metrics);
     let client = ModelClient::new(
         Arc::clone(&config),
         None,
         model_info,
-        otel_manager,
+        otel_manager.clone(),
         provider.clone(),
         None,
         ReasoningSummary::Auto,
         conversation_id,
         SessionSource::Exec,
+        TransportManager::new(),
     );
 
     WebsocketTestHarness {
         _codex_home: codex_home,
         client,
+        otel_manager,
     }
 }
 

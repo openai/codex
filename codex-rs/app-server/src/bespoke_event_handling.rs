@@ -44,6 +44,7 @@ use codex_app_server_protocol::McpToolCallResult;
 use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind as V2PatchChangeKind;
+use codex_app_server_protocol::PlanDeltaNotification;
 use codex_app_server_protocol::RawResponseItemCompletedNotification;
 use codex_app_server_protocol::ReasoningSummaryPartAddedNotification;
 use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
@@ -52,6 +53,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::TerminalInteractionNotification;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadNameUpdatedNotification;
 use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
@@ -117,6 +119,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         msg,
     } = event;
     match msg {
+        EventMsg::TurnStarted(_) => {}
         EventMsg::TurnComplete(_ev) => {
             handle_turn_complete(
                 conversation_id,
@@ -279,6 +282,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                         header: question.header,
                         question: question.question,
                         is_other: question.is_other,
+                        is_secret: question.is_secret,
                         options: question.options.map(|options| {
                             options
                                 .into_iter()
@@ -591,14 +595,27 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::AgentMessageContentDelta(event) => {
+            let codex_protocol::protocol::AgentMessageContentDeltaEvent { item_id, delta, .. } =
+                event;
             let notification = AgentMessageDeltaNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item_id,
+                delta,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::AgentMessageDelta(notification))
+                .await;
+        }
+        EventMsg::PlanDelta(event) => {
+            let notification = PlanDeltaNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
                 item_id: event.item_id,
                 delta: event.delta,
             };
             outgoing
-                .send_server_notification(ServerNotification::AgentMessageDelta(notification))
+                .send_server_notification(ServerNotification::PlanDelta(notification))
                 .await;
         }
         EventMsg::ContextCompacted(..) => {
@@ -1096,6 +1113,17 @@ pub(crate) async fn apply_bespoke_event_handling(
                 outgoing.send_response(request_id, response).await;
             }
         }
+        EventMsg::ThreadNameUpdated(thread_name_event) => {
+            if let ApiVersion::V2 = api_version {
+                let notification = ThreadNameUpdatedNotification {
+                    thread_id: thread_name_event.thread_id.to_string(),
+                    thread_name: thread_name_event.thread_name,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::ThreadNameUpdated(notification))
+                    .await;
+            }
+        }
         EventMsg::TurnDiff(turn_diff_event) => {
             handle_turn_diff(
                 conversation_id,
@@ -1147,6 +1175,7 @@ async fn handle_turn_plan_update(
     api_version: ApiVersion,
     outgoing: &OutgoingMessageSender,
 ) {
+    // `update_plan` is a todo/checklist tool; it is not related to plan-mode updates
     if let ApiVersion::V2 = api_version {
         let notification = TurnPlanUpdatedNotification {
             thread_id: conversation_id.to_string(),

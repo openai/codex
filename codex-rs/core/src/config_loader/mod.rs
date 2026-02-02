@@ -1,3 +1,4 @@
+mod cloud_requirements;
 mod config_requirements;
 mod diagnostics;
 mod fingerprint;
@@ -6,7 +7,6 @@ mod layer_io;
 mod macos;
 mod merge;
 mod overrides;
-#[cfg(test)]
 mod requirements_exec_policy;
 mod state;
 
@@ -25,16 +25,19 @@ use codex_protocol::config_types::TrustLevel;
 use codex_protocol::protocol::AskForApproval;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
+use dunce::canonicalize as normalize_path;
 use serde::Deserialize;
 use std::io;
 use std::path::Path;
 use toml::Value as TomlValue;
 
+pub use cloud_requirements::CloudRequirementsLoader;
 pub use config_requirements::ConfigRequirements;
 pub use config_requirements::ConfigRequirementsToml;
 pub use config_requirements::McpServerIdentity;
 pub use config_requirements::McpServerRequirement;
 pub use config_requirements::RequirementSource;
+pub use config_requirements::ResidencyRequirement;
 pub use config_requirements::SandboxModeRequirement;
 pub use config_requirements::Sourced;
 pub use diagnostics::ConfigError;
@@ -69,6 +72,7 @@ const DEFAULT_PROJECT_ROOT_MARKERS: &[&str] = &[".git"];
 /// earlier layer cannot be overridden by a later layer:
 ///
 /// - admin:    managed preferences (*)
+/// - cloud:    managed cloud requirements
 /// - system    `/etc/codex/requirements.toml`
 ///
 /// For backwards compatibility, we also load from
@@ -98,6 +102,7 @@ pub async fn load_config_layers_state(
     cwd: Option<AbsolutePathBuf>,
     cli_overrides: &[(String, TomlValue)],
     overrides: LoaderOverrides,
+    cloud_requirements: CloudRequirementsLoader,
 ) -> io::Result<ConfigLayerStack> {
     let mut config_requirements_toml = ConfigRequirementsWithSources::default();
 
@@ -109,6 +114,11 @@ pub async fn load_config_layers_state(
             .as_deref(),
     )
     .await?;
+
+    if let Some(requirements) = cloud_requirements.get().await {
+        config_requirements_toml
+            .merge_unset_fields(RequirementSource::CloudRequirements, requirements);
+    }
 
     // Honor /etc/codex/requirements.toml.
     if cfg!(unix) {
@@ -226,6 +236,7 @@ pub async fn load_config_layers_state(
             &cwd,
             &project_trust_context.project_root,
             &project_trust_context,
+            codex_home,
         )
         .await?;
         layers.extend(project_layers);
@@ -414,7 +425,9 @@ async fn load_requirements_from_legacy_scheme(
 ///   empty array, which indicates that root detection should be disabled).
 /// - Returns an error if `project_root_markers` is specified but is not an
 ///   array of strings.
-fn project_root_markers_from_config(config: &TomlValue) -> io::Result<Option<Vec<String>>> {
+pub(crate) fn project_root_markers_from_config(
+    config: &TomlValue,
+) -> io::Result<Option<Vec<String>>> {
     let Some(table) = config.as_table() else {
         return Ok(None);
     };
@@ -443,7 +456,7 @@ fn project_root_markers_from_config(config: &TomlValue) -> io::Result<Option<Vec
     Ok(Some(markers))
 }
 
-fn default_project_root_markers() -> Vec<String> {
+pub(crate) fn default_project_root_markers() -> Vec<String> {
     DEFAULT_PROJECT_ROOT_MARKERS
         .iter()
         .map(ToString::to_string)
@@ -661,7 +674,11 @@ async fn load_project_layers(
     cwd: &AbsolutePathBuf,
     project_root: &AbsolutePathBuf,
     trust_context: &ProjectTrustContext,
+    codex_home: &Path,
 ) -> io::Result<Vec<ConfigLayerEntry>> {
+    let codex_home_abs = AbsolutePathBuf::from_absolute_path(codex_home)?;
+    let codex_home_normalized =
+        normalize_path(codex_home_abs.as_path()).unwrap_or_else(|_| codex_home_abs.to_path_buf());
     let mut dirs = cwd
         .as_path()
         .ancestors()
@@ -692,6 +709,11 @@ async fn load_project_layers(
         let layer_dir = AbsolutePathBuf::from_absolute_path(dir)?;
         let decision = trust_context.decision_for_dir(&layer_dir);
         let dot_codex_abs = AbsolutePathBuf::from_absolute_path(&dot_codex)?;
+        let dot_codex_normalized =
+            normalize_path(dot_codex_abs.as_path()).unwrap_or_else(|_| dot_codex_abs.to_path_buf());
+        if dot_codex_abs == codex_home_abs || dot_codex_normalized == codex_home_normalized {
+            continue;
+        }
         let config_file = dot_codex_abs.join(CONFIG_TOML_FILE)?;
         match tokio::fs::read_to_string(&config_file).await {
             Ok(contents) => {

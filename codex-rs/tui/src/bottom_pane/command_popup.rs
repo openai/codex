@@ -14,6 +14,11 @@ use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 use std::collections::HashSet;
 
+// Hide alias commands in the default popup list so each unique action appears once.
+// `quit` is an alias of `exit`, so we skip `quit` here.
+// `approvals` is an alias of `permissions`.
+const ALIAS_COMMANDS: &[SlashCommand] = &[SlashCommand::Quit, SlashCommand::Approvals];
+
 /// A selectable item in the popup: either a built-in command or a user prompt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CommandItem {
@@ -75,7 +80,7 @@ impl CommandPopup {
 
     /// Update the filter string based on the current composer text. The text
     /// passed in is expected to start with a leading '/'. Everything after the
-    /// *first* '/" on the *first* line becomes the active filter that is used
+    /// *first* '/' on the *first* line becomes the active filter that is used
     /// to narrow down the list of available commands.
     pub(crate) fn on_composer_text_change(&mut self, text: String) {
         let first_line = text.lines().next().unwrap_or("");
@@ -122,8 +127,7 @@ impl CommandPopup {
         if filter.is_empty() {
             // Built-ins first, in presentation order.
             for (_, cmd) in self.builtins.iter() {
-                // Skipping quit as it's a duplicate of exit.
-                if *cmd == SlashCommand::Quit {
+                if ALIAS_COMMANDS.contains(cmd) {
                     continue;
                 }
                 out.push((CommandItem::Builtin(*cmd), None));
@@ -458,7 +462,7 @@ mod tests {
     #[test]
     fn collab_command_hidden_when_collaboration_modes_disabled() {
         let mut popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
-        popup.on_composer_text_change("/coll".to_string());
+        popup.on_composer_text_change("/".to_string());
 
         let cmds: Vec<&str> = popup
             .filtered_items()
@@ -471,6 +475,10 @@ mod tests {
         assert!(
             !cmds.contains(&"collab"),
             "expected '/collab' to be hidden when collaboration modes are disabled, got {cmds:?}"
+        );
+        assert!(
+            !cmds.contains(&"plan"),
+            "expected '/plan' to be hidden when collaboration modes are disabled, got {cmds:?}"
         );
     }
 
@@ -490,6 +498,25 @@ mod tests {
         match popup.selected_item() {
             Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "collab"),
             other => panic!("expected collab to be selected for exact match, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plan_command_visible_when_collaboration_modes_enabled() {
+        let mut popup = CommandPopup::new(
+            Vec::new(),
+            CommandPopupFlags {
+                collaboration_modes_enabled: true,
+                connectors_enabled: false,
+                personality_command_enabled: true,
+                windows_degraded_sandbox_active: false,
+            },
+        );
+        popup.on_composer_text_change("/plan".to_string());
+
+        match popup.selected_item() {
+            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "plan"),
+            other => panic!("expected plan to be selected for exact match, got {other:?}"),
         }
     }
 

@@ -280,7 +280,18 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
     let policy = parser.build();
     tracing::debug!("loaded rules from {} files", policy_paths.len());
 
-    Ok(policy)
+    let Some(requirements_policy) = config_stack.requirements().exec_policy.as_deref() else {
+        return Ok(policy);
+    };
+
+    let mut combined_rules = policy.rules().clone();
+    for (program, rules) in requirements_policy.as_ref().rules().iter_all() {
+        for rule in rules {
+            combined_rules.insert(program.clone(), rule.clone());
+        }
+    }
+
+    Ok(Policy::new(combined_rules))
 }
 
 /// If a command is not matched by any execpolicy rule, derive a [`Decision`].
@@ -1265,6 +1276,30 @@ prefix_rule(
             ExecApprovalRequirement::Skip {
                 bypass_sandbox: true,
                 proposed_execpolicy_amendment: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn dangerous_git_push_requires_approval_in_danger_full_access() {
+        let command = vec_str(&["git", "push", "origin", "+main"]);
+        let manager = ExecPolicyManager::default();
+        let requirement = manager
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                features: &Features::with_defaults(),
+                command: &command,
+                approval_policy: AskForApproval::OnRequest,
+                sandbox_policy: &SandboxPolicy::DangerFullAccess,
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                prefix_rule: None,
+            })
+            .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
             }
         );
     }

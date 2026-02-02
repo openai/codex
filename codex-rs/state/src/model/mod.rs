@@ -2,6 +2,8 @@ mod log;
 mod thread_metadata;
 
 pub use log::LogEntry;
+pub use log::LogQuery;
+pub use log::LogRow;
 pub use thread_metadata::Anchor;
 pub use thread_metadata::BackfillStats;
 pub use thread_metadata::ExtractionOutcome;
