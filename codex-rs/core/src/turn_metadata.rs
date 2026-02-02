@@ -20,7 +20,6 @@ struct TurnMetadata {
     workspaces: BTreeMap<String, TurnMetadataWorkspace>,
 }
 
-/// this happens at request send time only
 pub(crate) async fn build_turn_metadata_header(cwd: &Path) -> Option<String> {
     let repo_root = get_git_repo_root(cwd)?;
 
