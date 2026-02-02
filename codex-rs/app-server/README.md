@@ -81,6 +81,7 @@ Example (from OpenAI's official VSCode extension):
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders` filtering.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`.
+- `thread/compact` — trigger a context compaction run for a thread; returns a `TurnStartResponse`. No `turn/started` notification is emitted; clients should rely on the core event stream (`task_started`) and item notifications.
 - `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success.
 - `thread/name/set` — set or update a thread’s user-facing name; returns `{}` on success. Thread names are not required to be unique; name lookups resolve to the most recently updated thread.
 - `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success.

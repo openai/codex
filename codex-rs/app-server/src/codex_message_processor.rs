@@ -98,6 +98,7 @@ use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
+use codex_app_server_protocol::ThreadCompactParams;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadItem;
@@ -455,6 +456,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadRead { request_id, params } => {
                 self.thread_read(request_id, params).await;
+            }
+            ClientRequest::ThreadCompact { request_id, params } => {
+                self.thread_compact(request_id, params).await;
             }
             ClientRequest::SkillsList { request_id, params } => {
                 self.skills_list(request_id, params).await;
@@ -4146,6 +4150,40 @@ impl CodexMessageProcessor {
                 let error = JSONRPCErrorError {
                     code: INTERNAL_ERROR_CODE,
                     message: format!("failed to start turn: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn thread_compact(&self, request_id: RequestId, params: ThreadCompactParams) {
+        let ThreadCompactParams { thread_id } = params;
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let turn_id = thread.submit(Op::Compact).await;
+        match turn_id {
+            Ok(turn_id) => {
+                let turn = Turn {
+                    id: turn_id,
+                    items: Vec::new(),
+                    error: None,
+                    status: TurnStatus::InProgress,
+                };
+
+                let response = TurnStartResponse { turn };
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to compact thread: {err}"),
                     data: None,
                 };
                 self.outgoing.send_error(request_id, error).await;

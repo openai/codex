@@ -152,6 +152,10 @@ client_request_definitions! {
         params: v2::ThreadReadParams,
         response: v2::ThreadReadResponse,
     },
+    ThreadCompact => "thread/compact" {
+        params: v2::ThreadCompactParams,
+        response: v2::TurnStartResponse,
+    },
     SkillsList => "skills/list" {
         params: v2::SkillsListParams,
         response: v2::SkillsListResponse,

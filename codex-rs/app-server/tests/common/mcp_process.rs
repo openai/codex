@@ -48,6 +48,7 @@ use codex_app_server_protocol::SendUserTurnParams;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::ThreadArchiveParams;
+use codex_app_server_protocol::ThreadCompactParams;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadLoadedListParams;
@@ -425,6 +426,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/read", params).await
+    }
+
+    /// Send a `thread/compact` JSON-RPC request.
+    pub async fn send_thread_compact_request(
+        &mut self,
+        params: ThreadCompactParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/compact", params).await
     }
 
     /// Send a `model/list` JSON-RPC request.
