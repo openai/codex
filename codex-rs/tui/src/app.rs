@@ -2239,7 +2239,7 @@ impl App {
             AppEvent::StatusLineTimeoutWarning { timeout_ms } => {
                 self.chat_widget.add_info_message(
                     format!(
-                        "Status line command timed out after {timeout_ms}ms. Consider increasing tui.status_line_timeout_ms in your config."
+                        "Status line command timed out after {timeout_ms}ms. Consider optimizing the command."
                     ),
                     None,
                 );
