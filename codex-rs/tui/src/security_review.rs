@@ -3157,7 +3157,7 @@ fn render_bug_sections(
             }
         }
         composed.push_str("\n\n#### Validation\n");
-        let expects_asan = crash_poc_category(&snapshot.bug).is_some();
+        let expects_asan = expects_asan_for_bug(&snapshot.bug);
         let status_label = validation_status_label(&snapshot.bug.validation);
         composed.push_str(&format!("- **Status:** {status_label}\n"));
         if let Some(tool) = snapshot
@@ -10607,6 +10607,22 @@ mod validation_target_selection_tests {
     }
 
     #[test]
+    fn excludes_low_risk_findings_from_validation_targets() {
+        let snapshot = SecurityReviewSnapshot {
+            generated_at: OffsetDateTime::now_utc(),
+            findings_summary: String::new(),
+            report_sections_prefix: Vec::new(),
+            bugs: vec![
+                make_bug_snapshot(1, 1, "High risk finding", "High", Vec::new()),
+                make_bug_snapshot(2, 10, "Low risk finding", "Low", Vec::new()),
+            ],
+        };
+
+        let targets = build_validation_findings_context(&snapshot, false);
+        assert_eq!(targets.ids, vec![BugIdentifier::RiskRank(1)]);
+    }
+
+    #[test]
     fn includes_web_browser_findings_in_validation_targets_even_when_disabled() {
         let snapshot = SecurityReviewSnapshot {
             generated_at: OffsetDateTime::now_utc(),
@@ -10727,6 +10743,34 @@ mod validation_target_selection_tests {
         };
 
         assert_eq!(crash_poc_category(&bug), Some("crash_poc_release"));
+    }
+
+    #[test]
+    fn expects_asan_only_for_release_crash_categories() {
+        let release = SecurityReviewBug {
+            summary_id: 1,
+            risk_rank: Some(1),
+            risk_score: Some(0.0),
+            title: "Crash".to_string(),
+            severity: "High".to_string(),
+            impact: "x".to_string(),
+            likelihood: "x".to_string(),
+            recommendation: "x".to_string(),
+            file: "x.rs#L1-L2".to_string(),
+            blame: None,
+            risk_reason: None,
+            verification_types: vec!["crash_poc_release".to_string()],
+            vulnerability_tag: None,
+            validation: BugValidationState::default(),
+            assignee_github: None,
+        };
+        assert_eq!(expects_asan_for_bug(&release), true);
+
+        let func = SecurityReviewBug {
+            verification_types: vec!["crash_poc_func".to_string()],
+            ..release
+        };
+        assert_eq!(expects_asan_for_bug(&func), false);
     }
 
     #[test]
@@ -21045,7 +21089,7 @@ async fn verify_bugs(
                 request: request.clone(),
                 title: entry.bug.title.clone(),
                 risk_rank: entry.bug.risk_rank,
-                expect_asan: crash_poc_category(&entry.bug).is_some(),
+                expect_asan: expects_asan_for_bug(&entry.bug),
             });
         }
 
@@ -21295,6 +21339,11 @@ fn has_verification_type(bug: &SecurityReviewBug, needle: &str) -> bool {
         .any(|t| t.eq_ignore_ascii_case(needle))
 }
 
+fn expects_asan_for_bug(bug: &SecurityReviewBug) -> bool {
+    has_verification_type(bug, "crash_poc_release")
+        || has_verification_type(bug, "crash_poc_release_bin")
+}
+
 fn crash_poc_category(bug: &SecurityReviewBug) -> Option<&'static str> {
     if has_verification_type(bug, "crash_poc_release")
         || has_verification_type(bug, "crash_poc_release_bin")
@@ -21317,7 +21366,7 @@ enum ValidationPromptKind {
 }
 
 fn validation_prompt_kind(bug: &SecurityReviewBug, vuln_tag: &str) -> ValidationPromptKind {
-    if crash_poc_category(bug).is_some() {
+    if expects_asan_for_bug(bug) {
         return ValidationPromptKind::Crash;
     }
     if has_verification_type(bug, "rce_bin") || is_rce_validation_vuln_tag(vuln_tag) {
@@ -21349,7 +21398,11 @@ fn build_validation_findings_context(
     snapshot: &SecurityReviewSnapshot,
     include_web_browser: bool,
 ) -> ValidationFindingsContext {
-    let mut selected: Vec<&BugSnapshot> = snapshot.bugs.iter().collect();
+    let mut selected: Vec<&BugSnapshot> = snapshot
+        .bugs
+        .iter()
+        .filter(|bug| is_high_risk(&bug.bug))
+        .collect();
     selected.sort_by(|left, right| {
         let left_rank = left.bug.risk_rank.unwrap_or(usize::MAX);
         let right_rank = right.bug.risk_rank.unwrap_or(usize::MAX);
@@ -21386,6 +21439,7 @@ fn build_validation_findings_context(
         let crash_poc_category_line = crash_poc_category(&item.bug)
             .map(|category| format!("\n  crash_poc_category: {category}"))
             .unwrap_or_default();
+        let expects_asan_line = format!("\n  expects_asan: {}", expects_asan_for_bug(&item.bug));
         let web_validation_enabled_line = if has_verification_type(&item.bug, "web_browser") {
             format!("\n  web_validation_enabled: {include_web_browser}")
         } else {
@@ -21403,11 +21457,12 @@ fn build_validation_findings_context(
         ids.push(identifier);
         // Include the original markdown so the model can infer concrete targets
         let context = format!(
-            "- id_kind: {id_kind}\n  id_value: {id_value}\n  risk_rank: {rank}\n  title: {title}\n  severity: {severity}\n  vuln_tag: {vuln_tag}\n  verification_types: {types}{crash_poc_category_line}{web_validation_enabled_line}\n  details:\n{details}\n---\n",
+            "- id_kind: {id_kind}\n  id_value: {id_value}\n  risk_rank: {rank}\n  title: {title}\n  severity: {severity}\n  vuln_tag: {vuln_tag}\n  verification_types: {types}{crash_poc_category_line}{expects_asan_line}{web_validation_enabled_line}\n  details:\n{details}\n---\n",
             title = item.bug.title,
             severity = item.bug.severity,
             types = types,
             crash_poc_category_line = crash_poc_category_line,
+            expects_asan_line = expects_asan_line,
             web_validation_enabled_line = web_validation_enabled_line,
             details = indent_block(&item.original_markdown, 2)
         );
