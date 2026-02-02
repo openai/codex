@@ -575,11 +575,8 @@ mod tests {
             exclude_slash_tmp: true,
         };
 
-        let shell_command: Vec<String> = vec![
-            "bash".to_string(),
-            "-c".to_string(),
-            "echo ok".to_string(),
-        ];
+        let shell_command: Vec<String> =
+            vec!["bash".to_string(), "-c".to_string(), "echo ok".to_string()];
         let args = create_seatbelt_command_args(shell_command, &policy, &cwd);
 
         // The second arg is the full policy string passed to sandbox-exec -p.
@@ -617,11 +614,8 @@ mod tests {
             exclude_slash_tmp: true,
         };
 
-        let shell_command: Vec<String> = vec![
-            "bash".to_string(),
-            "-c".to_string(),
-            "echo ok".to_string(),
-        ];
+        let shell_command: Vec<String> =
+            vec!["bash".to_string(), "-c".to_string(), "echo ok".to_string()];
         let args = create_seatbelt_command_args(shell_command, &policy, &cwd);
 
         let full_policy = &args[1];
