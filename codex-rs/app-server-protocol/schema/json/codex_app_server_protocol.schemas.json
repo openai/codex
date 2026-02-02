@@ -1804,6 +1804,78 @@
           "type": "object"
         },
         {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fuzzyFileSearch/sessionStart"
+              ],
+              "title": "FuzzyFileSearch/sessionStartRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/FuzzyFileSearchSessionStartParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "FuzzyFileSearch/sessionStartRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fuzzyFileSearch/sessionUpdate"
+              ],
+              "title": "FuzzyFileSearch/sessionUpdateRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/FuzzyFileSearchSessionUpdateParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "FuzzyFileSearch/sessionUpdateRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fuzzyFileSearch/sessionStop"
+              ],
+              "title": "FuzzyFileSearch/sessionStopRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/FuzzyFileSearchSessionStopParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "FuzzyFileSearch/sessionStopRequest",
+          "type": "object"
+        },
+        {
           "description": "Execute a command (argv vector) under the server's sandbox.",
           "properties": {
             "id": {
@@ -5205,6 +5277,95 @@
       ],
       "type": "object"
     },
+    "FuzzyFileSearchSessionStartParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "roots": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "roots",
+        "sessionId"
+      ],
+      "title": "FuzzyFileSearchSessionStartParams",
+      "type": "object"
+    },
+    "FuzzyFileSearchSessionStartResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "FuzzyFileSearchSessionStartResponse",
+      "type": "object"
+    },
+    "FuzzyFileSearchSessionStopParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "title": "FuzzyFileSearchSessionStopParams",
+      "type": "object"
+    },
+    "FuzzyFileSearchSessionStopResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "FuzzyFileSearchSessionStopResponse",
+      "type": "object"
+    },
+    "FuzzyFileSearchSessionUpdateParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "query": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "query",
+        "sessionId"
+      ],
+      "title": "FuzzyFileSearchSessionUpdateParams",
+      "type": "object"
+    },
+    "FuzzyFileSearchSessionUpdateResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "FuzzyFileSearchSessionUpdateResponse",
+      "type": "object"
+    },
+    "FuzzyFileSearchSessionUpdatedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "files": {
+          "items": {
+            "$ref": "#/definitions/FuzzyFileSearchResult"
+          },
+          "type": "array"
+        },
+        "query": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "files",
+        "query",
+        "sessionId"
+      ],
+      "title": "FuzzyFileSearchSessionUpdatedNotification",
+      "type": "object"
+    },
     "GetAuthStatusParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -8190,6 +8351,26 @@
             "params"
           ],
           "title": "ConfigWarningNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "fuzzyFileSearch/sessionUpdated"
+              ],
+              "title": "FuzzyFileSearch/sessionUpdatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/FuzzyFileSearchSessionUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "FuzzyFileSearch/sessionUpdatedNotification",
           "type": "object"
         },
         {
