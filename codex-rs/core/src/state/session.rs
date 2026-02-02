@@ -8,6 +8,7 @@ use std::collections::HashSet;
 
 use crate::codex::SessionConfiguration;
 use crate::context_manager::ContextManager;
+use crate::context_manager::is_user_turn_boundary;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
@@ -75,7 +76,7 @@ impl SessionState {
     /// user turn and optionally fill the slot with a TurnContextItem.
     pub(crate) fn record_user_turn_placeholders(&mut self, items: &[ResponseItem]) {
         for item in items {
-            if matches!(item, ResponseItem::Message { role, .. } if role == "user") {
+            if is_user_turn_boundary(item) {
                 self.turn_context_history.push(None);
             }
         }

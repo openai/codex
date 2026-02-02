@@ -111,6 +111,7 @@ use crate::config::resolve_web_search_mode_for_turn;
 use crate::config::types::McpServerConfig;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::context_manager::ContextManager;
+use crate::context_manager::is_user_turn_boundary;
 use crate::environment_context::EnvironmentContext;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
@@ -1858,8 +1859,7 @@ impl Session {
             match item {
                 RolloutItem::ResponseItem(response_item) => {
                     history_items.push(response_item.clone());
-                    if matches!(response_item, ResponseItem::Message { role, .. } if role == "user")
-                    {
+                    if is_user_turn_boundary(response_item) {
                         turn_context_history.push(None);
                         awaiting_turn_context = true;
                     }
@@ -1943,9 +1943,7 @@ impl Session {
         let user_positions: Vec<usize> = items
             .iter()
             .enumerate()
-            .filter_map(|(idx, item)| {
-                matches!(item, ResponseItem::Message { role, .. } if role == "user").then_some(idx)
-            })
+            .filter_map(|(idx, item)| is_user_turn_boundary(item).then_some(idx))
             .collect();
         let Some(&first_user_idx) = user_positions.first() else {
             return;
@@ -1963,7 +1961,7 @@ impl Session {
     fn user_turn_count(items: &[ResponseItem]) -> usize {
         items
             .iter()
-            .filter(|item| matches!(item, ResponseItem::Message { role, .. } if role == "user"))
+            .filter(|item| is_user_turn_boundary(item))
             .count()
     }
 
@@ -5375,6 +5373,106 @@ mod tests {
 
         assert_eq!(history.len(), 2);
         assert_eq!(modes, vec![Some(collaboration_mode), None]);
+    }
+
+    #[test]
+    fn user_turn_count_ignores_non_turn_user_messages() {
+        let items = vec![
+            user_message("<user_instructions>do the thing</user_instructions>"),
+            user_message(
+                "# AGENTS.md instructions for project\n\n<INSTRUCTIONS>\nrule\n</INSTRUCTIONS>",
+            ),
+            user_message(
+                "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
+            ),
+            user_message("<user_shell_command>echo 42</user_shell_command>"),
+            user_message("real user turn"),
+        ];
+
+        assert_eq!(Session::user_turn_count(&items), 1);
+    }
+
+    #[test]
+    fn reconstruct_turn_context_history_ignores_non_turn_user_messages() {
+        let collaboration_mode = CollaborationMode {
+            mode: ModeKind::Plan,
+            settings: Settings {
+                model: "gpt-test".to_string(),
+                reasoning_effort: None,
+                developer_instructions: None,
+            },
+        };
+        let turn_context = TurnContextItem {
+            cwd: PathBuf::from("/tmp"),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            model: collaboration_mode.settings.model.clone(),
+            personality: None,
+            collaboration_mode: Some(collaboration_mode.clone()),
+            effort: None,
+            summary: ReasoningSummaryConfig::Auto,
+            user_instructions: None,
+            developer_instructions: None,
+            final_output_json_schema: None,
+            truncation_policy: None,
+        };
+        let rollout_items = vec![
+            RolloutItem::ResponseItem(user_message(
+                "<user_instructions>do the thing</user_instructions>",
+            )),
+            RolloutItem::ResponseItem(user_message(
+                "# AGENTS.md instructions for project\n\n<INSTRUCTIONS>\nrule\n</INSTRUCTIONS>",
+            )),
+            RolloutItem::ResponseItem(user_message("real user turn")),
+            RolloutItem::TurnContext(turn_context),
+        ];
+
+        let history = Session::reconstruct_turn_context_history_from_rollout(&rollout_items);
+        let modes: Vec<Option<ModeKind>> = history
+            .iter()
+            .map(|item| {
+                item.as_ref()
+                    .and_then(|ctx| ctx.collaboration_mode.as_ref().map(|mode| mode.mode))
+            })
+            .collect();
+
+        assert_eq!(modes, vec![Some(ModeKind::Plan)]);
+    }
+
+    #[test]
+    fn drop_last_n_user_turns_from_items_ignores_non_turn_user_messages() {
+        let mut items = vec![
+            user_message("<environment_context>ctx</environment_context>"),
+            user_message("<user_instructions>do the thing</user_instructions>"),
+            user_message("turn 1 user"),
+            ResponseItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "turn 1 assistant".to_string(),
+                }],
+                end_turn: None,
+            },
+            user_message("turn 2 user"),
+            ResponseItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "turn 2 assistant".to_string(),
+                }],
+                end_turn: None,
+            },
+        ];
+
+        Session::drop_last_n_user_turns_from_items(&mut items, 2);
+
+        assert_eq!(
+            items,
+            vec![
+                user_message("<environment_context>ctx</environment_context>"),
+                user_message("<user_instructions>do the thing</user_instructions>"),
+            ]
+        );
     }
 
     #[tokio::test]
