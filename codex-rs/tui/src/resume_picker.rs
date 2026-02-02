@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
@@ -11,6 +12,7 @@ use codex_core::RolloutRecorder;
 use codex_core::ThreadItem;
 use codex_core::ThreadSortKey;
 use codex_core::ThreadsPage;
+use codex_core::find_thread_names_by_ids;
 use codex_core::path_utils;
 use codex_protocol::items::TurnItem;
 use color_eyre::eyre::Result;
@@ -34,12 +36,12 @@ use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
+use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionMetaLine;
 
 const PAGE_SIZE: usize = 25;
 const LOAD_NEAR_THRESHOLD: usize = 5;
-
 #[derive(Debug, Clone)]
 pub enum SessionSelection {
     StartFresh,
@@ -97,8 +99,9 @@ enum BackgroundEvent {
 }
 
 /// Interactive session picker that lists recorded rollout files with simple
-/// search and pagination. Shows the first user input as the preview, relative
-/// time (e.g., "5 seconds ago"), and the absolute path.
+/// search and pagination. Shows the session name when available, otherwise the
+/// first user input as the preview, relative time (e.g., "5 seconds ago"), and
+/// the absolute path.
 pub async fn run_resume_picker(
     tui: &mut Tui,
     codex_home: &Path,
@@ -210,7 +213,7 @@ async fn run_session_picker(
                 }
             }
             Some(event) = background_events.next() => {
-                state.handle_background_event(event)?;
+                state.handle_background_event(event).await?;
             }
             else => break,
         }
@@ -257,6 +260,7 @@ struct PickerState {
     show_all: bool,
     filter_cwd: Option<PathBuf>,
     action: SessionPickerAction,
+    thread_name_cache: HashMap<ThreadId, Option<String>>,
 }
 
 struct PaginationState {
@@ -312,10 +316,30 @@ impl SearchState {
 struct Row {
     path: PathBuf,
     preview: String,
+    thread_id: Option<ThreadId>,
+    thread_name: Option<String>,
     created_at: Option<DateTime<Utc>>,
     updated_at: Option<DateTime<Utc>>,
     cwd: Option<PathBuf>,
     git_branch: Option<String>,
+}
+
+impl Row {
+    fn display_preview(&self) -> &str {
+        self.thread_name.as_deref().unwrap_or(&self.preview)
+    }
+
+    fn matches_query(&self, query: &str) -> bool {
+        if self.preview.to_lowercase().contains(query) {
+            return true;
+        }
+        if let Some(thread_name) = self.thread_name.as_ref()
+            && thread_name.to_lowercase().contains(query)
+        {
+            return true;
+        }
+        false
+    }
 }
 
 impl PickerState {
@@ -352,6 +376,7 @@ impl PickerState {
             show_all,
             filter_cwd,
             action,
+            thread_name_cache: HashMap::new(),
         }
     }
 
@@ -453,7 +478,7 @@ impl PickerState {
         });
     }
 
-    fn handle_background_event(&mut self, event: BackgroundEvent) -> Result<()> {
+    async fn handle_background_event(&mut self, event: BackgroundEvent) -> Result<()> {
         match event {
             BackgroundEvent::PageLoaded {
                 request_token,
@@ -470,6 +495,7 @@ impl PickerState {
                 self.pagination.loading = LoadingState::Idle;
                 let page = page.map_err(color_eyre::Report::from)?;
                 self.ingest_page(page);
+                self.update_thread_names().await;
                 let completed_token = pending.search_token.or(search_token);
                 self.continue_search_if_token_matches(completed_token);
             }
@@ -508,6 +534,48 @@ impl PickerState {
         self.apply_filter();
     }
 
+    async fn update_thread_names(&mut self) {
+        let mut missing_ids = HashSet::new();
+        for row in &self.all_rows {
+            let Some(thread_id) = row.thread_id else {
+                continue;
+            };
+            if self.thread_name_cache.contains_key(&thread_id) {
+                continue;
+            }
+            missing_ids.insert(thread_id);
+        }
+
+        if missing_ids.is_empty() {
+            return;
+        }
+
+        let names = find_thread_names_by_ids(&self.codex_home, &missing_ids)
+            .await
+            .unwrap_or_default();
+        for thread_id in missing_ids {
+            let thread_name = names.get(&thread_id).cloned();
+            self.thread_name_cache.insert(thread_id, thread_name);
+        }
+
+        let mut updated = false;
+        for row in self.all_rows.iter_mut() {
+            let Some(thread_id) = row.thread_id else {
+                continue;
+            };
+            let thread_name = self.thread_name_cache.get(&thread_id).cloned().flatten();
+            if row.thread_name == thread_name {
+                continue;
+            }
+            row.thread_name = thread_name;
+            updated = true;
+        }
+
+        if updated {
+            self.apply_filter();
+        }
+    }
+
     fn apply_filter(&mut self) {
         let base_iter = self
             .all_rows
@@ -517,10 +585,7 @@ impl PickerState {
             self.filtered_rows = base_iter.cloned().collect();
         } else {
             let q = self.query.to_lowercase();
-            self.filtered_rows = base_iter
-                .filter(|r| r.preview.to_lowercase().contains(&q))
-                .cloned()
-                .collect();
+            self.filtered_rows = base_iter.filter(|r| r.matches_query(&q)).cloned().collect();
         }
         if self.selected >= self.filtered_rows.len() {
             self.selected = self.filtered_rows.len().saturating_sub(1);
@@ -712,7 +777,7 @@ fn head_to_row(item: &ThreadItem) -> Row {
         .and_then(parse_timestamp_str)
         .or(created_at);
 
-    let (cwd, git_branch) = extract_session_meta_from_head(&item.head);
+    let (cwd, git_branch, thread_id) = extract_session_meta_from_head(&item.head);
     let preview = preview_from_head(&item.head)
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
@@ -721,6 +786,8 @@ fn head_to_row(item: &ThreadItem) -> Row {
     Row {
         path: item.path.clone(),
         preview,
+        thread_id,
+        thread_name: None,
         created_at,
         updated_at,
         cwd,
@@ -728,15 +795,18 @@ fn head_to_row(item: &ThreadItem) -> Row {
     }
 }
 
-fn extract_session_meta_from_head(head: &[serde_json::Value]) -> (Option<PathBuf>, Option<String>) {
+fn extract_session_meta_from_head(
+    head: &[serde_json::Value],
+) -> (Option<PathBuf>, Option<String>, Option<ThreadId>) {
     for value in head {
         if let Ok(meta_line) = serde_json::from_value::<SessionMetaLine>(value.clone()) {
             let cwd = Some(meta_line.meta.cwd);
             let git_branch = meta_line.git.and_then(|git| git.branch);
-            return (cwd, git_branch);
+            let thread_id = Some(meta_line.meta.id);
+            return (cwd, git_branch, thread_id);
         }
     }
-    (None, None)
+    (None, None, None)
 }
 
 fn paths_match(a: &Path, b: &Path) -> bool {
@@ -909,7 +979,7 @@ fn render_list(
         if add_leading_gap {
             preview_width = preview_width.saturating_sub(2);
         }
-        let preview = truncate_text(&row.preview, preview_width);
+        let preview = truncate_text(row.display_preview(), preview_width);
         let mut spans: Vec<Span> = vec![marker];
         if let Some(updated) = updated_span {
             spans.push(updated);
@@ -1253,6 +1323,22 @@ mod tests {
     }
 
     #[test]
+    fn row_display_preview_prefers_thread_name() {
+        let row = Row {
+            path: PathBuf::from("/tmp/a.jsonl"),
+            preview: String::from("first message"),
+            thread_id: None,
+            thread_name: Some(String::from("My session")),
+            created_at: None,
+            updated_at: None,
+            cwd: None,
+            git_branch: None,
+        };
+
+        assert_eq!(row.display_preview(), "My session");
+    }
+
+    #[test]
     fn resume_table_snapshot() {
         use crate::custom_terminal::Terminal;
         use crate::test_backend::VT100Backend;
@@ -1275,6 +1361,8 @@ mod tests {
             Row {
                 path: PathBuf::from("/tmp/a.jsonl"),
                 preview: String::from("Fix resume picker timestamps"),
+                thread_id: None,
+                thread_name: None,
                 created_at: Some(now - Duration::minutes(16)),
                 updated_at: Some(now - Duration::seconds(42)),
                 cwd: None,
@@ -1283,6 +1371,8 @@ mod tests {
             Row {
                 path: PathBuf::from("/tmp/b.jsonl"),
                 preview: String::from("Investigate lazy pagination cap"),
+                thread_id: None,
+                thread_name: None,
                 created_at: Some(now - Duration::hours(1)),
                 updated_at: Some(now - Duration::minutes(35)),
                 cwd: None,
@@ -1291,6 +1381,8 @@ mod tests {
             Row {
                 path: PathBuf::from("/tmp/c.jsonl"),
                 preview: String::from("Explain the codebase"),
+                thread_id: None,
+                thread_name: None,
                 created_at: Some(now - Duration::hours(2)),
                 updated_at: Some(now - Duration::hours(2)),
                 cwd: None,
@@ -1488,6 +1580,104 @@ mod tests {
         assert_snapshot!("resume_picker_screen", snapshot);
     }
 
+    #[tokio::test]
+    async fn resume_picker_thread_names_snapshot() {
+        use crate::custom_terminal::Terminal;
+        use crate::test_backend::VT100Backend;
+        use ratatui::layout::Constraint;
+        use ratatui::layout::Layout;
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let session_index_path = tempdir.path().join("session_index.jsonl");
+
+        let id1 =
+            ThreadId::from_string("11111111-1111-1111-1111-111111111111").expect("thread id 1");
+        let id2 =
+            ThreadId::from_string("22222222-2222-2222-2222-222222222222").expect("thread id 2");
+        let entries = vec![
+            json!({
+                "id": id1,
+                "thread_name": "Keep this for now",
+                "updated_at": "2025-01-01T00:00:00Z",
+            }),
+            json!({
+                "id": id2,
+                "thread_name": "Named thread",
+                "updated_at": "2025-01-01T00:00:00Z",
+            }),
+        ];
+        let mut out = String::new();
+        for entry in entries {
+            out.push_str(&serde_json::to_string(&entry).expect("session index entry"));
+            out.push('\n');
+        }
+        std::fs::write(&session_index_path, out).expect("write session index");
+
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state = PickerState::new(
+            tempdir.path().to_path_buf(),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+            true,
+            None,
+            SessionPickerAction::Resume,
+        );
+
+        let now = Utc::now();
+        let rows = vec![
+            Row {
+                path: PathBuf::from("/tmp/a.jsonl"),
+                preview: String::from("First message preview"),
+                thread_id: Some(id1),
+                thread_name: None,
+                created_at: None,
+                updated_at: Some(now - Duration::days(2)),
+                cwd: None,
+                git_branch: None,
+            },
+            Row {
+                path: PathBuf::from("/tmp/b.jsonl"),
+                preview: String::from("Second message preview"),
+                thread_id: Some(id2),
+                thread_name: None,
+                created_at: None,
+                updated_at: Some(now - Duration::days(3)),
+                cwd: None,
+                git_branch: None,
+            },
+        ];
+        state.all_rows = rows.clone();
+        state.filtered_rows = rows;
+        state.view_rows = Some(2);
+        state.selected = 0;
+        state.scroll_top = 0;
+        state.update_view_rows(2);
+
+        state.update_thread_names().await;
+
+        let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all);
+
+        let width: u16 = 80;
+        let height: u16 = 5;
+        let backend = VT100Backend::new(width, height);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, width, height));
+
+        {
+            let mut frame = terminal.get_frame();
+            let area = frame.area();
+            let segments =
+                Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(area);
+            render_column_headers(&mut frame, segments[0], &metrics);
+            render_list(&mut frame, segments[1], &state, &metrics);
+        }
+        terminal.flush().expect("flush");
+
+        let snapshot = terminal.backend().to_string();
+        assert_snapshot!("resume_picker_thread_names", snapshot);
+    }
+
     #[test]
     fn pageless_scrolling_deduplicates_and_keeps_order() {
         let loader: PageLoader = Arc::new(|_| {});
@@ -1674,8 +1864,8 @@ mod tests {
         assert_eq!(state.selected, state.filtered_rows.len().saturating_sub(2));
     }
 
-    #[test]
-    fn set_query_loads_until_match_and_respects_scan_cap() {
+    #[tokio::test]
+    async fn set_query_loads_until_match_and_respects_scan_cap() {
         let recorded_requests: Arc<Mutex<Vec<PageLoadRequest>>> = Arc::new(Mutex::new(Vec::new()));
         let request_sink = recorded_requests.clone();
         let loader: PageLoader = Arc::new(move |req: PageLoadRequest| {
@@ -1726,6 +1916,7 @@ mod tests {
                     false,
                 )),
             })
+            .await
             .unwrap();
 
         let second_request = {
@@ -1753,6 +1944,7 @@ mod tests {
                     false,
                 )),
             })
+            .await
             .unwrap();
 
         assert!(!state.filtered_rows.is_empty());
@@ -1772,6 +1964,7 @@ mod tests {
                 search_token: second_request.search_token,
                 page: Ok(page(Vec::new(), None, 0, false)),
             })
+            .await
             .unwrap();
         assert_eq!(recorded_requests.lock().unwrap().len(), 1);
 
@@ -1781,6 +1974,7 @@ mod tests {
                 search_token: active_request.search_token,
                 page: Ok(page(Vec::new(), None, 3, true)),
             })
+            .await
             .unwrap();
 
         assert!(state.filtered_rows.is_empty());

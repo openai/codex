@@ -18,6 +18,7 @@ use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWarningNotification;
+use codex_app_server_protocol::ExperimentalApi;
 use codex_app_server_protocol::InitializeResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -28,6 +29,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::SkillsListUpdatedNotification;
+use codex_app_server_protocol::experimental_required_message;
 use codex_core::AuthManager;
 use codex_core::FileWatcherEvent;
 use codex_core::ThreadManager;
@@ -112,6 +114,7 @@ pub(crate) struct MessageProcessor {
     config: Arc<Config>,
     initialized: bool,
     initialized_flag: Arc<AtomicBool>,
+    experimental_api_enabled: Arc<AtomicBool>,
     config_warnings: Vec<ConfigWarningNotification>,
 }
 
@@ -141,6 +144,7 @@ impl MessageProcessor {
             config_warnings,
         } = args;
         let outgoing = Arc::new(outgoing);
+        let experimental_api_enabled = Arc::new(AtomicBool::new(false));
         let auth_manager = AuthManager::shared(
             config.codex_home.clone(),
             false,
@@ -204,6 +208,7 @@ impl MessageProcessor {
             config,
             initialized: false,
             initialized_flag,
+            experimental_api_enabled,
             config_warnings,
         }
     }
@@ -249,6 +254,12 @@ impl MessageProcessor {
                     self.outgoing.send_error(request_id, error).await;
                     return;
                 } else {
+                    let experimental_api_enabled = params
+                        .capabilities
+                        .as_ref()
+                        .is_some_and(|cap| cap.experimental_api);
+                    self.experimental_api_enabled
+                        .store(experimental_api_enabled, Ordering::Relaxed);
                     let ClientInfo {
                         name,
                         title: _title,
@@ -311,6 +322,18 @@ impl MessageProcessor {
                     return;
                 }
             }
+        }
+
+        if let Some(reason) = codex_request.experimental_reason()
+            && !self.experimental_api_enabled.load(Ordering::Relaxed)
+        {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: experimental_required_message(reason),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
         }
 
         match codex_request {

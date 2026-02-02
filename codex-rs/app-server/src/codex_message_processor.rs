@@ -69,6 +69,8 @@ use codex_app_server_protocol::McpServerOauthLoginParams;
 use codex_app_server_protocol::McpServerOauthLoginResponse;
 use codex_app_server_protocol::McpServerRefreshResponse;
 use codex_app_server_protocol::McpServerStatus;
+use codex_app_server_protocol::MockExperimentalMethodParams;
+use codex_app_server_protocol::MockExperimentalMethodResponse;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::NewConversationParams;
@@ -506,6 +508,9 @@ impl CodexMessageProcessor {
                     Self::list_collaboration_modes(outgoing, thread_manager, request_id, params)
                         .await;
                 });
+            }
+            ClientRequest::MockExperimentalMethod { request_id, params } => {
+                self.mock_experimental_method(request_id, params).await;
             }
             ClientRequest::McpServerOauthLogin { request_id, params } => {
                 self.mcp_server_oauth_login(request_id, params).await;
@@ -1606,6 +1611,7 @@ impl CodexMessageProcessor {
             base_instructions,
             developer_instructions,
             dynamic_tools,
+            mock_experimental_field: _mock_experimental_field,
             experimental_raw_events,
             personality,
             ephemeral,
@@ -2999,6 +3005,16 @@ impl CodexMessageProcessor {
         let items = thread_manager.list_collaboration_modes();
         let response = CollaborationModeListResponse { data: items };
         outgoing.send_response(request_id, response).await;
+    }
+
+    async fn mock_experimental_method(
+        &self,
+        request_id: RequestId,
+        params: MockExperimentalMethodParams,
+    ) {
+        let MockExperimentalMethodParams { value } = params;
+        let response = MockExperimentalMethodResponse { echoed: value };
+        self.outgoing.send_response(request_id, response).await;
     }
 
     async fn mcp_server_refresh(&self, request_id: RequestId, _params: Option<()>) {
