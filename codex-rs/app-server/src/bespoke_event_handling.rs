@@ -352,7 +352,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                         id: call_id.clone(),
                         response: CoreDynamicToolResponse {
                             call_id,
-                            output: "dynamic tool calls require api v2".to_string(),
+                            output: Some("dynamic tool calls require api v2".to_string()),
                             success: false,
                             content_items: None,
                         },

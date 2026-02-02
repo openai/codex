@@ -10,6 +10,7 @@ use crate::tools::registry::ToolKind;
 use async_trait::async_trait;
 use codex_protocol::dynamic_tools::DynamicToolCallRequest;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::protocol::EventMsg;
 use serde_json::Value;
 use tokio::sync::oneshot;
@@ -55,10 +56,18 @@ impl ToolHandler for DynamicToolHandler {
                 )
             })?;
 
+        let DynamicToolResponse {
+            output,
+            content_items,
+            success,
+            ..
+        } = response;
+        let output = normalize_output(output, content_items.as_deref());
+
         Ok(ToolOutput::Function {
-            content: response.output,
-            content_items: response.content_items,
-            success: Some(response.success),
+            content: output,
+            content_items,
+            success: Some(success),
         })
     }
 }
@@ -95,4 +104,84 @@ async fn request_dynamic_tool(
     });
     session.send_event(turn_context, event).await;
     rx_response.await.ok()
+}
+
+fn normalize_output(
+    output: Option<String>,
+    content_items: Option<&[FunctionCallOutputContentItem]>,
+) -> String {
+    if let Some(output) = output {
+        return output;
+    }
+
+    content_items_to_text(content_items).unwrap_or_default()
+}
+
+fn content_items_to_text(
+    content_items: Option<&[FunctionCallOutputContentItem]>,
+) -> Option<String> {
+    let mut text = Vec::new();
+
+    for item in content_items.unwrap_or_default() {
+        if let FunctionCallOutputContentItem::InputText { text: segment } = item
+            && !segment.trim().is_empty()
+        {
+            text.push(segment.as_str());
+        }
+    }
+
+    if text.is_empty() {
+        None
+    } else {
+        Some(text.join("\n"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn normalize_output_prefers_explicit_output() {
+        let content_items = vec![FunctionCallOutputContentItem::InputText {
+            text: "fallback".to_string(),
+        }];
+
+        let output = normalize_output(Some("explicit".to_string()), Some(&content_items));
+        assert_eq!(output, "explicit");
+    }
+
+    #[test]
+    fn normalize_output_uses_text_content_items() {
+        let content_items = vec![
+            FunctionCallOutputContentItem::InputText {
+                text: "line 1".to_string(),
+            },
+            FunctionCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,AAA".to_string(),
+            },
+            FunctionCallOutputContentItem::InputText {
+                text: "line 2".to_string(),
+            },
+        ];
+
+        let output = normalize_output(None, Some(&content_items));
+        assert_eq!(output, "line 1\nline 2");
+    }
+
+    #[test]
+    fn normalize_output_ignores_empty_and_image_only_content_items() {
+        let content_items = vec![
+            FunctionCallOutputContentItem::InputText {
+                text: "   ".to_string(),
+            },
+            FunctionCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,AAA".to_string(),
+            },
+        ];
+
+        let output = normalize_output(None, Some(&content_items));
+        assert_eq!(output, "");
+    }
 }

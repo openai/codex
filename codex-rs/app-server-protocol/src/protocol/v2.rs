@@ -2671,16 +2671,58 @@ pub struct DynamicToolCallParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct DynamicToolCallResponse {
-    /// Optional plain-text output. When omitted, the app server will derive a
-    /// string representation from `contentItems` for legacy consumers.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    /// Preferred structured tool output (for example text + images) that is
+    /// forwarded directly to the model as content items.
+    ///
+    /// At least one of `content_items` or `output` must be set.
+    pub content_items: Option<Vec<DynamicToolCallOutputContentItem>>,
+    /// Legacy plain-text tool output.
+    ///
+    /// At least one of `content_items` or `output` must be set.
     pub output: Option<String>,
     pub success: bool,
-    /// Optional structured content for the tool output (for example, images).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub content_items: Option<Vec<FunctionCallOutputContentItem>>,
+}
+
+/// App-server-facing dynamic tool output items.
+///
+/// This mirrors `FunctionCallOutputContentItem` today, but is intentionally
+/// defined separately so the app-server API can evolve without forcing matching
+/// protocol changes at the same time.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+#[ts(export_to = "v2/")]
+pub enum DynamicToolCallOutputContentItem {
+    #[serde(alias = "input_text")]
+    InputText { text: String },
+    #[serde(alias = "input_image", rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    InputImage {
+        #[serde(alias = "image_url")]
+        image_url: String,
+    },
+}
+
+impl From<DynamicToolCallOutputContentItem> for FunctionCallOutputContentItem {
+    fn from(item: DynamicToolCallOutputContentItem) -> Self {
+        match item {
+            DynamicToolCallOutputContentItem::InputText { text } => Self::InputText { text },
+            DynamicToolCallOutputContentItem::InputImage { image_url } => {
+                Self::InputImage { image_url }
+            }
+        }
+    }
+}
+
+impl From<FunctionCallOutputContentItem> for DynamicToolCallOutputContentItem {
+    fn from(item: FunctionCallOutputContentItem) -> Self {
+        match item {
+            FunctionCallOutputContentItem::InputText { text } => Self::InputText { text },
+            FunctionCallOutputContentItem::InputImage { image_url } => {
+                Self::InputImage { image_url }
+            }
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -2868,6 +2910,7 @@ mod tests {
     use codex_protocol::items::TurnItem;
     use codex_protocol::items::UserMessageItem;
     use codex_protocol::items::WebSearchItem;
+    use codex_protocol::models::FunctionCallOutputContentItem;
     use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
     use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
     use codex_protocol::user_input::UserInput as CoreUserInput;
@@ -3040,6 +3083,63 @@ mod tests {
                     "httpStatusCode": 401
                 }
             })
+        );
+    }
+
+    #[test]
+    fn dynamic_tool_response_serializes_content_items() {
+        let value = serde_json::to_value(DynamicToolCallResponse {
+            content_items: Some(vec![DynamicToolCallOutputContentItem::InputText {
+                text: "dynamic-ok".to_string(),
+            }]),
+            output: None,
+            success: true,
+        })
+        .unwrap();
+
+        assert_eq!(
+            value,
+            json!({
+                "output": null,
+                "success": true,
+                "contentItems": [
+                    {
+                        "type": "inputText",
+                        "text": "dynamic-ok"
+                    }
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn dynamic_tool_content_item_maps_to_function_call_output_content_item() {
+        let item = DynamicToolCallOutputContentItem::InputImage {
+            image_url: "data:image/png;base64,AAA".to_string(),
+        };
+
+        let converted: FunctionCallOutputContentItem = item.into();
+        assert_eq!(
+            converted,
+            FunctionCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,AAA".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn dynamic_tool_content_item_accepts_legacy_snake_case_payloads() {
+        let item = serde_json::from_value::<DynamicToolCallOutputContentItem>(json!({
+            "type": "input_image",
+            "image_url": "data:image/png;base64,AAA"
+        }))
+        .unwrap();
+
+        assert_eq!(
+            item,
+            DynamicToolCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,AAA".to_string(),
+            }
         );
     }
 }

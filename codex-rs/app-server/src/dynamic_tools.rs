@@ -19,7 +19,7 @@ pub(crate) async fn on_call_response(
             error!("request failed: {err:?}");
             let fallback = CoreDynamicToolResponse {
                 call_id: call_id.clone(),
-                output: "dynamic tool request failed".to_string(),
+                output: Some("dynamic tool request failed".to_string()),
                 success: false,
                 content_items: None,
             };
@@ -36,20 +36,33 @@ pub(crate) async fn on_call_response(
         }
     };
 
-    let response = serde_json::from_value::<DynamicToolCallResponse>(value).unwrap_or_else(|err| {
-        error!("failed to deserialize DynamicToolCallResponse: {err}");
-        DynamicToolCallResponse {
-            output: Some("dynamic tool response was invalid".to_string()),
-            success: false,
-            content_items: None,
-        }
+    let mut response =
+        serde_json::from_value::<DynamicToolCallResponse>(value).unwrap_or_else(|err| {
+            error!("failed to deserialize DynamicToolCallResponse: {err}");
+            DynamicToolCallResponse {
+                content_items: None,
+                output: Some("dynamic tool response was invalid".to_string()),
+                success: false,
+            }
+        });
+
+    if response.content_items.is_none() && response.output.is_none() {
+        error!("dynamic tool response must include output or contentItems");
+        response.output = Some("dynamic tool response must include output or contentItems".into());
+        response.success = false;
+    }
+
+    let content_items = response.content_items.map(|items| {
+        items
+            .into_iter()
+            .map(Into::into)
+            .collect::<Vec<FunctionCallOutputContentItem>>()
     });
-    let output = normalize_output(response.output, response.content_items.as_deref());
     let response = CoreDynamicToolResponse {
         call_id: call_id.clone(),
-        output,
+        output: response.output,
         success: response.success,
-        content_items: response.content_items,
+        content_items,
     };
     if let Err(err) = conversation
         .submit(Op::DynamicToolResponse {
@@ -60,25 +73,4 @@ pub(crate) async fn on_call_response(
     {
         error!("failed to submit DynamicToolResponse: {err}");
     }
-}
-
-fn normalize_output(
-    output: Option<String>,
-    content_items: Option<&[FunctionCallOutputContentItem]>,
-) -> String {
-    if let Some(output) = output {
-        return output;
-    }
-
-    if let Some(items) = content_items {
-        return match serde_json::to_string(items) {
-            Ok(json) => json,
-            Err(err) => {
-                error!("failed to serialize dynamic tool content_items: {err}");
-                String::new()
-            }
-        };
-    }
-
-    String::new()
 }

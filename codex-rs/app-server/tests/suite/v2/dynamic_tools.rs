@@ -4,6 +4,7 @@ use app_test_support::McpProcess;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
+use codex_app_server_protocol::DynamicToolCallOutputContentItem;
 use codex_app_server_protocol::DynamicToolCallParams;
 use codex_app_server_protocol::DynamicToolCallResponse;
 use codex_app_server_protocol::DynamicToolSpec;
@@ -316,18 +317,23 @@ async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<(
     };
     assert_eq!(params, expected);
 
-    let content_items = vec![
-        FunctionCallOutputContentItem::InputText {
+    let response_content_items = vec![
+        DynamicToolCallOutputContentItem::InputText {
             text: "dynamic-ok".to_string(),
         },
-        FunctionCallOutputContentItem::InputImage {
+        DynamicToolCallOutputContentItem::InputImage {
             image_url: "data:image/png;base64,AAA".to_string(),
         },
     ];
+    let content_items = response_content_items
+        .clone()
+        .into_iter()
+        .map(Into::into)
+        .collect::<Vec<FunctionCallOutputContentItem>>();
     let response = DynamicToolCallResponse {
         output: None,
         success: true,
-        content_items: Some(content_items.clone()),
+        content_items: Some(response_content_items),
     };
     mcp.send_response(request_id, serde_json::to_value(response)?)
         .await?;
@@ -344,6 +350,8 @@ async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<(
         .find_map(|body| function_call_output_payload(body, call_id))
         .context("expected function_call_output in follow-up request")?;
     let expected_payload = FunctionCallOutputPayload {
+        // `FunctionCallOutputPayload` deserializes item arrays by also storing
+        // a JSON string representation in `content`.
         content: serde_json::to_string(&content_items)?,
         content_items: Some(content_items),
         success: None,

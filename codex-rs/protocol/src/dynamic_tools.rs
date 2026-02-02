@@ -27,7 +27,7 @@ pub struct DynamicToolCallRequest {
 #[serde(rename_all = "camelCase")]
 pub struct DynamicToolResponse {
     pub call_id: String,
-    pub output: String,
+    pub output: Option<String>,
     pub success: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
