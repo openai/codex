@@ -429,14 +429,17 @@ client_request_definitions! {
         params: FuzzyFileSearchParams,
         response: FuzzyFileSearchResponse,
     },
+    #[experimental("fuzzyFileSearch/sessionStart")]
     FuzzyFileSearchSessionStart => "fuzzyFileSearch/sessionStart" {
         params: FuzzyFileSearchSessionStartParams,
         response: FuzzyFileSearchSessionStartResponse,
     },
+    #[experimental("fuzzyFileSearch/sessionUpdate")]
     FuzzyFileSearchSessionUpdate => "fuzzyFileSearch/sessionUpdate" {
         params: FuzzyFileSearchSessionUpdateParams,
         response: FuzzyFileSearchSessionUpdateResponse,
     },
+    #[experimental("fuzzyFileSearch/sessionStop")]
     FuzzyFileSearchSessionStop => "fuzzyFileSearch/sessionStop" {
         params: FuzzyFileSearchSessionStopParams,
         response: FuzzyFileSearchSessionStopResponse,

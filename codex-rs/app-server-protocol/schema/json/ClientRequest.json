@@ -576,50 +576,6 @@
       ],
       "type": "object"
     },
-    "FuzzyFileSearchSessionStartParams": {
-      "properties": {
-        "roots": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "sessionId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "roots",
-        "sessionId"
-      ],
-      "type": "object"
-    },
-    "FuzzyFileSearchSessionStopParams": {
-      "properties": {
-        "sessionId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "sessionId"
-      ],
-      "type": "object"
-    },
-    "FuzzyFileSearchSessionUpdateParams": {
-      "properties": {
-        "query": {
-          "type": "string"
-        },
-        "sessionId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "query",
-        "sessionId"
-      ],
-      "type": "object"
-    },
     "GetAccountParams": {
       "properties": {
         "refreshToken": {
@@ -4345,78 +4301,6 @@
         "params"
       ],
       "title": "FuzzyFileSearchRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "fuzzyFileSearch/sessionStart"
-          ],
-          "title": "FuzzyFileSearch/sessionStartRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/FuzzyFileSearchSessionStartParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "FuzzyFileSearch/sessionStartRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "fuzzyFileSearch/sessionUpdate"
-          ],
-          "title": "FuzzyFileSearch/sessionUpdateRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/FuzzyFileSearchSessionUpdateParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "FuzzyFileSearch/sessionUpdateRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "fuzzyFileSearch/sessionStop"
-          ],
-          "title": "FuzzyFileSearch/sessionStopRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/FuzzyFileSearchSessionStopParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "FuzzyFileSearch/sessionStopRequest",
       "type": "object"
     },
     {
