@@ -626,15 +626,13 @@ pub fn parse_cursor(token: &str) -> Option<Cursor> {
         return None;
     };
 
-    let ts = OffsetDateTime::parse(file_ts, &Rfc3339)
-        .ok()
-        .or_else(|| {
-            let format: &[FormatItem] =
-                format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
-            PrimitiveDateTime::parse(file_ts, format)
-                .ok()
-                .map(PrimitiveDateTime::assume_utc)
-        })?;
+    let ts = OffsetDateTime::parse(file_ts, &Rfc3339).ok().or_else(|| {
+        let format: &[FormatItem] =
+            format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
+        PrimitiveDateTime::parse(file_ts, format)
+            .ok()
+            .map(PrimitiveDateTime::assume_utc)
+    })?;
 
     Some(Cursor::new(ts, uuid))
 }
@@ -642,12 +640,9 @@ pub fn parse_cursor(token: &str) -> Option<Cursor> {
 fn build_next_cursor(items: &[ThreadItem], sort_key: ThreadSortKey) -> Option<Cursor> {
     let last = items.last()?;
     let file_name = last.path.file_name()?.to_string_lossy();
-    let (_created_ts, id) = parse_timestamp_uuid_from_filename(&file_name)?;
+    let (created_ts, id) = parse_timestamp_uuid_from_filename(&file_name)?;
     let ts = match sort_key {
-        ThreadSortKey::CreatedAt => {
-            let created_at = last.created_at.as_deref()?;
-            OffsetDateTime::parse(created_at, &Rfc3339).ok()?
-        }
+        ThreadSortKey::CreatedAt => created_ts,
         ThreadSortKey::UpdatedAt => {
             let updated_at = last.updated_at.as_deref()?;
             OffsetDateTime::parse(updated_at, &Rfc3339).ok()?
