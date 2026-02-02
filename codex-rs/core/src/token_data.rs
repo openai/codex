@@ -42,6 +42,15 @@ impl IdTokenInfo {
             PlanType::Unknown(s) => s.clone(),
         })
     }
+
+    pub fn is_workspace_account(&self) -> bool {
+        matches!(
+            self.chatgpt_plan_type,
+            Some(PlanType::Known(
+                KnownPlan::Team | KnownPlan::Business | KnownPlan::Enterprise | KnownPlan::Edu
+            ))
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,6 +64,7 @@ pub(crate) enum PlanType {
 #[serde(rename_all = "lowercase")]
 pub(crate) enum KnownPlan {
     Free,
+    Go,
     Plus,
     Pro,
     Team,
@@ -67,8 +77,16 @@ pub(crate) enum KnownPlan {
 struct IdClaims {
     #[serde(default)]
     email: Option<String>,
+    #[serde(rename = "https://api.openai.com/profile", default)]
+    profile: Option<ProfileClaims>,
     #[serde(rename = "https://api.openai.com/auth", default)]
     auth: Option<AuthClaims>,
+}
+
+#[derive(Deserialize)]
+struct ProfileClaims {
+    #[serde(default)]
+    email: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -103,17 +121,20 @@ pub fn parse_id_token(id_token: &str) -> Result<IdTokenInfo, IdTokenInfoError> {
 
     let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload_b64)?;
     let claims: IdClaims = serde_json::from_slice(&payload_bytes)?;
+    let email = claims
+        .email
+        .or_else(|| claims.profile.and_then(|profile| profile.email));
 
     match claims.auth {
         Some(auth) => Ok(IdTokenInfo {
-            email: claims.email,
+            email,
             raw_jwt: id_token.to_string(),
             chatgpt_plan_type: auth.chatgpt_plan_type,
             chatgpt_user_id: auth.chatgpt_user_id.or(auth.user_id),
             chatgpt_account_id: auth.chatgpt_account_id,
         }),
         None => Ok(IdTokenInfo {
-            email: claims.email,
+            email,
             raw_jwt: id_token.to_string(),
             chatgpt_plan_type: None,
             chatgpt_user_id: None,
@@ -140,6 +161,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
     use serde::Serialize;
 
     #[test]
@@ -175,6 +197,38 @@ mod tests {
     }
 
     #[test]
+    fn id_token_info_parses_go_plan() {
+        #[derive(Serialize)]
+        struct Header {
+            alg: &'static str,
+            typ: &'static str,
+        }
+        let header = Header {
+            alg: "none",
+            typ: "JWT",
+        };
+        let payload = serde_json::json!({
+            "email": "user@example.com",
+            "https://api.openai.com/auth": {
+                "chatgpt_plan_type": "go"
+            }
+        });
+
+        fn b64url_no_pad(bytes: &[u8]) -> String {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+        }
+
+        let header_b64 = b64url_no_pad(&serde_json::to_vec(&header).unwrap());
+        let payload_b64 = b64url_no_pad(&serde_json::to_vec(&payload).unwrap());
+        let signature_b64 = b64url_no_pad(b"sig");
+        let fake_jwt = format!("{header_b64}.{payload_b64}.{signature_b64}");
+
+        let info = parse_id_token(&fake_jwt).expect("should parse");
+        assert_eq!(info.email.as_deref(), Some("user@example.com"));
+        assert_eq!(info.get_chatgpt_plan_type().as_deref(), Some("Go"));
+    }
+
+    #[test]
     fn id_token_info_handles_missing_fields() {
         #[derive(Serialize)]
         struct Header {
@@ -199,5 +253,20 @@ mod tests {
         let info = parse_id_token(&fake_jwt).expect("should parse");
         assert!(info.email.is_none());
         assert!(info.get_chatgpt_plan_type().is_none());
+    }
+
+    #[test]
+    fn workspace_account_detection_matches_workspace_plans() {
+        let workspace = IdTokenInfo {
+            chatgpt_plan_type: Some(PlanType::Known(KnownPlan::Business)),
+            ..IdTokenInfo::default()
+        };
+        assert_eq!(workspace.is_workspace_account(), true);
+
+        let personal = IdTokenInfo {
+            chatgpt_plan_type: Some(PlanType::Known(KnownPlan::Pro)),
+            ..IdTokenInfo::default()
+        };
+        assert_eq!(personal.is_workspace_account(), false);
     }
 }

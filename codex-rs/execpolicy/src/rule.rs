@@ -96,6 +96,8 @@ pub trait Rule: Any + Debug + Send + Sync {
     fn program(&self) -> &str;
 
     fn matches(&self, cmd: &[String]) -> Option<RuleMatch>;
+
+    fn as_any(&self) -> &dyn Any;
 }
 
 pub type RuleRef = Arc<dyn Rule>;
@@ -113,6 +115,10 @@ impl Rule for PrefixRule {
                 decision: self.decision,
                 justification: self.justification.clone(),
             })
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 

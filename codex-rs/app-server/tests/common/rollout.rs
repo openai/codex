@@ -39,6 +39,27 @@ pub fn create_fake_rollout(
     model_provider: Option<&str>,
     git_info: Option<GitInfo>,
 ) -> Result<String> {
+    create_fake_rollout_with_source(
+        codex_home,
+        filename_ts,
+        meta_rfc3339,
+        preview,
+        model_provider,
+        git_info,
+        SessionSource::Cli,
+    )
+}
+
+/// Create a minimal rollout file with an explicit session source.
+pub fn create_fake_rollout_with_source(
+    codex_home: &Path,
+    filename_ts: &str,
+    meta_rfc3339: &str,
+    preview: &str,
+    model_provider: Option<&str>,
+    git_info: Option<GitInfo>,
+    source: SessionSource,
+) -> Result<String> {
     let uuid = Uuid::new_v4();
     let uuid_str = uuid.to_string();
     let conversation_id = ThreadId::from_string(&uuid_str)?;
@@ -57,9 +78,10 @@ pub fn create_fake_rollout(
         cwd: PathBuf::from("/"),
         originator: "codex".to_string(),
         cli_version: "0.0.0".to_string(),
-        source: SessionSource::Cli,
+        source,
         model_provider: model_provider.map(str::to_string),
         base_instructions: None,
+        dynamic_tools: None,
     };
     let payload = serde_json::to_value(SessionMetaLine {
         meta,
@@ -138,6 +160,7 @@ pub fn create_fake_rollout_with_text_elements(
         source: SessionSource::Cli,
         model_provider: model_provider.map(str::to_string),
         base_instructions: None,
+        dynamic_tools: None,
     };
     let payload = serde_json::to_value(SessionMetaLine {
         meta,

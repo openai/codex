@@ -1,0 +1,77 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "TextPosition": {
+      "properties": {
+        "column": {
+          "description": "1-based column number (in Unicode scalar values).",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "line": {
+          "description": "1-based line number.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "column",
+        "line"
+      ],
+      "type": "object"
+    },
+    "TextRange": {
+      "properties": {
+        "end": {
+          "$ref": "#/definitions/TextPosition"
+        },
+        "start": {
+          "$ref": "#/definitions/TextPosition"
+        }
+      },
+      "required": [
+        "end",
+        "start"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "details": {
+      "description": "Optional extra guidance or error details.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "path": {
+      "description": "Optional path to the config file that triggered the warning.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "range": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/TextRange"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional range for the error location inside the config file."
+    },
+    "summary": {
+      "description": "Concise summary of the warning.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "summary"
+  ],
+  "title": "ConfigWarningNotification",
+  "type": "object"
+}

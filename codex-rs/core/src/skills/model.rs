@@ -9,6 +9,7 @@ pub struct SkillMetadata {
     pub description: String,
     pub short_description: Option<String>,
     pub interface: Option<SkillInterface>,
+    pub dependencies: Option<SkillDependencies>,
     pub path: PathBuf,
     pub scope: SkillScope,
 }
@@ -21,6 +22,21 @@ pub struct SkillInterface {
     pub icon_large: Option<PathBuf>,
     pub brand_color: Option<String>,
     pub default_prompt: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillDependencies {
+    pub tools: Vec<SkillToolDependency>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillToolDependency {
+    pub r#type: String,
+    pub value: String,
+    pub description: Option<String>,
+    pub transport: Option<String>,
+    pub command: Option<String>,
+    pub url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

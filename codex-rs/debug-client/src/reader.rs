@@ -229,6 +229,11 @@ fn emit_filtered_item(item: ThreadItem, thread_id: &str, output: &Output) -> any
             let label = output.format_label("assistant", LabelColor::Assistant);
             output.server_line(&format!("{thread_label} {label}: {text}"))?;
         }
+        ThreadItem::Plan { text, .. } => {
+            let label = output.format_label("assistant", LabelColor::Assistant);
+            output.server_line(&format!("{thread_label} {label}: plan"))?;
+            write_multiline(output, &thread_label, &format!("{label}:"), &text)?;
+        }
         ThreadItem::CommandExecution {
             command,
             status,

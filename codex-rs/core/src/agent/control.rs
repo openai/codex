@@ -39,12 +39,20 @@ impl AgentControl {
         &self,
         config: crate::config::Config,
         prompt: String,
+        session_source: Option<codex_protocol::protocol::SessionSource>,
     ) -> CodexResult<ThreadId> {
         let state = self.upgrade()?;
         let reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
 
         // The same `AgentControl` is sent to spawn the thread.
-        let new_thread = state.spawn_new_thread(config, self.clone()).await?;
+        let new_thread = match session_source {
+            Some(session_source) => {
+                state
+                    .spawn_new_thread_with_source(config, self.clone(), session_source)
+                    .await?
+            }
+            None => state.spawn_new_thread(config, self.clone()).await?,
+        };
         reservation.commit(new_thread.thread_id);
 
         // Notify a new thread has been created. This notification will be processed by clients
@@ -138,6 +146,7 @@ mod tests {
     use crate::config::Config;
     use crate::config::ConfigBuilder;
     use assert_matches::assert_matches;
+    use codex_protocol::config_types::ModeKind;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::TurnAbortReason;
@@ -223,6 +232,7 @@ mod tests {
     async fn on_event_updates_status_from_task_started() {
         let status = agent_status_from_event(&EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: ModeKind::Custom,
         }));
         assert_eq!(status, Some(AgentStatus::Running));
     }
@@ -268,7 +278,7 @@ mod tests {
         let control = AgentControl::default();
         let (_home, config) = test_config().await;
         let err = control
-            .spawn_agent(config, "hello".to_string())
+            .spawn_agent(config, "hello".to_string(), None)
             .await
             .expect_err("spawn_agent should fail without a manager");
         assert_eq!(
@@ -370,7 +380,7 @@ mod tests {
         let harness = AgentControlHarness::new().await;
         let thread_id = harness
             .control
-            .spawn_agent(harness.config.clone(), "spawned".to_string())
+            .spawn_agent(harness.config.clone(), "spawned".to_string(), None)
             .await
             .expect("spawn_agent should succeed");
         let _thread = harness
@@ -417,12 +427,12 @@ mod tests {
             .expect("start thread");
 
         let first_agent_id = control
-            .spawn_agent(config.clone(), "hello".to_string())
+            .spawn_agent(config.clone(), "hello".to_string(), None)
             .await
             .expect("spawn_agent should succeed");
 
         let err = control
-            .spawn_agent(config, "hello again".to_string())
+            .spawn_agent(config, "hello again".to_string(), None)
             .await
             .expect_err("spawn_agent should respect max threads");
         let CodexErr::AgentLimitReached {
@@ -455,7 +465,7 @@ mod tests {
         let control = manager.agent_control();
 
         let first_agent_id = control
-            .spawn_agent(config.clone(), "hello".to_string())
+            .spawn_agent(config.clone(), "hello".to_string(), None)
             .await
             .expect("spawn_agent should succeed");
         let _ = control
@@ -464,7 +474,7 @@ mod tests {
             .expect("shutdown agent");
 
         let second_agent_id = control
-            .spawn_agent(config.clone(), "hello again".to_string())
+            .spawn_agent(config.clone(), "hello again".to_string(), None)
             .await
             .expect("spawn_agent should succeed after shutdown");
         let _ = control
@@ -490,12 +500,12 @@ mod tests {
         let cloned = control.clone();
 
         let first_agent_id = cloned
-            .spawn_agent(config.clone(), "hello".to_string())
+            .spawn_agent(config.clone(), "hello".to_string(), None)
             .await
             .expect("spawn_agent should succeed");
 
         let err = control
-            .spawn_agent(config, "hello again".to_string())
+            .spawn_agent(config, "hello again".to_string(), None)
             .await
             .expect_err("spawn_agent should respect shared guard");
         let CodexErr::AgentLimitReached { max_threads } = err else {

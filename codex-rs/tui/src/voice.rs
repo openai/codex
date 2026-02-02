@@ -355,10 +355,7 @@ async fn resolve_auth() -> Result<TranscriptionAuthContext, String> {
         .map_err(|e| format!("failed to read auth.json: {e}"))?
         .ok_or_else(|| "No Codex auth is configured; please run `codex login`".to_string())?;
 
-    let chatgpt_account_id = match auth.mode {
-        AuthMode::ChatGPT => auth.get_account_id(),
-        AuthMode::ApiKey => None,
-    };
+    let chatgpt_account_id = auth.get_account_id();
 
     let token = auth
         .get_token()
@@ -367,7 +364,7 @@ async fn resolve_auth() -> Result<TranscriptionAuthContext, String> {
         .await
         .map_err(|e| format!("failed to load config: {e}"))?;
     Ok(TranscriptionAuthContext {
-        mode: auth.mode,
+        mode: auth.api_auth_mode(),
         bearer_token: token,
         chatgpt_account_id,
         chatgpt_base_url: normalize_chatgpt_base_url(&config.chatgpt_base_url),
@@ -383,43 +380,44 @@ async fn transcribe_bytes(
     let client = reqwest::Client::new();
     let audio_bytes = wav_bytes.len();
     let prompt_for_log = context.as_deref().unwrap_or("").to_string();
-    let (endpoint, request) = if auth.mode == AuthMode::ChatGPT {
-        let part = reqwest::multipart::Part::bytes(wav_bytes)
-            .file_name("audio.wav")
-            .mime_str("audio/wav")
-            .map_err(|e| format!("failed to set mime: {e}"))?;
-        let form = reqwest::multipart::Form::new().part("file", part);
-        let endpoint = format!("{}/transcribe", auth.chatgpt_base_url);
-        let mut req = client
-            .post(&endpoint)
-            .bearer_auth(&auth.bearer_token)
-            .multipart(form)
-            .header("User-Agent", get_codex_user_agent());
-        if let Some(acc) = auth.chatgpt_account_id {
-            req = req.header("ChatGPT-Account-Id", acc);
-        }
-        (endpoint, req)
-    } else {
-        let part = reqwest::multipart::Part::bytes(wav_bytes)
-            .file_name("audio.wav")
-            .mime_str("audio/wav")
-            .map_err(|e| format!("failed to set mime: {e}"))?;
-        let mut form = reqwest::multipart::Form::new()
-            .text("model", "gpt-4o-transcribe")
-            .part("file", part);
-        if let Some(context) = context {
-            form = form.text("prompt", context);
-        }
-        let endpoint = "https://api.openai.com/v1/audio/transcriptions".to_string();
-        (
-            endpoint,
-            client
-                .post("https://api.openai.com/v1/audio/transcriptions")
+    let (endpoint, request) =
+        if matches!(auth.mode, AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens) {
+            let part = reqwest::multipart::Part::bytes(wav_bytes)
+                .file_name("audio.wav")
+                .mime_str("audio/wav")
+                .map_err(|e| format!("failed to set mime: {e}"))?;
+            let form = reqwest::multipart::Form::new().part("file", part);
+            let endpoint = format!("{}/transcribe", auth.chatgpt_base_url);
+            let mut req = client
+                .post(&endpoint)
                 .bearer_auth(&auth.bearer_token)
                 .multipart(form)
-                .header("User-Agent", get_codex_user_agent()),
-        )
-    };
+                .header("User-Agent", get_codex_user_agent());
+            if let Some(acc) = auth.chatgpt_account_id {
+                req = req.header("ChatGPT-Account-Id", acc);
+            }
+            (endpoint, req)
+        } else {
+            let part = reqwest::multipart::Part::bytes(wav_bytes)
+                .file_name("audio.wav")
+                .mime_str("audio/wav")
+                .map_err(|e| format!("failed to set mime: {e}"))?;
+            let mut form = reqwest::multipart::Form::new()
+                .text("model", "gpt-4o-transcribe")
+                .part("file", part);
+            if let Some(context) = context {
+                form = form.text("prompt", context);
+            }
+            let endpoint = "https://api.openai.com/v1/audio/transcriptions".to_string();
+            (
+                endpoint,
+                client
+                    .post("https://api.openai.com/v1/audio/transcriptions")
+                    .bearer_auth(&auth.bearer_token)
+                    .multipart(form)
+                    .header("User-Agent", get_codex_user_agent()),
+            )
+        };
 
     let audio_kib = audio_bytes as f32 / 1024.0;
     let mode = auth.mode;

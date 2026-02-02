@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::ffi::OsStr;
 use std::fs::File;
 use std::fs::FileTimes;
 use std::fs::{self};
@@ -21,6 +22,7 @@ use crate::rollout::list::ThreadItem;
 use crate::rollout::list::ThreadSortKey;
 use crate::rollout::list::ThreadsPage;
 use crate::rollout::list::get_threads;
+use crate::rollout::rollout_date_parts;
 use anyhow::Result;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
@@ -41,6 +43,16 @@ fn provider_vec(providers: &[&str]) -> Vec<String> {
         .iter()
         .map(std::string::ToString::to_string)
         .collect()
+}
+
+#[test]
+fn rollout_date_parts_extracts_directory_components() {
+    let file_name = OsStr::new("rollout-2025-03-01T09-00-00-123.jsonl");
+    let parts = rollout_date_parts(file_name);
+    assert_eq!(
+        parts,
+        Some(("2025".to_string(), "03".to_string(), "01".to_string()))
+    );
 }
 
 fn write_session_file(
@@ -129,6 +141,63 @@ fn write_session_file_with_provider(
     let times = FileTimes::new().set_modified(dt.into());
     file.set_times(times)?;
     Ok((dt, uuid))
+}
+
+fn write_session_file_with_delayed_user_event(
+    root: &Path,
+    ts_str: &str,
+    uuid: Uuid,
+    meta_lines_before_user: usize,
+) -> std::io::Result<()> {
+    let format: &[FormatItem] =
+        format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
+    let dt = PrimitiveDateTime::parse(ts_str, format)
+        .unwrap()
+        .assume_utc();
+    let dir = root
+        .join("sessions")
+        .join(format!("{:04}", dt.year()))
+        .join(format!("{:02}", u8::from(dt.month())))
+        .join(format!("{:02}", dt.day()));
+    fs::create_dir_all(&dir)?;
+
+    let filename = format!("rollout-{ts_str}-{uuid}.jsonl");
+    let file_path = dir.join(filename);
+    let mut file = File::create(file_path)?;
+
+    for i in 0..meta_lines_before_user {
+        let id = if i == 0 {
+            uuid
+        } else {
+            Uuid::from_u128(100 + i as u128)
+        };
+        let payload = serde_json::json!({
+            "id": id,
+            "timestamp": ts_str,
+            "cwd": ".",
+            "originator": "test_originator",
+            "cli_version": "test_version",
+            "source": "vscode",
+            "model_provider": "test-provider",
+        });
+        let meta = serde_json::json!({
+            "timestamp": ts_str,
+            "type": "session_meta",
+            "payload": payload,
+        });
+        writeln!(file, "{meta}")?;
+    }
+
+    let user_event = serde_json::json!({
+        "timestamp": ts_str,
+        "type": "event_msg",
+        "payload": {"type": "user_message", "message": "Hello from user", "kind": "plain"}
+    });
+    writeln!(file, "{user_event}")?;
+
+    let times = FileTimes::new().set_modified(dt.into());
+    file.set_times(times)?;
+    Ok(())
 }
 
 fn write_session_file_with_meta_payload(
@@ -540,6 +609,31 @@ async fn test_pagination_cursor() {
 }
 
 #[tokio::test]
+async fn test_list_threads_scans_past_head_for_user_event() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+
+    let uuid = Uuid::from_u128(99);
+    let ts = "2025-05-01T10-30-00";
+    write_session_file_with_delayed_user_event(home, ts, uuid, 12).unwrap();
+
+    let provider_filter = provider_vec(&[TEST_PROVIDER]);
+    let page = get_threads(
+        home,
+        10,
+        None,
+        ThreadSortKey::CreatedAt,
+        INTERACTIVE_SESSION_SOURCES,
+        Some(provider_filter.as_slice()),
+        TEST_PROVIDER,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(page.items.len(), 1);
+}
+
+#[tokio::test]
 async fn test_get_thread_contents() {
     let temp = TempDir::new().unwrap();
     let home = temp.path();
@@ -779,6 +873,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
                 source: SessionSource::VSCode,
                 model_provider: Some("test-provider".into()),
                 base_instructions: None,
+                dynamic_tools: None,
             },
             git: None,
         }),

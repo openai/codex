@@ -211,6 +211,9 @@ impl OnboardingScreen {
 
 impl KeyboardHandler for OnboardingScreen {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
+        if !matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+            return;
+        }
         let is_api_key_entry_active = self.is_api_key_entry_active();
         let should_quit = match key_event {
             KeyEvent {
@@ -311,6 +314,9 @@ impl WidgetRef for &OnboardingScreen {
             }
             let scratch_area = Rect::new(0, 0, width, max_h);
             let mut scratch = Buffer::empty(scratch_area);
+            if let Step::Welcome(widget) = step {
+                widget.update_layout_area(scratch_area);
+            }
             step.render_ref(scratch_area, &mut scratch);
             let h = used_rows(&scratch, width, max_h).min(max_h);
             if h > 0 {

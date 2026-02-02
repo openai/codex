@@ -57,6 +57,7 @@ pub(crate) async fn run_codex_thread_interactive(
         initial_history.unwrap_or(InitialHistory::New),
         SessionSource::SubAgent(SubAgentSource::Review),
         parent_session.services.agent_control.clone(),
+        Vec::new(),
     )
     .await?;
     let codex = Arc::new(codex);
@@ -92,6 +93,7 @@ pub(crate) async fn run_codex_thread_interactive(
         tx_sub: tx_ops,
         rx_event: rx_sub,
         agent_status: codex.agent_status.clone(),
+        session: Arc::clone(&codex.session),
     })
 }
 
@@ -134,6 +136,7 @@ pub(crate) async fn run_codex_thread_one_shot(
     let (tx_bridge, rx_bridge) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let ops_tx = io.tx_sub.clone();
     let agent_status = io.agent_status.clone();
+    let session = Arc::clone(&io.session);
     let io_for_bridge = io;
     tokio::spawn(async move {
         while let Ok(event) = io_for_bridge.next_event().await {
@@ -166,6 +169,7 @@ pub(crate) async fn run_codex_thread_one_shot(
         rx_event: rx_bridge,
         tx_sub: tx_closed,
         agent_status,
+        session,
     })
 }
 
@@ -203,6 +207,10 @@ async fn forward_events(
                     Event {
                         id: _,
                         msg: EventMsg::SessionConfigured(_),
+                    } => {}
+                    Event {
+                        id: _,
+                        msg: EventMsg::ThreadNameUpdated(_),
                     } => {}
                     Event {
                         id,
@@ -442,14 +450,14 @@ mod tests {
         let (tx_events, rx_events) = bounded(1);
         let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+        let (session, ctx, _rx_evt) = crate::codex::make_session_and_context_with_rx().await;
         let codex = Arc::new(Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
             rx_event: rx_events,
             agent_status,
+            session: Arc::clone(&session),
         });
-
-        let (session, ctx, _rx_evt) = crate::codex::make_session_and_context_with_rx().await;
 
         let (tx_out, rx_out) = bounded(1);
         tx_out

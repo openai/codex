@@ -136,7 +136,8 @@ async fn run_command_under_sandbox(
     if let SandboxType::Windows = sandbox_type {
         #[cfg(target_os = "windows")]
         {
-            use codex_core::features::Feature;
+            use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+            use codex_protocol::config_types::WindowsSandboxLevel;
             use codex_windows_sandbox::run_windows_sandbox_capture;
             use codex_windows_sandbox::run_windows_sandbox_capture_elevated;
 
@@ -147,8 +148,10 @@ async fn run_command_under_sandbox(
             let env_map = env.clone();
             let command_vec = command.clone();
             let base_dir = config.codex_home.clone();
-            let use_elevated = config.features.enabled(Feature::WindowsSandbox)
-                && config.features.enabled(Feature::WindowsSandboxElevated);
+            let use_elevated = matches!(
+                WindowsSandboxLevel::from_config(&config),
+                WindowsSandboxLevel::Elevated
+            );
 
             // Preflight audit is invoked elsewhere at the appropriate times.
             let res = tokio::task::spawn_blocking(move || {
