@@ -52,6 +52,7 @@ pub struct ConfigRequirements {
     pub sandbox_policy: Constrained<SandboxPolicy>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
     pub(crate) exec_policy: Option<Sourced<RequirementsExecPolicy>>,
+    pub enforce_residency: Constrained<Option<ResidencyRequirement>>,
 }
 
 impl Default for ConfigRequirements {
@@ -61,6 +62,7 @@ impl Default for ConfigRequirements {
             sandbox_policy: Constrained::allow_any(SandboxPolicy::ReadOnly),
             mcp_servers: None,
             exec_policy: None,
+            enforce_residency: Constrained::allow_any(None),
         }
     }
 }
@@ -84,6 +86,7 @@ pub struct ConfigRequirementsToml {
     pub allowed_sandbox_modes: Option<Vec<SandboxModeRequirement>>,
     pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
     pub rules: Option<RequirementsExecPolicyToml>,
+    pub enforce_residency: Option<ResidencyRequirement>,
 }
 
 /// Value paired with the requirement source it came from, for better error
@@ -114,6 +117,7 @@ pub struct ConfigRequirementsWithSources {
     pub allowed_sandbox_modes: Option<Sourced<Vec<SandboxModeRequirement>>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
     pub rules: Option<Sourced<RequirementsExecPolicyToml>>,
+    pub enforce_residency: Option<Sourced<ResidencyRequirement>>,
 }
 
 impl ConfigRequirementsWithSources {
@@ -146,6 +150,7 @@ impl ConfigRequirementsWithSources {
                 allowed_sandbox_modes,
                 mcp_servers,
                 rules,
+                enforce_residency,
             }
         );
     }
@@ -156,12 +161,14 @@ impl ConfigRequirementsWithSources {
             allowed_sandbox_modes,
             mcp_servers,
             rules,
+            enforce_residency,
         } = self;
         ConfigRequirementsToml {
             allowed_approval_policies: allowed_approval_policies.map(|sourced| sourced.value),
             allowed_sandbox_modes: allowed_sandbox_modes.map(|sourced| sourced.value),
             mcp_servers: mcp_servers.map(|sourced| sourced.value),
             rules: rules.map(|sourced| sourced.value),
+            enforce_residency: enforce_residency.map(|sourced| sourced.value),
         }
     }
 }
@@ -193,12 +200,19 @@ impl From<SandboxMode> for SandboxModeRequirement {
     }
 }
 
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ResidencyRequirement {
+    Us,
+}
+
 impl ConfigRequirementsToml {
     pub fn is_empty(&self) -> bool {
         self.allowed_approval_policies.is_none()
             && self.allowed_sandbox_modes.is_none()
             && self.mcp_servers.is_none()
             && self.rules.is_none()
+            && self.enforce_residency.is_none()
     }
 }
 
@@ -211,6 +225,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             allowed_sandbox_modes,
             mcp_servers,
             rules,
+            enforce_residency,
         } = toml;
 
         let approval_policy: Constrained<AskForApproval> = match allowed_approval_policies {
@@ -298,11 +313,33 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             None => None,
         };
 
+        let enforce_residency: Constrained<Option<ResidencyRequirement>> = match enforce_residency {
+            Some(Sourced {
+                value: residency,
+                source: requirement_source,
+            }) => {
+                let required = Some(residency);
+                Constrained::new(required, move |candidate| {
+                    if candidate == &required {
+                        Ok(())
+                    } else {
+                        Err(ConstraintError::InvalidValue {
+                            field_name: "enforce_residency",
+                            candidate: format!("{candidate:?}"),
+                            allowed: format!("{required:?}"),
+                            requirement_source: requirement_source.clone(),
+                        })
+                    }
+                })?
+            }
+            None => Constrained::allow_any(None),
+        };
         Ok(ConfigRequirements {
             approval_policy,
             sandbox_policy,
             mcp_servers,
             exec_policy,
+            enforce_residency,
         })
     }
 }
@@ -329,6 +366,7 @@ mod tests {
             allowed_sandbox_modes,
             mcp_servers,
             rules,
+            enforce_residency,
         } = toml;
         ConfigRequirementsWithSources {
             allowed_approval_policies: allowed_approval_policies
@@ -337,6 +375,8 @@ mod tests {
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             mcp_servers: mcp_servers.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             rules: rules.map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            enforce_residency: enforce_residency
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
         }
     }
 
@@ -350,6 +390,8 @@ mod tests {
             SandboxModeRequirement::WorkspaceWrite,
             SandboxModeRequirement::DangerFullAccess,
         ];
+        let enforce_residency = ResidencyRequirement::Us;
+        let enforce_source = source.clone();
 
         // Intentionally constructed without `..Default::default()` so adding a new field to
         // `ConfigRequirementsToml` forces this test to be updated.
@@ -358,6 +400,7 @@ mod tests {
             allowed_sandbox_modes: Some(allowed_sandbox_modes.clone()),
             mcp_servers: None,
             rules: None,
+            enforce_residency: Some(enforce_residency),
         };
 
         target.merge_unset_fields(source.clone(), other);
@@ -372,6 +415,7 @@ mod tests {
                 allowed_sandbox_modes: Some(Sourced::new(allowed_sandbox_modes, source)),
                 mcp_servers: None,
                 rules: None,
+                enforce_residency: Some(Sourced::new(enforce_residency, enforce_source)),
             }
         );
     }
@@ -401,6 +445,7 @@ mod tests {
                 allowed_sandbox_modes: None,
                 mcp_servers: None,
                 rules: None,
+                enforce_residency: None,
             }
         );
         Ok(())
@@ -438,6 +483,7 @@ mod tests {
                 allowed_sandbox_modes: None,
                 mcp_servers: None,
                 rules: None,
+                enforce_residency: None,
             }
         );
         Ok(())

@@ -1,7 +1,8 @@
 //! Cloud-hosted config requirements for Codex.
 //!
 //! This crate fetches `requirements.toml` data from the backend as an alternative to loading it
-//! from the local filesystem. It only applies to Enterprise ChatGPT customers.
+//! from the local filesystem. It only applies to Business (aka Enterprise CBP) or Enterprise ChatGPT
+//! customers.
 //!
 //! Today, fetching is best-effort: on error or timeout, Codex continues without cloud requirements.
 //! We expect to tighten this so that Enterprise ChatGPT customers must successfully fetch these
@@ -19,7 +20,7 @@ use std::time::Duration;
 use std::time::Instant;
 use tokio::time::timeout;
 
-/// This blocks codecs startup, so must be short.
+/// This blocks codex startup, so must be short.
 const CLOUD_REQUIREMENTS_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[async_trait]
@@ -119,7 +120,12 @@ impl CloudRequirementsService {
 
     async fn fetch(&self) -> Option<ConfigRequirementsToml> {
         let auth = self.auth_manager.auth().await?;
-        if !(auth.is_chatgpt_auth() && auth.account_plan_type() == Some(PlanType::Enterprise)) {
+        if !auth.is_chatgpt_auth()
+            || !matches!(
+                auth.account_plan_type(),
+                Some(PlanType::Business | PlanType::Enterprise)
+            )
+        {
             return None;
         }
 
@@ -269,15 +275,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetch_cloud_requirements_skips_non_enterprise_plan() {
-        let auth_manager = auth_manager_with_plan("pro");
+    async fn fetch_cloud_requirements_skips_non_business_or_enterprise_plan() {
         let service = CloudRequirementsService::new(
-            auth_manager,
+            auth_manager_with_plan("pro"),
             Arc::new(StaticFetcher { contents: None }),
             CLOUD_REQUIREMENTS_TIMEOUT,
         );
         let result = service.fetch().await;
         assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn fetch_cloud_requirements_allows_business_plan() {
+        let service = CloudRequirementsService::new(
+            auth_manager_with_plan("business"),
+            Arc::new(StaticFetcher {
+                contents: Some("allowed_approval_policies = [\"never\"]".to_string()),
+            }),
+            CLOUD_REQUIREMENTS_TIMEOUT,
+        );
+        assert_eq!(
+            service.fetch().await,
+            Some(ConfigRequirementsToml {
+                allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_sandbox_modes: None,
+                mcp_servers: None,
+                rules: None,
+                enforce_residency: None,
+            })
+        );
     }
 
     #[tokio::test]
@@ -315,6 +341,7 @@ mod tests {
                 allowed_sandbox_modes: None,
                 mcp_servers: None,
                 rules: None,
+                enforce_residency: None,
             })
         );
     }
