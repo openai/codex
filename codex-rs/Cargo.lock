@@ -1901,6 +1901,7 @@ dependencies = [
  "codex-otel",
  "codex-protocol",
  "dirs",
+ "log",
  "owo-colors",
  "pretty_assertions",
  "serde",
