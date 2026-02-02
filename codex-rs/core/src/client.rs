@@ -145,11 +145,7 @@ impl ModelClient {
         }
     }
 
-    pub fn new_session(
-        &self,
-        _turn_metadata_header: Option<String>,
-        turn_metadata_cwd: Option<PathBuf>,
-    ) -> ModelClientSession {
+    pub fn new_session(&self, turn_metadata_cwd: Option<PathBuf>) -> ModelClientSession {
         ModelClientSession {
             state: Arc::clone(&self.state),
             connection: None,
