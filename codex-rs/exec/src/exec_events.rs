@@ -1,5 +1,5 @@
 use codex_protocol::models::WebSearchAction;
-use mcp_types::ContentBlock as McpContentBlock;
+type McpContentBlock = serde_json::Value;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -256,6 +256,13 @@ pub struct CollabToolCallItem {
 /// Result payload produced by an MCP tool invocation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct McpToolCallItemResult {
+    // NOTE: `rmcp::model::Content` (and its `RawContent` variants) would be a
+    // more precise Rust representation of MCP content blocks. We intentionally
+    // use `serde_json::Value` here because this crate exports JSON schema + TS
+    // types (`schemars`/`ts-rs`), and the rmcp model types aren't set up to be
+    // schema/TS friendly (and would introduce heavier coupling to rmcp's Rust
+    // representations). Using `JsonValue` keeps the payload wire-shaped and
+    // easy to export.
     pub content: Vec<McpContentBlock>,
     pub structured_content: Option<JsonValue>,
 }
