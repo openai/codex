@@ -3,6 +3,7 @@ use chrono::Utc;
 use codex_api::AuthProvider as ApiAuthProvider;
 use codex_api::TransportError;
 use codex_api::error::ApiError;
+use codex_api::rate_limits::parse_promo_message;
 use codex_api::rate_limits::parse_rate_limit;
 use http::HeaderMap;
 use serde::Deserialize;
@@ -70,6 +71,7 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
                     if let Ok(err) = serde_json::from_str::<UsageErrorResponse>(&body_text) {
                         if err.error.error_type.as_deref() == Some("usage_limit_reached") {
                             let rate_limits = headers.as_ref().and_then(parse_rate_limit);
+                            let promo_message = headers.as_ref().and_then(parse_promo_message);
                             let resets_at = err
                                 .error
                                 .resets_at
@@ -78,6 +80,7 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
                                 plan_type: err.error.plan_type,
                                 resets_at,
                                 rate_limits,
+                                promo_message,
                             });
                         } else if err.error.error_type.as_deref() == Some("usage_not_included") {
                             return CodexErr::UsageNotIncluded;

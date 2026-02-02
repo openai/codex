@@ -320,7 +320,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         .expect("prior assistant message");
     let pos_permissions = messages
         .iter()
-        .position(|(role, text)| role == "developer" && text.contains("`approval_policy`"))
+        .position(|(role, text)| role == "developer" && text.contains("<permissions instructions>"))
         .expect("permissions message");
     let pos_user_instructions = messages
         .iter()
@@ -1216,6 +1216,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         status: Some("completed".into()),
         action: Some(WebSearchAction::Search {
             query: Some("weather".into()),
+            queries: None,
         }),
     });
     prompt.input.push(ResponseItem::FunctionCall {

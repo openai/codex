@@ -25,6 +25,7 @@ use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
 use crate::render::renderable::Renderable;
+use crate::style::proposed_plan_style;
 use crate::style::user_message_style;
 use crate::text_formatting::format_and_truncate_tool_result;
 use crate::text_formatting::truncate_text;
@@ -44,6 +45,7 @@ use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::web_search::web_search_detail;
+use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::PlanItemArg;
@@ -725,16 +727,17 @@ pub fn new_approval_decision_cell(
                 ],
             )
         }
-        ApprovedExecpolicyAmendment { .. } => {
-            let snippet = Span::from(exec_snippet(&command)).dim();
+        ApprovedExecpolicyAmendment {
+            proposed_execpolicy_amendment,
+        } => {
+            let snippet = Span::from(exec_snippet(&proposed_execpolicy_amendment.command)).dim();
             (
                 "✔ ".green(),
                 vec![
                     "You ".into(),
                     "approved".bold(),
-                    " codex to run ".into(),
+                    " codex to always run commands that start with ".into(),
                     snippet,
-                    " and applied the execpolicy amendment".bold(),
                 ],
             )
         }
@@ -971,11 +974,6 @@ pub(crate) fn new_session_info(
                 "  ".into(),
                 "/status".into(),
                 " - show current session configuration".dim(),
-            ]),
-            Line::from(vec![
-                "  ".into(),
-                "/approvals".into(),
-                " - choose what Codex can do without approval".dim(),
             ]),
             Line::from(vec![
                 "  ".into(),
@@ -1768,6 +1766,63 @@ pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlanUpdateCell {
     PlanUpdateCell { explanation, plan }
 }
 
+pub(crate) fn new_proposed_plan(plan_markdown: String) -> ProposedPlanCell {
+    ProposedPlanCell { plan_markdown }
+}
+
+pub(crate) fn new_proposed_plan_stream(
+    lines: Vec<Line<'static>>,
+    is_stream_continuation: bool,
+) -> ProposedPlanStreamCell {
+    ProposedPlanStreamCell {
+        lines,
+        is_stream_continuation,
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct ProposedPlanCell {
+    plan_markdown: String,
+}
+
+#[derive(Debug)]
+pub(crate) struct ProposedPlanStreamCell {
+    lines: Vec<Line<'static>>,
+    is_stream_continuation: bool,
+}
+
+impl HistoryCell for ProposedPlanCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(vec!["• ".dim(), "Proposed Plan".bold()].into());
+        lines.push(Line::from(" "));
+
+        let mut plan_lines: Vec<Line<'static>> = vec![Line::from(" ")];
+        let plan_style = proposed_plan_style();
+        let wrap_width = width.saturating_sub(4).max(1) as usize;
+        let mut body: Vec<Line<'static>> = Vec::new();
+        append_markdown(&self.plan_markdown, Some(wrap_width), &mut body);
+        if body.is_empty() {
+            body.push(Line::from("(empty)".dim().italic()));
+        }
+        plan_lines.extend(prefix_lines(body, "  ".into(), "  ".into()));
+        plan_lines.push(Line::from(" "));
+
+        lines.extend(plan_lines.into_iter().map(|line| line.style(plan_style)));
+        lines
+    }
+}
+
+impl HistoryCell for ProposedPlanStreamCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        self.lines.clone()
+    }
+
+    fn is_stream_continuation(&self) -> bool {
+        self.is_stream_continuation
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct PlanUpdateCell {
     explanation: Option<String>,
@@ -1912,32 +1967,108 @@ pub(crate) fn new_reasoning_summary_block(full_reasoning_buffer: String) -> Box<
 /// divider.
 pub struct FinalMessageSeparator {
     elapsed_seconds: Option<u64>,
+    runtime_metrics: Option<RuntimeMetricsSummary>,
 }
 impl FinalMessageSeparator {
     /// Creates a separator; `elapsed_seconds` typically comes from the status indicator timer.
-    pub(crate) fn new(elapsed_seconds: Option<u64>) -> Self {
-        Self { elapsed_seconds }
+    pub(crate) fn new(
+        elapsed_seconds: Option<u64>,
+        runtime_metrics: Option<RuntimeMetricsSummary>,
+    ) -> Self {
+        Self {
+            elapsed_seconds,
+            runtime_metrics,
+        }
     }
 }
 impl HistoryCell for FinalMessageSeparator {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let elapsed_seconds = self
+        let mut label_parts = Vec::new();
+        if let Some(elapsed_seconds) = self
             .elapsed_seconds
-            .map(super::status_indicator_widget::fmt_elapsed_compact);
-        if let Some(elapsed_seconds) = elapsed_seconds {
-            let worked_for = format!("─ Worked for {elapsed_seconds} ─");
-            let worked_for_width = worked_for.width();
-            vec![
-                Line::from_iter([
-                    worked_for,
-                    "─".repeat((width as usize).saturating_sub(worked_for_width)),
-                ])
-                .dim(),
-            ]
-        } else {
-            vec![Line::from_iter(["─".repeat(width as usize).dim()])]
+            .map(super::status_indicator_widget::fmt_elapsed_compact)
+        {
+            label_parts.push(format!("Worked for {elapsed_seconds}"));
         }
+        if let Some(metrics_label) = self.runtime_metrics.and_then(runtime_metrics_label) {
+            label_parts.push(metrics_label);
+        }
+
+        if label_parts.is_empty() {
+            return vec![Line::from_iter(["─".repeat(width as usize).dim()])];
+        }
+
+        let label = format!("─ {} ─", label_parts.join(" • "));
+        let (label, _suffix, label_width) = take_prefix_by_width(&label, width as usize);
+        vec![
+            Line::from_iter([
+                label,
+                "─".repeat((width as usize).saturating_sub(label_width)),
+            ])
+            .dim(),
+        ]
     }
+}
+
+fn runtime_metrics_label(summary: RuntimeMetricsSummary) -> Option<String> {
+    let mut parts = Vec::new();
+    if summary.tool_calls.count > 0 {
+        let duration = format_duration_ms(summary.tool_calls.duration_ms);
+        let calls = pluralize(summary.tool_calls.count, "call", "calls");
+        parts.push(format!(
+            "Local tools: {} {calls} ({duration})",
+            summary.tool_calls.count
+        ));
+    }
+    if summary.api_calls.count > 0 {
+        let duration = format_duration_ms(summary.api_calls.duration_ms);
+        let calls = pluralize(summary.api_calls.count, "call", "calls");
+        parts.push(format!(
+            "Inference: {} {calls} ({duration})",
+            summary.api_calls.count
+        ));
+    }
+    if summary.websocket_calls.count > 0 {
+        let duration = format_duration_ms(summary.websocket_calls.duration_ms);
+        parts.push(format!(
+            "WebSocket: {} events send ({duration})",
+            summary.websocket_calls.count
+        ));
+    }
+    if summary.streaming_events.count > 0 {
+        let duration = format_duration_ms(summary.streaming_events.duration_ms);
+        let stream_label = pluralize(summary.streaming_events.count, "Stream", "Streams");
+        let events = pluralize(summary.streaming_events.count, "event", "events");
+        parts.push(format!(
+            "{stream_label}: {} {events} ({duration})",
+            summary.streaming_events.count
+        ));
+    }
+    if summary.websocket_events.count > 0 {
+        let duration = format_duration_ms(summary.websocket_events.duration_ms);
+        parts.push(format!(
+            "{} events received ({duration})",
+            summary.websocket_events.count
+        ));
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" • "))
+    }
+}
+
+fn format_duration_ms(duration_ms: u64) -> String {
+    if duration_ms >= 1_000 {
+        let seconds = duration_ms as f64 / 1_000.0;
+        format!("{seconds:.1}s")
+    } else {
+        format!("{duration_ms}ms")
+    }
+}
+
+fn pluralize(count: u64, singular: &'static str, plural: &'static str) -> &'static str {
+    if count == 1 { singular } else { plural }
 }
 
 fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
@@ -1972,6 +2103,8 @@ mod tests {
     use codex_core::config::types::McpServerConfig;
     use codex_core::config::types::McpServerTransportConfig;
     use codex_core::protocol::McpAuthStatus;
+    use codex_otel::RuntimeMetricTotals;
+    use codex_otel::RuntimeMetricsSummary;
     use codex_protocol::models::WebSearchAction;
     use codex_protocol::parse_command::ParsedCommand;
     use dirs::home_dir;
@@ -2045,6 +2178,42 @@ mod tests {
             lines,
             vec!["↳ Interacted with background terminal", "  └ (waited)"],
         );
+    }
+
+    #[test]
+    fn final_message_separator_includes_runtime_metrics() {
+        let summary = RuntimeMetricsSummary {
+            tool_calls: RuntimeMetricTotals {
+                count: 3,
+                duration_ms: 2_450,
+            },
+            api_calls: RuntimeMetricTotals {
+                count: 2,
+                duration_ms: 1_200,
+            },
+            streaming_events: RuntimeMetricTotals {
+                count: 6,
+                duration_ms: 900,
+            },
+            websocket_calls: RuntimeMetricTotals {
+                count: 1,
+                duration_ms: 700,
+            },
+            websocket_events: RuntimeMetricTotals {
+                count: 4,
+                duration_ms: 1_200,
+            },
+        };
+        let cell = FinalMessageSeparator::new(Some(12), Some(summary));
+        let rendered = render_lines(&cell.display_lines(200));
+
+        assert_eq!(rendered.len(), 1);
+        assert!(rendered[0].contains("Worked for 12s"));
+        assert!(rendered[0].contains("Local tools: 3 calls (2.5s)"));
+        assert!(rendered[0].contains("Inference: 2 calls (1.2s)"));
+        assert!(rendered[0].contains("WebSocket: 1 events send (700ms)"));
+        assert!(rendered[0].contains("Streams: 6 events (900ms)"));
+        assert!(rendered[0].contains("4 events received (1.2s)"));
     }
 
     #[test]
@@ -2240,7 +2409,10 @@ mod tests {
         let cell = new_web_search_call(
             "call-1".to_string(),
             query.clone(),
-            WebSearchAction::Search { query: Some(query) },
+            WebSearchAction::Search {
+                query: Some(query),
+                queries: None,
+            },
         );
         let rendered = render_lines(&cell.display_lines(64)).join("\n");
 
@@ -2254,7 +2426,10 @@ mod tests {
         let cell = new_web_search_call(
             "call-1".to_string(),
             query.clone(),
-            WebSearchAction::Search { query: Some(query) },
+            WebSearchAction::Search {
+                query: Some(query),
+                queries: None,
+            },
         );
         let rendered = render_lines(&cell.display_lines(64));
 
@@ -2273,7 +2448,10 @@ mod tests {
         let cell = new_web_search_call(
             "call-1".to_string(),
             query.clone(),
-            WebSearchAction::Search { query: Some(query) },
+            WebSearchAction::Search {
+                query: Some(query),
+                queries: None,
+            },
         );
         let rendered = render_lines(&cell.display_lines(64));
 
@@ -2287,7 +2465,10 @@ mod tests {
         let cell = new_web_search_call(
             "call-1".to_string(),
             query.clone(),
-            WebSearchAction::Search { query: Some(query) },
+            WebSearchAction::Search {
+                query: Some(query),
+                queries: None,
+            },
         );
         let rendered = render_lines(&cell.transcript_lines(64)).join("\n");
 

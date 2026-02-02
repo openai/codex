@@ -41,7 +41,14 @@ opentelemetry-otlp = { workspace = true, features = [
     "tls-roots",
 ]}
 opentelemetry-semantic-conventions = { workspace = true }
-opentelemetry_sdk = { workspace = true, features = ["logs", "metrics", "rt-tokio", "testing", "trace"] }
+opentelemetry_sdk = { workspace = true, features = [
+    "experimental_metrics_custom_reader",
+    "logs",
+    "metrics",
+    "rt-tokio",
+    "testing",
+    "trace",
+] }
 http = { workspace = true }
 reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
 serde = { workspace = true, features = ["derive"] }
@@ -49,10 +56,14 @@ serde_json = { workspace = true }
 strum_macros = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
 tracing = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
-opentelemetry_sdk = { workspace = true, features = ["testing"] }
+opentelemetry_sdk = { workspace = true, features = [
+    "experimental_metrics_custom_reader",
+    "testing",
+] }
 pretty_assertions = { workspace = true }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""List curated skills from a GitHub repo path."""
+"""List skills from a GitHub repo path."""
 
 from __future__ import annotations
 
@@ -47,28 +47,32 @@ def _installed_skills() -> set[str]:
     return entries
 
 
-def _list_curated(repo: str, path: str, ref: str) -> list[str]:
+def _list_skills(repo: str, path: str, ref: str) -> list[str]:
     api_url = github_api_contents_url(repo, path, ref)
     try:
         payload = _request(api_url)
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             raise ListError(
-                "Curated skills path not found: "
+                "Skills path not found: "
                 f"https://github.com/{repo}/tree/{ref}/{path}"
             ) from exc
-        raise ListError(f"Failed to fetch curated skills: HTTP {exc.code}") from exc
+        raise ListError(f"Failed to fetch skills: HTTP {exc.code}") from exc
     data = json.loads(payload.decode("utf-8"))
     if not isinstance(data, list):
-        raise ListError("Unexpected curated listing response.")
+        raise ListError("Unexpected skills listing response.")
     skills = [item["name"] for item in data if item.get("type") == "dir"]
     return sorted(skills)
 
 
 def _parse_args(argv: list[str]) -> Args:
-    parser = argparse.ArgumentParser(description="List curated skills.")
+    parser = argparse.ArgumentParser(description="List skills.")
     parser.add_argument("--repo", default=DEFAULT_REPO)
-    parser.add_argument("--path", default=DEFAULT_PATH)
+    parser.add_argument(
+        "--path",
+        default=DEFAULT_PATH,
+        help="Repo path to list (default: skills/.curated)",
+    )
     parser.add_argument("--ref", default=DEFAULT_REF)
     parser.add_argument(
         "--format",
@@ -82,7 +86,7 @@ def _parse_args(argv: list[str]) -> Args:
 def main(argv: list[str]) -> int:
     args = _parse_args(argv)
     try:
-        skills = _list_curated(args.repo, args.path, args.ref)
+        skills = _list_skills(args.repo, args.path, args.ref)
         installed = _installed_skills()
         if args.format == "json":
             payload = [

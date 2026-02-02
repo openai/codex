@@ -4,6 +4,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
 use crate::codex_message_processor::CodexMessageProcessor;
+use crate::codex_message_processor::CodexMessageProcessorArgs;
 use crate::config_api::ConfigApi;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::OutgoingMessageSender;
@@ -35,10 +36,12 @@ use codex_core::auth::ExternalAuthRefreshReason;
 use codex_core::auth::ExternalAuthRefresher;
 use codex_core::auth::ExternalAuthTokens;
 use codex_core::config::Config;
+use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::default_client::SetOriginatorError;
 use codex_core::default_client::USER_AGENT_SUFFIX;
 use codex_core::default_client::get_codex_user_agent;
+use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::default_client::set_default_originator;
 use codex_feedback::CodexFeedback;
 use codex_protocol::ThreadId;
@@ -106,23 +109,37 @@ pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     codex_message_processor: CodexMessageProcessor,
     config_api: ConfigApi,
+    config: Arc<Config>,
     initialized: bool,
     initialized_flag: Arc<AtomicBool>,
     config_warnings: Vec<ConfigWarningNotification>,
 }
 
+pub(crate) struct MessageProcessorArgs {
+    pub(crate) outgoing: OutgoingMessageSender,
+    pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
+    pub(crate) config: Arc<Config>,
+    pub(crate) cli_overrides: Vec<(String, TomlValue)>,
+    pub(crate) loader_overrides: LoaderOverrides,
+    pub(crate) cloud_requirements: CloudRequirementsLoader,
+    pub(crate) feedback: CodexFeedback,
+    pub(crate) config_warnings: Vec<ConfigWarningNotification>,
+}
+
 impl MessageProcessor {
     /// Create a new `MessageProcessor`, retaining a handle to the outgoing
     /// `Sender` so handlers can enqueue messages to be written to stdout.
-    pub(crate) fn new(
-        outgoing: OutgoingMessageSender,
-        codex_linux_sandbox_exe: Option<PathBuf>,
-        config: Arc<Config>,
-        cli_overrides: Vec<(String, TomlValue)>,
-        loader_overrides: LoaderOverrides,
-        feedback: CodexFeedback,
-        config_warnings: Vec<ConfigWarningNotification>,
-    ) -> Self {
+    pub(crate) fn new(args: MessageProcessorArgs) -> Self {
+        let MessageProcessorArgs {
+            outgoing,
+            codex_linux_sandbox_exe,
+            config,
+            cli_overrides,
+            loader_overrides,
+            cloud_requirements,
+            feedback,
+            config_warnings,
+        } = args;
         let outgoing = Arc::new(outgoing);
         let auth_manager = AuthManager::shared(
             config.codex_home.clone(),
@@ -138,7 +155,6 @@ impl MessageProcessor {
             auth_manager.clone(),
             SessionSource::VSCode,
         ));
-
         // Watch for on-disk skill changes and reinject the updated skills into
         // subsequent requests.
         let initialized_flag = Arc::new(AtomicBool::new(false));
@@ -164,21 +180,28 @@ impl MessageProcessor {
                 }
             }
         });
-        let codex_message_processor = CodexMessageProcessor::new(
+        let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
             auth_manager,
             thread_manager,
-            outgoing.clone(),
+            outgoing: outgoing.clone(),
             codex_linux_sandbox_exe,
-            Arc::clone(&config),
-            cli_overrides.clone(),
+            config: Arc::clone(&config),
+            cli_overrides: cli_overrides.clone(),
+            cloud_requirements: cloud_requirements.clone(),
             feedback,
+        });
+        let config_api = ConfigApi::new(
+            config.codex_home.clone(),
+            cli_overrides,
+            loader_overrides,
+            cloud_requirements,
         );
-        let config_api = ConfigApi::new(config.codex_home.clone(), cli_overrides, loader_overrides);
 
         Self {
             outgoing,
             codex_message_processor,
             config_api,
+            config,
             initialized: false,
             initialized_flag,
             config_warnings,
@@ -252,6 +275,7 @@ impl MessageProcessor {
                             }
                         }
                     }
+                    set_default_client_residency_requirement(self.config.enforce_residency.value());
                     let user_agent_suffix = format!("{name}; {version}");
                     if let Ok(mut suffix) = USER_AGENT_SUFFIX.lock() {
                         *suffix = Some(user_agent_suffix);

@@ -41,6 +41,14 @@ pub fn parse_rate_limit(headers: &HeaderMap) -> Option<RateLimitSnapshot> {
     })
 }
 
+/// Parses the bespoke Codex rate-limit headers into a `RateLimitSnapshot`.
+pub fn parse_promo_message(headers: &HeaderMap) -> Option<String> {
+    parse_header_str(headers, "x-codex-promo-message")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(std::string::ToString::to_string)
+}
+
 fn parse_rate_limit_window(
     headers: &HeaderMap,
     used_percent_header: &str,

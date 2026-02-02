@@ -88,7 +88,7 @@ impl ContextManager {
         let model_info = turn_context.client.get_model_info();
         let personality = turn_context
             .personality
-            .or(turn_context.client.config().model_personality);
+            .or(turn_context.client.config().personality);
         let base_instructions = model_info.get_model_instructions(personality);
         let base_tokens = i64::try_from(approx_token_count(&base_instructions)).unwrap_or(i64::MAX);
 
@@ -266,7 +266,7 @@ impl ContextManager {
     }
 
     fn process_item(&self, item: &ResponseItem, policy: TruncationPolicy) -> ResponseItem {
-        let policy_with_serialization_budget = policy.mul(1.2);
+        let policy_with_serialization_budget = policy * 1.2;
         match item {
             ResponseItem::FunctionCallOutput { call_id, output } => {
                 let truncated =
