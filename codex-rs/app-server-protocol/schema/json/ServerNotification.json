@@ -630,6 +630,22 @@
       ],
       "type": "string"
     },
+    "CollaborationMode": {
+      "description": "Collaboration mode for a Codex session.",
+      "properties": {
+        "mode": {
+          "$ref": "#/definitions/ModeKind"
+        },
+        "settings": {
+          "$ref": "#/definitions/Settings"
+        }
+      },
+      "required": [
+        "mode",
+        "settings"
+      ],
+      "type": "object"
+    },
     "CommandAction": {
       "oneOf": [
         {
@@ -1099,6 +1115,17 @@
         {
           "description": "Conversation history was rolled back by dropping the last N user turns.",
           "properties": {
+            "model_visible_state": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ModelVisibleState"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Model-visible session state after rollback.\n\nThis lets clients synchronize UI mode/model indicators with core after history rewind. Optional for backward compatibility with older persisted events."
+            },
             "num_turns": {
               "description": "Number of user turns that were removed from context.",
               "format": "uint32",
@@ -3908,6 +3935,21 @@
       ],
       "type": "string"
     },
+    "ModelVisibleState": {
+      "properties": {
+        "collaboration_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CollaborationMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "NetworkAccess": {
       "description": "Represents whether outbound network access is available to the agent.",
       "enum": [
@@ -5369,6 +5411,34 @@
           "type": "object"
         }
       ]
+    },
+    "Settings": {
+      "description": "Settings for a collaboration mode.",
+      "properties": {
+        "developer_instructions": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "type": "object"
     },
     "SkillDependencies": {
       "properties": {

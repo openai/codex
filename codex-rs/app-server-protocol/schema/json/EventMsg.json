@@ -93,6 +93,34 @@
         }
       ]
     },
+    "Annotations": {
+      "description": "Optional annotations for the client. The client can use annotations to inform how objects are used or displayed",
+      "properties": {
+        "audience": {
+          "items": {
+            "$ref": "#/definitions/Role"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "lastModified": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "priority": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "AskForApproval": {
       "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Codex.",
       "oneOf": [
@@ -126,6 +154,57 @@
         }
       ]
     },
+    "AudioContent": {
+      "description": "Audio provided to or from an LLM.",
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "mimeType",
+        "type"
+      ],
+      "type": "object"
+    },
+    "BlobResourceContents": {
+      "properties": {
+        "blob": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "blob",
+        "uri"
+      ],
+      "type": "object"
+    },
     "ByteRange": {
       "properties": {
         "end": {
@@ -150,9 +229,10 @@
     "CallToolResult": {
       "description": "The server's response to a tool call.",
       "properties": {
-        "_meta": true,
         "content": {
-          "items": true,
+          "items": {
+            "$ref": "#/definitions/ContentBlock"
+          },
           "type": "array"
         },
         "isError": {
@@ -310,6 +390,41 @@
         }
       ]
     },
+    "CollaborationMode": {
+      "description": "Collaboration mode for a Codex session.",
+      "properties": {
+        "mode": {
+          "$ref": "#/definitions/ModeKind"
+        },
+        "settings": {
+          "$ref": "#/definitions/Settings"
+        }
+      },
+      "required": [
+        "mode",
+        "settings"
+      ],
+      "type": "object"
+    },
+    "ContentBlock": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/TextContent"
+        },
+        {
+          "$ref": "#/definitions/ImageContent"
+        },
+        {
+          "$ref": "#/definitions/AudioContent"
+        },
+        {
+          "$ref": "#/definitions/ResourceLink"
+        },
+        {
+          "$ref": "#/definitions/EmbeddedResource"
+        }
+      ]
+    },
     "ContentItem": {
       "oneOf": [
         {
@@ -445,6 +560,42 @@
       ],
       "type": "object"
     },
+    "EmbeddedResource": {
+      "description": "The contents of a resource, embedded into a prompt or tool call result.\n\nIt is up to the client how best to render embedded resources for the benefit of the LLM and/or the user.",
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resource": {
+          "$ref": "#/definitions/EmbeddedResourceResource"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource",
+        "type"
+      ],
+      "type": "object"
+    },
+    "EmbeddedResourceResource": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/TextResourceContents"
+        },
+        {
+          "$ref": "#/definitions/BlobResourceContents"
+        }
+      ]
+    },
     "EventMsg": {
       "description": "Response event from the agent NOTE: Make sure none of these values have optional types, as it will mess up the extension code-gen.",
       "oneOf": [
@@ -521,6 +672,17 @@
         {
           "description": "Conversation history was rolled back by dropping the last N user turns.",
           "properties": {
+            "model_visible_state": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ModelVisibleState"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Model-visible session state after rollback.\n\nThis lets clients synchronize UI mode/model indicators with core after history rewind. Optional for backward compatibility with older persisted events."
+            },
             "num_turns": {
               "description": "Number of user turns that were removed from context.",
               "format": "uint32",
@@ -2936,6 +3098,36 @@
       ],
       "type": "object"
     },
+    "ImageContent": {
+      "description": "An image provided to or from an LLM.",
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "mimeType",
+        "type"
+      ],
+      "type": "object"
+    },
     "LocalShellAction": {
       "oneOf": [
         {
@@ -3128,6 +3320,21 @@
         "custom"
       ],
       "type": "string"
+    },
+    "ModelVisibleState": {
+      "properties": {
+        "collaboration_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CollaborationMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
     },
     "NetworkAccess": {
       "description": "Represents whether outbound network access is available to the agent.",
@@ -3441,8 +3648,7 @@
           "format": "int64",
           "type": "integer"
         }
-      ],
-      "description": "ID of a request, which can be either a string or an integer."
+      ]
     },
     "RequestUserInputQuestion": {
       "properties": {
@@ -3498,18 +3704,19 @@
     "Resource": {
       "description": "A known resource that the server is capable of reading.",
       "properties": {
-        "_meta": true,
-        "annotations": true,
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "description": {
           "type": [
             "string",
-            "null"
-          ]
-        },
-        "icons": {
-          "items": true,
-          "type": [
-            "array",
             "null"
           ]
         },
@@ -3545,10 +3752,74 @@
       ],
       "type": "object"
     },
+    "ResourceLink": {
+      "description": "A resource that the server is capable of reading, included in a prompt or tool call result.\n\nNote: resource links returned by tools are not guaranteed to appear in the results of `resources/list` requests.",
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mimeType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "size": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "type",
+        "uri"
+      ],
+      "type": "object"
+    },
     "ResourceTemplate": {
       "description": "A template description for resources available on the server.",
       "properties": {
-        "annotations": true,
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "description": {
           "type": [
             "string",
@@ -4149,6 +4420,14 @@
         }
       ]
     },
+    "Role": {
+      "description": "The sender or recipient of messages and data in a conversation.",
+      "enum": [
+        "assistant",
+        "user"
+      ],
+      "type": "string"
+    },
     "SandboxPolicy": {
       "description": "Determines execution restrictions for model shell commands.",
       "oneOf": [
@@ -4252,6 +4531,34 @@
           "type": "object"
         }
       ]
+    },
+    "Settings": {
+      "description": "Settings for a collaboration mode.",
+      "properties": {
+        "developer_instructions": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "type": "object"
     },
     "SkillDependencies": {
       "properties": {
@@ -4458,6 +4765,32 @@
       ],
       "type": "string"
     },
+    "TextContent": {
+      "description": "Text provided to or from an LLM.",
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "type"
+      ],
+      "type": "object"
+    },
     "TextElement": {
       "properties": {
         "byte_range": {
@@ -4478,6 +4811,27 @@
       },
       "required": [
         "byte_range"
+      ],
+      "type": "object"
+    },
+    "TextResourceContents": {
+      "properties": {
+        "mimeType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "uri"
       ],
       "type": "object"
     },
@@ -4541,26 +4895,38 @@
     "Tool": {
       "description": "Definition for a tool the client can call.",
       "properties": {
-        "_meta": true,
-        "annotations": true,
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolAnnotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "description": {
           "type": [
             "string",
             "null"
           ]
         },
-        "icons": {
-          "items": true,
-          "type": [
-            "array",
-            "null"
-          ]
+        "inputSchema": {
+          "$ref": "#/definitions/ToolInputSchema"
         },
-        "inputSchema": true,
         "name": {
           "type": "string"
         },
-        "outputSchema": true,
+        "outputSchema": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolOutputSchema"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "title": {
           "type": [
             "string",
@@ -4572,6 +4938,82 @@
         "inputSchema",
         "name"
       ],
+      "type": "object"
+    },
+    "ToolAnnotations": {
+      "description": "Additional properties describing a Tool to clients.\n\nNOTE: all properties in ToolAnnotations are **hints**. They are not guaranteed to provide a faithful description of tool behavior (including descriptive properties like `title`).\n\nClients should never make tool use decisions based on ToolAnnotations received from untrusted servers.",
+      "properties": {
+        "destructiveHint": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "idempotentHint": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "openWorldHint": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "readOnlyHint": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ToolInputSchema": {
+      "description": "A JSON Schema object defining the expected parameters for the tool.",
+      "properties": {
+        "properties": true,
+        "required": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "type": {
+          "default": "object",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ToolOutputSchema": {
+      "description": "An optional JSON Schema object defining the structure of the tool's output returned in the structuredContent field of a CallToolResult.",
+      "properties": {
+        "properties": true,
+        "required": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "type": {
+          "default": "object",
+          "type": "string"
+        }
+      },
       "type": "object"
     },
     "TurnAbortReason": {
@@ -5048,6 +5490,17 @@
     {
       "description": "Conversation history was rolled back by dropping the last N user turns.",
       "properties": {
+        "model_visible_state": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ModelVisibleState"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Model-visible session state after rollback.\n\nThis lets clients synchronize UI mode/model indicators with core after history rewind. Optional for backward compatibility with older persisted events."
+        },
         "num_turns": {
           "description": "Number of user turns that were removed from context.",
           "format": "uint32",

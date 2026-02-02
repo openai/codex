@@ -2772,16 +2772,13 @@ mod handlers {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) {
-        let previous_context = sess
-            .new_default_turn_with_sub_id(sess.next_internal_sub_id())
-            .await;
-        let previous_collaboration_mode = sess
-            .state
-            .lock()
-            .await
-            .session_configuration
-            .collaboration_mode
-            .clone();
+        let (previous_collaboration_mode, initial_context_seeded) = {
+            let state = sess.state.lock().await;
+            (
+                state.session_configuration.collaboration_mode.clone(),
+                state.initial_context_seeded,
+            )
+        };
         let next_collaboration_mode = updates.collaboration_mode.clone();
 
         if let Err(err) = sess.update_settings(updates).await {
@@ -2796,27 +2793,23 @@ mod handlers {
             return;
         }
 
-        let initial_context_seeded = sess.state.lock().await.initial_context_seeded;
         if !initial_context_seeded {
             return;
         }
 
-        let current_context = sess.new_default_turn_with_sub_id(sub_id).await;
-        let has_model_visible_state_update = next_collaboration_mode.is_some();
-        let pending_model_visible_state_sync = {
+        if let Some(next_mode) = next_collaboration_mode
+            && next_mode != previous_collaboration_mode
+        {
             let mut state = sess.state.lock().await;
-            state.take_pending_model_visible_state_sync(has_model_visible_state_update)
-        };
-        let update_items = sess.build_settings_update_items(
-            Some(&previous_context),
-            &current_context,
-            &previous_collaboration_mode,
-            next_collaboration_mode.as_ref(),
-            &pending_model_visible_state_sync,
-        );
-        if !update_items.is_empty() {
-            sess.record_conversation_items(&current_context, &update_items)
-                .await;
+            if !matches!(
+                state.pending_model_visible_state_sync,
+                PendingModelVisibleStateSync::ForceEmitAll
+            ) {
+                state.pending_model_visible_state_sync =
+                    PendingModelVisibleStateSync::Snapshot(ModelVisibleState {
+                        collaboration_mode: Some(previous_collaboration_mode),
+                    });
+            }
         }
     }
 
@@ -2883,7 +2876,10 @@ mod handlers {
             .session_configuration
             .collaboration_mode
             .clone();
-        let next_collaboration_mode = updates.collaboration_mode.clone();
+        let mut next_collaboration_mode = updates.collaboration_mode.clone();
+        if next_collaboration_mode.is_none() {
+            next_collaboration_mode = Some(previous_collaboration_mode.clone());
+        }
         let Ok(current_context) = sess.new_turn_with_sub_id(sub_id, updates).await else {
             // new_turn_with_sub_id already emits the error event.
             return;
