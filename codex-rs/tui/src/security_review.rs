@@ -1490,6 +1490,19 @@ impl SecurityReviewPlanTracker {
         }
     }
 
+    fn mark_steps_complete(&mut self, steps: &[SecurityReviewPlanStep]) {
+        let mut changed = false;
+        for step in steps {
+            changed |= self.set_status_if_present(*step, StepStatus::Completed);
+        }
+        if changed {
+            self.emit_update();
+            if self.snapshots_enabled {
+                self.emit_plan_snapshot();
+            }
+        }
+    }
+
     fn reset_step(&mut self, step: SecurityReviewPlanStep) {
         let Some(entry) = self.steps.iter_mut().find(|item| item.kind == step) else {
             return;
@@ -3699,6 +3712,14 @@ struct GitLinkInfo {
     github_prefix: String,
 }
 
+#[derive(Clone, Debug)]
+struct GitRevisionInfo {
+    commit: String,
+    branch: Option<String>,
+    commit_timestamp: Option<i64>,
+    repository_url: Option<String>,
+}
+
 struct BugPromptData {
     prompt: String,
     logs: Vec<String>,
@@ -4422,6 +4443,10 @@ pub async fn run_security_review(
     let repo_path = request.repo_path.clone();
     let repo_slug = sanitize_repo_slug(&repo_path);
     let git_revision = collect_git_revision(&repo_path).await;
+    let skip_validation = git_revision
+        .as_ref()
+        .and_then(|revision| revision.repository_url.as_deref())
+        .is_some_and(is_openai_openai_repo);
     let mut include_paths = request.include_paths.clone();
     let mut scope_display_paths = request.scope_display_paths.clone();
     let mut auto_scope_prompt = request.auto_scope_prompt.clone();
@@ -5040,6 +5065,19 @@ pub async fn run_security_review(
                 .to_string(),
         );
         plan_tracker.reset_step(SecurityReviewPlanStep::ValidateFindings);
+    }
+
+    if skip_validation {
+        record(
+            &mut logs,
+            "Skipping validation for openai/openai: skipping validation target preparation, per-finding validation, and post-validation refinement."
+                .to_string(),
+        );
+        plan_tracker.mark_steps_complete(&[
+            SecurityReviewPlanStep::PrepareValidationTargets,
+            SecurityReviewPlanStep::ValidateFindings,
+            SecurityReviewPlanStep::PostValidationRefine,
+        ]);
     }
     checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
     persist_checkpoint(&mut checkpoint, &mut logs);
@@ -6672,7 +6710,11 @@ pub async fn run_security_review(
 
     // Intentionally avoid logging the output path pre-write to keep logs concise.
     let (git_commit, git_branch, git_commit_timestamp) = match git_revision.as_ref() {
-        Some((commit, branch, ts)) => (Some(commit.clone()), branch.clone(), *ts),
+        Some(revision) => (
+            Some(revision.commit.clone()),
+            revision.branch.clone(),
+            revision.commit_timestamp,
+        ),
         None => (None, None, None),
     };
     let metadata = SecurityReviewMetadata {
@@ -6838,20 +6880,23 @@ pub async fn run_security_review(
         });
     }
 
-    let validation_already_complete = matches!(
-        plan_tracker.status_for(SecurityReviewPlanStep::ValidateFindings),
-        Some(StepStatus::Completed)
-    );
+    let validation_already_complete = skip_validation
+        || matches!(
+            plan_tracker.status_for(SecurityReviewPlanStep::ValidateFindings),
+            Some(StepStatus::Completed)
+        );
     let include_web_browser = request
         .validation_target_url
         .as_deref()
         .map(str::trim)
         .is_some_and(|s| !s.is_empty());
     if validation_already_complete {
-        record(
-            &mut logs,
-            "Validate findings already completed; skipping validation.".to_string(),
-        );
+        if !skip_validation {
+            record(
+                &mut logs,
+                "Validate findings already completed; skipping validation.".to_string(),
+            );
+        }
     } else {
         let validation_targets = build_validation_findings_context(&snapshot, include_web_browser);
 
@@ -7144,7 +7189,13 @@ pub async fn run_security_review(
     );
     let revision_summary = git_revision
         .as_ref()
-        .map(|(commit, branch, ts)| format_revision_label(commit.as_str(), branch.as_ref(), *ts))
+        .map(|revision| {
+            format_revision_label(
+                revision.commit.as_str(),
+                revision.branch.as_ref(),
+                revision.commit_timestamp,
+            )
+        })
         .unwrap_or_else(|| "unknown".to_string());
     let trufflehog_path = if is_open_source {
         let candidate = request.output_root.join("trufflehog.jsonl");
@@ -14044,83 +14095,8 @@ async fn analyze_files_individually(
             .push("No high, medium, or low severity findings remain after filtering.".to_string());
     }
 
-    // Now run risk rerank on the deduplicated set
-    if !bug_summaries.is_empty() {
-        let risk_logs = rerank_bugs_by_risk(
-            client,
-            provider,
-            auth,
-            model,
-            reasoning_effort,
-            &mut bug_summaries,
-            repo_root,
-            repository_summary,
-            spec_markdown,
-            progress_sender.clone(),
-            log_sink.clone(),
-            metrics.clone(),
-        )
-        .await;
-        aggregated_logs.extend(risk_logs);
-    }
-
-    // Normalize again and rewrite markdown severities post-rerank,
-    // then filter once more in case severities changed to informational.
-    if !bug_summaries.is_empty() {
-        for summary in bug_summaries.iter_mut() {
-            if let Some(normalized) = normalize_severity_label(&summary.severity) {
-                summary.severity = normalized;
-            } else {
-                summary.severity = summary.severity.trim().to_string();
-            }
-        }
-        let mut replacements: HashMap<usize, String> = HashMap::new();
-        for summary in bug_summaries.iter_mut() {
-            if let Some(updated) =
-                rewrite_bug_markdown_severity(summary.markdown.as_str(), summary.severity.as_str())
-            {
-                summary.markdown = updated.clone();
-                replacements.insert(summary.id, updated);
-            }
-            if let Some(updated) =
-                rewrite_bug_markdown_heading_id(summary.markdown.as_str(), summary.id)
-            {
-                summary.markdown = updated.clone();
-                replacements.insert(summary.id, updated);
-            }
-        }
-        if !replacements.is_empty() {
-            for detail in bug_details.iter_mut() {
-                if let Some(markdown) = replacements.get(&detail.summary_id) {
-                    detail.original_markdown = markdown.clone();
-                }
-            }
-        }
-
-        let before = bug_summaries.len();
-        let mut retained: HashSet<usize> = HashSet::new();
-        bug_summaries.retain(|summary| {
-            let keep = matches!(
-                summary.severity.trim().to_ascii_lowercase().as_str(),
-                "high" | "medium" | "low"
-            );
-            if keep {
-                retained.insert(summary.id);
-            }
-            keep
-        });
-        bug_details.retain(|detail| retained.contains(&detail.summary_id));
-        let after = bug_summaries.len();
-        if after < before {
-            aggregated_logs.push(format!(
-                "Filtered out {} informational finding{} after rerank.",
-                before - after,
-                if (before - after) == 1 { "" } else { "s" }
-            ));
-        }
-
-        normalize_bug_identifiers(&mut bug_summaries, &mut bug_details);
-    }
+    // Risk rerank runs after LLM dedupe in the full pipeline (see `run_security_review`),
+    // so we avoid doing it here to prevent reranking duplicates.
 
     snippets_with_findings.sort_by_key(|(index, _)| *index);
     let allowed_paths: HashSet<PathBuf> = bug_summaries
@@ -17628,7 +17604,7 @@ async fn build_git_link_info(repo_path: &Path) -> Option<GitLinkInfo> {
     })
 }
 
-async fn collect_git_revision(repo_path: &Path) -> Option<(String, Option<String>, Option<i64>)> {
+async fn collect_git_revision(repo_path: &Path) -> Option<GitRevisionInfo> {
     let canonical_repo = repo_path.canonicalize().ok()?;
     let git_root = get_git_repo_root(&canonical_repo)?;
     let canonical_root = git_root.canonicalize().unwrap_or(git_root);
@@ -17643,7 +17619,12 @@ async fn collect_git_revision(repo_path: &Path) -> Option<(String, Option<String
         .into_iter()
         .next()
         .map(|entry| entry.timestamp);
-    Some((commit, branch, timestamp))
+    Some(GitRevisionInfo {
+        commit,
+        branch,
+        commit_timestamp: timestamp,
+        repository_url: git_info.repository_url,
+    })
 }
 
 fn normalize_github_url(remote: &str, commit: &str) -> Option<String> {
@@ -17690,6 +17671,72 @@ fn normalize_github_url(remote: &str, commit: &str) -> Option<String> {
     }
 
     Some(format!("{base}/blob/{trimmed_commit}/"))
+}
+
+fn normalize_github_repo_url(remote: &str) -> Option<String> {
+    let trimmed_remote = remote.trim();
+    if trimmed_remote.is_empty() {
+        return None;
+    }
+
+    let mut base =
+        if trimmed_remote.starts_with("http://") || trimmed_remote.starts_with("https://") {
+            trimmed_remote.to_string()
+        } else if trimmed_remote.starts_with("ssh://") {
+            let url = Url::parse(trimmed_remote).ok()?;
+            let host = url.host_str()?;
+            if !host.contains("github") {
+                return None;
+            }
+            let path = url.path().trim_start_matches('/');
+            format!("https://{host}/{path}")
+        } else if let Some(idx) = trimmed_remote.find("@github.com:") {
+            let path = &trimmed_remote[idx + "@github.com:".len()..];
+            format!("https://github.com/{path}")
+        } else if trimmed_remote.starts_with("git@github.com:") {
+            trimmed_remote.replacen("git@github.com:", "https://github.com/", 1)
+        } else {
+            return None;
+        };
+
+    if !base.contains("github") {
+        return None;
+    }
+
+    if base.ends_with(".git") {
+        base.truncate(base.len() - 4);
+    }
+
+    while base.ends_with('/') {
+        base.pop();
+    }
+
+    if base.is_empty() {
+        return None;
+    }
+
+    Some(base)
+}
+
+fn github_owner_repo_from_remote(remote: &str) -> Option<(String, String)> {
+    let normalized = normalize_github_repo_url(remote)?;
+    let url = Url::parse(&normalized).ok()?;
+    if url.host_str()? != "github.com" {
+        return None;
+    }
+    let mut segments = url.path_segments()?;
+    let owner = segments.next()?.trim();
+    let repo = segments.next()?.trim();
+    if owner.is_empty() || repo.is_empty() {
+        return None;
+    }
+    Some((owner.to_string(), repo.to_string()))
+}
+
+fn is_openai_openai_repo(remote: &str) -> bool {
+    github_owner_repo_from_remote(remote).is_some_and(|(owner, repo)| {
+        owner.eq_ignore_ascii_case("openai") && repo.eq_ignore_ascii_case("openai")
+    })
 }
 
 fn sanitize_table_field(value: &str) -> String {
@@ -17804,6 +17851,36 @@ fn apply_severity_matrix(summary: &mut BugSummary) -> Option<SeverityMatrixUpdat
         likelihood,
         product,
     })
+}
+
+#[cfg(test)]
+mod openai_openai_validation_skip_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn detects_openai_openai_repo_remotes() {
+        for remote in [
+            "https://github.com/openai/openai",
+            "https://github.com/openai/openai.git",
+            "git@github.com:openai/openai.git",
+            "ssh://git@github.com/openai/openai.git",
+        ] {
+            assert_eq!(is_openai_openai_repo(remote), true, "{remote}");
+        }
+    }
+
+    #[test]
+    fn ignores_non_openai_openai_remotes() {
+        for remote in [
+            "https://github.com/openai/other-repo.git",
+            "git@github.com:openai/other-repo.git",
+            "https://github.com/other/openai.git",
+            "git@github.com:other/openai.git",
+        ] {
+            assert_eq!(is_openai_openai_repo(remote), false, "{remote}");
+        }
+    }
 }
 
 fn normalize_severity_label(value: &str) -> Option<String> {
