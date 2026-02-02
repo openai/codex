@@ -1,3 +1,8 @@
+//! Shared model metadata types exchanged between Codex services and clients.
+//!
+//! These types are serialized across core, TUI, app-server, and SDK boundaries, so field defaults
+//! are used to preserve compatibility when older payloads omit newly introduced attributes.
+
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -43,7 +48,7 @@ pub enum ReasoningEffort {
     XHigh,
 }
 
-/// Input modalities supported by a model.
+/// Canonical user-input modality tags advertised by a model.
 #[derive(
     Debug,
     Serialize,
@@ -62,11 +67,17 @@ pub enum ReasoningEffort {
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum InputModality {
+    /// Plain text turns and tool payloads.
     #[default]
     Text,
+    /// Image attachments included in user turns.
     Image,
 }
 
+/// Backward-compatible default when `input_modalities` is omitted on the wire.
+///
+/// Legacy payloads predate modality metadata, so we conservatively assume both text and images are
+/// accepted unless a preset explicitly narrows support.
 pub fn default_input_modalities() -> Vec<InputModality> {
     vec![InputModality::Text, InputModality::Image]
 }
@@ -116,6 +127,7 @@ pub struct ModelPreset {
     pub show_in_picker: bool,
     /// whether this model is supported in the api
     pub supported_in_api: bool,
+    /// Input modalities accepted when composing user turns for this preset.
     #[serde(default = "default_input_modalities")]
     pub input_modalities: Vec<InputModality>,
 }
@@ -236,6 +248,7 @@ pub struct ModelInfo {
     #[serde(default = "default_effective_context_window_percent")]
     pub effective_context_window_percent: i64,
     pub experimental_supported_tools: Vec<String>,
+    /// Input modalities accepted by the backend for this model.
     #[serde(default = "default_input_modalities")]
     pub input_modalities: Vec<InputModality>,
 }

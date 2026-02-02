@@ -394,6 +394,10 @@ impl ChatComposer {
         self.skills = skills;
     }
 
+    /// Toggle composer-side image paste handling.
+    ///
+    /// This only affects whether image-like paste content is converted into attachments; the
+    /// `ChatWidget` layer still performs capability checks before images are submitted.
     pub fn set_image_paste_enabled(&mut self, enabled: bool) {
         self.config.image_paste_enabled = enabled;
     }

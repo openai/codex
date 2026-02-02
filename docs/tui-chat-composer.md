@@ -84,6 +84,9 @@ Key effects when disabled:
   `prepare_submission_text`.
 - When `slash_commands_enabled` is `false`, slash-context paste-burst exceptions are disabled.
 - When `image_paste_enabled` is `false`, file-path paste image attachment is skipped.
+- `ChatWidget` may toggle `image_paste_enabled` at runtime based on the selected model's
+  `input_modalities`; attach and submit paths also re-check support and emit a warning instead of
+  dropping the draft.
 
 Built-in slash command availability is centralized in
 `codex-rs/tui/src/bottom_pane/slash_commands.rs` and reused by both the composer and the command

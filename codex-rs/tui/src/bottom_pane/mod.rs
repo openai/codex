@@ -209,6 +209,9 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    /// Update image-paste behavior for the active composer and repaint immediately.
+    ///
+    /// Callers use this to keep composer affordances aligned with model capabilities.
     pub fn set_image_paste_enabled(&mut self, enabled: bool) {
         self.composer.set_image_paste_enabled(enabled);
         self.request_redraw();

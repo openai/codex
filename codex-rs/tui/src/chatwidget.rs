@@ -2749,6 +2749,10 @@ impl ChatWidget {
         }
     }
 
+    /// Attach a local image to the composer when the active model supports image inputs.
+    ///
+    /// When the model does not advertise image support, we keep the draft unchanged and surface a
+    /// warning event so users can switch models or remove attachments.
     pub(crate) fn attach_image(&mut self, path: PathBuf) {
         if !self.current_model_supports_images() {
             self.add_to_history(history_cell::new_warning_event(
@@ -3234,6 +3238,7 @@ impl ChatWidget {
             return;
         }
         if !local_images.is_empty() && !self.current_model_supports_images() {
+            // Preserve the user's composed payload so they can retry after changing models.
             let local_image_paths = local_images.iter().map(|img| img.path.clone()).collect();
             self.bottom_pane
                 .set_composer_text(text, text_elements, local_image_paths);
@@ -5297,6 +5302,10 @@ impl ChatWidget {
             .unwrap_or(false)
     }
 
+    /// Return whether the effective model currently advertises image-input support.
+    ///
+    /// We intentionally default to `true` when model metadata cannot be read so transient catalog
+    /// failures do not hard-block user input in the UI.
     fn current_model_supports_images(&self) -> bool {
         let model = self.current_model();
         self.models_manager
@@ -5395,6 +5404,7 @@ impl ChatWidget {
     fn refresh_model_display(&mut self) {
         let effective = self.effective_collaboration_mode();
         self.session_header.set_model(effective.model());
+        // Keep composer paste affordances aligned with the currently effective model.
         self.sync_image_paste_enabled();
     }
 
