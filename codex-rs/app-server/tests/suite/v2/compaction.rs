@@ -26,7 +26,6 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
-use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::auth::AuthCredentialsStoreMode;
@@ -370,12 +369,9 @@ async fn wait_for_context_compaction_started_without_turn_started(
                 }
             }
             JSONRPCMessage::Notification(notification) if notification.method == "turn/started" => {
-                let started: TurnStartedNotification = serde_json::from_value(
-                    notification.params.clone().expect("turn/started params"),
-                )?;
-                if started.turn.id == forbidden_turn_id {
-                    anyhow::bail!("unexpected v2 turn/started notification for manual compaction");
-                }
+                anyhow::bail!(
+                    "unexpected v2 turn/started notification for manual compaction (turn_id={forbidden_turn_id})"
+                );
             }
             _ => {}
         }
@@ -400,12 +396,9 @@ async fn wait_for_context_compaction_completed_without_turn_started(
                 }
             }
             JSONRPCMessage::Notification(notification) if notification.method == "turn/started" => {
-                let started: TurnStartedNotification = serde_json::from_value(
-                    notification.params.clone().expect("turn/started params"),
-                )?;
-                if started.turn.id == forbidden_turn_id {
-                    anyhow::bail!("unexpected v2 turn/started notification for manual compaction");
-                }
+                anyhow::bail!(
+                    "unexpected v2 turn/started notification for manual compaction (turn_id={forbidden_turn_id})"
+                );
             }
             _ => {}
         }

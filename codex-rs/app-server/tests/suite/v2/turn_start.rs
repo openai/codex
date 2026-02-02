@@ -31,7 +31,6 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
-use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::features::FEATURES;
@@ -269,20 +268,6 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
     let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
     assert!(!turn.id.is_empty());
 
-    // Expect a turn/started notification.
-    let notif: JSONRPCNotification = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("turn/started"),
-    )
-    .await??;
-    let started: TurnStartedNotification =
-        serde_json::from_value(notif.params.expect("params must be present"))?;
-    assert_eq!(started.thread_id, thread.id);
-    assert_eq!(
-        started.turn.status,
-        codex_app_server_protocol::TurnStatus::InProgress
-    );
-
     // Send a second turn that exercises the overrides path: change the model.
     let turn_req2 = mcp
         .send_turn_start_request(TurnStartParams {
@@ -304,13 +289,6 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
     assert!(!turn2.id.is_empty());
     // Ensure the second turn has a different id than the first.
     assert_ne!(turn.id, turn2.id);
-
-    // Expect a second turn/started notification as well.
-    let _notif2: JSONRPCNotification = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("turn/started"),
-    )
-    .await??;
 
     let completed_notif: JSONRPCNotification = timeout(
         DEFAULT_READ_TIMEOUT,

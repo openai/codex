@@ -125,7 +125,6 @@ use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
-use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInfoResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
@@ -4136,15 +4135,6 @@ impl CodexMessageProcessor {
 
                 let response = TurnStartResponse { turn: turn.clone() };
                 self.outgoing.send_response(request_id, response).await;
-
-                // Emit v2 turn/started notification.
-                let notif = TurnStartedNotification {
-                    thread_id: params.thread_id,
-                    turn,
-                };
-                self.outgoing
-                    .send_server_notification(ServerNotification::TurnStarted(notif))
-                    .await;
             }
             Err(err) => {
                 let error = JSONRPCErrorError {
@@ -4217,23 +4207,14 @@ impl CodexMessageProcessor {
         &self,
         request_id: &RequestId,
         turn: Turn,
-        parent_thread_id: String,
         review_thread_id: String,
     ) {
         let response = ReviewStartResponse {
-            turn: turn.clone(),
+            turn,
             review_thread_id,
         };
         self.outgoing
             .send_response(request_id.clone(), response)
-            .await;
-
-        let notif = TurnStartedNotification {
-            thread_id: parent_thread_id,
-            turn,
-        };
-        self.outgoing
-            .send_server_notification(ServerNotification::TurnStarted(notif))
             .await;
     }
 
@@ -4250,13 +4231,8 @@ impl CodexMessageProcessor {
         match turn_id {
             Ok(turn_id) => {
                 let turn = Self::build_review_turn(turn_id, display_text);
-                self.emit_review_started(
-                    request_id,
-                    turn,
-                    parent_thread_id.clone(),
-                    parent_thread_id,
-                )
-                .await;
+                self.emit_review_started(request_id, turn, parent_thread_id)
+                    .await;
                 Ok(())
             }
             Err(err) => Err(JSONRPCErrorError {
@@ -4355,7 +4331,7 @@ impl CodexMessageProcessor {
 
         let turn = Self::build_review_turn(turn_id, display_text);
         let review_thread_id = thread_id.to_string();
-        self.emit_review_started(request_id, turn, review_thread_id.clone(), review_thread_id)
+        self.emit_review_started(request_id, turn, review_thread_id)
             .await;
 
         Ok(())
