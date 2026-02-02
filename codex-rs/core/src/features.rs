@@ -78,6 +78,8 @@ pub enum Feature {
     ShellTool,
 
     // Experimental
+    /// Enable JavaScript REPL tools backed by a persistent Node kernel.
+    JsRepl,
     /// Use the single unified PTY-backed exec tool.
     UnifiedExec,
     /// Include the freeform apply_patch tool.
@@ -421,6 +423,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "shell_snapshot",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::JsRepl,
+        key: "js_repl",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::WebSearchRequest,
