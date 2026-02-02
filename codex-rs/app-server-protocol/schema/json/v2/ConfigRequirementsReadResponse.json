@@ -1,0 +1,76 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "AskForApproval": {
+      "enum": [
+        "untrusted",
+        "on-failure",
+        "on-request",
+        "never"
+      ],
+      "type": "string"
+    },
+    "ConfigRequirements": {
+      "properties": {
+        "allowedApprovalPolicies": {
+          "items": {
+            "$ref": "#/definitions/AskForApproval"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "allowedSandboxModes": {
+          "items": {
+            "$ref": "#/definitions/SandboxMode"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "enforceResidency": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResidencyRequirement"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ResidencyRequirement": {
+      "enum": [
+        "us"
+      ],
+      "type": "string"
+    },
+    "SandboxMode": {
+      "enum": [
+        "read-only",
+        "workspace-write",
+        "danger-full-access"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "requirements": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ConfigRequirements"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Null if no requirements are configured (e.g. no requirements.toml/MDM entries)."
+    }
+  },
+  "title": "ConfigRequirementsReadResponse",
+  "type": "object"
+}

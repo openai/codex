@@ -1,0 +1,73 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ReviewDecision": {
+      "description": "User's decision in response to an ExecApprovalRequest.",
+      "oneOf": [
+        {
+          "description": "User has approved this command and the agent should execute it.",
+          "enum": [
+            "approved"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "User has approved this command and wants to apply the proposed execpolicy amendment so future matching commands are permitted.",
+          "properties": {
+            "approved_execpolicy_amendment": {
+              "properties": {
+                "proposed_execpolicy_amendment": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "proposed_execpolicy_amendment"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "approved_execpolicy_amendment"
+          ],
+          "title": "ApprovedExecpolicyAmendmentReviewDecision",
+          "type": "object"
+        },
+        {
+          "description": "User has approved this command and wants to automatically approve any future identical instances (`command` and `cwd` match exactly) for the remainder of the session.",
+          "enum": [
+            "approved_for_session"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "User has denied this command and the agent should not execute it, but it should continue the session and try something else.",
+          "enum": [
+            "denied"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "User has denied this command and the agent should not do anything until the user's next command.",
+          "enum": [
+            "abort"
+          ],
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "properties": {
+    "decision": {
+      "$ref": "#/definitions/ReviewDecision"
+    }
+  },
+  "required": [
+    "decision"
+  ],
+  "title": "ApplyPatchApprovalResponse",
+  "type": "object"
+}
