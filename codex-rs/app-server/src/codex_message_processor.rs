@@ -1467,6 +1467,7 @@ impl CodexMessageProcessor {
         let outgoing = self.outgoing.clone();
         let req_id = request_id;
         let sandbox_cwd = self.config.cwd.clone();
+        let use_linux_sandbox_bwrap = self.config.features.enabled(Feature::UseLinuxSandboxBwrap);
 
         tokio::spawn(async move {
             match codex_core::exec::process_exec_tool_call(
@@ -1474,6 +1475,7 @@ impl CodexMessageProcessor {
                 &effective_policy,
                 sandbox_cwd.as_path(),
                 &codex_linux_sandbox_exe,
+                use_linux_sandbox_bwrap,
                 None,
             )
             .await

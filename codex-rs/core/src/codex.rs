@@ -524,6 +524,7 @@ pub(crate) struct TurnContext {
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) tools_config: ToolsConfig,
+    pub(crate) features: Features,
     pub(crate) ghost_snapshot: GhostSnapshotConfig,
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
@@ -725,6 +726,7 @@ impl Session {
             windows_sandbox_level: session_configuration.windows_sandbox_level,
             shell_environment_policy: per_turn_config.shell_environment_policy.clone(),
             tools_config,
+            features: per_turn_config.features.clone(),
             ghost_snapshot: per_turn_config.ghost_snapshot.clone(),
             final_output_json_schema: None,
             codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
@@ -995,6 +997,7 @@ impl Session {
             sandbox_policy: session_configuration.sandbox_policy.get().clone(),
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             sandbox_cwd: session_configuration.cwd.clone(),
+            use_linux_sandbox_bwrap: config.features.enabled(Feature::UseLinuxSandboxBwrap),
         };
         let cancel_token = sess.mcp_startup_cancellation_token().await;
 
@@ -1244,6 +1247,9 @@ impl Session {
                 sandbox_policy: per_turn_config.sandbox_policy.get().clone(),
                 codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
                 sandbox_cwd: per_turn_config.cwd.clone(),
+                use_linux_sandbox_bwrap: per_turn_config
+                    .features
+                    .enabled(Feature::UseLinuxSandboxBwrap),
             };
             if let Err(e) = self
                 .services
@@ -2325,6 +2331,7 @@ impl Session {
             sandbox_policy: turn_context.sandbox_policy.clone(),
             codex_linux_sandbox_exe: turn_context.codex_linux_sandbox_exe.clone(),
             sandbox_cwd: turn_context.cwd.clone(),
+            use_linux_sandbox_bwrap: turn_context.features.enabled(Feature::UseLinuxSandboxBwrap),
         };
         let cancel_token = self.reset_mcp_startup_cancellation_token().await;
 
@@ -3198,6 +3205,7 @@ async fn spawn_review_thread(
         sub_id: sub_id.to_string(),
         client,
         tools_config,
+        features: parent_turn_context.features.clone(),
         ghost_snapshot: parent_turn_context.ghost_snapshot.clone(),
         developer_instructions: None,
         user_instructions: None,
