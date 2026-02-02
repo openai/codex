@@ -2167,6 +2167,7 @@ pub enum ThreadItem {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type", rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub enum WebSearchAction {
     Search {
         query: Option<String>,

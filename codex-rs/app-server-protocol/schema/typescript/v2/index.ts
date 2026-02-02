@@ -169,5 +169,6 @@ export type { TurnStartResponse } from "./TurnStartResponse";
 export type { TurnStartedNotification } from "./TurnStartedNotification";
 export type { TurnStatus } from "./TurnStatus";
 export type { UserInput } from "./UserInput";
+export type { WebSearchAction } from "./WebSearchAction";
 export type { WindowsWorldWritableWarningNotification } from "./WindowsWorldWritableWarningNotification";
 export type { WriteStatus } from "./WriteStatus";
