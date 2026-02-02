@@ -3036,15 +3036,19 @@ impl ChatWidget {
                 cmd.command()
             );
             self.add_to_history(history_cell::new_error_event(message));
-            self.bottom_pane.drain_pending_submission_state();
             self.request_redraw();
             return;
         }
 
-        let trimmed = args.trim().to_string();
+        let trimmed = args.trim();
         match cmd {
             SlashCommand::Rename if !trimmed.is_empty() => {
-                let Some(name) = codex_core::util::normalize_thread_name(&trimmed) else {
+                let Some((prepared_args, _prepared_elements)) =
+                    self.bottom_pane.prepare_inline_args_submission(false)
+                else {
+                    return;
+                };
+                let Some(name) = codex_core::util::normalize_thread_name(&prepared_args) else {
                     self.add_error_message("Thread name cannot be empty.".to_string());
                     return;
                 };
@@ -3061,7 +3065,7 @@ impl ChatWidget {
                     return;
                 }
                 let Some((prepared_args, prepared_elements)) =
-                    self.bottom_pane.prepare_plan_args_submission()
+                    self.bottom_pane.prepare_inline_args_submission(true)
                 else {
                     return;
                 };
@@ -3083,10 +3087,15 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Review if !trimmed.is_empty() => {
+                let Some((prepared_args, _prepared_elements)) =
+                    self.bottom_pane.prepare_inline_args_submission(false)
+                else {
+                    return;
+                };
                 self.submit_op(Op::Review {
                     review_request: ReviewRequest {
                         target: ReviewTarget::Custom {
-                            instructions: trimmed,
+                            instructions: prepared_args,
                         },
                         user_facing_hint: None,
                     },

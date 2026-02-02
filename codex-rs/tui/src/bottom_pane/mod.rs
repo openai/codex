@@ -794,8 +794,11 @@ impl BottomPane {
             .take_recent_submission_images_with_placeholders()
     }
 
-    pub(crate) fn prepare_plan_args_submission(&mut self) -> Option<(String, Vec<TextElement>)> {
-        self.composer.prepare_plan_args_submission()
+    pub(crate) fn prepare_inline_args_submission(
+        &mut self,
+        record_history: bool,
+    ) -> Option<(String, Vec<TextElement>)> {
+        self.composer.prepare_inline_args_submission(record_history)
     }
 
     fn as_renderable(&'_ self) -> RenderableItem<'_> {

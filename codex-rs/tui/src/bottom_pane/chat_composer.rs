@@ -2078,34 +2078,10 @@ impl ChatComposer {
             return Some(InputResult::None);
         }
 
-        // `/plan ...` is staged differently from other arg-taking commands:
-        // history recording + pending-paste expansion must happen only after
-        // ChatWidget confirms Plan mode actually activated. If Plan mode is
-        // unavailable, we keep the raw draft intact instead of consuming it.
-        if cmd == SlashCommand::Plan {
-            let mut args_elements = Self::slash_command_args_elements(
-                rest,
-                rest_offset,
-                &self.textarea.text_elements(),
-            );
-            let trimmed_rest = rest.trim();
-            args_elements = Self::trim_text_elements(rest, trimmed_rest, args_elements);
-            return Some(InputResult::CommandWithArgs(
-                cmd,
-                trimmed_rest.to_string(),
-                args_elements,
-            ));
-        }
-
-        let (prepared_text, prepared_elements) = self.prepare_submission_text(false)?;
-        let (_, prepared_rest, prepared_rest_offset) = parse_slash_name(&prepared_text)?;
-        let mut args_elements = Self::slash_command_args_elements(
-            prepared_rest,
-            prepared_rest_offset,
-            &prepared_elements,
-        );
-        let trimmed_rest = prepared_rest.trim();
-        args_elements = Self::trim_text_elements(prepared_rest, trimmed_rest, args_elements);
+        let mut args_elements =
+            Self::slash_command_args_elements(rest, rest_offset, &self.textarea.text_elements());
+        let trimmed_rest = rest.trim();
+        args_elements = Self::trim_text_elements(rest, trimmed_rest, args_elements);
         Some(InputResult::CommandWithArgs(
             cmd,
             trimmed_rest.to_string(),
@@ -2113,8 +2089,17 @@ impl ChatComposer {
         ))
     }
 
-    pub(crate) fn prepare_plan_args_submission(&mut self) -> Option<(String, Vec<TextElement>)> {
-        let (prepared_text, prepared_elements) = self.prepare_submission_text(true)?;
+    /// Expand pending placeholders and extract normalized inline-command args.
+    ///
+    /// Inline-arg commands are initially dispatched using the raw draft so command rejection does
+    /// not consume user input. Once a command is accepted, this helper performs the usual
+    /// submission preparation (paste expansion, element trimming) and rebases element ranges from
+    /// full-text offsets to command-arg offsets.
+    pub(crate) fn prepare_inline_args_submission(
+        &mut self,
+        record_history: bool,
+    ) -> Option<(String, Vec<TextElement>)> {
+        let (prepared_text, prepared_elements) = self.prepare_submission_text(record_history)?;
         let (_, prepared_rest, prepared_rest_offset) = parse_slash_name(&prepared_text)?;
         let mut args_elements = Self::slash_command_args_elements(
             prepared_rest,
