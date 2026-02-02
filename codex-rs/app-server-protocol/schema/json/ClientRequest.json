@@ -176,10 +176,6 @@
       ],
       "type": "object"
     },
-    "CollaborationModeListParams": {
-      "description": "EXPERIMENTAL - list collaboration mode presets.",
-      "type": "object"
-    },
     "CommandExecParams": {
       "properties": {
         "command": {
@@ -678,8 +674,29 @@
       ],
       "type": "object"
     },
+    "InitializeCapabilities": {
+      "description": "Client-declared capabilities negotiated during initialize.",
+      "properties": {
+        "experimentalApi": {
+          "default": false,
+          "description": "Opt into receiving experimental API methods and fields.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "InitializeParams": {
       "properties": {
+        "capabilities": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/InitializeCapabilities"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "clientInfo": {
           "$ref": "#/definitions/ClientInfo"
         }
@@ -2551,15 +2568,6 @@
             "null"
           ]
         },
-        "dynamicTools": {
-          "items": {
-            "$ref": "#/definitions/DynamicToolSpec"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
         "ephemeral": {
           "type": [
             "boolean",
@@ -3026,7 +3034,7 @@
       "type": "object"
     },
     {
-      "description": "NEW APIs",
+      "description": "NEW APIs Uses `inspect_params` because only some fields are experimental.",
       "properties": {
         "id": {
           "$ref": "#/definitions/RequestId"
@@ -3432,31 +3440,6 @@
         "params"
       ],
       "title": "Model/listRequest",
-      "type": "object"
-    },
-    {
-      "description": "EXPERIMENTAL - list collaboration mode presets.",
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "collaborationMode/list"
-          ],
-          "title": "CollaborationMode/listRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/CollaborationModeListParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "CollaborationMode/listRequest",
       "type": "object"
     },
     {

@@ -10,6 +10,9 @@ pub trait ExperimentalApi {
 pub struct ExperimentalField {
     pub type_name: &'static str,
     pub field_name: &'static str,
+    /// Stable identifier returned when this field is used.
+    /// Convention: `<method>` for method-level gates or `<method>.<field>` for
+    /// field-level gates.
     pub reason: &'static str,
 }
 

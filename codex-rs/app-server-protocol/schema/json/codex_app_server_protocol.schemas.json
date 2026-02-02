@@ -943,31 +943,6 @@
           "type": "object"
         },
         {
-          "description": "EXPERIMENTAL - list collaboration mode presets.",
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/RequestId"
-            },
-            "method": {
-              "enum": [
-                "collaborationMode/list"
-              ],
-              "title": "CollaborationMode/listRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/CollaborationModeListParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "CollaborationMode/listRequest",
-          "type": "object"
-        },
-        {
           "properties": {
             "id": {
               "$ref": "#/definitions/RequestId"
@@ -5463,9 +5438,30 @@
       ],
       "type": "object"
     },
+    "InitializeCapabilities": {
+      "description": "Client-declared capabilities negotiated during initialize.",
+      "properties": {
+        "experimentalApi": {
+          "default": false,
+          "description": "Opt into receiving experimental API methods and fields.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "InitializeParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "capabilities": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/InitializeCapabilities"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "clientInfo": {
           "$ref": "#/definitions/ClientInfo"
         }
@@ -10408,29 +10404,6 @@
         ],
         "type": "object"
       },
-      "CollaborationModeListParams": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "EXPERIMENTAL - list collaboration mode presets.",
-        "title": "CollaborationModeListParams",
-        "type": "object"
-      },
-      "CollaborationModeListResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "EXPERIMENTAL - collaboration mode presets response.",
-        "properties": {
-          "data": {
-            "items": {
-              "$ref": "#/definitions/v2/CollaborationModeMask"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "data"
-        ],
-        "title": "CollaborationModeListResponse",
-        "type": "object"
-      },
       "CollaborationModeMask": {
         "description": "A mask for collaboration mode settings, allowing partial updates. All fields except `name` are optional, enabling selective updates.",
         "properties": {
@@ -15316,15 +15289,6 @@
           "developerInstructions": {
             "type": [
               "string",
-              "null"
-            ]
-          },
-          "dynamicTools": {
-            "items": {
-              "$ref": "#/definitions/v2/DynamicToolSpec"
-            },
-            "type": [
-              "array",
               "null"
             ]
           },

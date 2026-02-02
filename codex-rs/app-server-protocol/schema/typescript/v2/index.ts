@@ -22,8 +22,6 @@ export type { CollabAgentState } from "./CollabAgentState";
 export type { CollabAgentStatus } from "./CollabAgentStatus";
 export type { CollabAgentTool } from "./CollabAgentTool";
 export type { CollabAgentToolCallStatus } from "./CollabAgentToolCallStatus";
-export type { CollaborationModeListParams } from "./CollaborationModeListParams";
-export type { CollaborationModeListResponse } from "./CollaborationModeListResponse";
 export type { CommandAction } from "./CommandAction";
 export type { CommandExecParams } from "./CommandExecParams";
 export type { CommandExecResponse } from "./CommandExecResponse";

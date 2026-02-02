@@ -11,6 +11,8 @@ use crate::export_server_notification_schemas;
 use crate::export_server_param_schemas;
 use crate::export_server_response_schemas;
 use crate::export_server_responses;
+use crate::protocol::common::EXPERIMENTAL_CLIENT_METHOD_PARAM_TYPES;
+use crate::protocol::common::EXPERIMENTAL_CLIENT_METHOD_RESPONSE_TYPES;
 use crate::protocol::common::EXPERIMENTAL_CLIENT_METHODS;
 use anyhow::Context;
 use anyhow::Result;
@@ -198,11 +200,17 @@ pub fn generate_json_with_experimental(out_dir: &Path, experimental_api: bool) -
 
 fn filter_experimental_ts(out_dir: &Path) -> Result<()> {
     let registered_fields = experimental_fields();
+    let experimental_method_types = experimental_method_types();
+    // Most generated TS files are filtered by schema processing, but
+    // `ClientRequest.ts` and `v2/ThreadStartParams.ts` need direct post-processing
+    // because they encode method/field information in file-local unions/interfaces.
     filter_client_request_ts(out_dir, EXPERIMENTAL_CLIENT_METHODS)?;
     filter_thread_start_params_ts(out_dir, &registered_fields)?;
+    remove_generated_type_files(out_dir, &experimental_method_types, "ts")?;
     Ok(())
 }
 
+/// Removes union arms from `ClientRequest.ts` for methods marked experimental.
 fn filter_client_request_ts(out_dir: &Path, experimental_methods: &[&str]) -> Result<()> {
     let path = out_dir.join("ClientRequest.ts");
     if !path.exists() {
@@ -229,11 +237,13 @@ fn filter_client_request_ts(out_dir: &Path, experimental_methods: &[&str]) -> Re
         .collect();
     let new_body = filtered_arms.join(" | ");
     content = format!("{prefix}{new_body}{suffix}");
+    content = prune_unused_type_imports(content, &new_body);
 
     fs::write(&path, content).with_context(|| format!("Failed to write {}", path.display()))?;
     Ok(())
 }
 
+/// Removes experimental properties from `v2/ThreadStartParams.ts`.
 fn filter_thread_start_params_ts(
     out_dir: &Path,
     experimental_fields: &[&'static crate::experimental_api::ExperimentalField],
@@ -277,6 +287,7 @@ fn filter_experimental_schema(bundle: &mut Value) -> Result<()> {
     filter_experimental_fields_in_root(bundle, &registered_fields);
     filter_experimental_fields_in_definitions(bundle, &registered_fields);
     prune_experimental_methods(bundle, EXPERIMENTAL_CLIENT_METHODS);
+    remove_experimental_method_type_definitions(bundle);
     Ok(())
 }
 
@@ -422,7 +433,120 @@ fn filter_experimental_json_files(out_dir: &Path) -> Result<()> {
         filter_experimental_schema(&mut value)?;
         write_pretty_json(path, &value)?;
     }
+    let experimental_method_types = experimental_method_types();
+    remove_generated_type_files(out_dir, &experimental_method_types, "json")?;
     Ok(())
+}
+
+fn experimental_method_types() -> HashSet<String> {
+    let mut type_names = HashSet::new();
+    collect_experimental_type_names(EXPERIMENTAL_CLIENT_METHOD_PARAM_TYPES, &mut type_names);
+    collect_experimental_type_names(EXPERIMENTAL_CLIENT_METHOD_RESPONSE_TYPES, &mut type_names);
+    type_names
+}
+
+fn collect_experimental_type_names(entries: &[&str], out: &mut HashSet<String>) {
+    for entry in entries {
+        let trimmed = entry.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let name = trimmed.rsplit("::").next().unwrap_or(trimmed);
+        if !name.is_empty() {
+            out.insert(name.to_string());
+        }
+    }
+}
+
+fn remove_generated_type_files(
+    out_dir: &Path,
+    type_names: &HashSet<String>,
+    extension: &str,
+) -> Result<()> {
+    for type_name in type_names {
+        for subdir in ["", "v1", "v2"] {
+            let path = if subdir.is_empty() {
+                out_dir.join(format!("{type_name}.{extension}"))
+            } else {
+                out_dir
+                    .join(subdir)
+                    .join(format!("{type_name}.{extension}"))
+            };
+            if path.exists() {
+                fs::remove_file(&path)
+                    .with_context(|| format!("Failed to remove {}", path.display()))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn remove_experimental_method_type_definitions(bundle: &mut Value) {
+    let type_names = experimental_method_types();
+    let Some(definitions) = bundle.get_mut("definitions").and_then(Value::as_object_mut) else {
+        return;
+    };
+    remove_experimental_method_type_definitions_map(definitions, &type_names);
+}
+
+fn remove_experimental_method_type_definitions_map(
+    definitions: &mut Map<String, Value>,
+    experimental_type_names: &HashSet<String>,
+) {
+    let keys_to_remove: Vec<String> = definitions
+        .keys()
+        .filter(|def_name| {
+            experimental_type_names
+                .iter()
+                .any(|type_name| definition_matches_type(def_name, type_name))
+        })
+        .cloned()
+        .collect();
+    for key in keys_to_remove {
+        definitions.remove(&key);
+    }
+
+    for value in definitions.values_mut() {
+        if !is_namespace_map(value) {
+            continue;
+        }
+        if let Some(namespace_defs) = value.as_object_mut() {
+            remove_experimental_method_type_definitions_map(
+                namespace_defs,
+                experimental_type_names,
+            );
+        }
+    }
+}
+
+fn prune_unused_type_imports(content: String, type_alias_body: &str) -> String {
+    let trailing_newline = content.ends_with('\n');
+    let mut lines = Vec::new();
+    for line in content.lines() {
+        if let Some(type_name) = parse_imported_type_name(line)
+            && !type_alias_body.contains(type_name)
+        {
+            continue;
+        }
+        lines.push(line);
+    }
+
+    let mut rewritten = lines.join("\n");
+    if trailing_newline {
+        rewritten.push('\n');
+    }
+    rewritten
+}
+
+fn parse_imported_type_name(line: &str) -> Option<&str> {
+    let line = line.trim();
+    let rest = line.strip_prefix("import type {")?;
+    let (type_name, _) = rest.split_once("} from ")?;
+    let type_name = type_name.trim();
+    if type_name.is_empty() || type_name.contains(',') || type_name.contains(" as ") {
+        return None;
+    }
+    Some(type_name)
 }
 
 fn json_files_in_recursive(dir: &Path) -> Result<Vec<PathBuf>> {
@@ -1285,9 +1409,27 @@ mod tests {
 
         let client_request_ts = fs::read_to_string(output_dir.join("ClientRequest.ts"))?;
         assert_eq!(client_request_ts.contains("mock/experimentalMethod"), false);
+        assert_eq!(
+            client_request_ts.contains("MockExperimentalMethodParams"),
+            false
+        );
         let thread_start_ts =
             fs::read_to_string(output_dir.join("v2").join("ThreadStartParams.ts"))?;
         assert_eq!(thread_start_ts.contains("mockExperimentalField"), false);
+        assert_eq!(
+            output_dir
+                .join("v2")
+                .join("MockExperimentalMethodParams.ts")
+                .exists(),
+            false
+        );
+        assert_eq!(
+            output_dir
+                .join("v2")
+                .join("MockExperimentalMethodResponse.ts")
+                .exists(),
+            false
+        );
 
         let mut undefined_offenders = Vec::new();
         let mut optional_nullable_offenders = BTreeSet::new();
@@ -1489,6 +1631,20 @@ mod tests {
 
         let client_request_ts = fs::read_to_string(output_dir.join("ClientRequest.ts"))?;
         assert_eq!(client_request_ts.contains("mock/experimentalMethod"), true);
+        assert_eq!(
+            output_dir
+                .join("v2")
+                .join("MockExperimentalMethodParams.ts")
+                .exists(),
+            true
+        );
+        assert_eq!(
+            output_dir
+                .join("v2")
+                .join("MockExperimentalMethodResponse.ts")
+                .exists(),
+            true
+        );
 
         let thread_start_ts =
             fs::read_to_string(output_dir.join("v2").join("ThreadStartParams.ts"))?;
@@ -1589,6 +1745,25 @@ mod tests {
         let bundle_json =
             fs::read_to_string(output_dir.join("codex_app_server_protocol.schemas.json"))?;
         assert_eq!(bundle_json.contains("mockExperimentalField"), false);
+        assert_eq!(bundle_json.contains("MockExperimentalMethodParams"), false);
+        assert_eq!(
+            bundle_json.contains("MockExperimentalMethodResponse"),
+            false
+        );
+        assert_eq!(
+            output_dir
+                .join("v2")
+                .join("MockExperimentalMethodParams.json")
+                .exists(),
+            false
+        );
+        assert_eq!(
+            output_dir
+                .join("v2")
+                .join("MockExperimentalMethodResponse.json")
+                .exists(),
+            false
+        );
 
         let _cleanup = fs::remove_dir_all(&output_dir);
         Ok(())

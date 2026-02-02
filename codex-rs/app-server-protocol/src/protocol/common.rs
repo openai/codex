@@ -41,14 +41,13 @@ pub enum AuthMode {
     ChatgptAuthTokens,
 }
 
-/// Generates an `enum ClientRequest` where each variant is a request that the
-/// client can send to the server. Each variant has associated `params` and
-/// `response` types. Also generates a `export_client_responses()` function to
-/// export all response types to TypeScript.
 macro_rules! experimental_reason_expr {
+    // If a request variant is explicitly marked experimental, that reason wins.
     (#[experimental($reason:expr)] $params:ident $(, $inspect_params:tt)?) => {
         Some($reason)
     };
+    // `inspect_params: true` is used when a method is mostly stable but needs
+    // field-level gating from its params type (for example, ThreadStart).
     ($params:ident, true) => {
         crate::experimental_api::ExperimentalApi::experimental_reason($params)
     };
@@ -69,6 +68,19 @@ macro_rules! experimental_method_entry {
     };
 }
 
+macro_rules! experimental_type_entry {
+    (#[experimental($reason:expr)] $ty:ty) => {
+        stringify!($ty)
+    };
+    ($ty:ty) => {
+        ""
+    };
+}
+
+/// Generates an `enum ClientRequest` where each variant is a request that the
+/// client can send to the server. Each variant has associated `params` and
+/// `response` types. Also generates a `export_client_responses()` function to
+/// export all response types to TypeScript.
 macro_rules! client_request_definitions {
     (
         $(
@@ -118,6 +130,16 @@ macro_rules! client_request_definitions {
                 experimental_method_entry!($(#[experimental($reason)])? $(=> $wire)?),
             )*
         ];
+        pub(crate) const EXPERIMENTAL_CLIENT_METHOD_PARAM_TYPES: &[&str] = &[
+            $(
+                experimental_type_entry!($(#[experimental($reason)])? $params),
+            )*
+        ];
+        pub(crate) const EXPERIMENTAL_CLIENT_METHOD_RESPONSE_TYPES: &[&str] = &[
+            $(
+                experimental_type_entry!($(#[experimental($reason)])? $response),
+            )*
+        ];
 
         pub fn export_client_responses(
             out_dir: &::std::path::Path,
@@ -160,6 +182,7 @@ client_request_definitions! {
 
     /// NEW APIs
     // Thread lifecycle
+    /// Uses `inspect_params` because only some fields are experimental.
     ThreadStart => "thread/start" {
         params: v2::ThreadStartParams,
         inspect_params: true,
@@ -231,13 +254,13 @@ client_request_definitions! {
         response: v2::ModelListResponse,
     },
     #[experimental("collaborationMode/list")]
-    /// EXPERIMENTAL - list collaboration mode presets.
+    /// Lists collaboration mode presets.
     CollaborationModeList => "collaborationMode/list" {
         params: v2::CollaborationModeListParams,
         response: v2::CollaborationModeListResponse,
     },
     #[experimental("mock/experimentalMethod")]
-    /// EXPERIMENTAL - test-only method used to validate experimental gating.
+    /// Test-only method used to validate experimental gating.
     MockExperimentalMethod => "mock/experimentalMethod" {
         params: v2::MockExperimentalMethodParams,
         response: v2::MockExperimentalMethodResponse,

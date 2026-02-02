@@ -79,15 +79,6 @@
         "null"
       ]
     },
-    "dynamicTools": {
-      "items": {
-        "$ref": "#/definitions/DynamicToolSpec"
-      },
-      "type": [
-        "array",
-        "null"
-      ]
-    },
     "ephemeral": {
       "type": [
         "boolean",

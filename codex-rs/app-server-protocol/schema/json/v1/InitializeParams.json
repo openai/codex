@@ -21,9 +21,30 @@
         "version"
       ],
       "type": "object"
+    },
+    "InitializeCapabilities": {
+      "description": "Client-declared capabilities negotiated during initialize.",
+      "properties": {
+        "experimentalApi": {
+          "default": false,
+          "description": "Opt into receiving experimental API methods and fields.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
     }
   },
   "properties": {
+    "capabilities": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/InitializeCapabilities"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "clientInfo": {
       "$ref": "#/definitions/ClientInfo"
     }
