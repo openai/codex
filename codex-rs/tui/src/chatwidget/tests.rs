@@ -326,6 +326,49 @@ async fn submission_preserves_text_elements_and_local_images() {
 }
 
 #[tokio::test]
+async fn blocked_image_restore_preserves_mention_paths() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let placeholder = "[Image #1]";
+    let text = format!("{placeholder} check $file");
+    let text_elements = vec![TextElement::new(
+        (0..placeholder.len()).into(),
+        Some(placeholder.to_string()),
+    )];
+    let local_images = vec![LocalImageAttachment {
+        placeholder: placeholder.to_string(),
+        path: PathBuf::from("/tmp/blocked.png"),
+    }];
+    let mention_paths =
+        HashMap::from([("file".to_string(), "/tmp/skills/file/SKILL.md".to_string())]);
+
+    chat.restore_blocked_image_submission(
+        text.clone(),
+        text_elements.clone(),
+        local_images.clone(),
+        mention_paths.clone(),
+    );
+
+    assert_eq!(chat.bottom_pane.composer_text(), text);
+    assert_eq!(chat.bottom_pane.composer_text_elements(), text_elements);
+    assert_eq!(
+        chat.bottom_pane.composer_local_image_paths(),
+        vec![local_images[0].path.clone()],
+    );
+    assert_eq!(chat.bottom_pane.take_mention_paths(), mention_paths);
+
+    let cells = drain_insert_history(&mut rx);
+    let warning = cells
+        .last()
+        .map(|lines| lines_to_single_string(lines))
+        .expect("expected warning cell");
+    assert!(
+        warning.contains("does not support image inputs"),
+        "expected image warning, got: {warning:?}"
+    );
+}
+
+#[tokio::test]
 async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 

@@ -3238,14 +3238,7 @@ impl ChatWidget {
             return;
         }
         if !local_images.is_empty() && !self.current_model_supports_images() {
-            // Preserve the user's composed payload so they can retry after changing models.
-            let local_image_paths = local_images.iter().map(|img| img.path.clone()).collect();
-            self.bottom_pane
-                .set_composer_text(text, text_elements, local_image_paths);
-            self.add_to_history(history_cell::new_warning_event(
-                self.image_inputs_not_supported_message(),
-            ));
-            self.request_redraw();
+            self.restore_blocked_image_submission(text, text_elements, local_images, mention_paths);
             return;
         }
 
@@ -3360,6 +3353,34 @@ impl ChatWidget {
         }
 
         self.needs_final_message_separator = false;
+    }
+
+    /// Restore the blocked submission draft without losing mention resolution state.
+    ///
+    /// The blocked-image path intentionally keeps the draft in the composer so
+    /// users can remove attachments and retry. We must restore
+    /// `mention_paths` alongside visible text; restoring only `$name` tokens
+    /// makes the draft look correct while degrading mention resolution to
+    /// name-only heuristics on retry.
+    fn restore_blocked_image_submission(
+        &mut self,
+        text: String,
+        text_elements: Vec<TextElement>,
+        local_images: Vec<LocalImageAttachment>,
+        mention_paths: HashMap<String, String>,
+    ) {
+        // Preserve the user's composed payload so they can retry after changing models.
+        let local_image_paths = local_images.iter().map(|img| img.path.clone()).collect();
+        self.bottom_pane.set_composer_text_with_mention_paths(
+            text,
+            text_elements,
+            local_image_paths,
+            mention_paths,
+        );
+        self.add_to_history(history_cell::new_warning_event(
+            self.image_inputs_not_supported_message(),
+        ));
+        self.request_redraw();
     }
 
     /// Replay a subset of initial events into the UI to seed the transcript when
