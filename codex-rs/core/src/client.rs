@@ -264,12 +264,8 @@ impl ModelClient {
 
 impl ModelClientSession {
     async fn turn_metadata_header(&self) -> Option<HeaderValue> {
-        let Some(cwd) = self.turn_metadata_cwd.as_deref() else {
-            return None;
-        };
-        let Some(value) = build_turn_metadata_header(cwd).await else {
-            return None;
-        };
+        let cwd = self.turn_metadata_cwd.as_deref()?;
+        let value = build_turn_metadata_header(cwd).await?;
         HeaderValue::from_str(value.as_str()).ok()
     }
 
