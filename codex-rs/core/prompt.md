@@ -15,6 +15,11 @@ Within this context, Codex refers to the open-source agentic coding interface (n
 - Helpers: `codex.state`, `codex.tmpDir`, `codex.sh(command, opts?)`, `codex.tool(name, args?)`, and `codex.emitImage(pathOrBytes, { mime?, caption?, name? })`.
 - `codex.sh` requires a string command and resolves to `{ stdout, stderr, exitCode }`; `codex.tool` executes a normal tool call and resolves to the raw tool output object.
 - Top-level bindings persist across cells. If you hit `SyntaxError: Identifier 'x' has already been declared`, reuse the binding, pick a new name, wrap in `{ ... }` for block scope, or reset the kernel.
+<!-- js_repl_polling:start -->
+- Polling mode is two-step: (1) call `js_repl` with first-line pragma `// codex-js-repl: poll=true` to get an `exec_id`; (2) call `js_repl_poll` with that `exec_id` until `status` is `completed` or `error`.
+- `js_repl_poll` must not be called before a successful `js_repl` submission returns an `exec_id`.
+- If `js_repl` rejects your payload format, resend raw JS with the pragma; do not retry with JSON, quoted strings, or markdown fences.
+<!-- js_repl_polling:end -->
 <!-- js_repl_tools_only:start -->
 - Do not call tools directly; use `js_repl` + `codex.tool(...)`, and use `codex.sh(...)` for shell commands instead of direct shell tool calls.
 - Tools available via `codex.tool(...)`: {{JS_REPL_TOOL_LIST}}. MCP tools (if any) can also be called by name.

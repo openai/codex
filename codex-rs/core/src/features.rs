@@ -80,6 +80,8 @@ pub enum Feature {
     // Experimental
     /// Enable JavaScript REPL tools backed by a persistent Node kernel.
     JsRepl,
+    /// Enable js_repl polling helpers and tool.
+    JsReplPolling,
     /// Only expose js_repl tools directly to the model.
     JsReplToolsOnly,
     /// Use the single unified PTY-backed exec tool.
@@ -324,6 +326,10 @@ impl Features {
             tracing::warn!("js_repl_tools_only requires js_repl; disabling js_repl_tools_only");
             features.disable(Feature::JsReplToolsOnly);
         }
+        if features.enabled(Feature::JsReplPolling) && !features.enabled(Feature::JsRepl) {
+            tracing::warn!("js_repl_polling requires js_repl; disabling js_repl_polling");
+            features.disable(Feature::JsReplPolling);
+        }
 
         features
     }
@@ -427,6 +433,16 @@ pub const FEATURES: &[FeatureSpec] = &[
             name: "JavaScript REPL",
             menu_description: "Run JavaScript cells with a persistent Node-backed kernel.",
             announcement: "NEW! Try the JavaScript REPL for persistent JS execution. Enable in /experimental!",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::JsReplPolling,
+        key: "js_repl_polling",
+        stage: Stage::Experimental {
+            name: "JS REPL polling",
+            menu_description: "Allow js_repl to return an exec_id and poll for completion.",
+            announcement: "NEW! Try polling mode for JavaScript REPL long-running cells.",
         },
         default_enabled: false,
     },

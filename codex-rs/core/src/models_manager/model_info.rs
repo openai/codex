@@ -35,6 +35,8 @@ const GPT_5_2_CODEX_PERSONALITY_PRAGMATIC: &str =
     include_str!("../../templates/personalities/gpt-5.2-codex_pragmatic.md");
 const JS_REPL_SECTION_START: &str = "<!-- js_repl:start -->";
 const JS_REPL_SECTION_END: &str = "<!-- js_repl:end -->";
+const JS_REPL_POLLING_SECTION_START: &str = "<!-- js_repl_polling:start -->";
+const JS_REPL_POLLING_SECTION_END: &str = "<!-- js_repl_polling:end -->";
 const JS_REPL_TOOLS_ONLY_SECTION_START: &str = "<!-- js_repl_tools_only:start -->";
 const JS_REPL_TOOLS_ONLY_SECTION_END: &str = "<!-- js_repl_tools_only:end -->";
 
@@ -115,6 +117,10 @@ pub(crate) fn with_config_overrides(mut model: ModelInfo, config: &Config) -> Mo
         &model.base_instructions,
         config.features.enabled(Feature::JsRepl),
     );
+    model.base_instructions = apply_js_repl_polling_section(
+        &model.base_instructions,
+        config.features.enabled(Feature::JsRepl) && config.features.enabled(Feature::JsReplPolling),
+    );
     model.base_instructions = apply_js_repl_tools_only_section(
         &model.base_instructions,
         config.features.enabled(Feature::JsRepl)
@@ -126,6 +132,15 @@ pub(crate) fn with_config_overrides(mut model: ModelInfo, config: &Config) -> Mo
 
 pub(crate) fn apply_js_repl_section(input: &str, enabled: bool) -> String {
     apply_section(input, JS_REPL_SECTION_START, JS_REPL_SECTION_END, enabled)
+}
+
+pub(crate) fn apply_js_repl_polling_section(input: &str, enabled: bool) -> String {
+    apply_section(
+        input,
+        JS_REPL_POLLING_SECTION_START,
+        JS_REPL_POLLING_SECTION_END,
+        enabled,
+    )
 }
 
 pub(crate) fn apply_js_repl_tools_only_section(input: &str, enabled: bool) -> String {
