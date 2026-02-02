@@ -1,3 +1,18 @@
+//! Status line runner for the TUI.
+//!
+//! This module executes an external command (configured via `tui_status_line`) to generate
+//! a customizable status line. The command receives a JSON payload via stdin containing
+//! session state (model, conversation stats, rate limits, etc.) and should output a single
+//! line to stdout, optionally with ANSI escape codes for styling.
+//!
+//! Key behaviors:
+//! - Request coalescing: only one command runs at a time; if updates arrive during execution,
+//!   the command reruns once with the latest payload after completing.
+//! - Timeout handling: commands that exceed `tui_status_line_timeout_ms` are killed and
+//!   a warning is emitted (once per session).
+//! - Error resilience: failures are logged but don't crash the TUI; the last successful
+//!   output continues to display.
+
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex;
