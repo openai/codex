@@ -243,9 +243,7 @@ impl serde::Serialize for Cursor {
     {
         let ts_str = self
             .ts
-            .format(&format_description!(
-                "[year]-[month]-[day]T[hour]-[minute]-[second]"
-            ))
+            .format(&Rfc3339)
             .map_err(|e| serde::ser::Error::custom(format!("format error: {e}")))?;
         serializer.serialize_str(&format!("{ts_str}|{}", self.id))
     }
@@ -628,9 +626,15 @@ pub fn parse_cursor(token: &str) -> Option<Cursor> {
         return None;
     };
 
-    let format: &[FormatItem] =
-        format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
-    let ts = PrimitiveDateTime::parse(file_ts, format).ok()?.assume_utc();
+    let ts = OffsetDateTime::parse(file_ts, &Rfc3339)
+        .ok()
+        .or_else(|| {
+            let format: &[FormatItem] =
+                format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
+            PrimitiveDateTime::parse(file_ts, format)
+                .ok()
+                .map(PrimitiveDateTime::assume_utc)
+        })?;
 
     Some(Cursor::new(ts, uuid))
 }
@@ -638,9 +642,12 @@ pub fn parse_cursor(token: &str) -> Option<Cursor> {
 fn build_next_cursor(items: &[ThreadItem], sort_key: ThreadSortKey) -> Option<Cursor> {
     let last = items.last()?;
     let file_name = last.path.file_name()?.to_string_lossy();
-    let (created_ts, id) = parse_timestamp_uuid_from_filename(&file_name)?;
+    let (_created_ts, id) = parse_timestamp_uuid_from_filename(&file_name)?;
     let ts = match sort_key {
-        ThreadSortKey::CreatedAt => created_ts,
+        ThreadSortKey::CreatedAt => {
+            let created_at = last.created_at.as_deref()?;
+            OffsetDateTime::parse(created_at, &Rfc3339).ok()?
+        }
         ThreadSortKey::UpdatedAt => {
             let updated_at = last.updated_at.as_deref()?;
             OffsetDateTime::parse(updated_at, &Rfc3339).ok()?
@@ -967,10 +974,7 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
             RolloutItem::SessionMeta(session_meta_line) => {
                 summary.source = Some(session_meta_line.meta.source.clone());
                 summary.model_provider = session_meta_line.meta.model_provider.clone();
-                summary.created_at = summary
-                    .created_at
-                    .clone()
-                    .or_else(|| Some(rollout_line.timestamp.clone()));
+                summary.created_at = Some(session_meta_line.meta.timestamp.clone());
                 summary.saw_session_meta = true;
                 if summary.head.len() < head_limit
                     && let Ok(val) = serde_json::to_value(session_meta_line)
