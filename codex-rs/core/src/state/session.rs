@@ -117,15 +117,15 @@ impl SessionState {
         self.turn_context_history = turn_context_history;
     }
 
-    /// Consume pending model-visible state sync only when a collaboration update is being built.
+    /// Consume pending model-visible state sync only when a model-visible update is being built.
     ///
-    /// If the next operation does not carry a collaboration update (for example, model-only
-    /// overrides), keep the pending sync for a later turn that does.
+    /// If the next operation does not carry any model-visible update, keep the pending sync for a
+    /// later turn that does.
     pub(crate) fn take_pending_model_visible_state_sync(
         &mut self,
-        has_collaboration_update: bool,
+        has_model_visible_state_update: bool,
     ) -> PendingModelVisibleStateSync {
-        if has_collaboration_update {
+        if has_model_visible_state_update {
             std::mem::take(&mut self.pending_model_visible_state_sync)
         } else {
             PendingModelVisibleStateSync::None

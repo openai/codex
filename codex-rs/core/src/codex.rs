@@ -2792,9 +2792,10 @@ mod handlers {
         }
 
         let current_context = sess.new_default_turn_with_sub_id(sub_id).await;
+        let has_model_visible_state_update = next_collaboration_mode.is_some();
         let pending_model_visible_state_sync = {
             let mut state = sess.state.lock().await;
-            state.take_pending_model_visible_state_sync(next_collaboration_mode.is_some())
+            state.take_pending_model_visible_state_sync(has_model_visible_state_update)
         };
         let update_items = sess.build_settings_update_items(
             Some(&previous_context),
@@ -2877,9 +2878,10 @@ mod handlers {
         // Attempt to inject input into current task
         if let Err(items) = sess.inject_input(items).await {
             sess.seed_initial_context_if_needed(&current_context).await;
+            let has_model_visible_state_update = next_collaboration_mode.is_some();
             let pending_model_visible_state_sync = {
                 let mut state = sess.state.lock().await;
-                state.take_pending_model_visible_state_sync(next_collaboration_mode.is_some())
+                state.take_pending_model_visible_state_sync(has_model_visible_state_update)
             };
             let update_items = sess.build_settings_update_items(
                 previous_context.as_ref(),

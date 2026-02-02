@@ -3130,6 +3130,18 @@ mod tests {
 
         assert_eq!(
             app.chat_widget.active_collaboration_mode_kind(),
+            ModeKind::Code
+        );
+
+        app.handle_backtrack_event(&EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 1,
+            model_visible_state: Some(ModelVisibleState {
+                collaboration_mode: Some(collaboration_mode(ModeKind::Plan)),
+            }),
+        }));
+
+        assert_eq!(
+            app.chat_widget.active_collaboration_mode_kind(),
             ModeKind::Plan
         );
 
@@ -3207,6 +3219,18 @@ mod tests {
             .confirm_backtrack_from_main()
             .expect("backtrack selection");
         app.apply_backtrack_rollback(selection);
+
+        assert_eq!(
+            app.chat_widget.active_collaboration_mode_kind(),
+            ModeKind::Code
+        );
+
+        app.handle_backtrack_event(&EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 1,
+            model_visible_state: Some(ModelVisibleState {
+                collaboration_mode: Some(collaboration_mode(ModeKind::Plan)),
+            }),
+        }));
 
         assert_eq!(
             app.chat_widget.active_collaboration_mode_kind(),
@@ -3373,25 +3397,25 @@ mod tests {
         app.apply_backtrack_rollback(selection);
         assert_eq!(
             app.chat_widget.active_collaboration_mode_kind(),
-            ModeKind::Plan
+            ModeKind::Code
         );
 
         app.handle_backtrack_event(&EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
             num_turns: 1,
             model_visible_state: Some(ModelVisibleState {
-                collaboration_mode: Some(collaboration_mode(ModeKind::Code)),
+                collaboration_mode: Some(collaboration_mode(ModeKind::Plan)),
             }),
         }));
 
         assert_eq!(
             app.chat_widget.active_collaboration_mode_kind(),
-            ModeKind::Code
+            ModeKind::Plan
         );
         assert!(app.backtrack.pending_rollback.is_none());
     }
 
     #[tokio::test]
-    async fn backtrack_failed_restores_previous_collaboration_mode() {
+    async fn backtrack_failed_keeps_current_collaboration_mode() {
         let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
         app.chat_widget
             .set_feature_enabled(Feature::CollaborationModes, true);
@@ -3451,7 +3475,7 @@ mod tests {
 
         assert_eq!(
             app.chat_widget.active_collaboration_mode_kind(),
-            ModeKind::Plan
+            ModeKind::Code
         );
 
         app.handle_backtrack_event(&EventMsg::Error(ErrorEvent {

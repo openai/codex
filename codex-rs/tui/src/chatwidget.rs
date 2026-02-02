@@ -5372,10 +5372,6 @@ impl ChatWidget {
         self.active_mode_kind()
     }
 
-    pub(crate) fn active_collaboration_mask(&self) -> Option<CollaborationModeMask> {
-        self.active_collaboration_mask.clone()
-    }
-
     fn is_session_configured(&self) -> bool {
         self.thread_id.is_some()
     }
@@ -5518,21 +5514,6 @@ impl ChatWidget {
         self.update_collaboration_mode_indicator();
         self.refresh_model_display();
         self.request_redraw();
-    }
-
-    pub(crate) fn replace_collaboration_mask(
-        &mut self,
-        mask: Option<CollaborationModeMask>,
-    ) -> Option<CollaborationModeMask> {
-        if !self.collaboration_modes_enabled() {
-            return None;
-        }
-        let previous = self.active_collaboration_mask.clone();
-        self.active_collaboration_mask = mask;
-        self.update_collaboration_mode_indicator();
-        self.refresh_model_display();
-        self.request_redraw();
-        previous
     }
 
     /// Synchronize collaboration-mode UI state from core's model-visible snapshot.

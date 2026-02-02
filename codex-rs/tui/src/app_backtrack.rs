@@ -39,7 +39,6 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::ThreadRolledBackEvent;
 use codex_protocol::ThreadId;
-use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::user_input::TextElement;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
@@ -86,8 +85,6 @@ pub(crate) struct BacktrackSelection {
     pub(crate) text_elements: Vec<TextElement>,
     /// Local image paths associated with the selected user message.
     pub(crate) local_image_paths: Vec<PathBuf>,
-    /// Collaboration mode active when the selected message was sent.
-    pub(crate) collaboration_mode: Option<CollaborationModeMask>,
 }
 
 /// An in-flight rollback requested from core.
@@ -98,8 +95,6 @@ pub(crate) struct BacktrackSelection {
 pub(crate) struct PendingBacktrackRollback {
     pub(crate) selection: BacktrackSelection,
     pub(crate) thread_id: Option<ThreadId>,
-    /// Active mask before optimistic rollback preview mode changes.
-    pub(crate) previous_collaboration_mask: Option<CollaborationModeMask>,
 }
 
 impl App {
@@ -209,21 +204,12 @@ impl App {
             return;
         }
 
-        // Optimistically apply the target mode for rollback preview when available.
-        // If the selected history item has no mode data (legacy/replayed entries), preserve the
-        // current mode until core returns authoritative rollback state.
-        let previous_collaboration_mask = self.chat_widget.active_collaboration_mask();
-        if let Some(collaboration_mode) = selection.collaboration_mode.clone() {
-            self.chat_widget
-                .replace_collaboration_mask(Some(collaboration_mode));
-        }
         let prefill = selection.prefill.clone();
         let text_elements = selection.text_elements.clone();
         let local_image_paths = selection.local_image_paths.clone();
         self.backtrack.pending_rollback = Some(PendingBacktrackRollback {
             selection,
             thread_id: self.chat_widget.thread_id(),
-            previous_collaboration_mask,
         });
         self.chat_widget.submit_op(Op::ThreadRollback { num_turns });
         if !prefill.is_empty() || !text_elements.is_empty() || !local_image_paths.is_empty() {
@@ -479,9 +465,6 @@ impl App {
                 if pending.thread_id != self.chat_widget.thread_id() {
                     return;
                 }
-                // Rollback failed: revert the optimistic mode switch to the pre-rollback mask.
-                self.chat_widget
-                    .replace_collaboration_mask(pending.previous_collaboration_mask);
             }
             _ => {}
         }
@@ -503,9 +486,6 @@ impl App {
         if let Some(model_visible_state) = rollback.model_visible_state.as_ref() {
             self.chat_widget
                 .apply_model_visible_state(model_visible_state);
-        } else {
-            self.chat_widget
-                .replace_collaboration_mask(pending.previous_collaboration_mask.clone());
         }
 
         self.trim_transcript_for_backtrack(pending.selection.nth_user_message);
@@ -518,26 +498,25 @@ impl App {
             return None;
         }
 
-        let (prefill, text_elements, local_image_paths, collaboration_mode) =
+        let (prefill, text_elements, local_image_paths) =
             nth_user_position(&self.transcript_cells, nth_user_message)
                 .and_then(|idx| self.transcript_cells.get(idx))
                 .and_then(|cell| cell.as_any().downcast_ref::<UserHistoryCell>())
                 .map(|cell| {
+                    let _historical_mode = cell.collaboration_mode.as_ref();
                     (
                         cell.message.clone(),
                         cell.text_elements.clone(),
                         cell.local_image_paths.clone(),
-                        cell.collaboration_mode.clone(),
                     )
                 })
-                .unwrap_or_else(|| (String::new(), Vec::new(), Vec::new(), None));
+                .unwrap_or_else(|| (String::new(), Vec::new(), Vec::new()));
 
         Some(BacktrackSelection {
             nth_user_message,
             prefill,
             text_elements,
             local_image_paths,
-            collaboration_mode,
         })
     }
 
