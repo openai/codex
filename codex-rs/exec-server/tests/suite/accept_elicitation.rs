@@ -105,6 +105,8 @@ prefix_rule(
                     "workdir": project_root_path.to_string_lossy(),
                 }
             ))),
+            task: None,
+            meta: None,
         })
         .await?;
     let tool_call_content = content
