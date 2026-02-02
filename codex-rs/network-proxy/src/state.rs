@@ -88,31 +88,6 @@ fn collect_layer_mtimes(stack: &ConfigLayerStack) -> Vec<LayerMtime> {
 struct PartialConfig {
     #[serde(default)]
     network: Option<NetworkConfigTable>,
-    #[serde(default)]
-    network_proxy: PartialNetworkProxyConfig,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct PartialNetworkProxyConfig {
-    enabled: Option<bool>,
-    mode: Option<NetworkMode>,
-    allow_upstream_proxy: Option<bool>,
-    dangerously_allow_non_loopback_proxy: Option<bool>,
-    dangerously_allow_non_loopback_admin: Option<bool>,
-    #[serde(default)]
-    policy: PartialNetworkPolicy,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct PartialNetworkPolicy {
-    #[serde(default)]
-    allowed_domains: Option<Vec<String>>,
-    #[serde(default)]
-    denied_domains: Option<Vec<String>>,
-    #[serde(default)]
-    allow_unix_sockets: Option<Vec<String>>,
-    #[serde(default)]
-    allow_local_binding: Option<bool>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -160,49 +135,9 @@ fn network_proxy_constraints_from_trusted_layers(
 
         if let Some(network) = partial.network.as_ref() {
             apply_network_constraints(&mut constraints, network);
-        } else {
-            apply_legacy_constraints(&mut constraints, &partial.network_proxy);
         }
     }
     Ok(constraints)
-}
-
-fn apply_legacy_constraints(
-    constraints: &mut NetworkProxyConstraints,
-    legacy: &PartialNetworkProxyConfig,
-) {
-    if let Some(enabled) = legacy.enabled {
-        constraints.enabled = Some(enabled);
-    }
-    if let Some(mode) = legacy.mode {
-        constraints.mode = Some(mode);
-    }
-    if let Some(allow_upstream_proxy) = legacy.allow_upstream_proxy {
-        constraints.allow_upstream_proxy = Some(allow_upstream_proxy);
-    }
-    if let Some(dangerously_allow_non_loopback_proxy) = legacy.dangerously_allow_non_loopback_proxy
-    {
-        constraints.dangerously_allow_non_loopback_proxy =
-            Some(dangerously_allow_non_loopback_proxy);
-    }
-    if let Some(dangerously_allow_non_loopback_admin) = legacy.dangerously_allow_non_loopback_admin
-    {
-        constraints.dangerously_allow_non_loopback_admin =
-            Some(dangerously_allow_non_loopback_admin);
-    }
-
-    if let Some(allowed_domains) = legacy.policy.allowed_domains.clone() {
-        constraints.allowed_domains = Some(allowed_domains);
-    }
-    if let Some(denied_domains) = legacy.policy.denied_domains.clone() {
-        constraints.denied_domains = Some(denied_domains);
-    }
-    if let Some(allow_unix_sockets) = legacy.policy.allow_unix_sockets.clone() {
-        constraints.allow_unix_sockets = Some(allow_unix_sockets);
-    }
-    if let Some(allow_local_binding) = legacy.policy.allow_local_binding {
-        constraints.allow_local_binding = Some(allow_local_binding);
-    }
 }
 
 fn apply_network_constraints(

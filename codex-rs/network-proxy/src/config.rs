@@ -14,7 +14,7 @@ pub struct NetworkProxyConfig {
     pub network_proxy: NetworkProxySettings,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NetworkProxySettings {
     #[serde(default)]
     pub enabled: bool,
@@ -58,7 +58,7 @@ impl Default for NetworkProxySettings {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct NetworkPolicy {
     #[serde(default)]
     pub allowed_domains: Vec<String>,
@@ -95,8 +95,6 @@ pub struct NetworkPolicyTable {
 struct RawNetworkProxyConfig {
     #[serde(default)]
     network: Option<NetworkConfigTable>,
-    #[serde(default)]
-    network_proxy: NetworkProxySettings,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -133,6 +131,11 @@ fn default_socks_url() -> String {
 }
 
 pub fn deserialize_network_proxy_config(value: toml::Value) -> Result<NetworkProxyConfig> {
+    if let toml::Value::Table(table) = &value
+        && table.contains_key("network_proxy")
+    {
+        warn!("`[network_proxy]` is ignored; use `[network]` instead");
+    }
     let parsed: RawNetworkProxyConfig = value
         .try_into()
         .context("failed to deserialize network proxy config")?;
@@ -141,7 +144,7 @@ pub fn deserialize_network_proxy_config(value: toml::Value) -> Result<NetworkPro
         .network
         .as_ref()
         .map(resolve_network_table)
-        .unwrap_or(parsed.network_proxy);
+        .unwrap_or_default();
 
     Ok(NetworkProxyConfig { network_proxy })
 }
@@ -588,7 +591,7 @@ allowed_domains = ["example.com"]
     }
 
     #[test]
-    fn deserialize_network_proxy_config_falls_back_to_legacy_network_proxy() {
+    fn deserialize_network_proxy_config_ignores_legacy_network_proxy() {
         let value: toml::Value = toml::from_str(
             r#"
 [network_proxy]
@@ -601,9 +604,7 @@ proxy_url = "http://127.0.0.1:3328"
 
         let parsed = deserialize_network_proxy_config(value).expect("deserialize config");
 
-        assert!(parsed.network_proxy.enabled);
-        assert_eq!(parsed.network_proxy.mode, NetworkMode::Limited);
-        assert_eq!(parsed.network_proxy.proxy_url, "http://127.0.0.1:3328");
+        assert_eq!(parsed.network_proxy, NetworkProxySettings::default());
     }
 
     #[test]
