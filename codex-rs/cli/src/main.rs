@@ -33,6 +33,7 @@ use supports_color::Stream;
 
 mod app_cmd;
 mod mcp_cmd;
+mod upgrades_os;
 #[cfg(not(windows))]
 mod wsl_paths;
 
