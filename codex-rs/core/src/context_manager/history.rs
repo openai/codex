@@ -356,10 +356,7 @@ fn estimate_item_token_count(item: &ResponseItem) -> i64 {
 pub(crate) fn is_codex_generated_item(item: &ResponseItem) -> bool {
     matches!(
         item,
-        ResponseItem::FunctionCallOutput { .. }
-            | ResponseItem::CustomToolCall { .. }
-            | ResponseItem::CustomToolCallOutput { .. }
-            | ResponseItem::LocalShellCall { .. }
+        ResponseItem::FunctionCallOutput { .. } | ResponseItem::CustomToolCallOutput { .. }
     ) || matches!(item, ResponseItem::Message { role, .. } if role == "developer")
 }
 
