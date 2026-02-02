@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "includeToken": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "refreshToken": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    }
+  },
+  "title": "GetAuthStatusParams",
+  "type": "object"
+}
