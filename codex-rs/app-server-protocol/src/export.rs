@@ -296,6 +296,7 @@ fn filter_experimental_fields_in_ts_file(
     let prefix = &content[..open_brace + 1];
     let suffix = &content[close_brace..];
     content = format!("{prefix}{new_inner}{suffix}");
+    content = prune_unused_type_imports(content, &new_inner);
     fs::write(path, content).with_context(|| format!("Failed to write {}", path.display()))?;
     Ok(())
 }
