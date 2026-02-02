@@ -49,6 +49,34 @@ Run `codex` and select **Sign in with ChatGPT**. We recommend signing into your 
 
 You can also use Codex with an API key, but this requires [additional setup](https://developers.openai.com/codex/auth#sign-in-with-an-api-key).
 
+## Troubleshooting
+
+<details>
+<summary><strong>macOS: Network calls fail even with <code>network_access = true</code></strong></summary>
+
+On macOS, the seatbelt sandbox unconditionally blocks outbound network access regardless of your `config.toml` settings. Commands that require network (cloud CLIs, curl, API clients, package managers) will fail with connection timeouts.
+
+**Symptoms:**
+- `CODEX_SANDBOX_NETWORK_DISABLED=1` is set in the sandbox environment
+- `network_access = true` under `[sandbox_workspace_write]` in `~/.codex/config.toml` has no effect
+- Network commands time out or report host unreachable
+
+**Workaround — use the CLI flag:**
+
+```shell
+codex --sandbox danger-full-access "your prompt"
+```
+
+Or add a persistent alias to your shell profile (`~/.zshrc` / `~/.bashrc`):
+
+```shell
+alias codex='CODEX_SANDBOX_NETWORK_DISABLED=0 codex --sandbox danger-full-access'
+```
+
+> **Note:** `--sandbox danger-full-access` disables all sandbox restrictions. Only use this in environments you trust. See [#10390](https://github.com/openai/codex/issues/10390) for details and a proposed fix.
+
+</details>
+
 ## Docs
 
 - [**Codex Documentation**](https://developers.openai.com/codex)
