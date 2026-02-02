@@ -3316,7 +3316,11 @@ mod handlers {
             .saturating_sub(num_turns as usize);
         updated_turn_context_history.truncate(truncated_len);
         if updated_turn_context_history.len() < user_turns {
-            updated_turn_context_history.resize_with(user_turns, || None);
+            let padding = user_turns - updated_turn_context_history.len();
+            let mut new_history = Vec::with_capacity(user_turns);
+            new_history.resize_with(padding, || None);
+            new_history.append(&mut updated_turn_context_history);
+            updated_turn_context_history = new_history;
         }
         state.set_turn_context_history(updated_turn_context_history);
 
@@ -5238,6 +5242,76 @@ mod tests {
         let response_item2: ResponseItem = ResponseInputItem::from(input2.clone()).into();
         sess.record_user_prompt_and_emit_turn_item(tc.as_ref(), &input2, response_item2)
             .await;
+
+        handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+        let rollback_event = wait_for_thread_rolled_back(&rx).await;
+        assert_eq!(rollback_event.num_turns, 1);
+        assert_eq!(
+            rollback_event.model_visible_state,
+            Some(ModelVisibleState {
+                collaboration_mode: Some(plan_mode.clone()),
+            })
+        );
+
+        let current_mode = sess.current_collaboration_mode().await;
+        assert_eq!(current_mode.mode, ModeKind::Plan);
+
+        let pending_model_visible_state_sync = {
+            let mut state = sess.state.lock().await;
+            state.take_pending_model_visible_state_sync(true)
+        };
+        assert_eq!(
+            pending_model_visible_state_sync,
+            PendingModelVisibleStateSync::Snapshot(ModelVisibleState {
+                collaboration_mode: Some(plan_mode),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn thread_rollback_left_pads_turn_context_history() {
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
+
+        let initial_context = sess.build_initial_context(tc.as_ref()).await;
+        sess.record_into_history(&initial_context, tc.as_ref())
+            .await;
+
+        let base_mode = sess.current_collaboration_mode().await;
+        let plan_mode = CollaborationMode {
+            mode: ModeKind::Plan,
+            settings: base_mode.settings.clone(),
+        };
+        let code_mode = CollaborationMode {
+            mode: ModeKind::Code,
+            settings: base_mode.settings.clone(),
+        };
+
+        for (idx, collaboration_mode) in
+            [base_mode.clone(), base_mode, plan_mode.clone(), code_mode]
+                .into_iter()
+                .enumerate()
+        {
+            {
+                let mut state = sess.state.lock().await;
+                state.session_configuration.collaboration_mode = collaboration_mode;
+            }
+            let input = vec![UserInput::Text {
+                text: format!("turn {}", idx + 1),
+                text_elements: Vec::new(),
+            }];
+            let response_item: ResponseItem = ResponseInputItem::from(input.clone()).into();
+            sess.record_user_prompt_and_emit_turn_item(tc.as_ref(), &input, response_item)
+                .await;
+        }
+
+        {
+            let mut state = sess.state.lock().await;
+            let existing = state.turn_context_history.len();
+            let trimmed = state
+                .turn_context_history
+                .split_off(existing.saturating_sub(2));
+            state.set_turn_context_history(trimmed);
+        }
 
         handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
         let rollback_event = wait_for_thread_rolled_back(&rx).await;
