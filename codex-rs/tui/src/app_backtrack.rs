@@ -28,6 +28,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::app::App;
+use crate::app_event::AppServerAction;
 use crate::history_cell::SessionInfoCell;
 use crate::history_cell::UserHistoryCell;
 use crate::pager_overlay::Overlay;
@@ -36,7 +37,6 @@ use crate::tui::TuiEvent;
 use codex_core::protocol::CodexErrorInfo;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
 use codex_protocol::ThreadId;
 use codex_protocol::user_input::TextElement;
 use color_eyre::eyre::Result;
@@ -210,7 +210,8 @@ impl App {
             selection,
             thread_id: self.chat_widget.thread_id(),
         });
-        self.chat_widget.submit_op(Op::ThreadRollback { num_turns });
+        self.chat_widget
+            .submit_action(AppServerAction::ThreadRollback { num_turns });
         if !prefill.is_empty() || !text_elements.is_empty() || !local_image_paths.is_empty() {
             self.chat_widget
                 .set_composer_text(prefill, text_elements, local_image_paths);

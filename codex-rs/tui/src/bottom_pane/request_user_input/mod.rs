@@ -18,6 +18,7 @@ mod layout;
 mod render;
 
 use crate::app_event::AppEvent;
+use crate::app_event::AppServerAction;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::ChatComposer;
@@ -29,7 +30,6 @@ use crate::bottom_pane::selection_popup_common::GenericDisplayRow;
 use crate::bottom_pane::selection_popup_common::measure_rows_height;
 use crate::render::renderable::Renderable;
 
-use codex_core::protocol::Op;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::request_user_input::RequestUserInputResponse;
@@ -719,11 +719,12 @@ impl RequestUserInputOverlay {
                 },
             );
         }
-        self.app_event_tx
-            .send(AppEvent::CodexOp(Op::UserInputAnswer {
-                id: self.request.turn_id.clone(),
+        self.app_event_tx.send(AppEvent::AppServerAction(
+            AppServerAction::UserInputAnswer {
+                call_id: self.request.call_id.clone(),
                 response: RequestUserInputResponse { answers },
-            }));
+            },
+        ));
         if let Some(next) = self.queue.pop_front() {
             self.request = next;
             self.reset_for_request();
@@ -966,7 +967,8 @@ impl BottomPaneView for RequestUserInputOverlay {
         }
 
         if matches!(key_event.code, KeyCode::Esc) {
-            self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
+            self.app_event_tx
+                .send(AppEvent::AppServerAction(AppServerAction::Interrupt));
             self.done = true;
             return;
         }
@@ -1173,7 +1175,8 @@ impl BottomPaneView for RequestUserInputOverlay {
     fn on_ctrl_c(&mut self) -> CancellationEvent {
         if self.confirm_unanswered_active() {
             self.close_unanswered_confirmation();
-            self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
+            self.app_event_tx
+                .send(AppEvent::AppServerAction(AppServerAction::Interrupt));
             self.done = true;
             return CancellationEvent::Handled;
         }
@@ -1182,7 +1185,8 @@ impl BottomPaneView for RequestUserInputOverlay {
             return CancellationEvent::Handled;
         }
 
-        self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
+        self.app_event_tx
+            .send(AppEvent::AppServerAction(AppServerAction::Interrupt));
         self.done = true;
         CancellationEvent::Handled
     }
@@ -1403,10 +1407,12 @@ mod tests {
         overlay.submit_answers();
 
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(Op::UserInputAnswer { id, response }) = event else {
+        let AppEvent::AppServerAction(AppServerAction::UserInputAnswer { call_id, response }) =
+            event
+        else {
             panic!("expected UserInputAnswer");
         };
-        assert_eq!(id, "turn-1");
+        assert_eq!(call_id, "call-1");
         let answer = response.answers.get("q1").expect("answer missing");
         assert_eq!(answer.answers, Vec::<String>::new());
     }
@@ -1425,7 +1431,8 @@ mod tests {
         overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+        let AppEvent::AppServerAction(AppServerAction::UserInputAnswer { response, .. }) = event
+        else {
             panic!("expected UserInputAnswer");
         };
         let answer = response.answers.get("q1").expect("answer missing");
@@ -1458,7 +1465,8 @@ mod tests {
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+        let AppEvent::AppServerAction(AppServerAction::UserInputAnswer { response, .. }) = event
+        else {
             panic!("expected UserInputAnswer");
         };
         let answer = response.answers.get("q1").expect("answer missing");
@@ -1479,7 +1487,8 @@ mod tests {
         overlay.handle_key_event(KeyEvent::from(KeyCode::Char('2')));
 
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+        let AppEvent::AppServerAction(AppServerAction::UserInputAnswer { response, .. }) = event
+        else {
             panic!("expected UserInputAnswer");
         };
         let answer = response.answers.get("q1").expect("answer missing");
@@ -1634,7 +1643,8 @@ mod tests {
         overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+        let AppEvent::AppServerAction(AppServerAction::UserInputAnswer { response, .. }) = event
+        else {
             panic!("expected UserInputAnswer");
         };
         let answer = response.answers.get("q1").expect("answer missing");
@@ -1658,10 +1668,10 @@ mod tests {
 
         assert_eq!(overlay.done, true);
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(op) = event else {
-            panic!("expected CodexOp");
+        let AppEvent::AppServerAction(action) = event else {
+            panic!("expected AppServerAction");
         };
-        assert_eq!(op, Op::Interrupt);
+        assert_eq!(action, AppServerAction::Interrupt);
     }
 
     #[test]
@@ -1679,10 +1689,10 @@ mod tests {
 
         assert_eq!(overlay.done, true);
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(op) = event else {
-            panic!("expected CodexOp");
+        let AppEvent::AppServerAction(action) = event else {
+            panic!("expected AppServerAction");
         };
-        assert_eq!(op, Op::Interrupt);
+        assert_eq!(action, AppServerAction::Interrupt);
     }
 
     #[test]
@@ -1703,10 +1713,10 @@ mod tests {
 
         assert_eq!(overlay.done, true);
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(op) = event else {
-            panic!("expected CodexOp");
+        let AppEvent::AppServerAction(action) = event else {
+            panic!("expected AppServerAction");
         };
-        assert_eq!(op, Op::Interrupt);
+        assert_eq!(action, AppServerAction::Interrupt);
     }
 
     #[test]
@@ -1728,10 +1738,10 @@ mod tests {
 
         assert_eq!(overlay.done, true);
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(op) = event else {
-            panic!("expected CodexOp");
+        let AppEvent::AppServerAction(action) = event else {
+            panic!("expected AppServerAction");
         };
-        assert_eq!(op, Op::Interrupt);
+        assert_eq!(action, AppServerAction::Interrupt);
     }
 
     #[test]
@@ -1906,7 +1916,8 @@ mod tests {
         overlay.submit_answers();
 
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+        let AppEvent::AppServerAction(AppServerAction::UserInputAnswer { response, .. }) = event
+        else {
             panic!("expected UserInputAnswer");
         };
         let answer = response.answers.get("q1").expect("answer missing");
@@ -1931,7 +1942,8 @@ mod tests {
         overlay.submit_answers();
 
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+        let AppEvent::AppServerAction(AppServerAction::UserInputAnswer { response, .. }) = event
+        else {
             panic!("expected UserInputAnswer");
         };
         let answer = response.answers.get("q1").expect("answer missing");
@@ -1973,7 +1985,8 @@ mod tests {
         overlay.submit_answers();
 
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+        let AppEvent::AppServerAction(AppServerAction::UserInputAnswer { response, .. }) = event
+        else {
             panic!("expected UserInputAnswer");
         };
         let answer = response.answers.get("q1").expect("answer missing");
@@ -2009,7 +2022,8 @@ mod tests {
         overlay.submit_answers();
 
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+        let AppEvent::AppServerAction(AppServerAction::UserInputAnswer { response, .. }) = event
+        else {
             panic!("expected UserInputAnswer");
         };
         let answer = response.answers.get("q1").expect("answer missing");
@@ -2094,7 +2108,8 @@ mod tests {
         overlay.submit_answers();
 
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+        let AppEvent::AppServerAction(AppServerAction::UserInputAnswer { response, .. }) = event
+        else {
             panic!("expected UserInputAnswer");
         };
         let answer = response.answers.get("q1").expect("answer missing");

@@ -58,6 +58,7 @@ mod app;
 mod app_backtrack;
 mod app_event;
 mod app_event_sender;
+mod app_server_client;
 mod ascii_animation;
 mod bottom_pane;
 mod chatwidget;
