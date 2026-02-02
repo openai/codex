@@ -26,7 +26,6 @@ use core_test_support::skip_if_no_network;
 use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
-use mcp_types::ContentBlock;
 use serde_json::Value;
 use serde_json::json;
 use serial_test::serial;
@@ -307,14 +306,10 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
     let base64_only = OPENAI_PNG
         .strip_prefix("data:image/png;base64,")
         .expect("data url prefix");
-    match &result.content[0] {
-        ContentBlock::ImageContent(img) => {
-            assert_eq!(img.mime_type, "image/png");
-            assert_eq!(img.r#type, "image");
-            assert_eq!(img.data, base64_only);
-        }
-        other => panic!("expected image content, got {other:?}"),
-    }
+    let entry = result.content[0].as_object().expect("content object");
+    assert_eq!(entry.get("type"), Some(&json!("image")));
+    assert_eq!(entry.get("mimeType"), Some(&json!("image/png")));
+    assert_eq!(entry.get("data"), Some(&json!(base64_only)));
 
     wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
