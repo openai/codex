@@ -788,6 +788,8 @@ At runtime, clients must send `initialize` with `capabilities.experimentalApi = 
 
    ```bash
    just write-app-server-schema
+   # Include experimental API fields/methods in fixtures.
+   just write-app-server-schema --experimental
    ```
     
 5. Verify the protocol crate:

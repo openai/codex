@@ -3036,14 +3036,14 @@ async fn experimental_features_toggle_saves_on_exit() {
     );
     chat.bottom_pane.show_view(Box::new(view));
 
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
 
     assert!(
         rx.try_recv().is_err(),
-        "expected no updates until exiting the popup"
+        "expected no updates until saving the popup"
     );
 
-    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     let mut updates = None;
     while let Ok(event) = rx.try_recv() {
