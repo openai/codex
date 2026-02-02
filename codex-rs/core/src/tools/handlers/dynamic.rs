@@ -57,7 +57,7 @@ impl ToolHandler for DynamicToolHandler {
 
         Ok(ToolOutput::Function {
             content: response.output,
-            content_items: None,
+            content_items: response.content_items,
             success: Some(response.success),
         })
     }

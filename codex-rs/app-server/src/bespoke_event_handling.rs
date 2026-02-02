@@ -354,6 +354,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                             call_id,
                             output: "dynamic tool calls require api v2".to_string(),
                             success: false,
+                            content_items: None,
                         },
                     })
                     .await;

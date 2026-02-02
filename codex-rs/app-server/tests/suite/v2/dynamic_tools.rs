@@ -15,6 +15,8 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::models::FunctionCallOutputPayload;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -200,8 +202,9 @@ async fn dynamic_tool_call_round_trip_sends_output_to_model() -> Result<()> {
 
     // Respond to the tool call so the model receives a function_call_output.
     let response = DynamicToolCallResponse {
-        output: "dynamic-ok".to_string(),
+        output: Some("dynamic-ok".to_string()),
         success: true,
+        content_items: None,
     };
     mcp.send_response(request_id, serde_json::to_value(response)?)
         .await?;
@@ -213,11 +216,139 @@ async fn dynamic_tool_call_round_trip_sends_output_to_model() -> Result<()> {
     .await??;
 
     let bodies = responses_bodies(&server).await?;
-    let output = bodies
+    let payload = bodies
         .iter()
-        .find_map(|body| function_call_output_text(body, call_id))
+        .find_map(|body| function_call_output_payload(body, call_id))
         .context("expected function_call_output in follow-up request")?;
-    assert_eq!(output, "dynamic-ok");
+    let expected_payload = FunctionCallOutputPayload {
+        content: "dynamic-ok".to_string(),
+        content_items: None,
+        success: None,
+    };
+    assert_eq!(payload, expected_payload);
+
+    Ok(())
+}
+
+/// Ensures dynamic tool call responses can include structured content items.
+#[tokio::test]
+async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<()> {
+    let call_id = "dyn-call-items-1";
+    let tool_name = "demo_tool";
+    let tool_args = json!({ "city": "Paris" });
+    let tool_call_arguments = serde_json::to_string(&tool_args)?;
+
+    let responses = vec![
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_function_call(call_id, tool_name, &tool_call_arguments),
+            responses::ev_completed("resp-1"),
+        ]),
+        create_final_assistant_message_sse_response("Done")?,
+    ];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let dynamic_tool = DynamicToolSpec {
+        name: tool_name.to_string(),
+        description: "Demo dynamic tool".to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "city": { "type": "string" }
+            },
+            "required": ["city"],
+            "additionalProperties": false,
+        }),
+    };
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            dynamic_tools: Some(vec![dynamic_tool]),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Run the tool".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+
+    let request = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_request_message(),
+    )
+    .await??;
+    let (request_id, params) = match request {
+        ServerRequest::DynamicToolCall { request_id, params } => (request_id, params),
+        other => panic!("expected DynamicToolCall request, got {other:?}"),
+    };
+
+    let expected = DynamicToolCallParams {
+        thread_id: thread.id,
+        turn_id: turn.id,
+        call_id: call_id.to_string(),
+        tool: tool_name.to_string(),
+        arguments: tool_args,
+    };
+    assert_eq!(params, expected);
+
+    let content_items = vec![
+        FunctionCallOutputContentItem::InputText {
+            text: "dynamic-ok".to_string(),
+        },
+        FunctionCallOutputContentItem::InputImage {
+            image_url: "data:image/png;base64,AAA".to_string(),
+        },
+    ];
+    let response = DynamicToolCallResponse {
+        output: None,
+        success: true,
+        content_items: Some(content_items.clone()),
+    };
+    mcp.send_response(request_id, serde_json::to_value(response)?)
+        .await?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let bodies = responses_bodies(&server).await?;
+    let payload = bodies
+        .iter()
+        .find_map(|body| function_call_output_payload(body, call_id))
+        .context("expected function_call_output in follow-up request")?;
+    let expected_payload = FunctionCallOutputPayload {
+        content: serde_json::to_string(&content_items)?,
+        content_items: Some(content_items),
+        success: None,
+    };
+    assert_eq!(payload, expected_payload);
 
     Ok(())
 }
@@ -248,7 +379,7 @@ fn find_tool<'a>(body: &'a Value, name: &str) -> Option<&'a Value> {
         })
 }
 
-fn function_call_output_text(body: &Value, call_id: &str) -> Option<String> {
+fn function_call_output_payload(body: &Value, call_id: &str) -> Option<FunctionCallOutputPayload> {
     body.get("input")
         .and_then(Value::as_array)
         .and_then(|items| {
@@ -258,8 +389,8 @@ fn function_call_output_text(body: &Value, call_id: &str) -> Option<String> {
             })
         })
         .and_then(|item| item.get("output"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
+        .cloned()
+        .and_then(|output| serde_json::from_value(output).ok())
 }
 
 fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {

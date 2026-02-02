@@ -4,6 +4,8 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use ts_rs::TS;
 
+use crate::models::FunctionCallOutputContentItem;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DynamicToolSpec {
@@ -27,4 +29,7 @@ pub struct DynamicToolResponse {
     pub call_id: String,
     pub output: String,
     pub success: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub content_items: Option<Vec<FunctionCallOutputContentItem>>,
 }
