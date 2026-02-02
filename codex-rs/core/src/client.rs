@@ -111,8 +111,6 @@ pub struct ModelClientSession {
     /// keep sending it unchanged between turn requests (e.g., for retries, incremental
     /// appends, or continuation requests), and must not send it between different turns.
     turn_state: Arc<OnceLock<String>>,
-    /// Turn-scoped metadata attached to every request in the turn.
-    turn_metadata_header: Option<HeaderValue>,
     /// Working directory used to lazily compute turn metadata at send time.
     turn_metadata_cwd: Option<PathBuf>,
 }
@@ -149,18 +147,15 @@ impl ModelClient {
 
     pub fn new_session(
         &self,
-        turn_metadata_header: Option<String>,
+        _turn_metadata_header: Option<String>,
         turn_metadata_cwd: Option<PathBuf>,
     ) -> ModelClientSession {
-        let turn_metadata_header =
-            turn_metadata_header.and_then(|value| HeaderValue::from_str(&value).ok());
         ModelClientSession {
             state: Arc::clone(&self.state),
             connection: None,
             websocket_last_items: Vec::new(),
             transport_manager: self.state.transport_manager.clone(),
             turn_state: Arc::new(OnceLock::new()),
-            turn_metadata_header,
             turn_metadata_cwd,
         }
     }
@@ -272,19 +267,14 @@ impl ModelClient {
 }
 
 impl ModelClientSession {
-    async fn ensure_turn_metadata_header(&mut self) {
-        if self.turn_metadata_header.is_some() {
-            return;
-        }
+    async fn turn_metadata_header(&self) -> Option<HeaderValue> {
         let Some(cwd) = self.turn_metadata_cwd.as_deref() else {
-            return;
+            return None;
         };
         let Some(value) = build_turn_metadata_header(cwd).await else {
-            return;
+            return None;
         };
-        if let Ok(header_value) = HeaderValue::from_str(value.as_str()) {
-            self.turn_metadata_header = Some(header_value);
-        }
+        HeaderValue::from_str(value.as_str()).ok()
     }
 
     /// Streams a single model turn using either the Responses or Chat
@@ -294,9 +284,6 @@ impl ModelClientSession {
     /// based on the `show_raw_agent_reasoning` flag in the config.
     pub async fn stream(&mut self, prompt: &Prompt) -> Result<ResponseStream> {
         let wire_api = self.state.provider.wire_api;
-        if matches!(wire_api, WireApi::Responses) {
-            self.ensure_turn_metadata_header().await;
-        }
         match wire_api {
             WireApi::Responses => {
                 let websocket_enabled = self.responses_websocket_enabled()
@@ -360,11 +347,12 @@ impl ModelClientSession {
         Ok(build_api_prompt(prompt, instructions, tools_json))
     }
 
-    fn build_responses_options(
+    async fn build_responses_options(
         &self,
         prompt: &Prompt,
         compression: Compression,
     ) -> ApiResponsesOptions {
+        let turn_metadata_header = self.turn_metadata_header().await;
         let model_info = &self.state.model_info;
 
         let default_reasoning_effort = model_info.default_reasoning_level;
@@ -416,7 +404,7 @@ impl ModelClientSession {
             extra_headers: build_responses_headers(
                 &self.state.config,
                 Some(&self.turn_state),
-                self.turn_metadata_header.as_ref(),
+                turn_metadata_header.as_ref(),
             ),
             compression,
             turn_state: Some(Arc::clone(&self.turn_state)),
@@ -617,7 +605,7 @@ impl ModelClientSession {
             let client = ApiResponsesClient::new(transport, api_provider, api_auth)
                 .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
 
-            let options = self.build_responses_options(prompt, compression);
+            let options = self.build_responses_options(prompt, compression).await;
 
             let stream_result = client
                 .stream_prompt(&self.state.model_info.slug, &api_prompt, options)
@@ -658,7 +646,7 @@ impl ModelClientSession {
             let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
             let compression = self.responses_request_compression(auth.as_ref());
 
-            let options = self.build_responses_options(prompt, compression);
+            let options = self.build_responses_options(prompt, compression).await;
             let request = self.prepare_websocket_request(&api_prompt, &options);
 
             let connection = match self
