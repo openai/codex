@@ -5524,8 +5524,13 @@ impl ChatWidget {
         let Some(collaboration_mode) = state.collaboration_mode.clone() else {
             return;
         };
-        self.current_collaboration_mode = collaboration_mode.clone();
-        if self.collaboration_modes_enabled() {
+        if collaboration_mode.mode == ModeKind::Custom {
+            self.current_collaboration_mode = collaboration_mode;
+            if self.collaboration_modes_enabled() {
+                self.active_collaboration_mask = None;
+                self.update_collaboration_mode_indicator();
+            }
+        } else if self.collaboration_modes_enabled() {
             self.active_collaboration_mask = self.collaboration_mask_from_mode(&collaboration_mode);
             self.update_collaboration_mode_indicator();
         }
