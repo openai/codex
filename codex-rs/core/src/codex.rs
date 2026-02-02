@@ -193,6 +193,7 @@ use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::js_repl::JsReplHandle;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::tools::spec::ToolsConfig;
@@ -477,6 +478,7 @@ pub(crate) struct Session {
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) services: SessionServices,
+    js_repl: Arc<JsReplHandle>,
     next_internal_sub_id: AtomicU64,
 }
 
@@ -513,6 +515,7 @@ pub(crate) struct TurnContext {
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
     pub(crate) truncation_policy: TruncationPolicy,
+    pub(crate) js_repl: Arc<JsReplHandle>,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     turn_metadata_header: OnceCell<Option<String>>,
 }
@@ -710,6 +713,7 @@ impl Session {
         conversation_id: ThreadId,
         sub_id: String,
         transport_manager: TransportManager,
+        js_repl: Arc<JsReplHandle>,
     ) -> TurnContext {
         let reasoning_effort = session_configuration.collaboration_mode.reasoning_effort();
         let reasoning_summary = session_configuration.model_reasoning_summary;
@@ -771,6 +775,7 @@ impl Session {
             codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
             truncation_policy: model_info.truncation_policy.into(),
+            js_repl,
             dynamic_tools: session_configuration.dynamic_tools.clone(),
             turn_metadata_header: OnceCell::new(),
         }
@@ -991,6 +996,10 @@ impl Session {
             state_db: state_db_ctx.clone(),
             transport_manager: TransportManager::new(),
         };
+        let js_repl = Arc::new(JsReplHandle::with_node_path(
+            config.js_repl_node_path.clone(),
+            config.codex_home.clone(),
+        ));
 
         let sess = Arc::new(Session {
             conversation_id,
@@ -1001,6 +1010,7 @@ impl Session {
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
             services,
+            js_repl,
             next_internal_sub_id: AtomicU64::new(0),
         });
 
@@ -1316,6 +1326,7 @@ impl Session {
             self.conversation_id,
             sub_id,
             self.services.transport_manager.clone(),
+            Arc::clone(&self.js_repl),
         );
 
         if let Some(final_schema) = final_output_json_schema {
@@ -3357,6 +3368,7 @@ async fn spawn_review_thread(
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),
+        js_repl: Arc::clone(&sess.js_repl),
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         truncation_policy: model_info.truncation_policy.into(),
         turn_metadata_header: parent_turn_context.turn_metadata_header.clone(),
@@ -5534,6 +5546,10 @@ mod tests {
             state_db: None,
             transport_manager: TransportManager::new(),
         };
+        let js_repl = Arc::new(JsReplHandle::with_node_path(
+            config.js_repl_node_path.clone(),
+            config.codex_home.clone(),
+        ));
 
         let turn_context = Session::make_turn_context(
             Some(Arc::clone(&auth_manager)),
@@ -5545,6 +5561,7 @@ mod tests {
             conversation_id,
             "turn_id".to_string(),
             services.transport_manager.clone(),
+            Arc::clone(&js_repl),
         );
 
         let session = Session {
@@ -5556,6 +5573,7 @@ mod tests {
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
             services,
+            js_repl,
             next_internal_sub_id: AtomicU64::new(0),
         };
 
@@ -5654,6 +5672,10 @@ mod tests {
             state_db: None,
             transport_manager: TransportManager::new(),
         };
+        let js_repl = Arc::new(JsReplHandle::with_node_path(
+            config.js_repl_node_path.clone(),
+            config.codex_home.clone(),
+        ));
 
         let turn_context = Arc::new(Session::make_turn_context(
             Some(Arc::clone(&auth_manager)),
@@ -5665,6 +5687,7 @@ mod tests {
             conversation_id,
             "turn_id".to_string(),
             services.transport_manager.clone(),
+            Arc::clone(&js_repl),
         ));
 
         let session = Arc::new(Session {
@@ -5676,6 +5699,7 @@ mod tests {
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
             services,
+            js_repl,
             next_internal_sub_id: AtomicU64::new(0),
         });
 

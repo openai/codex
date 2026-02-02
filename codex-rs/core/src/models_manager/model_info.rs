@@ -33,6 +33,8 @@ const GPT_5_2_CODEX_PERSONALITY_FRIENDLY: &str =
     include_str!("../../templates/personalities/gpt-5.2-codex_friendly.md");
 const GPT_5_2_CODEX_PERSONALITY_PRAGMATIC: &str =
     include_str!("../../templates/personalities/gpt-5.2-codex_pragmatic.md");
+const JS_REPL_SECTION_START: &str = "<!-- js_repl:start -->";
+const JS_REPL_SECTION_END: &str = "<!-- js_repl:end -->";
 
 pub(crate) const CONTEXT_WINDOW_272K: i64 = 272_000;
 
@@ -107,8 +109,40 @@ pub(crate) fn with_config_overrides(mut model: ModelInfo, config: &Config) -> Mo
     } else if !config.features.enabled(Feature::Personality) {
         model.model_messages = None;
     }
+    model.base_instructions = apply_js_repl_section(
+        &model.base_instructions,
+        config.features.enabled(Feature::JsRepl),
+    );
 
     model
+}
+
+pub(crate) fn apply_js_repl_section(input: &str, enabled: bool) -> String {
+    apply_section(input, JS_REPL_SECTION_START, JS_REPL_SECTION_END, enabled)
+}
+
+fn apply_section(input: &str, start_marker: &str, end_marker: &str, enabled: bool) -> String {
+    let Some(start) = input.find(start_marker) else {
+        return input.to_string();
+    };
+    let Some(end) = input.find(end_marker) else {
+        return input.to_string();
+    };
+    if end <= start {
+        return input.to_string();
+    }
+    let before = &input[..start];
+    let section_start = start + start_marker.len();
+    let after_start = end + end_marker.len();
+    let section = &input[section_start..end];
+    let after = &input[after_start..];
+    let mut result = String::with_capacity(before.len() + section.len() + after.len());
+    result.push_str(before);
+    if enabled {
+        result.push_str(section);
+    }
+    result.push_str(after);
+    result
 }
 
 // todo(aibrahim): remove most of the entries here when enabling models.json

@@ -78,6 +78,8 @@ pub enum Feature {
     ShellTool,
 
     // Experimental
+    /// Enable JavaScript REPL tools backed by a persistent Node kernel.
+    JsRepl,
     /// Use the single unified PTY-backed exec tool.
     UnifiedExec,
     /// Include the freeform apply_patch tool.
@@ -411,6 +413,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "unified_exec",
         stage: Stage::Stable,
         default_enabled: !cfg!(windows),
+    },
+    FeatureSpec {
+        id: Feature::JsRepl,
+        key: "js_repl",
+        stage: Stage::Experimental {
+            name: "JavaScript REPL",
+            menu_description: "Run JavaScript cells with a persistent Node-backed kernel.",
+            announcement: "NEW! Try the JavaScript REPL for persistent JS execution. Enable in /experimental!",
+        },
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::WebSearchRequest,
