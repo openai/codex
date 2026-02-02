@@ -16,10 +16,14 @@ pub async fn run_mac_app_open_or_install(
         open_codex_app(&app_path, &workspace).await?;
         return Ok(());
     }
-
+    eprintln!("Codex Desktop not found; downloading installer...");
     let installed_app = download_and_install_codex_to_user_applications(&download_url)
         .await
         .context("failed to download/install Codex Desktop")?;
+    eprintln!(
+        "Launching Codex Desktop from {installed_app}...",
+        installed_app = installed_app.display()
+    );
     open_codex_app(&installed_app, &workspace).await?;
     Ok(())
 }
