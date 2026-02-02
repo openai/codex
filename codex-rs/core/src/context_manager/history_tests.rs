@@ -57,6 +57,23 @@ fn user_input_text_msg(text: &str) -> ResponseItem {
     }
 }
 
+fn function_call_output(call_id: &str, content: &str) -> ResponseItem {
+    ResponseItem::FunctionCallOutput {
+        call_id: call_id.to_string(),
+        output: FunctionCallOutputPayload {
+            content: content.to_string(),
+            ..Default::default()
+        },
+    }
+}
+
+fn custom_tool_call_output(call_id: &str, output: &str) -> ResponseItem {
+    ResponseItem::CustomToolCallOutput {
+        call_id: call_id.to_string(),
+        output: output.to_string(),
+    }
+}
+
 fn reasoning_msg(text: &str) -> ResponseItem {
     ResponseItem::Reasoning {
         id: String::new(),
@@ -163,6 +180,63 @@ fn non_last_reasoning_tokens_ignore_entries_after_last_user() {
 }
 
 #[test]
+fn trailing_codex_generated_tokens_stop_at_first_non_generated_item() {
+    let earlier_output = function_call_output("call-earlier", "earlier output");
+    let trailing_function_output = function_call_output("call-tail-1", "tail function output");
+    let trailing_custom_output = custom_tool_call_output("call-tail-2", "tail custom output");
+    let history = create_history_with_items(vec![
+        earlier_output,
+        user_msg("boundary item"),
+        trailing_function_output.clone(),
+        trailing_custom_output.clone(),
+    ]);
+    let expected_tokens = estimate_item_token_count(&trailing_function_output)
+        .saturating_add(estimate_item_token_count(&trailing_custom_output));
+
+    assert_eq!(
+        history.get_trailing_codex_generated_items_tokens(),
+        expected_tokens
+    );
+}
+
+#[test]
+fn trailing_codex_generated_tokens_exclude_function_call_tail() {
+    let history = create_history_with_items(vec![ResponseItem::FunctionCall {
+        id: None,
+        name: "not-generated".to_string(),
+        arguments: "{}".to_string(),
+        call_id: "call-tail".to_string(),
+    }]);
+
+    assert_eq!(history.get_trailing_codex_generated_items_tokens(), 0);
+}
+
+#[test]
+fn total_token_usage_includes_only_trailing_codex_generated_items() {
+    let non_trailing_output = function_call_output("call-before-message", "not trailing");
+    let trailing_assistant = assistant_msg("assistant boundary");
+    let trailing_output = custom_tool_call_output("tool-tail", "trailing output");
+    let mut history = create_history_with_items(vec![
+        non_trailing_output,
+        user_msg("boundary"),
+        trailing_assistant.clone(),
+        trailing_output.clone(),
+    ]);
+    history.update_token_info(
+        &TokenUsage {
+            total_tokens: 100,
+            ..Default::default()
+        },
+        None,
+    );
+
+    assert_eq!(
+        history.get_total_token_usage(true),
+        100 + estimate_item_token_count(&trailing_output)
+    );
+}
+
+#[test]
 fn get_history_for_prompt_drops_ghost_commits() {
     let items = vec![ResponseItem::GhostSnapshot {
         ghost_commit: GhostCommit::new("ghost-1".to_string(), None, Vec::new(), Vec::new()),
@@ -214,6 +288,30 @@ fn remove_first_item_removes_matching_call_for_output() {
     let mut h = create_history_with_items(items);
     h.remove_first_item();
     assert_eq!(h.raw_items(), vec![]);
+}
+
+#[test]
+fn remove_last_item_removes_matching_call_for_output() {
+    let items = vec![
+        user_msg("before tool call"),
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "do_it".to_string(),
+            arguments: "{}".to_string(),
+            call_id: "call-delete-last".to_string(),
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: "call-delete-last".to_string(),
+            output: FunctionCallOutputPayload {
+                content: "ok".to_string(),
+                ..Default::default()
+            },
+        },
+    ];
+    let mut h = create_history_with_items(items);
+
+    assert!(h.remove_last_item());
+    assert_eq!(h.raw_items(), vec![user_msg("before tool call")]);
 }
 
 #[test]

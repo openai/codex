@@ -3324,6 +3324,17 @@ pub(crate) async fn run_turn(
     let model_info = turn_context.client.get_model_info();
     let auto_compact_limit = model_info.auto_compact_token_limit().unwrap_or(i64::MAX);
     let total_usage_tokens = sess.get_total_token_usage().await;
+    let estimated_token_count = sess
+        .clone_history()
+        .await
+        .estimate_token_count(turn_context.as_ref());
+    info!(
+        turn_id = %turn_context.sub_id,
+        total_usage_tokens,
+        estimated_token_count = ?estimated_token_count,
+        auto_compact_limit,
+        "between-turn token usage snapshot"
+    );
     let event = EventMsg::TurnStarted(TurnStartedEvent {
         model_context_window: turn_context.client.get_model_context_window(),
         collaboration_mode_kind: turn_context.collaboration_mode_kind,
