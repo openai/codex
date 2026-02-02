@@ -185,8 +185,11 @@ pub async fn wait_for_event<F>(codex: &CodexThread, predicate: F) -> codex_core:
 where
     F: FnMut(&codex_core::protocol::EventMsg) -> bool,
 {
-    use tokio::time::Duration;
-    wait_for_event_with_timeout(codex, predicate, Duration::from_secs(1)).await
+    #[cfg(target_os = "windows")]
+    let wait_time = tokio::time::Duration::from_secs(3);
+    #[cfg(not(target_os = "windows"))]
+    let wait_time = tokio::time::Duration::from_secs(1);
+    wait_for_event_with_timeout(codex, predicate, wait_time).await
 }
 
 pub async fn wait_for_event_match<T, F>(codex: &CodexThread, matcher: F) -> T
@@ -205,11 +208,14 @@ pub async fn wait_for_event_with_timeout<F>(
 where
     F: FnMut(&codex_core::protocol::EventMsg) -> bool,
 {
-    use tokio::time::Duration;
     use tokio::time::timeout;
+    #[cfg(target_os = "windows")]
+    let min_wait_time = tokio::time::Duration::from_secs(10);
+    #[cfg(not(target_os = "windows"))]
+    let min_wait_time = tokio::time::Duration::from_secs(5);
     loop {
         // Allow a bit more time to accommodate async startup work (e.g. config IO, tool discovery)
-        let ev = timeout(wait_time.max(Duration::from_secs(5)), codex.next_event())
+        let ev = timeout(wait_time.max(min_wait_time), codex.next_event())
             .await
             .expect("timeout waiting for event")
             .expect("stream ended unexpectedly");

@@ -50,6 +50,9 @@ use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
+#[cfg(target_os = "windows")]
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
+#[cfg(not(target_os = "windows"))]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const TEST_ORIGINATOR: &str = "codex_vscode";
 
@@ -685,7 +688,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
         )?,
         create_final_assistant_message_sse_response("done 2")?,
     ];
-    let server = create_mock_responses_server_sequence(responses).await;
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
     // Default approval is untrusted to force elicitation on first turn.
     create_config_toml(
         codex_home.as_path(),

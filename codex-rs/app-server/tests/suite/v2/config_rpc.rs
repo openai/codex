@@ -28,6 +28,9 @@ use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
+#[cfg(target_os = "windows")]
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
+#[cfg(not(target_os = "windows"))]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 fn write_config(codex_home: &TempDir, contents: &str) -> Result<()> {

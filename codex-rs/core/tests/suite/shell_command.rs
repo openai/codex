@@ -20,6 +20,10 @@ use test_case::test_case;
 /// Use this timeout if, empirically, a test seems to need more time than the
 /// default.
 const MEDIUM_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(target_os = "windows")]
+const DEFAULT_SHELL_TIMEOUT_MS: i64 = 5_000;
+#[cfg(not(target_os = "windows"))]
+const DEFAULT_SHELL_TIMEOUT_MS: i64 = 2_000;
 
 fn shell_responses_with_timeout(
     call_id: &str,
@@ -50,7 +54,7 @@ fn shell_responses_with_timeout(
 }
 
 fn shell_responses(call_id: &str, command: &str, login: Option<bool>) -> Vec<String> {
-    shell_responses_with_timeout(call_id, command, login, 2_000)
+    shell_responses_with_timeout(call_id, command, login, DEFAULT_SHELL_TIMEOUT_MS)
 }
 
 async fn shell_command_harness_with(

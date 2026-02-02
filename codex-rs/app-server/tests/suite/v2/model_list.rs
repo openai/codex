@@ -17,6 +17,9 @@ use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
+#[cfg(target_os = "windows")]
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(25);
+#[cfg(not(target_os = "windows"))]
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 

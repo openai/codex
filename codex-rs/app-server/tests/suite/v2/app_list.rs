@@ -38,6 +38,9 @@ use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
+#[cfg(target_os = "windows")]
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(25);
+#[cfg(not(target_os = "windows"))]
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tokio::test]

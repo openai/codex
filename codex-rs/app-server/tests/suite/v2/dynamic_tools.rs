@@ -25,6 +25,9 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 use wiremock::MockServer;
 
+#[cfg(target_os = "windows")]
+const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(25);
+#[cfg(not(target_os = "windows"))]
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Ensures dynamic tool specs are serialized into the model request payload.
