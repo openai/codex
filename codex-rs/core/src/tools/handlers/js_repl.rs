@@ -1,11 +1,9 @@
 use async_trait::async_trait;
+use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use std::sync::Arc;
-use std::time::Duration;
 use std::time::Instant;
 
-use crate::exec::ExecToolCallOutput;
-use crate::exec::StreamOutput;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::protocol::ExecCommandSource;
@@ -14,11 +12,13 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
-use crate::tools::events::ToolEventFailure;
 use crate::tools::events::ToolEventStage;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::js_repl::JS_REPL_PRAGMA_PREFIX;
+use crate::tools::js_repl::JS_REPL_TIMEOUT_ERROR_MESSAGE;
+use crate::tools::js_repl::JsExecPollResult;
 use crate::tools::js_repl::JsReplArgs;
+use crate::tools::js_repl::emit_js_repl_exec_end;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -26,33 +26,19 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 
 pub struct JsReplHandler;
 pub struct JsReplResetHandler;
+pub struct JsReplPollHandler;
+pub struct JsReplCancelHandler;
 
-fn join_outputs(stdout: &str, stderr: &str) -> String {
-    if stdout.is_empty() {
-        stderr.to_string()
-    } else if stderr.is_empty() {
-        stdout.to_string()
-    } else {
-        format!("{stdout}\n{stderr}")
-    }
+#[derive(Clone, Debug, Deserialize)]
+struct JsReplPollArgs {
+    exec_id: String,
+    #[serde(default)]
+    yield_time_ms: Option<u64>,
 }
 
-fn build_js_repl_exec_output(
-    output: &str,
-    error: Option<&str>,
-    duration: Duration,
-) -> ExecToolCallOutput {
-    let stdout = output.to_string();
-    let stderr = error.unwrap_or("").to_string();
-    let aggregated_output = join_outputs(&stdout, &stderr);
-    ExecToolCallOutput {
-        exit_code: if error.is_some() { 1 } else { 0 },
-        stdout: StreamOutput::new(stdout),
-        stderr: StreamOutput::new(stderr),
-        aggregated_output: StreamOutput::new(aggregated_output),
-        duration,
-        timed_out: false,
-    }
+#[derive(Clone, Debug, Deserialize)]
+struct JsReplCancelArgs {
+    exec_id: String,
 }
 
 async fn emit_js_repl_exec_begin(
@@ -70,28 +56,8 @@ async fn emit_js_repl_exec_begin(
     emitter.emit(ctx, ToolEventStage::Begin).await;
 }
 
-async fn emit_js_repl_exec_end(
-    session: &crate::codex::Session,
-    turn: &crate::codex::TurnContext,
-    call_id: &str,
-    output: &str,
-    error: Option<&str>,
-    duration: Duration,
-) {
-    let exec_output = build_js_repl_exec_output(output, error, duration);
-    let emitter = ToolEmitter::shell(
-        vec!["js_repl".to_string()],
-        turn.cwd.clone(),
-        ExecCommandSource::Agent,
-        false,
-    );
-    let ctx = ToolEventCtx::new(session, turn, call_id, None);
-    let stage = if error.is_some() {
-        ToolEventStage::Failure(ToolEventFailure::Output(exec_output))
-    } else {
-        ToolEventStage::Success(exec_output)
-    };
-    emitter.emit(ctx, stage).await;
+fn is_js_repl_timeout_message(message: &str) -> bool {
+    message == JS_REPL_TIMEOUT_ERROR_MESSAGE
 }
 #[async_trait]
 impl ToolHandler for JsReplHandler {
@@ -131,7 +97,55 @@ impl ToolHandler for JsReplHandler {
                 ));
             }
         };
+        if args.poll && !session.features().enabled(Feature::JsReplPolling) {
+            return Err(FunctionCallError::RespondToModel(
+                "js_repl polling is disabled by feature flag".to_string(),
+            ));
+        }
         let manager = turn.js_repl.manager().await?;
+        if args.poll {
+            let started_at = Instant::now();
+            emit_js_repl_exec_begin(session.as_ref(), turn.as_ref(), &call_id).await;
+            let submission = Arc::clone(&manager)
+                .submit(
+                    Arc::clone(&session),
+                    Arc::clone(&turn),
+                    tracker,
+                    call_id.clone(),
+                    args,
+                )
+                .await;
+            let submission = match submission {
+                Ok(submission) => submission,
+                Err(err) => {
+                    let message = err.to_string();
+                    emit_js_repl_exec_end(
+                        session.as_ref(),
+                        turn.as_ref(),
+                        &call_id,
+                        "",
+                        Some(&message),
+                        started_at.elapsed(),
+                        false,
+                    )
+                    .await;
+                    return Err(err);
+                }
+            };
+            let content = serde_json::to_string(&serde_json::json!({
+                "exec_id": submission.exec_id,
+                "status": "running",
+            }))
+            .map_err(|err| {
+                FunctionCallError::Fatal(format!(
+                    "failed to serialize js_repl submission result: {err}"
+                ))
+            })?;
+            return Ok(ToolOutput::Function {
+                body: FunctionCallOutputBody::Text(content),
+                success: Some(true),
+            });
+        }
         let started_at = Instant::now();
         emit_js_repl_exec_begin(session.as_ref(), turn.as_ref(), &call_id).await;
         let result = manager
@@ -141,6 +155,7 @@ impl ToolHandler for JsReplHandler {
             Ok(result) => result,
             Err(err) => {
                 let message = err.to_string();
+                let timed_out = is_js_repl_timeout_message(&message);
                 emit_js_repl_exec_end(
                     session.as_ref(),
                     turn.as_ref(),
@@ -148,6 +163,7 @@ impl ToolHandler for JsReplHandler {
                     "",
                     Some(&message),
                     started_at.elapsed(),
+                    timed_out,
                 )
                 .await;
                 return Err(err);
@@ -166,6 +182,7 @@ impl ToolHandler for JsReplHandler {
             &content,
             None,
             started_at.elapsed(),
+            false,
         )
         .await;
 
@@ -197,6 +214,131 @@ impl ToolHandler for JsReplResetHandler {
     }
 }
 
+#[async_trait]
+impl ToolHandler for JsReplPollHandler {
+    fn kind(&self) -> ToolKind {
+        ToolKind::Function
+    }
+
+    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+        let ToolInvocation {
+            session,
+            turn,
+            payload,
+            ..
+        } = invocation;
+
+        if !session.features().enabled(Feature::JsRepl) {
+            return Err(FunctionCallError::RespondToModel(
+                "js_repl is disabled by feature flag".to_string(),
+            ));
+        }
+        if !session.features().enabled(Feature::JsReplPolling) {
+            return Err(FunctionCallError::RespondToModel(
+                "js_repl polling is disabled by feature flag".to_string(),
+            ));
+        }
+
+        let ToolPayload::Function { arguments } = payload else {
+            return Err(FunctionCallError::RespondToModel(
+                "js_repl_poll expects function payload".to_string(),
+            ));
+        };
+        let args: JsReplPollArgs = parse_arguments(&arguments)?;
+        let manager = turn.js_repl.manager().await?;
+        let result = manager.poll(&args.exec_id, args.yield_time_ms).await?;
+        let output = format_poll_output(&result)?;
+        Ok(ToolOutput::Function {
+            body: FunctionCallOutputBody::Text(output.content),
+            success: Some(true),
+        })
+    }
+}
+
+#[async_trait]
+impl ToolHandler for JsReplCancelHandler {
+    fn kind(&self) -> ToolKind {
+        ToolKind::Function
+    }
+
+    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+        let ToolInvocation {
+            session,
+            turn,
+            payload,
+            ..
+        } = invocation;
+
+        if !session.features().enabled(Feature::JsRepl) {
+            return Err(FunctionCallError::RespondToModel(
+                "js_repl is disabled by feature flag".to_string(),
+            ));
+        }
+        if !session.features().enabled(Feature::JsReplPolling) {
+            return Err(FunctionCallError::RespondToModel(
+                "js_repl polling is disabled by feature flag".to_string(),
+            ));
+        }
+
+        let ToolPayload::Function { arguments } = payload else {
+            return Err(FunctionCallError::RespondToModel(
+                "js_repl_cancel expects function payload".to_string(),
+            ));
+        };
+        let args: JsReplCancelArgs = parse_arguments(&arguments)?;
+        let manager = turn.js_repl.manager().await?;
+        manager.cancel(&args.exec_id).await?;
+
+        let content = serde_json::to_string(&serde_json::json!({
+            "exec_id": args.exec_id,
+            "status": "canceled",
+        }))
+        .map_err(|err| {
+            FunctionCallError::Fatal(format!(
+                "failed to serialize js_repl cancellation result: {err}"
+            ))
+        })?;
+        Ok(ToolOutput::Function {
+            body: FunctionCallOutputBody::Text(content),
+            success: Some(true),
+        })
+    }
+}
+
+struct JsReplPollOutput {
+    content: String,
+}
+
+fn format_poll_output(result: &JsExecPollResult) -> Result<JsReplPollOutput, FunctionCallError> {
+    let status = if result.done {
+        if result.error.is_some() {
+            "error"
+        } else {
+            "completed"
+        }
+    } else {
+        "running"
+    };
+
+    let logs = if result.logs.is_empty() {
+        None
+    } else {
+        Some(result.logs.join("\n"))
+    };
+    let payload = serde_json::json!({
+        "exec_id": result.exec_id,
+        "status": status,
+        "logs": logs,
+        "output": result.output,
+        "error": result.error,
+    });
+    let content = serde_json::to_string(&payload).map_err(|err| {
+        FunctionCallError::Fatal(format!("failed to serialize js_repl poll result: {err}"))
+    })?;
+
+    Ok(JsReplPollOutput { content })
+}
+
 fn parse_freeform_args(input: &str) -> Result<JsReplArgs, FunctionCallError> {
     if input.trim().is_empty() {
         return Err(FunctionCallError::RespondToModel(
@@ -208,6 +350,7 @@ fn parse_freeform_args(input: &str) -> Result<JsReplArgs, FunctionCallError> {
     let mut args = JsReplArgs {
         code: input.to_string(),
         timeout_ms: None,
+        poll: false,
     };
 
     let mut lines = input.splitn(2, '\n');
@@ -220,12 +363,13 @@ fn parse_freeform_args(input: &str) -> Result<JsReplArgs, FunctionCallError> {
     };
 
     let mut timeout_ms: Option<u64> = None;
+    let mut poll: Option<bool> = None;
     let directive = pragma.trim();
     if !directive.is_empty() {
         for token in directive.split_whitespace() {
             let (key, value) = token.split_once('=').ok_or_else(|| {
                 FunctionCallError::RespondToModel(format!(
-                    "js_repl pragma expects space-separated key=value pairs (supported keys: timeout_ms); got `{token}`"
+                    "js_repl pragma expects space-separated key=value pairs (supported keys: timeout_ms, poll); got `{token}`"
                 ))
             })?;
             match key {
@@ -242,9 +386,26 @@ fn parse_freeform_args(input: &str) -> Result<JsReplArgs, FunctionCallError> {
                     })?;
                     timeout_ms = Some(parsed);
                 }
+                "poll" => {
+                    if poll.is_some() {
+                        return Err(FunctionCallError::RespondToModel(
+                            "js_repl pragma specifies poll more than once".to_string(),
+                        ));
+                    }
+                    let parsed = match value.to_ascii_lowercase().as_str() {
+                        "true" => true,
+                        "false" => false,
+                        _ => {
+                            return Err(FunctionCallError::RespondToModel(format!(
+                                "js_repl pragma poll must be true or false; got `{value}`"
+                            )));
+                        }
+                    };
+                    poll = Some(parsed);
+                }
                 _ => {
                     return Err(FunctionCallError::RespondToModel(format!(
-                        "js_repl pragma only supports timeout_ms; got `{key}`"
+                        "js_repl pragma only supports timeout_ms, poll; got `{key}`"
                     )));
                 }
             }
@@ -260,6 +421,7 @@ fn parse_freeform_args(input: &str) -> Result<JsReplArgs, FunctionCallError> {
     reject_json_or_quoted_source(rest)?;
     args.code = rest.to_string();
     args.timeout_ms = timeout_ms;
+    args.poll = poll.unwrap_or(false);
     Ok(args)
 }
 
@@ -287,17 +449,23 @@ fn reject_json_or_quoted_source(code: &str) -> Result<(), FunctionCallError> {
 mod tests {
     use std::time::Duration;
 
+    use super::format_poll_output;
+    use super::is_js_repl_timeout_message;
     use super::parse_freeform_args;
     use crate::codex::make_session_and_context_with_rx;
     use crate::protocol::EventMsg;
     use crate::protocol::ExecCommandSource;
+    use crate::tools::js_repl::JS_REPL_TIMEOUT_ERROR_MESSAGE;
+    use crate::tools::js_repl::JsExecPollResult;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
 
     #[test]
     fn parse_freeform_args_without_pragma() {
         let args = parse_freeform_args("console.log('ok');").expect("parse args");
         assert_eq!(args.code, "console.log('ok');");
         assert_eq!(args.timeout_ms, None);
+        assert!(!args.poll);
     }
 
     #[test]
@@ -306,6 +474,16 @@ mod tests {
         let args = parse_freeform_args(input).expect("parse args");
         assert_eq!(args.code, "console.log('ok');");
         assert_eq!(args.timeout_ms, Some(15_000));
+        assert!(!args.poll);
+    }
+
+    #[test]
+    fn parse_freeform_args_with_poll() {
+        let input = "// codex-js-repl: poll=true\nconsole.log('ok');";
+        let args = parse_freeform_args(input).expect("parse args");
+        assert_eq!(args.code, "console.log('ok');");
+        assert_eq!(args.timeout_ms, None);
+        assert!(args.poll);
     }
 
     #[test]
@@ -314,7 +492,7 @@ mod tests {
             .expect_err("expected error");
         assert_eq!(
             err.to_string(),
-            "js_repl pragma only supports timeout_ms; got `nope`"
+            "js_repl pragma only supports timeout_ms, poll; got `nope`"
         );
     }
 
@@ -324,7 +502,17 @@ mod tests {
             .expect_err("expected error");
         assert_eq!(
             err.to_string(),
-            "js_repl pragma only supports timeout_ms; got `reset`"
+            "js_repl pragma only supports timeout_ms, poll; got `reset`"
+        );
+    }
+
+    #[test]
+    fn parse_freeform_args_rejects_duplicate_poll() {
+        let err = parse_freeform_args("// codex-js-repl: poll=true poll=false\nconsole.log('ok');")
+            .expect_err("expected error");
+        assert_eq!(
+            err.to_string(),
+            "js_repl pragma specifies poll more than once"
         );
     }
 
@@ -337,9 +525,40 @@ mod tests {
         );
     }
 
+    #[test]
+    fn timeout_message_detection_matches_canonical_error() {
+        assert!(is_js_repl_timeout_message(JS_REPL_TIMEOUT_ERROR_MESSAGE));
+        assert!(!is_js_repl_timeout_message("some other error"));
+    }
+
+    #[test]
+    fn format_poll_output_serializes_logs_in_json_payload() {
+        let result = JsExecPollResult {
+            exec_id: "exec-1".to_string(),
+            logs: vec!["line 1".to_string(), "line 2".to_string()],
+            output: None,
+            error: None,
+            done: false,
+        };
+        let output = format_poll_output(&result).expect("format poll output");
+        let payload: serde_json::Value =
+            serde_json::from_str(&output.content).expect("valid json payload");
+        assert_eq!(
+            payload,
+            json!({
+                "exec_id": "exec-1",
+                "status": "running",
+                "logs": "line 1\nline 2",
+                "output": null,
+                "error": null,
+            })
+        );
+    }
+
     #[tokio::test]
     async fn emit_js_repl_exec_end_sends_event() {
         let (session, turn, rx) = make_session_and_context_with_rx().await;
+        super::emit_js_repl_exec_begin(session.as_ref(), turn.as_ref(), "call-1").await;
         super::emit_js_repl_exec_end(
             session.as_ref(),
             turn.as_ref(),
@@ -347,6 +566,7 @@ mod tests {
             "hello",
             None,
             Duration::from_millis(12),
+            false,
         )
         .await;
 
@@ -373,6 +593,42 @@ mod tests {
         assert_eq!(event.exit_code, 0);
         assert_eq!(event.duration, Duration::from_millis(12));
         assert!(event.formatted_output.contains("hello"));
+        assert!(!event.formatted_output.contains("command timed out after"));
+        assert!(!event.parsed_cmd.is_empty());
+    }
+
+    #[tokio::test]
+    async fn emit_js_repl_exec_end_sends_timed_out_event() {
+        let (session, turn, rx) = make_session_and_context_with_rx().await;
+        super::emit_js_repl_exec_begin(session.as_ref(), turn.as_ref(), "call-timeout").await;
+        super::emit_js_repl_exec_end(
+            session.as_ref(),
+            turn.as_ref(),
+            "call-timeout",
+            "",
+            Some(JS_REPL_TIMEOUT_ERROR_MESSAGE),
+            Duration::from_millis(50),
+            true,
+        )
+        .await;
+
+        let event = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let event = rx.recv().await.expect("event");
+                if let EventMsg::ExecCommandEnd(end) = event.msg {
+                    break end;
+                }
+            }
+        })
+        .await
+        .expect("timed out waiting for exec end");
+
+        assert_eq!(event.call_id, "call-timeout");
+        assert!(
+            event
+                .formatted_output
+                .contains("command timed out after 50 milliseconds")
+        );
         assert!(!event.parsed_cmd.is_empty());
     }
 }

@@ -159,6 +159,8 @@ impl ToolRouter {
         if source == ToolCallSource::Direct
             && turn.tools_config.js_repl_tools_only
             && !matches!(tool_name.as_str(), "js_repl" | "js_repl_reset")
+            && !(turn.tools_config.js_repl_poll_enabled
+                && matches!(tool_name.as_str(), "js_repl_poll" | "js_repl_cancel"))
         {
             let err = FunctionCallError::RespondToModel(
                 "direct tool calls are disabled; use js_repl and codex.tool(...) instead"
@@ -324,6 +326,66 @@ mod tests {
                 assert!(
                     !content.contains("direct tool calls are disabled"),
                     "js_repl source should bypass direct-call policy gate"
+                );
+            }
+            other => panic!("expected function call output, got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn js_repl_tools_only_allows_direct_poll_cancel_calls_when_polling_enabled()
+    -> anyhow::Result<()> {
+        let (session, mut turn) = make_session_and_context().await;
+        turn.tools_config.js_repl_tools_only = true;
+        turn.tools_config.js_repl_poll_enabled = true;
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let mcp_tools = session
+            .services
+            .mcp_connection_manager
+            .read()
+            .await
+            .list_all_tools()
+            .await;
+        let app_tools = Some(mcp_tools.clone());
+        let router = ToolRouter::from_config(
+            &turn.tools_config,
+            Some(
+                mcp_tools
+                    .into_iter()
+                    .map(|(name, tool)| (name, tool.tool))
+                    .collect(),
+            ),
+            app_tools,
+            turn.dynamic_tools.as_slice(),
+        );
+
+        let call = ToolCall {
+            tool_name: "js_repl_cancel".to_string(),
+            call_id: "call-cancel".to_string(),
+            payload: ToolPayload::Function {
+                arguments: r#"{"exec_id":"exec-1"}"#.to_string(),
+            },
+        };
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+        let response = router
+            .dispatch_tool_call(session, turn, tracker, call, ToolCallSource::Direct)
+            .await?;
+
+        match response {
+            ResponseInputItem::FunctionCallOutput { output, .. } => {
+                let content = output.text_content().unwrap_or_default();
+                assert!(
+                    !content.contains("direct tool calls are disabled"),
+                    "polling helper should bypass direct-call policy gate"
+                );
+                assert!(
+                    content.contains("js_repl is disabled by feature flag")
+                        || content.contains("unsupported call: js_repl_cancel"),
+                    "expected js_repl handler/registry failure, got: {content}"
                 );
             }
             other => panic!("expected function call output, got {other:?}"),

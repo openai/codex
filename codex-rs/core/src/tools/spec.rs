@@ -40,6 +40,7 @@ pub(crate) struct ToolsConfig {
     pub agent_roles: BTreeMap<String, AgentRoleConfig>,
     pub search_tool: bool,
     pub js_repl_enabled: bool,
+    pub js_repl_poll_enabled: bool,
     pub js_repl_tools_only: bool,
     pub collab_tools: bool,
     pub collaboration_modes_tools: bool,
@@ -61,6 +62,7 @@ impl ToolsConfig {
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_js_repl = features.enabled(Feature::JsRepl);
+        let include_js_repl_polling = include_js_repl && features.enabled(Feature::JsReplPolling);
         let include_js_repl_tools_only =
             include_js_repl && features.enabled(Feature::JsReplToolsOnly);
         let include_collab_tools = features.enabled(Feature::Collab);
@@ -101,6 +103,7 @@ impl ToolsConfig {
             agent_roles: BTreeMap::new(),
             search_tool: include_search_tool,
             js_repl_enabled: include_js_repl,
+            js_repl_poll_enabled: include_js_repl_polling,
             js_repl_tools_only: include_js_repl_tools_only,
             collab_tools: include_collab_tools,
             collaboration_modes_tools: include_collaboration_modes_tools,
@@ -1067,17 +1070,74 @@ fn create_list_dir_tool() -> ToolSpec {
     })
 }
 
-fn create_js_repl_tool() -> ToolSpec {
+fn create_js_repl_tool(polling_enabled: bool) -> ToolSpec {
     const JS_REPL_FREEFORM_GRAMMAR: &str = r#"start: /[\s\S]*/"#;
+    let mut description = "Runs JavaScript in a persistent Node kernel with top-level await. This is a freeform tool: send raw JavaScript source text, optionally with a first-line pragma like `// codex-js-repl: timeout_ms=15000`; do not send JSON/quotes/markdown fences."
+        .to_string();
+    if polling_enabled {
+        description.push_str(
+            " Add `poll=true` in the first-line pragma to return an exec_id for polling, and use `js_repl_poll`/`js_repl_cancel` with that exec_id.",
+        );
+    }
 
     ToolSpec::Freeform(FreeformTool {
         name: "js_repl".to_string(),
-        description: "Runs JavaScript in a persistent Node kernel with top-level await. This is a freeform tool: send raw JavaScript source text, optionally with a first-line pragma like `// codex-js-repl: timeout_ms=15000`; do not send JSON/quotes/markdown fences."
-            .to_string(),
+        description,
         format: FreeformToolFormat {
             r#type: "grammar".to_string(),
             syntax: "lark".to_string(),
             definition: JS_REPL_FREEFORM_GRAMMAR.to_string(),
+        },
+    })
+}
+
+fn create_js_repl_poll_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "exec_id".to_string(),
+            JsonSchema::String {
+                description: Some("Identifier returned by js_repl when poll=true.".to_string()),
+            },
+        ),
+        (
+            "yield_time_ms".to_string(),
+            JsonSchema::Number {
+                description: Some(
+                    "How long to wait (in milliseconds) for logs or completion before yielding."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "js_repl_poll".to_string(),
+        description: "Poll a running js_repl exec for incremental logs or completion. Use js_repl_cancel to stop it.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["exec_id".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_js_repl_cancel_tool() -> ToolSpec {
+    let properties = BTreeMap::from([(
+        "exec_id".to_string(),
+        JsonSchema::String {
+            description: Some("Identifier returned by js_repl when poll=true.".to_string()),
+        },
+    )]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "js_repl_cancel".to_string(),
+        description: "Cancel a running polled js_repl exec.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["exec_id".to_string()]),
+            additional_properties: Some(false.into()),
         },
     })
 }
@@ -1404,7 +1464,9 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::ApplyPatchHandler;
     use crate::tools::handlers::DynamicToolHandler;
     use crate::tools::handlers::GrepFilesHandler;
+    use crate::tools::handlers::JsReplCancelHandler;
     use crate::tools::handlers::JsReplHandler;
+    use crate::tools::handlers::JsReplPollHandler;
     use crate::tools::handlers::JsReplResetHandler;
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
@@ -1435,6 +1497,8 @@ pub(crate) fn build_specs(
     let request_user_input_handler = Arc::new(RequestUserInputHandler);
     let search_tool_handler = Arc::new(SearchToolBm25Handler);
     let js_repl_handler = Arc::new(JsReplHandler);
+    let js_repl_cancel_handler = Arc::new(JsReplCancelHandler);
+    let js_repl_poll_handler = Arc::new(JsReplPollHandler);
     let js_repl_reset_handler = Arc::new(JsReplResetHandler);
 
     match &config.shell_type {
@@ -1479,7 +1543,16 @@ pub(crate) fn build_specs(
     builder.register_handler("update_plan", plan_handler);
 
     if config.js_repl_enabled {
-        builder.push_spec(create_js_repl_tool());
+        builder.push_spec_with_parallel_support(
+            create_js_repl_tool(config.js_repl_poll_enabled),
+            config.js_repl_poll_enabled,
+        );
+        if config.js_repl_poll_enabled {
+            builder.push_spec_with_parallel_support(create_js_repl_poll_tool(), true);
+            builder.push_spec_with_parallel_support(create_js_repl_cancel_tool(), true);
+            builder.register_handler("js_repl_poll", js_repl_poll_handler);
+            builder.register_handler("js_repl_cancel", js_repl_cancel_handler);
+        }
         builder.push_spec(create_js_repl_reset_tool());
         builder.register_handler("js_repl", js_repl_handler);
         builder.register_handler("js_repl_reset", js_repl_reset_handler);
@@ -1900,6 +1973,16 @@ mod tests {
             "js_repl should be disabled when the feature is off"
         );
         assert!(
+            !tools.iter().any(|tool| tool.spec.name() == "js_repl_poll"),
+            "js_repl_poll should be disabled when the feature is off"
+        );
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool.spec.name() == "js_repl_cancel"),
+            "js_repl_cancel should be disabled when the feature is off"
+        );
+        assert!(
             !tools.iter().any(|tool| tool.spec.name() == "js_repl_reset"),
             "js_repl_reset should be disabled when the feature is off"
         );
@@ -1920,6 +2003,28 @@ mod tests {
         });
         let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
         assert_contains_tool_names(&tools, &["js_repl", "js_repl_reset"]);
+        assert!(
+            !tools.iter().any(|tool| tool.spec.name() == "js_repl_poll"),
+            "js_repl_poll should be disabled when polling is off"
+        );
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool.spec.name() == "js_repl_cancel"),
+            "js_repl_cancel should be disabled when polling is off"
+        );
+
+        features.enable(Feature::JsReplPolling);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+        });
+        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+        assert_contains_tool_names(
+            &tools,
+            &["js_repl", "js_repl_poll", "js_repl_cancel", "js_repl_reset"],
+        );
     }
 
     fn assert_model_tools(

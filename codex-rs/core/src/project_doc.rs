@@ -48,6 +48,15 @@ fn render_js_repl_instructions(config: &Config) -> Option<String> {
     section.push_str("- Top-level bindings persist across cells. If you hit `SyntaxError: Identifier 'x' has already been declared`, reuse the binding, pick a new name, wrap in `{ ... }` for block scope, or reset the kernel with `js_repl_reset`.\n");
     section.push_str("- Top-level static import declarations (for example `import x from \"pkg\"`) are currently unsupported in `js_repl`; use dynamic imports with `await import(\"pkg\")` instead.\n");
 
+    if config.features.enabled(Feature::JsReplPolling) {
+        section.push_str("- Polling mode is two-step: (1) call `js_repl` with first-line pragma `// codex-js-repl: poll=true` to get an `exec_id`; (2) call `js_repl_poll` with that `exec_id` until `status` is `completed` or `error`.\n");
+        section.push_str(
+            "- Use `js_repl_cancel` with an `exec_id` to cancel a long-running polled execution.\n",
+        );
+        section.push_str("- `js_repl_poll`/`js_repl_cancel` must not be called before a successful `js_repl` submission returns an `exec_id`.\n");
+        section.push_str("- If `js_repl` rejects your payload format, resend raw JS with the pragma; do not retry with JSON, quoted strings, or markdown fences.\n");
+    }
+
     if config.features.enabled(Feature::JsReplToolsOnly) {
         section.push_str("- Do not call tools directly; use `js_repl` + `codex.tool(...)` for all tool calls, including shell commands.\n");
         section
@@ -431,6 +440,21 @@ mod tests {
             .await
             .expect("js_repl instructions expected");
         let expected = "## JavaScript REPL (Node)\n- Use `js_repl` for Node-backed JavaScript with top-level await in a persistent kernel. `codex.state` persists for the session (best effort) and is cleared by `js_repl_reset`.\n- `js_repl` is a freeform/custom tool. Direct `js_repl` calls must send raw JavaScript tool input (optionally with first-line `// codex-js-repl: timeout_ms=15000`). Do not wrap code in JSON (for example `{\"code\":\"...\"}`), quotes, or markdown code fences.\n- Helpers: `codex.state`, `codex.tmpDir`, and `codex.tool(name, args?)`.\n- `codex.tool` executes a normal tool call and resolves to the raw tool output object. Use it for shell and non-shell tools alike.\n- To share generated images with the model, write a file under `codex.tmpDir`, call `await codex.tool(\"view_image\", { path: \"/absolute/path\" })`, then delete the file.\n- Top-level bindings persist across cells. If you hit `SyntaxError: Identifier 'x' has already been declared`, reuse the binding, pick a new name, wrap in `{ ... }` for block scope, or reset the kernel with `js_repl_reset`.\n- Top-level static import declarations (for example `import x from \"pkg\"`) are currently unsupported in `js_repl`; use dynamic imports with `await import(\"pkg\")` instead.\n- Do not call tools directly; use `js_repl` + `codex.tool(...)` for all tool calls, including shell commands.\n- MCP tools (if any) can also be called by name via `codex.tool(...)`.\n- Avoid direct access to `process.stdout` / `process.stderr` / `process.stdin`; it can corrupt the JSON line protocol. Use `console.log` and `codex.tool(...)`.";
+        assert_eq!(res, expected);
+    }
+
+    #[tokio::test]
+    async fn js_repl_polling_instructions_are_feature_gated() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut cfg = make_config(&tmp, 4096, None).await;
+        cfg.features
+            .enable(Feature::JsRepl)
+            .enable(Feature::JsReplPolling);
+
+        let res = get_user_instructions(&cfg, None)
+            .await
+            .expect("js_repl instructions expected");
+        let expected = "## JavaScript REPL (Node)\n- Use `js_repl` for Node-backed JavaScript with top-level await in a persistent kernel. `codex.state` persists for the session (best effort) and is cleared by `js_repl_reset`.\n- `js_repl` is a freeform/custom tool. Direct `js_repl` calls must send raw JavaScript tool input (optionally with first-line `// codex-js-repl: timeout_ms=15000`). Do not wrap code in JSON (for example `{\"code\":\"...\"}`), quotes, or markdown code fences.\n- Helpers: `codex.state`, `codex.tmpDir`, and `codex.tool(name, args?)`.\n- `codex.tool` executes a normal tool call and resolves to the raw tool output object. Use it for shell and non-shell tools alike.\n- To share generated images with the model, write a file under `codex.tmpDir`, call `await codex.tool(\"view_image\", { path: \"/absolute/path\" })`, then delete the file.\n- Top-level bindings persist across cells. If you hit `SyntaxError: Identifier 'x' has already been declared`, reuse the binding, pick a new name, wrap in `{ ... }` for block scope, or reset the kernel with `js_repl_reset`.\n- Top-level static import declarations (for example `import x from \"pkg\"`) are currently unsupported in `js_repl`; use dynamic imports with `await import(\"pkg\")` instead.\n- Polling mode is two-step: (1) call `js_repl` with first-line pragma `// codex-js-repl: poll=true` to get an `exec_id`; (2) call `js_repl_poll` with that `exec_id` until `status` is `completed` or `error`.\n- Use `js_repl_cancel` with an `exec_id` to cancel a long-running polled execution.\n- `js_repl_poll`/`js_repl_cancel` must not be called before a successful `js_repl` submission returns an `exec_id`.\n- If `js_repl` rejects your payload format, resend raw JS with the pragma; do not retry with JSON, quoted strings, or markdown fences.\n- Avoid direct access to `process.stdout` / `process.stderr` / `process.stdin`; it can corrupt the JSON line protocol. Use `console.log` and `codex.tool(...)`.";
         assert_eq!(res, expected);
     }
 
