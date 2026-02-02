@@ -100,7 +100,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         session_source,
         TransportManager::new(),
     )
-    .new_session();
+    .new_session(None, None);
 
     let mut prompt = Prompt::default();
     prompt.input = vec![ResponseItem::Message {
@@ -294,7 +294,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
         session_source,
         TransportManager::new(),
     )
-    .new_session();
+    .new_session(None, None);
 
     let mut prompt = Prompt::default();
     prompt.input = vec![ResponseItem::Message {
@@ -451,7 +451,7 @@ async fn responses_respects_model_info_overrides_from_config() {
         session_source,
         TransportManager::new(),
     )
-    .new_session();
+    .new_session(None, None);
 
     let mut prompt = Prompt::default();
     prompt.input = vec![ResponseItem::Message {

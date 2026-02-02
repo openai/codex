@@ -147,18 +147,7 @@ impl ModelClient {
         }
     }
 
-    pub fn new_session(&self) -> ModelClientSession {
-        self.new_session_with_turn_metadata_and_cwd(None, None)
-    }
-
-    pub fn new_session_with_turn_metadata(
-        &self,
-        turn_metadata_header: Option<String>,
-    ) -> ModelClientSession {
-        self.new_session_with_turn_metadata_and_cwd(turn_metadata_header, None)
-    }
-
-    pub fn new_session_with_turn_metadata_and_cwd(
+    pub fn new_session(
         &self,
         turn_metadata_header: Option<String>,
         turn_metadata_cwd: Option<PathBuf>,
