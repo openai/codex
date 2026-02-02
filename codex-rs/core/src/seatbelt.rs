@@ -562,6 +562,151 @@ mod tests {
         assert_eq!(expected_args, args);
     }
 
+    #[test]
+    fn create_seatbelt_args_includes_network_policy_when_network_access_true() {
+        let tmp = TempDir::new().expect("tempdir");
+        let cwd = tmp.path().join("cwd");
+        fs::create_dir_all(&cwd).expect("create cwd");
+
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            network_access: true,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+
+        let shell_command: Vec<String> = vec![
+            "bash".to_string(),
+            "-c".to_string(),
+            "echo ok".to_string(),
+        ];
+        let args = create_seatbelt_command_args(shell_command, &policy, &cwd);
+
+        // The second arg is the full policy string passed to sandbox-exec -p.
+        let full_policy = &args[1];
+
+        // Verify the network policy rules are present.
+        assert!(
+            full_policy.contains("(allow network-outbound)"),
+            "seatbelt policy should contain network-outbound when network_access is true"
+        );
+        assert!(
+            full_policy.contains("(allow network-inbound)"),
+            "seatbelt policy should contain network-inbound when network_access is true"
+        );
+        assert!(
+            full_policy.contains("(allow system-socket)"),
+            "seatbelt policy should contain system-socket when network_access is true"
+        );
+        assert!(
+            full_policy.contains("com.apple.SystemConfiguration.DNSConfiguration"),
+            "seatbelt policy should allow DNS configuration lookup when network_access is true"
+        );
+    }
+
+    #[test]
+    fn create_seatbelt_args_excludes_network_policy_when_network_access_false() {
+        let tmp = TempDir::new().expect("tempdir");
+        let cwd = tmp.path().join("cwd");
+        fs::create_dir_all(&cwd).expect("create cwd");
+
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+
+        let shell_command: Vec<String> = vec![
+            "bash".to_string(),
+            "-c".to_string(),
+            "echo ok".to_string(),
+        ];
+        let args = create_seatbelt_command_args(shell_command, &policy, &cwd);
+
+        let full_policy = &args[1];
+
+        assert!(
+            !full_policy.contains("(allow network-outbound)"),
+            "seatbelt policy should NOT contain network-outbound when network_access is false"
+        );
+        assert!(
+            !full_policy.contains("(allow network-inbound)"),
+            "seatbelt policy should NOT contain network-inbound when network_access is false"
+        );
+    }
+
+    #[test]
+    fn seatbelt_network_access_true_allows_socket_creation() {
+        // Integration test: verify that a command run under seatbelt with
+        // network_access=true can create a TCP socket and bind to localhost.
+        // This tests the OS-level seatbelt enforcement without needing
+        // external network access (no DNS, no remote hosts).
+        let tmp = TempDir::new().expect("tempdir");
+        let cwd = tmp.path().join("cwd");
+        fs::create_dir_all(&cwd).expect("create cwd");
+
+        let policy_with_network = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            network_access: true,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        };
+
+        // Create a TCP socket bound to localhost:0 (ephemeral port).
+        // Under seatbelt without network policy, this fails because
+        // (deny default) blocks system-socket and network-outbound.
+        let shell_command: Vec<String> = vec![
+            "bash".to_string(),
+            "-c".to_string(),
+            "python3 -c \"import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()); s.close()\"".to_string(),
+        ];
+        let args = create_seatbelt_command_args(shell_command.clone(), &policy_with_network, &cwd);
+
+        let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
+            .args(&args)
+            .current_dir(&cwd)
+            .output()
+            .expect("execute seatbelt command");
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // If sandbox-exec itself is denied (e.g., in CI without entitlements), skip.
+        if stderr.contains("sandbox-exec: sandbox_apply: Operation not permitted") {
+            return;
+        }
+
+        assert!(
+            output.status.success(),
+            "socket creation should succeed with network_access=true. stderr: {stderr}"
+        );
+
+        // Now verify the same command FAILS with network_access=false.
+        let policy_without_network = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            network_access: false,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        };
+        let args_no_net =
+            create_seatbelt_command_args(shell_command, &policy_without_network, &cwd);
+
+        let output_no_net = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
+            .args(&args_no_net)
+            .current_dir(&cwd)
+            .output()
+            .expect("execute seatbelt command");
+
+        let stderr_no_net = String::from_utf8_lossy(&output_no_net.stderr);
+        if stderr_no_net.contains("sandbox-exec: sandbox_apply: Operation not permitted") {
+            return;
+        }
+
+        assert!(
+            !output_no_net.status.success(),
+            "socket creation should FAIL with network_access=false, proving the seatbelt policy actually controls network access"
+        );
+    }
+
     struct PopulatedTmp {
         /// Path containing a .git and .codex subfolder.
         /// For the purposes of this test, we consider this a "vulnerable" root

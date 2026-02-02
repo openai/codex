@@ -1102,6 +1102,20 @@ impl ConfigToml {
                 })
             })
             .unwrap_or_default();
+        let sandbox_mode_source = if sandbox_mode_override.is_some() {
+            "cli-flag"
+        } else if profile_sandbox_mode.is_some() {
+            "config-profile"
+        } else if self.sandbox_mode.is_some() {
+            "config-toml"
+        } else {
+            "default"
+        };
+        tracing::info!(
+            sandbox_mode = ?resolved_sandbox_mode,
+            source = sandbox_mode_source,
+            "resolved sandbox mode"
+        );
         let mut sandbox_policy = match resolved_sandbox_mode {
             SandboxMode::ReadOnly => SandboxPolicy::new_read_only_policy(),
             SandboxMode::WorkspaceWrite => match self.sandbox_workspace_write.as_ref() {
@@ -1110,13 +1124,24 @@ impl ConfigToml {
                     network_access,
                     exclude_tmpdir_env_var,
                     exclude_slash_tmp,
-                }) => SandboxPolicy::WorkspaceWrite {
-                    writable_roots: writable_roots.clone(),
-                    network_access: *network_access,
-                    exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
-                    exclude_slash_tmp: *exclude_slash_tmp,
-                },
-                None => SandboxPolicy::new_workspace_write_policy(),
+                }) => {
+                    tracing::info!(
+                        network_access = *network_access,
+                        "sandbox workspace-write policy from config"
+                    );
+                    SandboxPolicy::WorkspaceWrite {
+                        writable_roots: writable_roots.clone(),
+                        network_access: *network_access,
+                        exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
+                        exclude_slash_tmp: *exclude_slash_tmp,
+                    }
+                }
+                None => {
+                    tracing::info!(
+                        "no [sandbox_workspace_write] in config, using defaults (network_access=false)"
+                    );
+                    SandboxPolicy::new_workspace_write_policy()
+                }
             },
             SandboxMode::DangerFullAccess => SandboxPolicy::DangerFullAccess,
         };
