@@ -173,11 +173,15 @@ impl SessionReporterImpl {
             #[expect(clippy::unwrap_used)]
             self.shared.latest_query.lock().unwrap().clone()
         };
-        if query.is_empty() || snapshot.query != query {
+        if snapshot.query != query {
             return;
         }
 
-        let files = collect_files(snapshot);
+        let files = if query.is_empty() {
+            Vec::new()
+        } else {
+            collect_files(snapshot)
+        };
 
         let notification = ServerNotification::FuzzyFileSearchSessionUpdated(
             FuzzyFileSearchSessionUpdatedNotification {

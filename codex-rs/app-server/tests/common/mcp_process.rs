@@ -612,6 +612,18 @@ impl McpProcess {
             .await
     }
 
+    pub async fn start_fuzzy_file_search_session(
+        &mut self,
+        session_id: &str,
+        roots: Vec<String>,
+    ) -> anyhow::Result<JSONRPCResponse> {
+        let request_id = self
+            .send_fuzzy_file_search_session_start_request(session_id, roots)
+            .await?;
+        self.read_stream_until_response_message(RequestId::Integer(request_id))
+            .await
+    }
+
     pub async fn send_fuzzy_file_search_session_update_request(
         &mut self,
         session_id: &str,
@@ -625,6 +637,18 @@ impl McpProcess {
             .await
     }
 
+    pub async fn update_fuzzy_file_search_session(
+        &mut self,
+        session_id: &str,
+        query: &str,
+    ) -> anyhow::Result<JSONRPCResponse> {
+        let request_id = self
+            .send_fuzzy_file_search_session_update_request(session_id, query)
+            .await?;
+        self.read_stream_until_response_message(RequestId::Integer(request_id))
+            .await
+    }
+
     pub async fn send_fuzzy_file_search_session_stop_request(
         &mut self,
         session_id: &str,
@@ -633,6 +657,17 @@ impl McpProcess {
             "sessionId": session_id,
         });
         self.send_request("fuzzyFileSearch/sessionStop", Some(params))
+            .await
+    }
+
+    pub async fn stop_fuzzy_file_search_session(
+        &mut self,
+        session_id: &str,
+    ) -> anyhow::Result<JSONRPCResponse> {
+        let request_id = self
+            .send_fuzzy_file_search_session_stop_request(session_id)
+            .await?;
+        self.read_stream_until_response_message(RequestId::Integer(request_id))
             .await
     }
 
