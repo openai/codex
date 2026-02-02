@@ -335,7 +335,7 @@ async fn drain_to_completed(
     turn_context: &TurnContext,
     prompt: &Prompt,
 ) -> CodexResult<()> {
-    let mut client_session = turn_context.client.new_session_with_turn_metadata_and_cwd(
+    let mut client_session = turn_context.client.new_session(
         turn_context.turn_metadata_header.clone(),
         Some(turn_context.cwd.clone()),
     );

@@ -3382,7 +3382,7 @@ pub(crate) async fn run_turn(
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
 
-    let mut client_session = turn_context.client.new_session_with_turn_metadata_and_cwd(
+    let mut client_session = turn_context.client.new_session(
         turn_context.turn_metadata_header.clone(),
         Some(turn_context.cwd.clone()),
     );
