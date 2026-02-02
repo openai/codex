@@ -125,10 +125,10 @@ pub fn parse_shell_lc_plain_commands(command: &[String]) -> Option<Vec<Vec<Strin
 /// This intentionally falls back to a looser split than `parse_shell_lc_plain_commands`,
 /// but refuses to parse when the fallback line contains shell substitutions.
 pub fn parse_shell_lc_execpolicy_prefix(command: &[String]) -> Option<Vec<Vec<String>>> {
-    if let Some(commands) = parse_shell_lc_plain_commands(command) {
-        if !commands.is_empty() {
-            return Some(commands);
-        }
+    if let Some(commands) = parse_shell_lc_plain_commands(command)
+        && !commands.is_empty()
+    {
+        return Some(commands);
     }
 
     let (_, script) = extract_bash_command(command)?;
