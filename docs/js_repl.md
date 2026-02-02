@@ -34,3 +34,15 @@ js_repl_node_path = "/absolute/path/to/node"
   - `// codex-js-repl: timeout_ms=15000 reset=true`
 - Top-level bindings persist across calls.
 - Use `js_repl_reset` to clear the kernel state.
+
+## Helper APIs inside the kernel
+
+`js_repl` exposes these globals:
+
+- `codex.state`: mutable object persisted for the current kernel session.
+- `codex.tmpDir`: per-session scratch directory path.
+- `codex.sh(command, opts?)`: runs a shell command through Codex execution policy and returns `{ stdout, stderr, exitCode }`.
+- `codex.tool(name, args?)`: executes a normal Codex tool call from inside js_repl.
+- `codex.emitImage(pathOrBytes, { mime?, caption?, name? })`: emits an image artifact in tool output.
+
+Avoid writing directly to `process.stdout` / `process.stderr` / `process.stdin`; the kernel uses a JSON-line transport over stdio.
