@@ -31,6 +31,7 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use supports_color::Stream;
 
+mod app_cmd;
 mod mcp_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
@@ -97,6 +98,9 @@ enum Subcommand {
 
     /// [experimental] Run the app server or related tooling.
     AppServer(AppServerCommand),
+
+    /// Launch the Codex desktop app (downloads the macOS installer if missing).
+    App(app_cmd::AppCommand),
 
     /// Generate shell completion scripts.
     Completion(CompletionCommand),
@@ -548,6 +552,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 codex_app_server_protocol::generate_json(&gen_cli.out_dir)?;
             }
         },
+        Some(Subcommand::App(app_cli)) => {
+            app_cmd::run_app(app_cli).await?;
+        }
         Some(Subcommand::Resume(ResumeCommand {
             session_id,
             last,
