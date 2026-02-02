@@ -1,6 +1,7 @@
 use crate::decision::Decision;
 use crate::error::Error;
 use crate::error::Result;
+use crate::rule::NetworkRule;
 use crate::rule::PatternToken;
 use crate::rule::PrefixPattern;
 use crate::rule::PrefixRule;
@@ -16,19 +17,30 @@ type HeuristicsFallback<'a> = Option<&'a dyn Fn(&[String]) -> Decision>;
 #[derive(Clone, Debug)]
 pub struct Policy {
     rules_by_program: MultiMap<String, RuleRef>,
+    network_rules: Vec<NetworkRule>,
 }
 
 impl Policy {
-    pub fn new(rules_by_program: MultiMap<String, RuleRef>) -> Self {
-        Self { rules_by_program }
+    pub fn new(
+        rules_by_program: MultiMap<String, RuleRef>,
+        network_rules: Vec<NetworkRule>,
+    ) -> Self {
+        Self {
+            rules_by_program,
+            network_rules,
+        }
     }
 
     pub fn empty() -> Self {
-        Self::new(MultiMap::new())
+        Self::new(MultiMap::new(), Vec::new())
     }
 
     pub fn rules(&self) -> &MultiMap<String, RuleRef> {
         &self.rules_by_program
+    }
+
+    pub fn network_rules(&self) -> &[NetworkRule] {
+        &self.network_rules
     }
 
     pub fn get_allowed_prefixes(&self) -> Vec<Vec<String>> {
@@ -75,6 +87,10 @@ impl Policy {
 
         self.rules_by_program.insert(first_token.clone(), rule);
         Ok(())
+    }
+
+    pub fn add_network_rule(&mut self, rule: NetworkRule) {
+        self.network_rules.push(rule);
     }
 
     pub fn check<F>(&self, cmd: &[String], heuristics_fallback: &F) -> Evaluation

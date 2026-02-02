@@ -2,11 +2,13 @@
 
 ## Overview
 
-- Policy engine and CLI built around `prefix_rule(pattern=[...], decision?, justification?, match?, not_match?)`.
-- This release covers the prefix-rule subset of the execpolicy language; a richer language will follow.
+- Policy engine and CLI built around two Starlark rule forms:
+  - `prefix_rule(pattern=[...], decision?, justification?, match?, not_match?)`
+  - `network_rule(host=..., protocol=..., decision=..., justification?)`
 - Tokens are matched in order; any `pattern` element may be a list to denote alternatives. `decision` defaults to `allow`; valid values: `allow`, `prompt`, `forbidden`.
 - `justification` is an optional human-readable rationale for why a rule exists. It can be provided for any `decision` and may be surfaced in different contexts (for example, in approval prompts or rejection messages). When `decision = "forbidden"` is used, include a recommended alternative in the `justification`, when appropriate (e.g., ``"Use `jj` instead of `git`."``).
 - `match` / `not_match` supply example invocations that are validated at load time (think of them as unit tests); examples can be token arrays or strings (strings are tokenized with `shlex`).
+- `network_rule` entries are consumed by `codex-network-proxy` for per-host network decisions. They are exact-host (normalized) matches only, with `protocol` limited to `http|https` and `decision` limited to `allow|deny|ask`.
 - The CLI always prints the JSON serialization of the evaluation result.
 - The legacy rule matcher lives in `codex-execpolicy-legacy`.
 
@@ -21,6 +23,17 @@ prefix_rule(
     justification = "explain why this rule exists",
     match = [["cmd", "alt1"], "cmd alt2"],           # examples that must match this rule
     not_match = [["cmd", "oops"], "cmd alt3"],       # examples that must not match this rule
+)
+```
+
+- Network rules use Starlark syntax:
+
+```starlark
+network_rule(
+    host = "api.example.com",   # exact host match after normalization
+    protocol = "https",         # http | https
+    decision = "allow",         # allow | deny | ask
+    justification = "Allow API calls",
 )
 ```
 

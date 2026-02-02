@@ -6,6 +6,9 @@ use anyhow::Result;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Error;
 use codex_execpolicy::Evaluation;
+use codex_execpolicy::NetworkRule;
+use codex_execpolicy::NetworkRuleDecision;
+use codex_execpolicy::NetworkRuleProtocol;
 use codex_execpolicy::Policy;
 use codex_execpolicy::PolicyParser;
 use codex_execpolicy::RuleMatch;
@@ -70,6 +73,114 @@ prefix_rule(
         evaluation
     );
     Ok(())
+}
+
+#[test]
+fn parses_network_rule() -> Result<()> {
+    let policy_src = r#"
+network_rule(
+    host = "api.example.com",
+    protocol = "https",
+    decision = "allow",
+    justification = "Allow API calls",
+)
+    "#;
+
+    let mut parser = PolicyParser::new();
+    parser.parse("test.rules", policy_src)?;
+    let policy = parser.build();
+
+    assert_eq!(
+        policy.network_rules(),
+        &[NetworkRule {
+            host: "api.example.com".to_string(),
+            protocol: NetworkRuleProtocol::Https,
+            decision: NetworkRuleDecision::Allow,
+            justification: Some("Allow API calls".to_string()),
+        }]
+    );
+    Ok(())
+}
+
+#[test]
+fn rejects_network_rule_with_empty_host() {
+    let policy_src = r#"
+network_rule(
+    host = "   ",
+    protocol = "https",
+    decision = "allow",
+)
+    "#;
+
+    let mut parser = PolicyParser::new();
+    let err = parser
+        .parse("test.rules", policy_src)
+        .expect_err("expected parse error");
+    assert!(
+        err.to_string()
+            .contains("invalid rule: host cannot be empty")
+    );
+}
+
+#[test]
+fn rejects_network_rule_with_invalid_protocol() {
+    let policy_src = r#"
+network_rule(
+    host = "api.example.com",
+    protocol = "socks5",
+    decision = "allow",
+)
+    "#;
+
+    let mut parser = PolicyParser::new();
+    let err = parser
+        .parse("test.rules", policy_src)
+        .expect_err("expected parse error");
+    assert!(
+        err.to_string()
+            .contains("invalid rule: invalid network protocol: socks5")
+    );
+}
+
+#[test]
+fn rejects_network_rule_with_invalid_decision() {
+    let policy_src = r#"
+network_rule(
+    host = "api.example.com",
+    protocol = "https",
+    decision = "prompt",
+)
+    "#;
+
+    let mut parser = PolicyParser::new();
+    let err = parser
+        .parse("test.rules", policy_src)
+        .expect_err("expected parse error");
+    assert!(
+        err.to_string()
+            .contains("invalid rule: invalid network decision: prompt")
+    );
+}
+
+#[test]
+fn rejects_network_rule_with_empty_justification() {
+    let policy_src = r#"
+network_rule(
+    host = "api.example.com",
+    protocol = "https",
+    decision = "allow",
+    justification = "  ",
+)
+    "#;
+
+    let mut parser = PolicyParser::new();
+    let err = parser
+        .parse("test.rules", policy_src)
+        .expect_err("expected parse error");
+    assert!(
+        err.to_string()
+            .contains("invalid rule: justification cannot be empty")
+    );
 }
 
 #[test]
