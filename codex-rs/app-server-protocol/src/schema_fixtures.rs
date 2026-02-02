@@ -6,6 +6,11 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SchemaFixtureOptions {
+    pub experimental_api: bool,
+}
+
 pub fn read_schema_fixture_tree(schema_root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>> {
     let typescript_root = schema_root.join("typescript");
     let json_root = schema_root.join("json");
@@ -26,14 +31,30 @@ pub fn read_schema_fixture_tree(schema_root: &Path) -> Result<BTreeMap<PathBuf, 
 /// This is intended to be used by tooling (e.g., `just write-app-server-schema`).
 /// It deletes any previously generated files so stale artifacts are removed.
 pub fn write_schema_fixtures(schema_root: &Path, prettier: Option<&Path>) -> Result<()> {
+    write_schema_fixtures_with_options(schema_root, prettier, SchemaFixtureOptions::default())
+}
+
+/// Regenerates schema fixtures with configurable options.
+pub fn write_schema_fixtures_with_options(
+    schema_root: &Path,
+    prettier: Option<&Path>,
+    options: SchemaFixtureOptions,
+) -> Result<()> {
     let typescript_out_dir = schema_root.join("typescript");
     let json_out_dir = schema_root.join("json");
 
     ensure_empty_dir(&typescript_out_dir)?;
     ensure_empty_dir(&json_out_dir)?;
 
-    crate::generate_ts(&typescript_out_dir, prettier)?;
-    crate::generate_json(&json_out_dir)?;
+    crate::generate_ts_with_options(
+        &typescript_out_dir,
+        prettier,
+        crate::GenerateTsOptions {
+            experimental_api: options.experimental_api,
+            ..crate::GenerateTsOptions::default()
+        },
+    )?;
+    crate::generate_json_with_experimental(&json_out_dir, options.experimental_api)?;
 
     Ok(())
 }

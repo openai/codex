@@ -13,6 +13,10 @@ struct Args {
     /// Optional path to the Prettier executable to format generated TypeScript files.
     #[arg(short = 'p', long = "prettier", value_name = "PRETTIER_BIN")]
     prettier: Option<PathBuf>,
+
+    /// Include experimental API methods and fields in generated fixtures.
+    #[arg(long = "experimental")]
+    experimental: bool,
 }
 
 fn main() -> Result<()> {
@@ -22,11 +26,17 @@ fn main() -> Result<()> {
         .schema_root
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("schema"));
 
-    codex_app_server_protocol::write_schema_fixtures(&schema_root, args.prettier.as_deref())
-        .with_context(|| {
-            format!(
-                "failed to regenerate schema fixtures under {}",
-                schema_root.display()
-            )
-        })
+    codex_app_server_protocol::write_schema_fixtures_with_options(
+        &schema_root,
+        args.prettier.as_deref(),
+        codex_app_server_protocol::SchemaFixtureOptions {
+            experimental_api: args.experimental,
+        },
+    )
+    .with_context(|| {
+        format!(
+            "failed to regenerate schema fixtures under {}",
+            schema_root.display()
+        )
+    })
 }
