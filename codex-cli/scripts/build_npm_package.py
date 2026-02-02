@@ -69,12 +69,24 @@ PACKAGE_EXPANSIONS: dict[str, list[str]] = {
 
 PACKAGE_NATIVE_COMPONENTS: dict[str, list[str]] = {
     "codex": [],
-    "codex-linux-x64": ["codex", "rg"],
-    "codex-linux-arm64": ["codex", "rg"],
-    "codex-darwin-x64": ["codex", "rg"],
-    "codex-darwin-arm64": ["codex", "rg"],
-    "codex-win32-x64": ["codex", "rg", "codex-windows-sandbox-setup", "codex-command-runner"],
-    "codex-win32-arm64": ["codex", "rg", "codex-windows-sandbox-setup", "codex-command-runner"],
+    "codex-linux-x64": ["codex", "rg", "node"],
+    "codex-linux-arm64": ["codex", "rg", "node"],
+    "codex-darwin-x64": ["codex", "rg", "node"],
+    "codex-darwin-arm64": ["codex", "rg", "node"],
+    "codex-win32-x64": [
+        "codex",
+        "rg",
+        "node",
+        "codex-windows-sandbox-setup",
+        "codex-command-runner",
+    ],
+    "codex-win32-arm64": [
+        "codex",
+        "rg",
+        "node",
+        "codex-windows-sandbox-setup",
+        "codex-command-runner",
+    ],
     "codex-responses-api-proxy": ["codex-responses-api-proxy"],
     "codex-sdk": [],
 }
@@ -92,6 +104,7 @@ COMPONENT_DEST_DIR: dict[str, str] = {
     "codex-windows-sandbox-setup": "codex",
     "codex-command-runner": "codex",
     "rg": "path",
+    "node": "node",
 }
 
 
