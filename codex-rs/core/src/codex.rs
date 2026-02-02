@@ -5515,6 +5515,7 @@ mod tests {
     use crate::tools::handlers::ShellHandler;
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::registry::ToolHandler;
+    use crate::tools::router::ToolCallSource;
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_app_server_protocol::AppInfo;
     use codex_otel::TelemetryAuthMode;
@@ -7452,6 +7453,7 @@ mod tests {
                 Arc::clone(&turn_context),
                 tracker,
                 call,
+                ToolCallSource::Direct,
             )
             .await
             .expect_err("expected fatal error");
