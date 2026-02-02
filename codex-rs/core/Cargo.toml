@@ -3,6 +3,7 @@ edition.workspace = true
 license.workspace = true
 name = "codex-core"
 version.workspace = true
+build = "build.rs"
 
 [lib]
 doctest = false
