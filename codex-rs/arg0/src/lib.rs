@@ -184,7 +184,7 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<Arg0PathEntryGu
 
     std::fs::create_dir_all(&codex_home)?;
     // Use a CODEX_HOME-scoped temp root to avoid cluttering the top-level directory.
-    let temp_root = codex_home.join("tmp").join("path2");
+    let temp_root = codex_home.join("tmp").join("arg0");
     std::fs::create_dir_all(&temp_root)?;
     #[cfg(unix)]
     {
