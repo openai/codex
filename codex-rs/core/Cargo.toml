@@ -122,12 +122,14 @@ seccompiler = { workspace = true }
 core-foundation = "0.9"
 keyring = { workspace = true, features = ["apple-native"] }
 
-# Build OpenSSL from source for musl builds.
+# CRAFT AGENTS: Build OpenSSL from source for cross-compilation targets.
 [target.x86_64-unknown-linux-musl.dependencies]
 openssl-sys = { workspace = true, features = ["vendored"] }
 
-# Build OpenSSL from source for musl builds.
 [target.aarch64-unknown-linux-musl.dependencies]
+openssl-sys = { workspace = true, features = ["vendored"] }
+
+[target.aarch64-unknown-linux-gnu.dependencies]
 openssl-sys = { workspace = true, features = ["vendored"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
