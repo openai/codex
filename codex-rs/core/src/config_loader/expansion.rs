@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 
-use dirs::home_dir;
 use serde_json::json;
 use toml::Value as TomlValue;
 
@@ -55,9 +54,6 @@ pub(crate) fn expand_key_for_matching_with_env(key: &str, env: &impl EnvProvider
         let home_var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
         if let Some(home) = env.get(home_var) {
             return home;
-        }
-        if let Some(home) = home_dir() {
-            return home.to_string_lossy().to_string();
         }
         return key.to_string();
     }
