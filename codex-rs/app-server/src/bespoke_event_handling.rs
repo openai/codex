@@ -274,7 +274,6 @@ pub(crate) async fn apply_bespoke_event_handling(
         },
         EventMsg::RequestUserInput(request) => {
             if matches!(api_version, ApiVersion::V2) {
-                let call_id = request.call_id.clone();
                 let questions = request
                     .questions
                     .into_iter()
@@ -298,14 +297,14 @@ pub(crate) async fn apply_bespoke_event_handling(
                 let params = ToolRequestUserInputParams {
                     thread_id: conversation_id.to_string(),
                     turn_id: request.turn_id,
-                    item_id: call_id.clone(),
+                    item_id: request.call_id,
                     questions,
                 };
                 let rx = outgoing
                     .send_request(ServerRequestPayload::ToolRequestUserInput(params))
                     .await;
                 tokio::spawn(async move {
-                    on_request_user_input_response(event_turn_id, call_id, rx, conversation).await;
+                    on_request_user_input_response(event_turn_id, rx, conversation).await;
                 });
             } else {
                 error!(
@@ -314,12 +313,10 @@ pub(crate) async fn apply_bespoke_event_handling(
                 );
                 let empty = CoreRequestUserInputResponse {
                     answers: HashMap::new(),
-                    interrupted: false,
                 };
                 if let Err(err) = conversation
                     .submit(Op::UserInputAnswer {
                         id: event_turn_id,
-                        call_id: Some(request.call_id),
                         response: empty,
                     })
                     .await
@@ -1486,7 +1483,6 @@ async fn on_exec_approval_response(
 
 async fn on_request_user_input_response(
     event_turn_id: String,
-    call_id: String,
     receiver: oneshot::Receiver<JsonValue>,
     conversation: Arc<CodexThread>,
 ) {
@@ -1497,12 +1493,10 @@ async fn on_request_user_input_response(
             error!("request failed: {err:?}");
             let empty = CoreRequestUserInputResponse {
                 answers: HashMap::new(),
-                interrupted: false,
             };
             if let Err(err) = conversation
                 .submit(Op::UserInputAnswer {
                     id: event_turn_id,
-                    call_id: Some(call_id.clone()),
                     response: empty,
                 })
                 .await
@@ -1518,7 +1512,6 @@ async fn on_request_user_input_response(
             error!("failed to deserialize ToolRequestUserInputResponse: {err}");
             ToolRequestUserInputResponse {
                 answers: HashMap::new(),
-                interrupted: false,
             }
         });
     let response = CoreRequestUserInputResponse {
@@ -1534,13 +1527,11 @@ async fn on_request_user_input_response(
                 )
             })
             .collect(),
-        interrupted: response.interrupted,
     };
 
     if let Err(err) = conversation
         .submit(Op::UserInputAnswer {
             id: event_turn_id,
-            call_id: Some(call_id),
             response,
         })
         .await

@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
+use std::collections::HashMap;
+
 use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
@@ -28,7 +30,6 @@ use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
-use std::collections::HashMap;
 
 fn call_output(req: &ResponsesRequest, call_id: &str) -> String {
     let raw = req.function_call_output(call_id);
@@ -160,14 +161,10 @@ async fn request_user_input_round_trip_resolves_pending() -> anyhow::Result<()> 
             answers: vec!["yes".to_string()],
         },
     );
-    let response = RequestUserInputResponse {
-        answers,
-        interrupted: false,
-    };
+    let response = RequestUserInputResponse { answers };
     codex
         .submit(Op::UserInputAnswer {
             id: request.turn_id.clone(),
-            call_id: Some(request.call_id.clone()),
             response,
         })
         .await?;
@@ -182,8 +179,7 @@ async fn request_user_input_round_trip_resolves_pending() -> anyhow::Result<()> 
         json!({
             "answers": {
                 "confirm_path": { "answers": ["yes"] }
-            },
-            "interrupted": false
+            }
         })
     );
 

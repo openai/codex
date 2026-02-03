@@ -133,7 +133,6 @@ pub(crate) async fn request_skill_dependencies(
         .await
         .unwrap_or_else(|| RequestUserInputResponse {
             answers: HashMap::new(),
-            interrupted: false,
         });
 
     if response.answers.is_empty() {

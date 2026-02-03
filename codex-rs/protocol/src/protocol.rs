@@ -222,9 +222,6 @@ pub enum Op {
     UserInputAnswer {
         /// Turn id for the in-flight request.
         id: String,
-        /// Call id for the original tool invocation, if known.
-        #[serde(default)]
-        call_id: Option<String>,
         /// User-provided answers.
         response: RequestUserInputResponse,
     },

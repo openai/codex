@@ -1700,33 +1700,14 @@ impl Session {
                 None => None,
             }
         };
-
         match entry {
             Some(tx_response) => {
-                if response.interrupted {
-                    // An interrupted request_user_input should end the turn without a follow-up
-                    // request; only mark the active turn when the response is still pending.
-                    self.mark_request_user_input_interrupted().await;
-                }
                 tx_response.send(response).ok();
             }
             None => {
                 warn!("No pending user input found for sub_id: {sub_id}");
             }
         }
-    }
-
-    pub async fn cancel_request_user_input(&self, sub_id: &str) {
-        let _ = {
-            let mut active = self.active_turn.lock().await;
-            match active.as_mut() {
-                Some(at) => {
-                    let mut ts = at.turn_state.lock().await;
-                    ts.remove_pending_user_input(sub_id)
-                }
-                None => None,
-            }
-        };
     }
 
     pub async fn notify_dynamic_tool_response(&self, call_id: &str, response: DynamicToolResponse) {
@@ -2240,25 +2221,6 @@ impl Session {
         }
     }
 
-    pub async fn mark_request_user_input_interrupted(&self) {
-        let mut active = self.active_turn.lock().await;
-        if let Some(at) = active.as_mut() {
-            let mut ts = at.turn_state.lock().await;
-            ts.mark_request_user_input_interrupted();
-        }
-    }
-
-    pub async fn take_request_user_input_interrupted(&self) -> bool {
-        let mut active = self.active_turn.lock().await;
-        match active.as_mut() {
-            Some(at) => {
-                let mut ts = at.turn_state.lock().await;
-                ts.take_request_user_input_interrupted()
-            }
-            None => false,
-        }
-    }
-
     pub async fn list_resources(
         &self,
         server: &str,
@@ -2507,12 +2469,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::PatchApproval { id, decision } => {
                 handlers::patch_approval(&sess, id, decision).await;
             }
-            Op::UserInputAnswer {
-                id,
-                call_id,
-                response,
-            } => {
-                drop(call_id);
+            Op::UserInputAnswer { id, response } => {
                 handlers::request_user_input_response(&sess, id, response).await;
             }
             Op::DynamicToolResponse { id, response } => {
@@ -4265,7 +4222,7 @@ async fn try_run_sampling_request(
     let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
     let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
     let receiving_span = trace_span!("receiving_stream");
-    let mut outcome: CodexResult<SamplingRequestResult> = loop {
+    let outcome: CodexResult<SamplingRequestResult> = loop {
         let handle_responses = trace_span!(
             parent: &receiving_span,
             "handle_responses",
@@ -4475,13 +4432,6 @@ async fn try_run_sampling_request(
     };
 
     drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
-
-    if let Ok(result) = outcome.as_mut() {
-        // Suppress follow-up requests when request_user_input was interrupted.
-        if sess.take_request_user_input_interrupted().await {
-            result.needs_follow_up = false;
-        }
-    }
 
     if should_emit_turn_diff {
         let unified_diff = {

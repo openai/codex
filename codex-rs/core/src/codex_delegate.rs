@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
@@ -367,11 +368,11 @@ async fn handle_request_user_input(
     event: RequestUserInputEvent,
     cancel_token: &CancellationToken,
 ) {
-    let RequestUserInputEvent {
-        call_id, questions, ..
-    } = event;
-    let args = RequestUserInputArgs { questions };
-    let response_fut = parent_session.request_user_input(parent_ctx, call_id.clone(), args);
+    let args = RequestUserInputArgs {
+        questions: event.questions,
+    };
+    let response_fut =
+        parent_session.request_user_input(parent_ctx, parent_ctx.sub_id.clone(), args);
     let response = await_user_input_with_cancel(
         response_fut,
         parent_session,
@@ -379,15 +380,7 @@ async fn handle_request_user_input(
         cancel_token,
     )
     .await;
-    if let Some(response) = response {
-        let _ = codex
-            .submit(Op::UserInputAnswer {
-                id,
-                call_id: Some(call_id),
-                response,
-            })
-            .await;
-    }
+    let _ = codex.submit(Op::UserInputAnswer { id, response }).await;
 }
 
 async fn await_user_input_with_cancel<F>(
@@ -395,17 +388,24 @@ async fn await_user_input_with_cancel<F>(
     parent_session: &Session,
     sub_id: &str,
     cancel_token: &CancellationToken,
-) -> Option<RequestUserInputResponse>
+) -> RequestUserInputResponse
 where
     F: core::future::Future<Output = Option<RequestUserInputResponse>>,
 {
     tokio::select! {
         biased;
         _ = cancel_token.cancelled() => {
-            parent_session.cancel_request_user_input(sub_id).await;
-            None
+            let empty = RequestUserInputResponse {
+                answers: HashMap::new(),
+            };
+            parent_session
+                .notify_user_input_response(sub_id, empty.clone())
+                .await;
+            empty
         }
-        response = fut => response,
+        response = fut => response.unwrap_or_else(|| RequestUserInputResponse {
+            answers: HashMap::new(),
+        }),
     }
 }
 
@@ -443,10 +443,7 @@ mod tests {
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::TurnAbortedEvent;
     use pretty_assertions::assert_eq;
-    use tokio::sync::oneshot;
     use tokio::sync::watch;
-
-    use crate::state::ActiveTurn;
 
     #[tokio::test]
     async fn forward_events_cancelled_while_send_blocked_shuts_down_delegate() {
@@ -519,26 +516,5 @@ mod tests {
             ops.iter().any(|op| matches!(op, Op::Shutdown)),
             "expected Shutdown op after cancellation"
         );
-    }
-
-    #[tokio::test]
-    async fn cancel_request_user_input_clears_session_buffer() {
-        let (session, ctx, _rx_evt) = crate::codex::make_session_and_context_with_rx().await;
-
-        let (tx, rx) = oneshot::channel();
-
-        {
-            let mut active = session.active_turn.lock().await;
-            let turn = ActiveTurn::default();
-            {
-                let mut ts = turn.turn_state.lock().await;
-                ts.insert_pending_user_input(ctx.sub_id.clone(), tx);
-            }
-            *active = Some(turn);
-        }
-
-        session.cancel_request_user_input(&ctx.sub_id).await;
-
-        assert!(rx.await.is_err(), "sender should be dropped on cancel");
     }
 }
