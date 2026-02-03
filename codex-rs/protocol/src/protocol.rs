@@ -416,6 +416,15 @@ pub enum SandboxPolicy {
     },
 }
 
+impl SandboxPolicy {
+    pub fn expects_enforcement(&self) -> bool {
+        matches!(
+            self,
+            SandboxPolicy::ReadOnly | SandboxPolicy::WorkspaceWrite { .. }
+        )
+    }
+}
+
 /// A writable root path accompanied by a list of subpaths that should remain
 /// read‑only even when the root is writable. This is primarily used to ensure
 /// that folders containing files that could be modified to escalate the

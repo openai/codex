@@ -310,13 +310,16 @@ pub fn render_decision_for_unmatched_command(
     let runtime_sandbox_provides_safety =
         cfg!(windows) && matches!(sandbox_policy, SandboxPolicy::ReadOnly);
 
-    // If the command is flagged as dangerous or we have no sandbox protection,
-    // we should never allow it to run without user approval.
+    // If the command is flagged as dangerous or we have no sandbox protection
+    // when we expect a sandbox to be on, we should never allow it to run
+    // without user approval.
     //
     // We prefer to prompt the user rather than outright forbid the command,
     // but if the user has explicitly disabled prompts, we must
     // forbid the command.
-    if command_might_be_dangerous(command) || runtime_sandbox_provides_safety {
+    if sandbox_policy.expects_enforcement()
+        && (command_might_be_dangerous(command) || runtime_sandbox_provides_safety)
+    {
         return if matches!(approval_policy, AskForApproval::Never) {
             Decision::Forbidden
         } else {
@@ -1020,6 +1023,21 @@ prefix_rule(
                     "orange".to_string()
                 ]))
             }
+        );
+    }
+
+    #[test]
+    fn danger_full_access_allows_dangerous_commands_with_never() {
+        let command = vec!["rm".to_string(), "-rf".to_string(), "/".to_string()];
+
+        assert_eq!(
+            render_decision_for_unmatched_command(
+                AskForApproval::Never,
+                &SandboxPolicy::DangerFullAccess,
+                &command,
+                SandboxPermissions::UseDefault,
+            ),
+            Decision::Allow
         );
     }
 
