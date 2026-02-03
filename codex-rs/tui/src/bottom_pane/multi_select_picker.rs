@@ -41,6 +41,7 @@ use ratatui::widgets::Widget;
 
 use super::selection_popup_common::GenericDisplayRow;
 use crate::app_event_sender::AppEventSender;
+use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::bottom_pane_view::BottomPaneView;
 use crate::bottom_pane::popup_consts::MAX_POPUP_ROWS;
 use crate::bottom_pane::scroll_state::ScrollState;
@@ -403,6 +404,15 @@ impl MultiSelectPicker {
 }
 
 impl BottomPaneView for MultiSelectPicker {
+    fn is_complete(&self) -> bool {
+        self.complete
+    }
+
+    fn on_ctrl_c(&mut self) -> CancellationEvent {
+        self.close();
+        CancellationEvent::Handled
+    }
+
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
             KeyEvent { code: KeyCode::Left, .. } if self.ordering_enabled => {
