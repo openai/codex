@@ -46,28 +46,37 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
     let server = MockServer::start().await;
 
     let remote_model = test_remote_model(REMOTE_MODEL, 1);
-    let models_mock = responses::mount_models_once_with_etag(
-        &server,
-        ModelsResponse {
-            models: vec![remote_model.clone()],
-        },
-        ETAG,
-    )
-    .await;
+    let models_mock =
+        responses::mount_models_once_with_etag(&server, ModelsResponse { models: vec![] }, ETAG)
+            .await;
 
     let mut builder = test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    builder = builder.with_config(|config| {
-        config.features.enable(Feature::RemoteModels);
-        config.model = Some("gpt-5".to_string());
-        config.model_provider.request_max_retries = Some(0);
-        config.model_provider.stream_max_retries = Some(1);
-    });
+    builder = builder
+        .with_pre_build_hook({
+            let remote_model = remote_model.clone();
+            move |home| {
+                let cache = ModelsCache {
+                    fetched_at: Utc::now(),
+                    etag: Some(ETAG.to_string()),
+                    client_version: Some(codex_core::models_manager::client_version_to_whole()),
+                    models: vec![remote_model],
+                };
+                let cache_path = home.join(CACHE_FILE);
+                write_cache_sync(&cache_path, &cache).expect("write cache");
+            }
+        })
+        .with_config(|config| {
+            config.features.enable(Feature::RemoteModels);
+            config.model = Some("gpt-5".to_string());
+            config.model_provider.request_max_retries = Some(0);
+            config.model_provider.stream_max_retries = Some(1);
+        });
 
     let test = builder.build(&server).await?;
     let codex = Arc::clone(&test.codex);
     let config = test.config.clone();
 
-    // Populate cache via initial refresh.
+    // Load cache so ModelsManager captures the current etag in memory.
     let models_manager = test.thread_manager.get_models_manager();
     let _ = models_manager
         .list_models(&config, RefreshStrategy::OnlineIfUncached)
@@ -116,7 +125,7 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
     );
     assert_eq!(
         models_mock.requests().len(),
-        1,
+        0,
         "/models should not refetch on matching etag"
     );
 
