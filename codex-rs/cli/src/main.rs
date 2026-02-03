@@ -31,7 +31,9 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use supports_color::Stream;
 
+#[cfg(target_os = "macos")]
 mod app_cmd;
+#[cfg(target_os = "macos")]
 mod desktop_app;
 mod mcp_cmd;
 #[cfg(not(windows))]
