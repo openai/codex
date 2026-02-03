@@ -181,6 +181,59 @@ pub async fn list_thread_ids_db(
     }
 }
 
+/// List thread metadata from SQLite without rollout directory traversal.
+#[allow(clippy::too_many_arguments)]
+pub async fn list_threads_db(
+    context: Option<&codex_state::StateRuntime>,
+    codex_home: &Path,
+    page_size: usize,
+    cursor: Option<&Cursor>,
+    sort_key: ThreadSortKey,
+    allowed_sources: &[SessionSource],
+    model_providers: Option<&[String]>,
+    archived: bool,
+) -> Option<codex_state::ThreadsPage> {
+    let ctx = context?;
+    if ctx.codex_home() != codex_home {
+        warn!(
+            "state db codex_home mismatch: expected {}, got {}",
+            ctx.codex_home().display(),
+            codex_home.display()
+        );
+    }
+
+    let anchor = cursor_to_anchor(cursor);
+    let allowed_sources: Vec<String> = allowed_sources
+        .iter()
+        .map(|value| match serde_json::to_value(value) {
+            Ok(Value::String(s)) => s,
+            Ok(other) => other.to_string(),
+            Err(_) => String::new(),
+        })
+        .collect();
+    let model_providers = model_providers.map(<[String]>::to_vec);
+    match ctx
+        .list_threads(
+            page_size,
+            anchor.as_ref(),
+            match sort_key {
+                ThreadSortKey::CreatedAt => codex_state::SortKey::CreatedAt,
+                ThreadSortKey::UpdatedAt => codex_state::SortKey::UpdatedAt,
+            },
+            allowed_sources.as_slice(),
+            model_providers.as_deref(),
+            archived,
+        )
+        .await
+    {
+        Ok(page) => Some(page),
+        Err(err) => {
+            warn!("state db list_threads failed: {err}");
+            None
+        }
+    }
+}
+
 /// Look up the rollout path for a thread id using SQLite.
 pub async fn find_rollout_path_by_id(
     context: Option<&codex_state::StateRuntime>,
