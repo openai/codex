@@ -31,8 +31,8 @@ fn format_hook_section(section: &str, command: &str, args: &[&str]) -> String {
 }
 
 fn write_hook_toml(cwd: &Path, contents: &str) {
-    let hook_dir = cwd.join(".codex");
-    fs::create_dir_all(&hook_dir).unwrap_or_else(|err| panic!("create .codex dir: {err}"));
+    let hook_dir = cwd.join(".agent");
+    fs::create_dir_all(&hook_dir).unwrap_or_else(|err| panic!("create .agent dir: {err}"));
     fs::write(hook_dir.join("hook.toml"), contents)
         .unwrap_or_else(|err| panic!("write hook.toml: {err}"));
 }
@@ -43,6 +43,16 @@ fn turn_start_hook_config() -> String {
     } else {
         format_hook_section("turn_start", "sh", &["-c", "echo hook-start 1>&2"])
     }
+}
+
+fn turn_start_hook_config_with_hook_input(enabled: bool) -> String {
+    let mut config = if cfg!(windows) {
+        format_hook_section("turn_start", "cmd.exe", &["/C", "echo hook-start 1>&2"])
+    } else {
+        format_hook_section("turn_start", "sh", &["-c", "echo hook-start 1>&2"])
+    };
+    config.push_str(&format!("run_on_hook_input = {enabled}\n"));
+    config
 }
 
 fn turn_start_hook_stdout_config() -> String {
@@ -92,7 +102,7 @@ fn turn_end_hook_config() -> String {
             "cmd.exe",
             &[
                 "/C",
-                "if not exist .codex/hook-end.fired (echo hook-end 1>&2 & type nul > .codex/hook-end.fired)",
+                "if not exist .agent/hook-end.fired (echo hook-end 1>&2 & type nul > .agent/hook-end.fired)",
             ],
         )
     } else {
@@ -101,7 +111,7 @@ fn turn_end_hook_config() -> String {
             "sh",
             &[
                 "-c",
-                "if [ ! -f .codex/hook-end.fired ]; then echo hook-end 1>&2; touch .codex/hook-end.fired; fi",
+                "if [ ! -f .agent/hook-end.fired ]; then echo hook-end 1>&2; touch .agent/hook-end.fired; fi",
             ],
         )
     }
@@ -356,6 +366,55 @@ async fn turn_end_hook_stderr_triggers_follow_up_turn() -> anyhow::Result<()> {
             .iter()
             .any(|text| text.contains("HookInput (TurnEnd): hook-end"))
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_start_hook_skips_hook_input_follow_up_when_disabled() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_model("test-gpt-5.1-codex");
+    let test = builder.build(&server).await?;
+
+    let config = format!(
+        "{}{}",
+        turn_start_hook_config_with_hook_input(false),
+        turn_end_hook_config()
+    );
+    write_hook_toml(test.cwd_path(), &config);
+
+    let response_body = sse(vec![
+        ev_response_created("resp-1"),
+        ev_assistant_message("msg-1", "ok"),
+        ev_completed("resp-1"),
+    ]);
+    let _response_mock = mount_sse_once(&server, response_body).await;
+
+    submit_user_turn(&test, "user input").await?;
+
+    let mut turn_completes = 0;
+    let mut turn_start_inputs = 0;
+    let mut turn_end_inputs = 0;
+    while turn_completes < 2 {
+        let event = wait_for_event(&test.codex, |_| true).await;
+        match event {
+            EventMsg::TurnComplete(_) => {
+                turn_completes += 1;
+            }
+            EventMsg::HookInput(hook_event) => {
+                if hook_event.hook == HookKind::TurnStart {
+                    turn_start_inputs += 1;
+                }
+                if hook_event.hook == HookKind::TurnEnd {
+                    turn_end_inputs += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    assert_eq!(turn_start_inputs, 1);
+    assert_eq!(turn_end_inputs, 1);
 
     Ok(())
 }
