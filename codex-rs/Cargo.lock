@@ -4650,16 +4650,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b3eede3bdf92f3b4f9dc04072a9ce5ab557d5ec9038773bf9ffcd5588b3cc05b"
 
 [[package]]
-name = "mcp-types"
-version = "0.0.0"
-dependencies = [
- "schemars 0.8.22",
- "serde",
- "serde_json",
- "ts-rs",
-]
-
-[[package]]
 name = "mcp_test_support"
 version = "0.0.0"
 dependencies = [
