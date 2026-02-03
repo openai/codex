@@ -13,6 +13,7 @@ codex-backend-client = { workspace = true }
 codex-core = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
+futures = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time"] }
 toml = { workspace = true }
 tracing = { workspace = true }

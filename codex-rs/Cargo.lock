@@ -1413,6 +1413,7 @@ dependencies = [
  "codex-core",
  "codex-otel",
  "codex-protocol",
+ "futures",
  "pretty_assertions",
  "serde_json",
  "tempfile",

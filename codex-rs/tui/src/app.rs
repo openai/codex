@@ -226,6 +226,14 @@ fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) 
     )));
 }
 
+fn emit_cloud_requirements_warning(app_event_tx: &AppEventSender, warning: Option<String>) {
+    if let Some(warning) = warning {
+        app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+            history_cell::new_warning_event(warning),
+        )));
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SessionSummary {
     usage_line: String,
@@ -908,6 +916,7 @@ impl App {
         tui: &mut tui::Tui,
         auth_manager: Arc<AuthManager>,
         mut config: Config,
+        cloud_requirements_warning: Option<String>,
         cli_kv_overrides: Vec<(String, TomlValue)>,
         harness_overrides: ConfigOverrides,
         active_profile: Option<String>,
@@ -921,6 +930,7 @@ impl App {
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
         emit_project_config_warnings(&app_event_tx, &config);
+        emit_cloud_requirements_warning(&app_event_tx, cloud_requirements_warning);
         tui.set_notification_method(config.tui_notification_method);
 
         let harness_overrides =
@@ -2546,6 +2556,36 @@ mod tests {
             vec![base_cwd.join("rel")]
         );
         Ok(())
+    }
+
+    #[test]
+    fn emit_cloud_requirements_warning_enqueues_warning_cell() {
+        let (tx, mut rx) = unbounded_channel();
+        let app_event_tx = AppEventSender::new(tx);
+        emit_cloud_requirements_warning(
+            &app_event_tx,
+            Some("Failed to load Cloud Requirements (HTTP 403).".to_string()),
+        );
+
+        let event = rx.try_recv().expect("expected warning event");
+        let AppEvent::InsertHistoryCell(cell) = event else {
+            panic!("expected InsertHistoryCell event");
+        };
+        let rendered = cell
+            .display_lines(200)
+            .into_iter()
+            .flat_map(|line| line.spans.into_iter().map(|span| span.content.to_string()))
+            .collect::<String>();
+        assert!(rendered.contains("HTTP 403"));
+    }
+
+    #[test]
+    fn emit_cloud_requirements_warning_skips_none() {
+        let (tx, mut rx) = unbounded_channel();
+        let app_event_tx = AppEventSender::new(tx);
+        emit_cloud_requirements_warning(&app_event_tx, None);
+
+        assert!(rx.try_recv().is_err());
     }
 
     #[tokio::test]

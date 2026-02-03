@@ -15,6 +15,7 @@ use codex_core::auth::CodexAuth;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigRequirementsToml;
 use codex_protocol::account::PlanType;
+use futures::FutureExt;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -27,9 +28,21 @@ const CLOUD_REQUIREMENTS_TIMEOUT: Duration = Duration::from_secs(5);
 trait RequirementsFetcher: Send + Sync {
     /// Returns requirements as a TOML string.
     ///
-    /// TODO(gt): For now, returns an Option. But when we want to make this fail-closed, return a
-    /// Result.
-    async fn fetch_requirements(&self, auth: &CodexAuth) -> Option<String>;
+    async fn fetch_requirements(
+        &self,
+        auth: &CodexAuth,
+    ) -> Result<Option<String>, CloudRequirementsLoadFailure>;
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+struct CloudRequirementsLoadOutcome {
+    requirements: Option<ConfigRequirementsToml>,
+    warning: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CloudRequirementsLoadFailure {
+    status_code: Option<u16>,
 }
 
 struct BackendRequirementsFetcher {
@@ -44,7 +57,10 @@ impl BackendRequirementsFetcher {
 
 #[async_trait]
 impl RequirementsFetcher for BackendRequirementsFetcher {
-    async fn fetch_requirements(&self, auth: &CodexAuth) -> Option<String> {
+    async fn fetch_requirements(
+        &self,
+        auth: &CodexAuth,
+    ) -> Result<Option<String>, CloudRequirementsLoadFailure> {
         let client = BackendClient::from_auth(self.base_url.clone(), auth)
             .inspect_err(|err| {
                 tracing::warn!(
@@ -52,20 +68,24 @@ impl RequirementsFetcher for BackendRequirementsFetcher {
                     "Failed to construct backend client for cloud requirements"
                 );
             })
-            .ok()?;
+            .map_err(|_| CloudRequirementsLoadFailure { status_code: None })?;
 
-        let response = client
-            .get_config_requirements_file()
-            .await
-            .inspect_err(|err| tracing::warn!(error = %err, "Failed to fetch cloud requirements"))
-            .ok()?;
+        let response = client.get_config_requirements_file().await.map_err(|err| {
+            let status_code = extract_http_status_code(&err.to_string());
+            tracing::warn!(
+                error = %err,
+                status_code,
+                "Failed to fetch cloud requirements"
+            );
+            CloudRequirementsLoadFailure { status_code }
+        })?;
 
         let Some(contents) = response.contents else {
             tracing::warn!("Cloud requirements response missing contents");
-            return None;
+            return Ok(None);
         };
 
-        Some(contents)
+        Ok(Some(contents))
     }
 }
 
@@ -88,18 +108,23 @@ impl CloudRequirementsService {
         }
     }
 
-    async fn fetch_with_timeout(&self) -> Option<ConfigRequirementsToml> {
+    async fn fetch_with_timeout(&self) -> CloudRequirementsLoadOutcome {
         let _timer =
             codex_otel::start_global_timer("codex.cloud_requirements.fetch.duration_ms", &[]);
         let started_at = Instant::now();
-        let result = timeout(self.timeout, self.fetch())
-            .await
-            .inspect_err(|_| {
-                tracing::warn!("Timed out waiting for cloud requirements; continuing without them");
-            })
-            .ok()?;
+        let result = match timeout(self.timeout, self.fetch()).await {
+            Ok(result) => result,
+            Err(_) => {
+                let warning = "Failed to load Cloud Requirements: request timed out. Continuing without cloud requirements.".to_string();
+                tracing::warn!("{warning}");
+                return CloudRequirementsLoadOutcome {
+                    requirements: None,
+                    warning: Some(warning),
+                };
+            }
+        };
 
-        match result.as_ref() {
+        match result.requirements.as_ref() {
             Some(requirements) => {
                 tracing::info!(
                     elapsed_ms = started_at.elapsed().as_millis(),
@@ -115,25 +140,49 @@ impl CloudRequirementsService {
             }
         }
 
+        if let Some(warning) = result.warning.as_deref() {
+            tracing::warn!("{warning}");
+        }
+
         result
     }
 
-    async fn fetch(&self) -> Option<ConfigRequirementsToml> {
-        let auth = self.auth_manager.auth().await?;
+    async fn fetch(&self) -> CloudRequirementsLoadOutcome {
+        let Some(auth) = self.auth_manager.auth().await else {
+            return CloudRequirementsLoadOutcome::default();
+        };
         if !auth.is_chatgpt_auth()
             || !matches!(
                 auth.account_plan_type(),
                 Some(PlanType::Business | PlanType::Enterprise)
             )
         {
-            return None;
+            return CloudRequirementsLoadOutcome::default();
         }
 
-        let contents = self.fetcher.fetch_requirements(&auth).await?;
-        parse_cloud_requirements(&contents)
-            .inspect_err(|err| tracing::warn!(error = %err, "Failed to parse cloud requirements"))
-            .ok()
-            .flatten()
+        let contents = match self.fetcher.fetch_requirements(&auth).await {
+            Ok(Some(contents)) => contents,
+            Ok(None) => return CloudRequirementsLoadOutcome::default(),
+            Err(err) => {
+                return CloudRequirementsLoadOutcome {
+                    requirements: None,
+                    warning: Some(fetch_warning_message(err.status_code)),
+                };
+            }
+        };
+        match parse_cloud_requirements(&contents) {
+            Ok(requirements) => CloudRequirementsLoadOutcome {
+                requirements,
+                warning: None,
+            },
+            Err(err) => {
+                tracing::warn!(error = %err, "Failed to parse cloud requirements");
+                CloudRequirementsLoadOutcome {
+                    requirements: None,
+                    warning: Some("Failed to load Cloud Requirements due to invalid response format. Continuing without cloud requirements.".to_string()),
+                }
+            }
+        }
     }
 }
 
@@ -147,12 +196,48 @@ pub fn cloud_requirements_loader(
         CLOUD_REQUIREMENTS_TIMEOUT,
     );
     let task = tokio::spawn(async move { service.fetch_with_timeout().await });
-    CloudRequirementsLoader::new(async move {
+    let load_outcome = async move {
         task.await
             .inspect_err(|err| tracing::warn!(error = %err, "Cloud requirements task failed"))
             .ok()
-            .flatten()
-    })
+            .unwrap_or_else(|| CloudRequirementsLoadOutcome {
+                requirements: None,
+                warning: Some(
+                    "Failed to load Cloud Requirements due to an internal task failure. Continuing without cloud requirements.".to_string(),
+                ),
+            })
+    }
+    .shared();
+    CloudRequirementsLoader::new_with_warning(
+        {
+            let load_outcome = load_outcome.clone();
+            async move { load_outcome.await.requirements }
+        },
+        async move { load_outcome.await.warning },
+    )
+}
+
+fn fetch_warning_message(status_code: Option<u16>) -> String {
+    match status_code {
+        Some(status_code) => format!(
+            "Failed to load Cloud Requirements (HTTP {status_code}). Continuing without cloud requirements."
+        ),
+        None => {
+            "Failed to load Cloud Requirements. Continuing without cloud requirements.".to_string()
+        }
+    }
+}
+
+fn extract_http_status_code(error_message: &str) -> Option<u16> {
+    let status_text = error_message.split_once(" failed: ")?.1;
+    let status_digits: String = status_text
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect();
+    if status_digits.len() != 3 {
+        return None;
+    }
+    status_digits.parse::<u16>().ok()
 }
 
 fn parse_cloud_requirements(
@@ -247,8 +332,11 @@ mod tests {
 
     #[async_trait::async_trait]
     impl RequirementsFetcher for StaticFetcher {
-        async fn fetch_requirements(&self, _auth: &CodexAuth) -> Option<String> {
-            self.contents.clone()
+        async fn fetch_requirements(
+            &self,
+            _auth: &CodexAuth,
+        ) -> Result<Option<String>, CloudRequirementsLoadFailure> {
+            Ok(self.contents.clone())
         }
     }
 
@@ -256,9 +344,12 @@ mod tests {
 
     #[async_trait::async_trait]
     impl RequirementsFetcher for PendingFetcher {
-        async fn fetch_requirements(&self, _auth: &CodexAuth) -> Option<String> {
+        async fn fetch_requirements(
+            &self,
+            _auth: &CodexAuth,
+        ) -> Result<Option<String>, CloudRequirementsLoadFailure> {
             pending::<()>().await;
-            None
+            Ok(None)
         }
     }
 
@@ -271,7 +362,7 @@ mod tests {
             CLOUD_REQUIREMENTS_TIMEOUT,
         );
         let result = service.fetch().await;
-        assert!(result.is_none());
+        assert_eq!(result, CloudRequirementsLoadOutcome::default());
     }
 
     #[tokio::test]
@@ -282,7 +373,7 @@ mod tests {
             CLOUD_REQUIREMENTS_TIMEOUT,
         );
         let result = service.fetch().await;
-        assert!(result.is_none());
+        assert_eq!(result, CloudRequirementsLoadOutcome::default());
     }
 
     #[tokio::test]
@@ -296,13 +387,16 @@ mod tests {
         );
         assert_eq!(
             service.fetch().await,
-            Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::Never]),
-                allowed_sandbox_modes: None,
-                mcp_servers: None,
-                rules: None,
-                enforce_residency: None,
-            })
+            CloudRequirementsLoadOutcome {
+                requirements: Some(ConfigRequirementsToml {
+                    allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                    allowed_sandbox_modes: None,
+                    mcp_servers: None,
+                    rules: None,
+                    enforce_residency: None,
+                }),
+                warning: None,
+            }
         );
     }
 
@@ -358,6 +452,34 @@ mod tests {
         tokio::time::advance(CLOUD_REQUIREMENTS_TIMEOUT + Duration::from_millis(1)).await;
 
         let result = handle.await.expect("cloud requirements task");
-        assert!(result.is_none());
+        assert_eq!(
+            result.warning,
+            Some(
+                "Failed to load Cloud Requirements: request timed out. Continuing without cloud requirements.".to_string()
+            )
+        );
+        assert_eq!(result.requirements, None);
+    }
+
+    #[test]
+    fn parse_http_status_code_from_backend_error_message() {
+        assert_eq!(
+            extract_http_status_code(
+                "GET https://chatgpt.com/backend-api/wham/config/requirements failed: 403 Forbidden; content-type=application/json; body={}"
+            ),
+            Some(403)
+        );
+        assert_eq!(
+            extract_http_status_code("Decode error for https://example.com: unexpected EOF"),
+            None
+        );
+    }
+
+    #[test]
+    fn fetch_warning_message_includes_status_code_when_available() {
+        assert_eq!(
+            fetch_warning_message(Some(429)),
+            "Failed to load Cloud Requirements (HTTP 429). Continuing without cloud requirements."
+        );
     }
 }

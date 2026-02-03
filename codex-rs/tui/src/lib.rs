@@ -282,6 +282,7 @@ pub async fn run_main(
         cloud_requirements.clone(),
     )
     .await;
+    let cloud_requirements_warning = cloud_requirements.warning().await;
     set_default_client_residency_requirement(config.enforce_residency.value());
 
     if let Some(warning) = add_dir_warning_message(&cli.add_dir, config.sandbox_policy.get()) {
@@ -398,6 +399,7 @@ pub async fn run_main(
     run_ratatui_app(
         cli,
         config,
+        cloud_requirements_warning,
         overrides,
         cli_kv_overrides,
         cloud_requirements,
@@ -410,6 +412,7 @@ pub async fn run_main(
 async fn run_ratatui_app(
     cli: Cli,
     initial_config: Config,
+    cloud_requirements_warning: Option<String>,
     overrides: ConfigOverrides,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     cloud_requirements: CloudRequirementsLoader,
@@ -684,6 +687,7 @@ async fn run_ratatui_app(
         &mut tui,
         auth_manager,
         config,
+        cloud_requirements_warning,
         cli_kv_overrides.clone(),
         overrides.clone(),
         active_profile,
