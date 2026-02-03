@@ -1094,7 +1094,11 @@ impl ConfigToml {
         profile_sandbox_mode: Option<SandboxMode>,
         windows_sandbox_level: WindowsSandboxLevel,
         resolved_cwd: &Path,
+        sandbox_policy_constraint: Option<&Constrained<SandboxPolicy>>,
     ) -> SandboxPolicyResolution {
+        let sandbox_mode_was_explicit = sandbox_mode_override.is_some()
+            || profile_sandbox_mode.is_some()
+            || self.sandbox_mode.is_some();
         let resolved_sandbox_mode = sandbox_mode_override
             .or(profile_sandbox_mode)
             .or(self.sandbox_mode)
@@ -1135,6 +1139,12 @@ impl ConfigToml {
         {
             sandbox_policy = SandboxPolicy::new_read_only_policy();
             forced_auto_mode_downgraded_on_windows = true;
+        }
+        if !sandbox_mode_was_explicit
+            && let Some(constraint) = sandbox_policy_constraint
+            && let Err(_err) = constraint.can_set(&sandbox_policy)
+        {
+            sandbox_policy = constraint.get().clone();
         }
         SandboxPolicyResolution {
             policy: sandbox_policy,
@@ -1364,6 +1374,9 @@ impl Config {
         let active_project = cfg
             .get_active_project(&resolved_cwd)
             .unwrap_or(ProjectConfig { trust_level: None });
+        let sandbox_mode_was_explicit = sandbox_mode.is_some()
+            || config_profile.sandbox_mode.is_some()
+            || cfg.sandbox_mode.is_some();
 
         let windows_sandbox_level = WindowsSandboxLevel::from_features(&features);
         let SandboxPolicyResolution {
@@ -1374,6 +1387,7 @@ impl Config {
             config_profile.sandbox_mode,
             windows_sandbox_level,
             &resolved_cwd,
+            Some(&requirements.sandbox_policy),
         );
         if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = &mut sandbox_policy {
             for path in additional_writable_roots {
@@ -1401,9 +1415,7 @@ impl Config {
             .is_some()
             || config_profile.approval_policy.is_some()
             || cfg.approval_policy.is_some()
-            || sandbox_mode.is_some()
-            || config_profile.sandbox_mode.is_some()
-            || cfg.sandbox_mode.is_some();
+            || sandbox_mode_was_explicit;
 
         let mut model_providers = built_in_model_providers();
         // Merge user-defined providers into the built-in list.
@@ -1919,6 +1931,7 @@ network_access = false  # This should be ignored.
             None,
             WindowsSandboxLevel::Disabled,
             &PathBuf::from("/tmp/test"),
+            None,
         );
         assert_eq!(
             resolution,
@@ -1943,6 +1956,7 @@ network_access = true  # This should be ignored.
             None,
             WindowsSandboxLevel::Disabled,
             &PathBuf::from("/tmp/test"),
+            None,
         );
         assert_eq!(
             resolution,
@@ -1975,6 +1989,7 @@ exclude_slash_tmp = true
             None,
             WindowsSandboxLevel::Disabled,
             &PathBuf::from("/tmp/test"),
+            None,
         );
         if cfg!(target_os = "windows") {
             assert_eq!(
@@ -2024,6 +2039,7 @@ trust_level = "trusted"
             None,
             WindowsSandboxLevel::Disabled,
             &PathBuf::from("/tmp/test"),
+            None,
         );
         if cfg!(target_os = "windows") {
             assert_eq!(
@@ -4331,6 +4347,7 @@ trust_level = "untrusted"
             None,
             WindowsSandboxLevel::Disabled,
             &PathBuf::from("/tmp/test"),
+            None,
         );
 
         // Verify that untrusted projects get WorkspaceWrite (or ReadOnly on Windows due to downgrade)
@@ -4348,6 +4365,46 @@ trust_level = "untrusted"
             );
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn derive_sandbox_policy_falls_back_to_constraint_value_for_implicit_defaults()
+    -> anyhow::Result<()> {
+        let project_dir = TempDir::new()?;
+        let project_path = project_dir.path().to_path_buf();
+        let project_key = project_path.to_string_lossy().to_string();
+        let cfg = ConfigToml {
+            projects: Some(HashMap::from([(
+                project_key,
+                ProjectConfig {
+                    trust_level: Some(TrustLevel::Trusted),
+                },
+            )])),
+            ..Default::default()
+        };
+        let constrained = Constrained::new(SandboxPolicy::DangerFullAccess, |candidate| {
+            if matches!(candidate, SandboxPolicy::DangerFullAccess) {
+                Ok(())
+            } else {
+                Err(ConstraintError::InvalidValue {
+                    field_name: "sandbox_mode",
+                    candidate: format!("{candidate:?}"),
+                    allowed: "[DangerFullAccess]".to_string(),
+                    requirement_source: RequirementSource::Unknown,
+                })
+            }
+        })?;
+
+        let resolution = cfg.derive_sandbox_policy(
+            None,
+            None,
+            WindowsSandboxLevel::Disabled,
+            &project_path,
+            Some(&constrained),
+        );
+
+        assert_eq!(resolution.policy, SandboxPolicy::DangerFullAccess);
         Ok(())
     }
 
@@ -4504,6 +4561,64 @@ mcp_oauth_callback_port = 5678
             );
         }
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn requirements_disallowing_default_sandbox_falls_back_to_required_default()
+    -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .cloud_requirements(CloudRequirementsLoader::new(async {
+                Some(crate::config_loader::ConfigRequirementsToml {
+                    allowed_sandbox_modes: Some(vec![
+                        crate::config_loader::SandboxModeRequirement::ReadOnly,
+                    ]),
+                    ..Default::default()
+                })
+            }))
+            .build()
+            .await?;
+
+        assert_eq!(*config.sandbox_policy.get(), SandboxPolicy::ReadOnly);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn explicit_sandbox_mode_still_errors_when_disallowed_by_requirements()
+    -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            r#"sandbox_mode = "danger-full-access"
+"#,
+        )?;
+
+        let requirements = crate::config_loader::ConfigRequirementsToml {
+            allowed_approval_policies: None,
+            allowed_sandbox_modes: Some(vec![
+                crate::config_loader::SandboxModeRequirement::ReadOnly,
+            ]),
+            mcp_servers: None,
+            rules: None,
+            enforce_residency: None,
+        };
+
+        let err = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cloud_requirements(CloudRequirementsLoader::new(
+                async move { Some(requirements) },
+            ))
+            .build()
+            .await
+            .expect_err("explicit disallowed mode should still fail");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        let message = err.to_string();
+        assert!(message.contains("invalid value for `sandbox_mode`"));
+        assert!(message.contains("set by cloud requirements"));
         Ok(())
     }
 }
