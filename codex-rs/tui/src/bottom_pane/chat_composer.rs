@@ -4,6 +4,7 @@
 //!
 //! - Editing the input buffer (a [`TextArea`]), including placeholder "elements" for attachments.
 //! - Routing keys to the active popup (slash commands, file search, skill/apps mentions).
+//! - Promoting typed slash commands into atomic elements when the command name is completed.
 //! - Handling submit vs newline on Enter.
 //! - Turning raw key streams into explicit paste operations on platforms where terminals
 //!   don't provide reliable bracketed paste (notably Windows).
@@ -36,6 +37,8 @@
 //!
 //! The numeric auto-submit path used by the slash popup performs the same pending-paste expansion
 //! and attachment pruning, and clears pending paste state on success.
+//! Slash commands with arguments (like `/plan` and `/review`) reuse the same preparation path so
+//! pasted content and text elements are preserved when extracting args.
 //!
 //! # Non-bracketed Paste Bursts
 //!
@@ -164,6 +167,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::ops::Range;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
@@ -184,7 +188,7 @@ pub enum InputResult {
         text_elements: Vec<TextElement>,
     },
     Command(SlashCommand),
-    CommandWithArgs(SlashCommand, String),
+    CommandWithArgs(SlashCommand, String, Vec<TextElement>),
     None,
 }
 
@@ -388,6 +392,14 @@ impl ChatComposer {
 
     pub fn set_skill_mentions(&mut self, skills: Option<Vec<SkillMetadata>>) {
         self.skills = skills;
+    }
+
+    /// Toggle composer-side image paste handling.
+    ///
+    /// This only affects whether image-like paste content is converted into attachments; the
+    /// `ChatWidget` layer still performs capability checks before images are submitted.
+    pub fn set_image_paste_enabled(&mut self, enabled: bool) {
+        self.config.image_paste_enabled = enabled;
     }
 
     pub fn set_connector_mentions(&mut self, connectors_snapshot: Option<ConnectorsSnapshot>) {
@@ -708,18 +720,45 @@ impl ChatComposer {
     }
 
     /// Replace the entire composer content with `text` and reset cursor.
-    /// This clears any pending paste payloads.
+    ///
+    /// This is the "fresh draft" path: it clears pending paste payloads and
+    /// mention link targets. Callers restoring a previously submitted draft
+    /// that must keep `$name -> path` resolution should use
+    /// [`Self::set_text_content_with_mention_paths`] instead.
     pub(crate) fn set_text_content(
         &mut self,
         text: String,
         text_elements: Vec<TextElement>,
         local_image_paths: Vec<PathBuf>,
     ) {
+        self.set_text_content_with_mention_paths(
+            text,
+            text_elements,
+            local_image_paths,
+            HashMap::new(),
+        );
+    }
+
+    /// Replace the entire composer content while restoring mention link targets.
+    ///
+    /// Mention popup insertion stores both visible text (for example `$file`)
+    /// and hidden `mention_paths` used to resolve the canonical target during
+    /// submission. Use this method when restoring an interrupted or blocked
+    /// draft; if callers restore only text and images, mentions can appear
+    /// intact to users while resolving to the wrong target or dropping on
+    /// retry.
+    pub(crate) fn set_text_content_with_mention_paths(
+        &mut self,
+        text: String,
+        text_elements: Vec<TextElement>,
+        local_image_paths: Vec<PathBuf>,
+        mention_paths: HashMap<String, String>,
+    ) {
         // Clear any existing content, placeholders, and attachments first.
         self.textarea.set_text_clearing_elements("");
         self.pending_pastes.clear();
         self.attached_images.clear();
-        self.mention_paths.clear();
+        self.mention_paths = mention_paths;
 
         self.textarea.set_text_with_elements(&text, &text_elements);
 
@@ -747,6 +786,7 @@ impl ChatComposer {
     /// Move the cursor to the end of the current text buffer.
     pub(crate) fn move_cursor_to_end(&mut self) {
         self.textarea.set_cursor(self.textarea.text().len());
+        self.sync_popups();
     }
 
     pub(crate) fn clear_for_ctrl_c(&mut self) -> Option<String> {
@@ -1235,6 +1275,7 @@ impl ChatComposer {
             self.handle_paste(pasted);
         }
         self.textarea.input(input);
+
         let text_after = self.textarea.text();
         self.pending_pastes
             .retain(|(placeholder, _)| text_after.contains(placeholder));
@@ -1798,7 +1839,12 @@ impl ChatComposer {
 
     /// Prepare text for submission/queuing. Returns None if submission should be suppressed.
     /// On success, clears pending paste payloads because placeholders have been expanded.
-    fn prepare_submission_text(&mut self) -> Option<(String, Vec<TextElement>)> {
+    ///
+    /// When `record_history` is true, the final submission is stored for ↑/↓ recall.
+    fn prepare_submission_text(
+        &mut self,
+        record_history: bool,
+    ) -> Option<(String, Vec<TextElement>)> {
         let mut text = self.textarea.text().to_string();
         let original_input = text.clone();
         let original_text_elements = self.textarea.text_elements();
@@ -1896,7 +1942,7 @@ impl ChatComposer {
         if text.is_empty() && self.attached_images.is_empty() {
             return None;
         }
-        if !text.is_empty() || !self.attached_images.is_empty() {
+        if record_history && (!text.is_empty() || !self.attached_images.is_empty()) {
             let local_image_paths = self
                 .attached_images
                 .iter()
@@ -1978,7 +2024,7 @@ impl ChatComposer {
             return (result, true);
         }
 
-        if let Some((text, text_elements)) = self.prepare_submission_text() {
+        if let Some((text, text_elements)) = self.prepare_submission_text(true) {
             if should_queue {
                 (
                     InputResult::Queued {
@@ -2026,6 +2072,9 @@ impl ChatComposer {
                 self.windows_degraded_sandbox_active,
             )
         {
+            if self.reject_slash_command_if_unavailable(cmd) {
+                return Some(InputResult::None);
+            }
             self.textarea.set_text_clearing_elements("");
             Some(InputResult::Command(cmd))
         } else {
@@ -2039,28 +2088,104 @@ impl ChatComposer {
         if !self.slash_commands_enabled() {
             return None;
         }
-        let original_input = self.textarea.text().to_string();
-        let input_starts_with_space = original_input.starts_with(' ');
-
-        if !input_starts_with_space {
-            let text = self.textarea.text().to_string();
-            if let Some((name, rest, _rest_offset)) = parse_slash_name(&text)
-                && !rest.is_empty()
-                && !name.contains('/')
-                && let Some(cmd) = slash_commands::find_builtin_command(
-                    name,
-                    self.collaboration_modes_enabled,
-                    self.connectors_enabled,
-                    self.personality_command_enabled,
-                    self.windows_degraded_sandbox_active,
-                )
-                && matches!(cmd, SlashCommand::Review | SlashCommand::Rename)
-            {
-                self.textarea.set_text_clearing_elements("");
-                return Some(InputResult::CommandWithArgs(cmd, rest.to_string()));
-            }
+        let text = self.textarea.text().to_string();
+        if text.starts_with(' ') {
+            return None;
         }
-        None
+
+        let (name, rest, rest_offset) = parse_slash_name(&text)?;
+        if rest.is_empty() || name.contains('/') {
+            return None;
+        }
+
+        let cmd = slash_commands::find_builtin_command(
+            name,
+            self.collaboration_modes_enabled,
+            self.connectors_enabled,
+            self.personality_command_enabled,
+            self.windows_degraded_sandbox_active,
+        )?;
+
+        if !cmd.supports_inline_args() {
+            return None;
+        }
+        if self.reject_slash_command_if_unavailable(cmd) {
+            return Some(InputResult::None);
+        }
+
+        let mut args_elements =
+            Self::slash_command_args_elements(rest, rest_offset, &self.textarea.text_elements());
+        let trimmed_rest = rest.trim();
+        args_elements = Self::trim_text_elements(rest, trimmed_rest, args_elements);
+        Some(InputResult::CommandWithArgs(
+            cmd,
+            trimmed_rest.to_string(),
+            args_elements,
+        ))
+    }
+
+    /// Expand pending placeholders and extract normalized inline-command args.
+    ///
+    /// Inline-arg commands are initially dispatched using the raw draft so command rejection does
+    /// not consume user input. Once a command is accepted, this helper performs the usual
+    /// submission preparation (paste expansion, element trimming) and rebases element ranges from
+    /// full-text offsets to command-arg offsets.
+    pub(crate) fn prepare_inline_args_submission(
+        &mut self,
+        record_history: bool,
+    ) -> Option<(String, Vec<TextElement>)> {
+        let (prepared_text, prepared_elements) = self.prepare_submission_text(record_history)?;
+        let (_, prepared_rest, prepared_rest_offset) = parse_slash_name(&prepared_text)?;
+        let mut args_elements = Self::slash_command_args_elements(
+            prepared_rest,
+            prepared_rest_offset,
+            &prepared_elements,
+        );
+        let trimmed_rest = prepared_rest.trim();
+        args_elements = Self::trim_text_elements(prepared_rest, trimmed_rest, args_elements);
+        Some((trimmed_rest.to_string(), args_elements))
+    }
+
+    fn reject_slash_command_if_unavailable(&self, cmd: SlashCommand) -> bool {
+        if !self.is_task_running || cmd.available_during_task() {
+            return false;
+        }
+        let message = format!(
+            "'/{}' is disabled while a task is in progress.",
+            cmd.command()
+        );
+        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+            history_cell::new_error_event(message),
+        )));
+        true
+    }
+
+    /// Translate full-text element ranges into command-argument ranges.
+    ///
+    /// `rest_offset` is the byte offset where `rest` begins in the full text.
+    fn slash_command_args_elements(
+        rest: &str,
+        rest_offset: usize,
+        text_elements: &[TextElement],
+    ) -> Vec<TextElement> {
+        if rest.is_empty() || text_elements.is_empty() {
+            return Vec::new();
+        }
+        text_elements
+            .iter()
+            .filter_map(|elem| {
+                if elem.byte_range.end <= rest_offset {
+                    return None;
+                }
+                let start = elem.byte_range.start.saturating_sub(rest_offset);
+                let mut end = elem.byte_range.end.saturating_sub(rest_offset);
+                if start >= rest.len() {
+                    return None;
+                }
+                end = end.min(rest.len());
+                (start < end).then_some(elem.map_range(|_| ByteRange { start, end }))
+            })
+            .collect()
     }
 
     /// Handle key event when no popup is visible.
@@ -2441,6 +2566,7 @@ impl ChatComposer {
     }
 
     fn sync_popups(&mut self) {
+        self.sync_slash_command_elements();
         if !self.popups_enabled() {
             self.active_popup = ActivePopup::None;
             return;
@@ -2505,6 +2631,88 @@ impl ChatComposer {
         ) {
             self.active_popup = ActivePopup::None;
         }
+    }
+
+    /// Keep slash command elements aligned with the current first line.
+    fn sync_slash_command_elements(&mut self) {
+        if !self.slash_commands_enabled() {
+            return;
+        }
+        let text = self.textarea.text();
+        let first_line_end = text.find('\n').unwrap_or(text.len());
+        let first_line = &text[..first_line_end];
+        let desired_range = self.slash_command_element_range(first_line);
+        // Slash commands are only valid at byte 0 of the first line.
+        // Any slash-shaped element not matching the current desired prefix is stale.
+        let mut has_desired = false;
+        let mut stale_ranges = Vec::new();
+        for elem in self.textarea.text_elements() {
+            let Some(payload) = elem.placeholder(text) else {
+                continue;
+            };
+            if payload.strip_prefix('/').is_none() {
+                continue;
+            }
+            let range = elem.byte_range.start..elem.byte_range.end;
+            if desired_range.as_ref() == Some(&range) {
+                has_desired = true;
+            } else {
+                stale_ranges.push(range);
+            }
+        }
+
+        for range in stale_ranges {
+            self.textarea.remove_element_range(range);
+        }
+
+        if let Some(range) = desired_range
+            && !has_desired
+        {
+            self.textarea.add_element_range(range);
+        }
+    }
+
+    fn slash_command_element_range(&self, first_line: &str) -> Option<Range<usize>> {
+        let (name, _rest, _rest_offset) = parse_slash_name(first_line)?;
+        if name.contains('/') {
+            return None;
+        }
+        let element_end = 1 + name.len();
+        let has_space_after = first_line
+            .get(element_end..)
+            .and_then(|tail| tail.chars().next())
+            .is_some_and(char::is_whitespace);
+        if !has_space_after {
+            return None;
+        }
+        if self.is_known_slash_name(name) {
+            Some(0..element_end)
+        } else {
+            None
+        }
+    }
+
+    fn is_known_slash_name(&self, name: &str) -> bool {
+        let is_builtin = slash_commands::find_builtin_command(
+            name,
+            self.collaboration_modes_enabled,
+            self.connectors_enabled,
+            self.personality_command_enabled,
+            self.windows_degraded_sandbox_active,
+        )
+        .is_some();
+        if is_builtin {
+            return true;
+        }
+        if let Some(rest) = name.strip_prefix(PROMPTS_CMD_PREFIX)
+            && let Some(prompt_name) = rest.strip_prefix(':')
+        {
+            return self
+                .custom_prompts
+                .iter()
+                .any(|prompt| prompt.name == prompt_name);
+        }
+        false
     }
 
     /// If the cursor is currently within a slash command on the first line,
@@ -4582,7 +4790,7 @@ mod tests {
             InputResult::Command(cmd) => {
                 assert_eq!(cmd.command(), "init");
             }
-            InputResult::CommandWithArgs(_, _) => {
+            InputResult::CommandWithArgs(_, _, _) => {
                 panic!("expected command dispatch without args for '/init'")
             }
             InputResult::Submitted { text, .. } => {
@@ -4594,6 +4802,49 @@ mod tests {
             InputResult::None => panic!("expected Command result for '/init'"),
         }
         assert!(composer.textarea.is_empty(), "composer should be cleared");
+    }
+
+    #[test]
+    fn slash_command_disabled_while_task_running_keeps_text() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_task_running(true);
+        composer
+            .textarea
+            .set_text_clearing_elements("/review these changes");
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(InputResult::None, result);
+        assert_eq!("/review these changes", composer.textarea.text());
+
+        let mut found_error = false;
+        while let Ok(event) = rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                let message = cell
+                    .display_lines(80)
+                    .into_iter()
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert!(message.contains("disabled while a task is in progress"));
+                found_error = true;
+                break;
+            }
+        }
+        assert!(found_error, "expected error history cell to be sent");
     }
 
     #[test]
@@ -4683,7 +4934,7 @@ mod tests {
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match result {
             InputResult::Command(cmd) => assert_eq!(cmd.command(), "diff"),
-            InputResult::CommandWithArgs(_, _) => {
+            InputResult::CommandWithArgs(_, _, _) => {
                 panic!("expected command dispatch without args for '/diff'")
             }
             InputResult::Submitted { text, .. } => {
@@ -4695,6 +4946,77 @@ mod tests {
             InputResult::None => panic!("expected Command result for '/diff'"),
         }
         assert!(composer.textarea.is_empty());
+    }
+
+    #[test]
+    fn slash_command_elementizes_on_space() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_collaboration_modes_enabled(true);
+
+        type_chars_humanlike(&mut composer, &['/', 'p', 'l', 'a', 'n', ' ']);
+
+        let text = composer.textarea.text().to_string();
+        let elements = composer.textarea.text_elements();
+        assert_eq!(text, "/plan ");
+        assert_eq!(elements.len(), 1);
+        assert_eq!(elements[0].placeholder(&text), Some("/plan"));
+    }
+
+    #[test]
+    fn slash_command_elementizes_only_known_commands() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_collaboration_modes_enabled(true);
+
+        type_chars_humanlike(&mut composer, &['/', 'U', 's', 'e', 'r', 's', ' ']);
+
+        let text = composer.textarea.text().to_string();
+        let elements = composer.textarea.text_elements();
+        assert_eq!(text, "/Users ");
+        assert!(elements.is_empty());
+    }
+
+    #[test]
+    fn slash_command_element_removed_when_not_at_start() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        type_chars_humanlike(&mut composer, &['/', 'r', 'e', 'v', 'i', 'e', 'w', ' ']);
+
+        let text = composer.textarea.text().to_string();
+        let elements = composer.textarea.text_elements();
+        assert_eq!(text, "/review ");
+        assert_eq!(elements.len(), 1);
+
+        composer.textarea.set_cursor(0);
+        type_chars_humanlike(&mut composer, &['x']);
+
+        let text = composer.textarea.text().to_string();
+        let elements = composer.textarea.text_elements();
+        assert_eq!(text, "x/review ");
+        assert!(elements.is_empty());
     }
 
     #[test]
@@ -4722,7 +5044,7 @@ mod tests {
             InputResult::Command(cmd) => {
                 assert_eq!(cmd.command(), "mention");
             }
-            InputResult::CommandWithArgs(_, _) => {
+            InputResult::CommandWithArgs(_, _, _) => {
                 panic!("expected command dispatch without args for '/mention'")
             }
             InputResult::Submitted { text, .. } => {
@@ -4736,6 +5058,44 @@ mod tests {
         assert!(composer.textarea.is_empty(), "composer should be cleared");
         composer.insert_str("@");
         assert_eq!(composer.textarea.text(), "@");
+    }
+
+    #[test]
+    fn slash_plan_args_preserve_text_elements() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_collaboration_modes_enabled(true);
+
+        type_chars_humanlike(&mut composer, &['/', 'p', 'l', 'a', 'n', ' ']);
+        let placeholder = local_image_label_text(1);
+        composer.attach_image(PathBuf::from("/tmp/plan.png"));
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        match result {
+            InputResult::CommandWithArgs(cmd, args, text_elements) => {
+                assert_eq!(cmd.command(), "plan");
+                assert_eq!(args, placeholder);
+                assert_eq!(text_elements.len(), 1);
+                assert_eq!(
+                    text_elements[0].placeholder(&args),
+                    Some(placeholder.as_str())
+                );
+            }
+            _ => panic!("expected CommandWithArgs for /plan with args"),
+        }
     }
 
     /// Behavior: multiple paste operations can coexist; placeholders should be expanded to their

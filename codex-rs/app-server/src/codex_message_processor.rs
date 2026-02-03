@@ -69,6 +69,8 @@ use codex_app_server_protocol::McpServerOauthLoginParams;
 use codex_app_server_protocol::McpServerOauthLoginResponse;
 use codex_app_server_protocol::McpServerRefreshResponse;
 use codex_app_server_protocol::McpServerStatus;
+use codex_app_server_protocol::MockExperimentalMethodParams;
+use codex_app_server_protocol::MockExperimentalMethodResponse;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::NewConversationParams;
@@ -202,6 +204,8 @@ use codex_utils_json_to_toml::json_to_toml;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::OsStr;
+use std::fs::FileTimes;
+use std::fs::OpenOptions;
 use std::io::Error as IoError;
 use std::path::Path;
 use std::path::PathBuf;
@@ -209,6 +213,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::SystemTime;
 use tokio::sync::Mutex;
 use tokio::sync::broadcast;
 use tokio::sync::oneshot;
@@ -503,6 +508,9 @@ impl CodexMessageProcessor {
                     Self::list_collaboration_modes(outgoing, thread_manager, request_id, params)
                         .await;
                 });
+            }
+            ClientRequest::MockExperimentalMethod { request_id, params } => {
+                self.mock_experimental_method(request_id, params).await;
             }
             ClientRequest::McpServerOauthLogin { request_id, params } => {
                 self.mcp_server_oauth_login(request_id, params).await;
@@ -1422,7 +1430,7 @@ impl CodexMessageProcessor {
         }
 
         let cwd = params.cwd.unwrap_or_else(|| self.config.cwd.clone());
-        let env = create_env(&self.config.shell_environment_policy);
+        let env = create_env(&self.config.shell_environment_policy, None);
         let timeout_ms = params
             .timeout_ms
             .and_then(|timeout_ms| u64::try_from(timeout_ms).ok());
@@ -1603,6 +1611,7 @@ impl CodexMessageProcessor {
             base_instructions,
             developer_instructions,
             dynamic_tools,
+            mock_experimental_field: _mock_experimental_field,
             experimental_raw_events,
             personality,
             ephemeral,
@@ -1770,7 +1779,7 @@ impl CodexMessageProcessor {
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
             base_instructions,
             developer_instructions,
-            model_personality: personality,
+            personality,
             ..Default::default()
         }
     }
@@ -1978,6 +1987,28 @@ impl CodexMessageProcessor {
                     message: format!("failed to unarchive thread: {err}"),
                     data: None,
                 })?;
+            tokio::task::spawn_blocking({
+                let restored_path = restored_path.clone();
+                move || -> std::io::Result<()> {
+                    let times = FileTimes::new().set_modified(SystemTime::now());
+                    OpenOptions::new()
+                        .append(true)
+                        .open(&restored_path)?
+                        .set_times(times)?;
+                    Ok(())
+                }
+            })
+            .await
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to update unarchived thread timestamp: {err}"),
+                data: None,
+            })?
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to update unarchived thread timestamp: {err}"),
+                data: None,
+            })?;
             if let Some(ctx) = state_db_ctx {
                 let _ = ctx
                     .mark_unarchived(thread_id, restored_path.as_path())
@@ -2974,6 +3005,16 @@ impl CodexMessageProcessor {
         let items = thread_manager.list_collaboration_modes();
         let response = CollaborationModeListResponse { data: items };
         outgoing.send_response(request_id, response).await;
+    }
+
+    async fn mock_experimental_method(
+        &self,
+        request_id: RequestId,
+        params: MockExperimentalMethodParams,
+    ) {
+        let MockExperimentalMethodParams { value } = params;
+        let response = MockExperimentalMethodResponse { echoed: value };
+        self.outgoing.send_response(request_id, response).await;
     }
 
     async fn mcp_server_refresh(&self, request_id: RequestId, _params: Option<()>) {

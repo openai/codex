@@ -14,6 +14,8 @@ use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::SessionSource;
 use codex_otel::OtelManager;
+use codex_otel::metrics::MetricsClient;
+use codex_otel::metrics::MetricsConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use core_test_support::load_default_config_for_test;
@@ -25,15 +27,19 @@ use core_test_support::responses::start_websocket_server;
 use core_test_support::responses::start_websocket_server_with_headers;
 use core_test_support::skip_if_no_network;
 use futures::StreamExt;
+use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
+use std::time::Duration;
 use tempfile::TempDir;
+use tracing_test::traced_test;
 
 const MODEL: &str = "gpt-5.2-codex";
 
 struct WebsocketTestHarness {
     _codex_home: TempDir,
     client: ModelClient,
+    otel_manager: OtelManager,
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -47,7 +53,7 @@ async fn responses_websocket_streams_request() {
     .await;
 
     let harness = websocket_harness(&server).await;
-    let mut session = harness.client.new_session();
+    let mut session = harness.client.new_session(None);
     let prompt = prompt_with_input(vec![message_item("hello")]);
 
     stream_until_complete(&mut session, &prompt).await;
@@ -65,6 +71,38 @@ async fn responses_websocket_streams_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[traced_test]
+async fn responses_websocket_emits_websocket_telemetry_events() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![vec![
+        ev_response_created("resp-1"),
+        ev_completed("resp-1"),
+    ]]])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    harness.otel_manager.reset_runtime_metrics();
+    let mut session = harness.client.new_session(None);
+    let prompt = prompt_with_input(vec![message_item("hello")]);
+
+    stream_until_complete(&mut session, &prompt).await;
+
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    let summary = harness
+        .otel_manager
+        .runtime_metrics_summary()
+        .expect("runtime metrics summary");
+    assert_eq!(summary.api_calls.count, 0);
+    assert_eq!(summary.streaming_events.count, 0);
+    assert_eq!(summary.websocket_calls.count, 1);
+    assert_eq!(summary.websocket_events.count, 2);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_websocket_emits_reasoning_included_event() {
     skip_if_no_network!();
 
@@ -75,7 +113,7 @@ async fn responses_websocket_emits_reasoning_included_event() {
     .await;
 
     let harness = websocket_harness(&server).await;
-    let mut session = harness.client.new_session();
+    let mut session = harness.client.new_session(None);
     let prompt = prompt_with_input(vec![message_item("hello")]);
 
     let mut stream = session
@@ -109,7 +147,7 @@ async fn responses_websocket_appends_on_prefix() {
     .await;
 
     let harness = websocket_harness(&server).await;
-    let mut session = harness.client.new_session();
+    let mut session = harness.client.new_session(None);
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let prompt_two = prompt_with_input(vec![message_item("hello"), message_item("second")]);
 
@@ -145,7 +183,7 @@ async fn responses_websocket_creates_on_non_prefix() {
     .await;
 
     let harness = websocket_harness(&server).await;
-    let mut session = harness.client.new_session();
+    let mut session = harness.client.new_session(None);
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let prompt_two = prompt_with_input(vec![message_item("different")]);
 
@@ -173,6 +211,7 @@ fn message_item(text: &str) -> ResponseItem {
         role: "user".into(),
         content: vec![ContentItem::InputText { text: text.into() }],
         end_turn: None,
+        phase: None,
     }
 }
 
@@ -211,6 +250,12 @@ async fn websocket_harness(server: &WebSocketTestServer) -> WebsocketTestHarness
     let model_info = ModelsManager::construct_model_info_offline(MODEL, &config);
     let conversation_id = ThreadId::new();
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let exporter = InMemoryMetricExporter::default();
+    let metrics = MetricsClient::new(
+        MetricsConfig::in_memory("test", "codex-core", env!("CARGO_PKG_VERSION"), exporter)
+            .with_runtime_reader(),
+    )
+    .expect("in-memory metrics client");
     let otel_manager = OtelManager::new(
         conversation_id,
         MODEL,
@@ -221,12 +266,13 @@ async fn websocket_harness(server: &WebSocketTestServer) -> WebsocketTestHarness
         false,
         "test".to_string(),
         SessionSource::Exec,
-    );
+    )
+    .with_metrics(metrics);
     let client = ModelClient::new(
         Arc::clone(&config),
         None,
         model_info,
-        otel_manager,
+        otel_manager.clone(),
         provider.clone(),
         None,
         ReasoningSummary::Auto,
@@ -238,6 +284,7 @@ async fn websocket_harness(server: &WebSocketTestServer) -> WebsocketTestHarness
     WebsocketTestHarness {
         _codex_home: codex_home,
         client,
+        otel_manager,
     }
 }
 
