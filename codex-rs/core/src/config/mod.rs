@@ -16,6 +16,7 @@ use crate::config::types::SandboxWorkspaceWrite;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
 use crate::config::types::SkillsConfig;
+use crate::config::types::StreamRenderingMode;
 use crate::config::types::Tui;
 use crate::config::types::UriBasedFileOpener;
 use crate::config_loader::CloudRequirementsLoader;
@@ -211,6 +212,9 @@ pub struct Config {
 
     /// Show startup tooltips in the TUI welcome screen.
     pub show_tooltips: bool,
+
+    /// Controls how streamed assistant text is rendered in the TUI.
+    pub tui_stream_rendering_mode: StreamRenderingMode,
 
     /// Start the TUI in the specified collaboration mode (plan/execute/etc.).
     pub experimental_mode: Option<ModeKind>,
@@ -1647,6 +1651,11 @@ impl Config {
                 .unwrap_or_default(),
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
             show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
+            tui_stream_rendering_mode: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.stream_rendering_mode)
+                .unwrap_or_default(),
             experimental_mode: cfg.tui.as_ref().and_then(|t| t.experimental_mode),
             tui_alternate_screen: cfg
                 .tui
@@ -1888,10 +1897,25 @@ persistence = "none"
                 notification_method: NotificationMethod::Auto,
                 animations: true,
                 show_tooltips: true,
+                stream_rendering_mode: StreamRenderingMode::LineBuffered,
                 experimental_mode: None,
                 alternate_screen: AltScreenMode::Auto,
             }
         );
+    }
+
+    #[test]
+    fn tui_config_stream_rendering_mode_parses() {
+        let cfg = r#"
+[tui]
+stream_rendering_mode = "delta"
+"#;
+
+        let parsed = toml::from_str::<ConfigToml>(cfg)
+            .expect("TUI config with stream_rendering_mode should succeed");
+        let tui = parsed.tui.expect("config should include tui section");
+
+        assert_eq!(tui.stream_rendering_mode, StreamRenderingMode::Delta);
     }
 
     #[test]
@@ -3834,6 +3858,7 @@ model_verbosity = "high"
                 tui_notification_method: Default::default(),
                 animations: true,
                 show_tooltips: true,
+                tui_stream_rendering_mode: StreamRenderingMode::LineBuffered,
                 experimental_mode: None,
                 analytics_enabled: Some(true),
                 feedback_enabled: true,
@@ -3919,6 +3944,7 @@ model_verbosity = "high"
             tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
+            tui_stream_rendering_mode: StreamRenderingMode::LineBuffered,
             experimental_mode: None,
             analytics_enabled: Some(true),
             feedback_enabled: true,
@@ -4019,6 +4045,7 @@ model_verbosity = "high"
             tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
+            tui_stream_rendering_mode: StreamRenderingMode::LineBuffered,
             experimental_mode: None,
             analytics_enabled: Some(false),
             feedback_enabled: true,
@@ -4105,6 +4132,7 @@ model_verbosity = "high"
             tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
+            tui_stream_rendering_mode: StreamRenderingMode::LineBuffered,
             experimental_mode: None,
             analytics_enabled: Some(true),
             feedback_enabled: true,

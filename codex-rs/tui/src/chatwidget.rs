@@ -35,6 +35,7 @@ use codex_chatgpt::connectors;
 use codex_core::config::Config;
 use codex_core::config::ConstraintResult;
 use codex_core::config::types::Notifications;
+use codex_core::config::types::StreamRenderingMode;
 use codex_core::features::FEATURES;
 use codex_core::features::Feature;
 use codex_core::git_info::current_branch_name;
@@ -489,6 +490,9 @@ pub(crate) struct ChatWidget {
     stream_controller: Option<StreamController>,
     // Stream lifecycle controller for proposed plan output.
     plan_stream_controller: Option<PlanStreamController>,
+    // While enabled, stream deltas directly into an in-place active assistant cell.
+    delta_streaming_active: bool,
+    delta_stream_buffer: String,
     running_commands: HashMap<String, RunningCommand>,
     suppressed_exec_calls: HashSet<String>,
     skills_all: Vec<ProtocolSkillMetadata>,
@@ -907,6 +911,20 @@ impl ChatWidget {
     }
 
     fn on_agent_message(&mut self, message: String) {
+        if self.stream_rendering_mode() == StreamRenderingMode::Delta && self.delta_streaming_active
+        {
+            if !message.is_empty() {
+                self.delta_stream_buffer = message;
+                self.update_delta_stream_active_cell();
+            }
+            self.flush_active_cell();
+            self.delta_streaming_active = false;
+            self.delta_stream_buffer.clear();
+            self.handle_stream_finished();
+            self.request_redraw();
+            return;
+        }
+
         // If we have a stream_controller, then the final agent message is redundant and will be a
         // duplicate of what has already been streamed.
         if self.stream_controller.is_none() && !message.is_empty() {
@@ -1021,6 +1039,8 @@ impl ChatWidget {
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
         self.plan_stream_controller = None;
+        self.delta_streaming_active = false;
+        self.delta_stream_buffer.clear();
         self.otel_manager.reset_runtime_metrics();
         self.bottom_pane.clear_quit_shortcut_hint();
         self.quit_shortcut_expires_at = None;
@@ -1035,6 +1055,11 @@ impl ChatWidget {
     }
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
+        if self.delta_streaming_active {
+            self.flush_active_cell();
+            self.delta_streaming_active = false;
+            self.delta_stream_buffer.clear();
+        }
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
         if let Some(mut controller) = self.plan_stream_controller.take()
@@ -1287,6 +1312,8 @@ impl ChatWidget {
         self.unified_exec_wait_streak = None;
         self.clear_unified_exec_processes();
         self.stream_controller = None;
+        self.delta_streaming_active = false;
+        self.delta_stream_buffer.clear();
         self.maybe_show_pending_rate_limit_prompt();
     }
 
@@ -1881,11 +1908,50 @@ impl ChatWidget {
         // Preserve deterministic FIFO across queued interrupts: once anything
         // is queued due to an active write cycle, continue queueing until the
         // queue is flushed to avoid reordering (e.g., ExecEnd before ExecBegin).
-        if self.stream_controller.is_some() || !self.interrupts.is_empty() {
+        if self.stream_controller.is_some()
+            || self.delta_streaming_active
+            || !self.interrupts.is_empty()
+        {
             push(&mut self.interrupts);
         } else {
             handle(self);
         }
+    }
+
+    fn stream_rendering_mode(&self) -> StreamRenderingMode {
+        self.config.tui_stream_rendering_mode
+    }
+
+    fn update_delta_stream_active_cell(&mut self) {
+        if self.delta_stream_buffer.is_empty() {
+            return;
+        }
+
+        let mut source = self.delta_stream_buffer.clone();
+        if !source.ends_with('\n') {
+            source.push('\n');
+        }
+
+        let mut rendered: Vec<Line<'static>> = Vec::new();
+        append_markdown(
+            &source,
+            self.last_rendered_width.get().map(|w| w.saturating_sub(2)),
+            &mut rendered,
+        );
+
+        while rendered
+            .last()
+            .is_some_and(crate::render::line_utils::is_blank_line_spaces_only)
+        {
+            rendered.pop();
+        }
+
+        if rendered.is_empty() {
+            return;
+        }
+
+        self.active_cell = Some(Box::new(AgentMessageCell::new(rendered, true)));
+        self.bump_active_cell_revision();
     }
 
     fn handle_stream_finished(&mut self) {
@@ -1901,7 +1967,18 @@ impl ChatWidget {
     fn handle_streaming_delta(&mut self, delta: String) {
         // Before streaming agent content, flush any active exec cell group.
         self.flush_unified_exec_wait_streak();
-        self.flush_active_cell();
+        let render_mode = self.stream_rendering_mode();
+        if render_mode != StreamRenderingMode::Delta || !self.delta_streaming_active {
+            self.flush_active_cell();
+        }
+
+        if render_mode == StreamRenderingMode::Delta {
+            self.delta_streaming_active = true;
+            self.delta_stream_buffer.push_str(&delta);
+            self.update_delta_stream_active_cell();
+            self.request_redraw();
+            return;
+        }
 
         if self.stream_controller.is_none() {
             // If the previous turn inserted non-stream history (exec output, patch status, MCP
@@ -2270,6 +2347,8 @@ impl ChatWidget {
             rate_limit_poller: None,
             stream_controller: None,
             plan_stream_controller: None,
+            delta_streaming_active: false,
+            delta_stream_buffer: String::new(),
             running_commands: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
@@ -2415,6 +2494,8 @@ impl ChatWidget {
             rate_limit_poller: None,
             stream_controller: None,
             plan_stream_controller: None,
+            delta_streaming_active: false,
+            delta_stream_buffer: String::new(),
             running_commands: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
@@ -2549,6 +2630,8 @@ impl ChatWidget {
             rate_limit_poller: None,
             stream_controller: None,
             plan_stream_controller: None,
+            delta_streaming_active: false,
+            delta_stream_buffer: String::new(),
             running_commands: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
