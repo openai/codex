@@ -1,59 +1,85 @@
 # Codex devcontainer
 
-This is a Codex-focused devcontainer setup adapted for this monorepo.
+Use this devcontainer when you want to run Codex inside your own project container.
 
-## Core design choices
+## Who this is for
 
-- devcontainer schema + `init` + `updateRemoteUserUID`
-- `${devcontainerId}`-scoped named volumes for per-container persistence
-- read-only host `~/.gitconfig` mount with container-local `GIT_CONFIG_GLOBAL`
-- explicit `workspaceMount`/`workspaceFolder`
-- post-create bootstrap script (`post_install.py`) for idempotent setup
+- developers using Codex on application repos
+- teams that want a consistent, secure dev environment
+- contributors working on this repo (also supported)
 
-## What is Codex-specific
+## Quick start
 
-- Rust toolchain pinned to `1.92.0` with `clippy`, `rustfmt`, `rust-src`
-- musl targets: `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`
+1. Put this `.devcontainer/` folder in your project.
+2. Open the project in VS Code.
+3. Run **Dev Containers: Rebuild and Reopen in Container**.
+4. In the container terminal, run `codex`.
+
+If you prefer API key auth, set `OPENAI_API_KEY` in your host environment before opening the container.
+
+## What you get by default
+
+- `codex` CLI preinstalled (`@openai/codex` via npm)
 - Node `22` + pnpm `10.28.2`
-- firewall setup that allowlists domains from `OPENAI_ALLOWED_DOMAINS`
-- persistent Cargo/Rustup volumes
+- Python 3 + pip
+- Rust `1.92.0` with `clippy`, `rustfmt`, `rust-src`
+- musl targets: `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`
+- common tools: git, zsh, rg, fd, fzf, jq, curl
+- persistent state volumes for history, auth/config, Cargo cache, and Rustup
 
-## Lifecycle hooks
+## How to use Codex after opening the container
 
-- `postCreateCommand`: `python3 /opt/post_install.py`
-  - configures history files
-  - fixes ownership on mounted dirs
-  - writes `/home/vscode/.gitconfig.local`
-- `postStartCommand`: `bash /opt/post_start.sh`
-  - applies firewall rules through `init-firewall.sh`
-  - enforces IPv6 default-deny so strict mode cannot be bypassed over IPv6
-  - optionally adds GitHub CIDR ranges from `api.github.com/meta`
+Basic flow:
 
-## Firewall modes
+```bash
+codex
+```
 
-- **Strict (default)**: `CODEX_ENABLE_FIREWALL=1` (or unset)
-- **Permissive**: `CODEX_ENABLE_FIREWALL=0`
+Useful checks:
 
-Optional strict-mode enhancement:
+```bash
+codex --help
+which codex
+```
 
-- `CODEX_INCLUDE_GITHUB_META_RANGES=1` (default) hydrates GitHub CIDRs into the allowlist.
+Typical usage is from your project root (`/workspace`), so Codex can inspect and edit files directly.
 
-To run in permissive mode during a session:
+## Firewall and network policy
+
+Strict mode is the default (`CODEX_ENABLE_FIREWALL=1`):
+
+- outbound traffic is allowlisted by domain via `OPENAI_ALLOWED_DOMAINS`
+- IPv4 is enforced with `iptables` + `ipset`
+- IPv6 is explicitly default-deny via `ip6tables` (prevents bypass)
+
+Default allowlist includes:
+
+- OpenAI: `api.openai.com`, `auth.openai.com`
+- GitHub: `github.com`, `api.github.com`, `codeload.github.com`, `raw.githubusercontent.com`, `objects.githubusercontent.com`
+- registries: `registry.npmjs.org`, `crates.io`, `index.crates.io`, `static.crates.io`, `static.rust-lang.org`, `pypi.org`, `files.pythonhosted.org`
+
+You can temporarily disable strict mode:
 
 ```bash
 export CODEX_ENABLE_FIREWALL=0
 ```
 
-Then restart or rebuild the container.
+Then rebuild/restart the container.
 
-## Persistent volumes
+## Adding more languages or tooling
 
-- `/commandhistory`
-- `/home/vscode/.codex`
-- `/home/vscode/.config/gh`
-- `/home/vscode/.cargo/registry`
-- `/home/vscode/.cargo/git`
-- `/home/vscode/.rustup`
+For project-specific stacks (Go, Java, .NET, etc.), add Dev Container features in `devcontainer.json`.
+
+Example:
+
+```json
+{
+  "features": {
+    "ghcr.io/devcontainers/features/go:1": { "version": "1.24" },
+    "ghcr.io/devcontainers/features/java:1": { "version": "21" }
+  }
+}
+```
 
 ## Local Docker smoke build
 

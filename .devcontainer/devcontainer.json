@@ -1,13 +1,14 @@
 {
   "$schema": "https://raw.githubusercontent.com/devcontainers/spec/main/schemas/devContainer.schema.json",
-  "name": "Codex Dev",
+  "name": "Codex",
   "build": {
     "dockerfile": "Dockerfile",
     "context": "..",
     "args": {
       "TZ": "${localEnv:TZ:UTC}",
       "NODE_MAJOR": "22",
-      "RUST_TOOLCHAIN": "1.92.0"
+      "RUST_TOOLCHAIN": "1.92.0",
+      "CODEX_NPM_VERSION": "latest"
     }
   },
   "runArgs": [
@@ -33,8 +34,8 @@
     "CODEX_UNSAFE_ALLOW_NO_SANDBOX": "1",
     "CODEX_ENABLE_FIREWALL": "1",
     "CODEX_INCLUDE_GITHUB_META_RANGES": "1",
-    "OPENAI_ALLOWED_DOMAINS": "api.openai.com auth.openai.com github.com api.github.com codeload.github.com raw.githubusercontent.com objects.githubusercontent.com crates.io index.crates.io static.crates.io static.rust-lang.org registry.npmjs.org",
-    "CARGO_TARGET_DIR": "/workspace/codex-rs/target/devcontainer",
+    "OPENAI_ALLOWED_DOMAINS": "api.openai.com auth.openai.com github.com api.github.com codeload.github.com raw.githubusercontent.com objects.githubusercontent.com crates.io index.crates.io static.crates.io static.rust-lang.org registry.npmjs.org pypi.org files.pythonhosted.org",
+    "CARGO_TARGET_DIR": "/workspace/.cache/cargo-target",
     "GIT_CONFIG_GLOBAL": "/home/vscode/.gitconfig.local",
     "COREPACK_ENABLE_DOWNLOAD_PROMPT": "0",
     "PYTHONDONTWRITEBYTECODE": "1",

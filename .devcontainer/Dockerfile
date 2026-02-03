@@ -4,6 +4,7 @@ ARG TZ
 ARG DEBIAN_FRONTEND=noninteractive
 ARG NODE_MAJOR=22
 ARG RUST_TOOLCHAIN=1.92.0
+ARG CODEX_NPM_VERSION=latest
 
 ENV TZ="$TZ"
 
@@ -42,7 +43,7 @@ RUN apt-get update \
 RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
     && apt-get update \
     && apt-get install -y --no-install-recommends nodejs \
-    && npm install -g corepack@latest \
+    && npm install -g corepack@latest "@openai/codex@${CODEX_NPM_VERSION}" \
     && corepack enable \
     && corepack prepare pnpm@10.28.2 --activate \
     && apt-get clean \
