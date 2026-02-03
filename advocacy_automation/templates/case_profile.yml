@@ -1,0 +1,21 @@
+case_id: "CASE-YYYY-MM-DD-INITIALS"
+case_title: "Short descriptive name"
+primary_contact:
+  name: ""
+  email: ""
+  phone: ""
+  preferred_contact: "email"
+confidentiality:
+  share_level: "private"
+  redaction_required: true
+jurisdiction:
+  location: ""
+  agencies:
+    - ""
+summary:
+  one_line: ""
+  key_harm: ""
+  relief_sought: ""
+timeline:
+  start_date: "YYYY-MM-DD"
+  end_date: "YYYY-MM-DD"
