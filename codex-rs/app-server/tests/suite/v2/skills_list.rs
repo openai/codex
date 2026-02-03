@@ -40,7 +40,7 @@ async fn skills_list_includes_additional_roots() -> Result<()> {
     let request_id = mcp
         .send_skills_list_request(SkillsListParams {
             cwds: vec![cwd.path().to_path_buf()],
-            additional_roots: vec![additional_root.path().to_path_buf()],
+            additional_roots: Some(vec![additional_root.path().to_path_buf()]),
             force_reload: true,
         })
         .await?;

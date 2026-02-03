@@ -6,7 +6,10 @@
       "items": {
         "type": "string"
       },
-      "type": "array"
+      "type": [
+        "array",
+        "null"
+      ]
     },
     "cwds": {
       "description": "When empty, defaults to the current session working directory.",

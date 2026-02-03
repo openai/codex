@@ -1481,9 +1481,9 @@ pub struct SkillsListParams {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cwds: Vec<PathBuf>,
 
-    /// Experimental: additional skill roots to scan alongside the defaults.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub additional_roots: Vec<PathBuf>,
+    /// Additional skill roots to scan alongside the defaults derived from cwds.
+    #[ts(optional = nullable)]
+    pub additional_roots: Option<Vec<PathBuf>>,
 
     /// When true, bypass the skills cache and re-scan skills from disk.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -1832,9 +1832,9 @@ pub enum TurnStatus {
 pub struct TurnStartParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
-    /// Experimental: additional skill roots to scan for this and subsequent turns.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub additional_roots: Vec<PathBuf>,
+    /// Additional skill roots to scan for this and subsequent turns.
+    #[ts(optional = nullable)]
+    pub additional_roots: Option<Vec<PathBuf>>,
     /// Override the working directory for this turn and subsequent turns.
     pub cwd: Option<PathBuf>,
     /// Override the approval policy for this turn and subsequent turns.
@@ -3030,17 +3030,19 @@ mod tests {
         assert_eq!(
             serde_json::to_value(SkillsListParams {
                 cwds: Vec::new(),
-                additional_roots: Vec::new(),
+                additional_roots: None,
                 force_reload: false,
             })
             .unwrap(),
-            json!({}),
+            json!({
+                "additionalRoots": null,
+            }),
         );
 
         assert_eq!(
             serde_json::to_value(SkillsListParams {
                 cwds: vec![PathBuf::from("/repo")],
-                additional_roots: vec![PathBuf::from("/opt/skills")],
+                additional_roots: Some(vec![PathBuf::from("/opt/skills")]),
                 force_reload: true,
             })
             .unwrap(),

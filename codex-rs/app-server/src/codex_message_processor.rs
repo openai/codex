@@ -4041,6 +4041,7 @@ impl CodexMessageProcessor {
         };
 
         let skills_manager = self.thread_manager.skills_manager();
+        let additional_roots = additional_roots.unwrap_or_default();
         let mut data = Vec::new();
         for cwd in cwds {
             let outcome = skills_manager
@@ -4146,7 +4147,7 @@ impl CodexMessageProcessor {
         let mapped_items: Vec<CoreInputItem> =
             input.into_iter().map(V2UserInput::into_core).collect();
 
-        if !additional_roots.is_empty() {
+        if let Some(additional_roots) = additional_roots {
             let _ = thread.submit(Op::SetSkillRoots { additional_roots }).await;
         }
 

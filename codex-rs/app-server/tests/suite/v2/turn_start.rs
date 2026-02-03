@@ -461,7 +461,7 @@ async fn turn_start_additional_roots_injects_skill_instructions() -> Result<()> 
                 text: "please run $desktop-extra-skill".to_string(),
                 text_elements: Vec::new(),
             }],
-            additional_roots: vec![additional_root.path().to_path_buf()],
+            additional_roots: Some(vec![additional_root.path().to_path_buf()]),
             ..Default::default()
         })
         .await?;
@@ -1101,7 +1101,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             personality: None,
             output_schema: None,
             collaboration_mode: None,
-            additional_roots: vec![],
+            additional_roots: None,
         })
         .await?;
     timeout(
@@ -1133,7 +1133,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             personality: None,
             output_schema: None,
             collaboration_mode: None,
-            additional_roots: vec![],
+            additional_roots: None,
         })
         .await?;
     timeout(

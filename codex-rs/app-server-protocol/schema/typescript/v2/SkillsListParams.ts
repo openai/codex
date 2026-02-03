@@ -10,7 +10,7 @@ cwds?: Array<string>,
 /**
  * Experimental: additional skill roots to scan alongside the defaults.
  */
-additionalRoots?: Array<string>, 
+additionalRoots?: Array<string> | null, 
 /**
  * When true, bypass the skills cache and re-scan skills from disk.
  */
