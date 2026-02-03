@@ -1408,8 +1408,18 @@ impl Session {
         previous_collaboration_mode: &CollaborationMode,
         next_collaboration_mode: Option<&CollaborationMode>,
         pending_model_visible_state_sync: &PendingModelVisibleStateSync,
+        initial_context_seeded_this_turn: bool,
     ) -> Option<ResponseItem> {
         let next_mode = next_collaboration_mode?;
+        if initial_context_seeded_this_turn
+            && matches!(
+                pending_model_visible_state_sync,
+                PendingModelVisibleStateSync::None
+            )
+        {
+            return None;
+        }
+
         let should_emit = match pending_model_visible_state_sync {
             PendingModelVisibleStateSync::None => previous_collaboration_mode != next_mode,
             PendingModelVisibleStateSync::Snapshot(snapshot) => {
@@ -1433,6 +1443,7 @@ impl Session {
         previous_collaboration_mode: &CollaborationMode,
         next_collaboration_mode: Option<&CollaborationMode>,
         pending_model_visible_state_sync: &PendingModelVisibleStateSync,
+        initial_context_seeded_this_turn: bool,
     ) -> Vec<ResponseItem> {
         let mut update_items = Vec::new();
         if let Some(env_item) =
@@ -1449,6 +1460,7 @@ impl Session {
             previous_collaboration_mode,
             next_collaboration_mode,
             pending_model_visible_state_sync,
+            initial_context_seeded_this_turn,
         ) {
             update_items.push(collaboration_mode_item);
         }
@@ -2000,11 +2012,11 @@ impl Session {
         state.reset_turn_context_history(user_turns);
     }
 
-    pub(crate) async fn seed_initial_context_if_needed(&self, turn_context: &TurnContext) {
+    pub(crate) async fn seed_initial_context_if_needed(&self, turn_context: &TurnContext) -> bool {
         {
             let mut state = self.state.lock().await;
             if state.initial_context_seeded {
-                return;
+                return false;
             }
             state.initial_context_seeded = true;
         }
@@ -2013,6 +2025,7 @@ impl Session {
         self.record_conversation_items(turn_context, &initial_context)
             .await;
         self.flush_rollout().await;
+        true
     }
 
     async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {
@@ -2891,7 +2904,8 @@ mod handlers {
 
         // Attempt to inject input into current task
         if let Err(items) = sess.inject_input(items).await {
-            sess.seed_initial_context_if_needed(&current_context).await;
+            let initial_context_seeded_this_turn =
+                sess.seed_initial_context_if_needed(&current_context).await;
             let has_model_visible_state_update = next_collaboration_mode.is_some();
             let pending_model_visible_state_sync = {
                 let mut state = sess.state.lock().await;
@@ -2903,6 +2917,7 @@ mod handlers {
                 &previous_collaboration_mode,
                 next_collaboration_mode.as_ref(),
                 &pending_model_visible_state_sync,
+                initial_context_seeded_this_turn,
             );
             if !update_items.is_empty() {
                 sess.record_conversation_items(&current_context, &update_items)
@@ -4858,16 +4873,31 @@ mod tests {
         expects_apply_patch_instructions: bool,
     }
 
+    fn message(role: &str, content: Vec<ContentItem>) -> ResponseItem {
+        serde_json::from_value(json!({
+            "type": "message",
+            "role": role,
+            "content": content,
+        }))
+        .expect("message should deserialize")
+    }
+
     fn user_message(text: &str) -> ResponseItem {
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
+        message(
+            "user",
+            vec![ContentItem::InputText {
                 text: text.to_string(),
             }],
-            end_turn: None,
-            phase: None,
-        }
+        )
+    }
+
+    fn assistant_message(text: &str) -> ResponseItem {
+        message(
+            "assistant",
+            vec![ContentItem::OutputText {
+                text: text.to_string(),
+            }],
+        )
     }
 
     fn make_connector(id: &str, name: &str) -> AppInfo {
@@ -5141,46 +5171,14 @@ mod tests {
             .await;
 
         let turn_1 = vec![
-            ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "turn 1 user".to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-            ResponseItem::Message {
-                id: None,
-                role: "assistant".to_string(),
-                content: vec![ContentItem::OutputText {
-                    text: "turn 1 assistant".to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
+            user_message("turn 1 user"),
+            assistant_message("turn 1 assistant"),
         ];
         sess.record_into_history(&turn_1, tc.as_ref()).await;
 
         let turn_2 = vec![
-            ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "turn 2 user".to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-            ResponseItem::Message {
-                id: None,
-                role: "assistant".to_string(),
-                content: vec![ContentItem::OutputText {
-                    text: "turn 2 assistant".to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
+            user_message("turn 2 user"),
+            assistant_message("turn 2 assistant"),
         ];
         sess.record_into_history(&turn_2, tc.as_ref()).await;
 
@@ -5356,14 +5354,7 @@ mod tests {
             state.session_configuration.collaboration_mode = collaboration_mode.clone();
         }
 
-        let user_turn = vec![ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "turn without turn context".to_string(),
-            }],
-            end_turn: None,
-        }];
+        let user_turn = vec![user_message("turn without turn context")];
         sess.record_into_history(&user_turn, tc.as_ref()).await;
 
         handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
@@ -5396,9 +5387,86 @@ mod tests {
             &previous_collaboration_mode,
             Some(&previous_collaboration_mode),
             &pending_model_visible_state_sync,
+            false,
         );
         let expected_item: ResponseItem =
             DeveloperInstructions::from_collaboration_mode(&previous_collaboration_mode)
+                .expect("expected collaboration instructions")
+                .into();
+        assert!(update_items.contains(&expected_item));
+    }
+
+    #[tokio::test]
+    async fn first_turn_skips_collaboration_update_after_initial_context_seed() {
+        let (sess, tc) = make_session_and_context().await;
+
+        let previous_collaboration_mode = tc.collaboration_mode.clone();
+        let next_collaboration_mode = CollaborationMode {
+            mode: ModeKind::Custom,
+            settings: Settings {
+                model: previous_collaboration_mode.settings.model.clone(),
+                reasoning_effort: previous_collaboration_mode.settings.reasoning_effort,
+                developer_instructions: Some("keep this in initial context only".to_string()),
+            },
+        };
+
+        {
+            let mut state = sess.state.lock().await;
+            state.initial_context_seeded = false;
+            state.session_configuration.collaboration_mode = next_collaboration_mode.clone();
+        }
+
+        let initial_context_seeded_this_turn = sess.seed_initial_context_if_needed(&tc).await;
+        assert!(initial_context_seeded_this_turn);
+
+        let update_items = sess.build_settings_update_items(
+            None,
+            &tc,
+            &previous_collaboration_mode,
+            Some(&next_collaboration_mode),
+            &PendingModelVisibleStateSync::None,
+            initial_context_seeded_this_turn,
+        );
+        let expected_item: ResponseItem =
+            DeveloperInstructions::from_collaboration_mode(&next_collaboration_mode)
+                .expect("expected collaboration instructions")
+                .into();
+        assert!(!update_items.contains(&expected_item));
+    }
+
+    #[tokio::test]
+    async fn first_turn_still_emits_collaboration_update_for_force_sync() {
+        let (sess, tc) = make_session_and_context().await;
+
+        let previous_collaboration_mode = tc.collaboration_mode.clone();
+        let next_collaboration_mode = CollaborationMode {
+            mode: ModeKind::Custom,
+            settings: Settings {
+                model: previous_collaboration_mode.settings.model.clone(),
+                reasoning_effort: previous_collaboration_mode.settings.reasoning_effort,
+                developer_instructions: Some("force emit this update".to_string()),
+            },
+        };
+
+        {
+            let mut state = sess.state.lock().await;
+            state.initial_context_seeded = false;
+            state.session_configuration.collaboration_mode = next_collaboration_mode.clone();
+        }
+
+        let initial_context_seeded_this_turn = sess.seed_initial_context_if_needed(&tc).await;
+        assert!(initial_context_seeded_this_turn);
+
+        let update_items = sess.build_settings_update_items(
+            None,
+            &tc,
+            &previous_collaboration_mode,
+            Some(&next_collaboration_mode),
+            &PendingModelVisibleStateSync::ForceEmitAll,
+            initial_context_seeded_this_turn,
+        );
+        let expected_item: ResponseItem =
+            DeveloperInstructions::from_collaboration_mode(&next_collaboration_mode)
                 .expect("expected collaboration instructions")
                 .into();
         assert!(update_items.contains(&expected_item));
@@ -5430,22 +5498,8 @@ mod tests {
             final_output_json_schema: None,
             truncation_policy: None,
         };
-        let user = ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "first user".to_string(),
-            }],
-            end_turn: None,
-        };
-        let assistant = ResponseItem::Message {
-            id: None,
-            role: "assistant".to_string(),
-            content: vec![ContentItem::OutputText {
-                text: "assistant reply".to_string(),
-            }],
-            end_turn: None,
-        };
+        let user = user_message("first user");
+        let assistant = assistant_message("assistant reply");
         let compacted = RolloutItem::Compacted(CompactedItem {
             message: format!("{}\nsummary", compact::SUMMARY_PREFIX),
             replacement_history: None,
@@ -5538,23 +5592,9 @@ mod tests {
             user_message("<environment_context>ctx</environment_context>"),
             user_message("<user_instructions>do the thing</user_instructions>"),
             user_message("turn 1 user"),
-            ResponseItem::Message {
-                id: None,
-                role: "assistant".to_string(),
-                content: vec![ContentItem::OutputText {
-                    text: "turn 1 assistant".to_string(),
-                }],
-                end_turn: None,
-            },
+            assistant_message("turn 1 assistant"),
             user_message("turn 2 user"),
-            ResponseItem::Message {
-                id: None,
-                role: "assistant".to_string(),
-                content: vec![ContentItem::OutputText {
-                    text: "turn 2 assistant".to_string(),
-                }],
-                end_turn: None,
-            },
+            assistant_message("turn 2 assistant"),
         ];
 
         Session::drop_last_n_user_turns_from_items(&mut items, 2);
@@ -5598,14 +5638,7 @@ mod tests {
         sess.record_user_prompt_and_emit_turn_item(tc.as_ref(), &input1, response_item1)
             .await;
 
-        let turn_2 = vec![ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "turn 2".to_string(),
-            }],
-            end_turn: None,
-        }];
+        let turn_2 = vec![user_message("turn 2")];
         sess.record_into_history(&turn_2, tc.as_ref()).await;
 
         {
@@ -5654,15 +5687,7 @@ mod tests {
         sess.record_into_history(&initial_context, tc.as_ref())
             .await;
 
-        let turn_1 = vec![ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "turn 1 user".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        }];
+        let turn_1 = vec![user_message("turn 1 user")];
         sess.record_into_history(&turn_1, tc.as_ref()).await;
 
         handlers::thread_rollback(&sess, "sub-1".to_string(), 99).await;
@@ -6604,27 +6629,11 @@ mod tests {
         }
         live_history.record_items(initial_context.iter(), turn_context.truncation_policy);
 
-        let user1 = ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "first user".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        };
+        let user1 = user_message("first user");
         live_history.record_items(std::iter::once(&user1), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(user1.clone()));
 
-        let assistant1 = ResponseItem::Message {
-            id: None,
-            role: "assistant".to_string(),
-            content: vec![ContentItem::OutputText {
-                text: "assistant reply one".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        };
+        let assistant1 = assistant_message("assistant reply one");
         live_history.record_items(std::iter::once(&assistant1), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(assistant1.clone()));
 
@@ -6642,27 +6651,11 @@ mod tests {
             replacement_history: None,
         }));
 
-        let user2 = ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "second user".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        };
+        let user2 = user_message("second user");
         live_history.record_items(std::iter::once(&user2), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(user2.clone()));
 
-        let assistant2 = ResponseItem::Message {
-            id: None,
-            role: "assistant".to_string(),
-            content: vec![ContentItem::OutputText {
-                text: "assistant reply two".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        };
+        let assistant2 = assistant_message("assistant reply two");
         live_history.record_items(std::iter::once(&assistant2), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(assistant2.clone()));
 
@@ -6680,27 +6673,11 @@ mod tests {
             replacement_history: None,
         }));
 
-        let user3 = ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "third user".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        };
+        let user3 = user_message("third user");
         live_history.record_items(std::iter::once(&user3), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(user3));
 
-        let assistant3 = ResponseItem::Message {
-            id: None,
-            role: "assistant".to_string(),
-            content: vec![ContentItem::OutputText {
-                text: "assistant reply three".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        };
+        let assistant3 = assistant_message("assistant reply three");
         live_history.record_items(std::iter::once(&assistant3), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(assistant3));
 
