@@ -3,13 +3,18 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::is_local_image_close_tag_text;
 use codex_protocol::models::is_local_image_open_tag_text;
+use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::TurnContextItem;
+use codex_protocol::protocol::USER_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use serde::Serialize;
 use serde_json::Value;
+
+const USER_INSTRUCTIONS_PREFIX: &str = "# AGENTS.md instructions for ";
+const TURN_ABORTED_OPEN_TAG: &str = "<turn_aborted>";
 
 /// Apply a rollout item to the metadata structure.
 pub fn apply_rollout_item(
@@ -74,12 +79,46 @@ fn apply_event_msg(metadata: &mut ThreadMetadata, event: &EventMsg) {
 }
 
 fn apply_response_item(metadata: &mut ThreadMetadata, item: &ResponseItem) {
-    if let Some(text) = extract_user_message_text(item) {
-        metadata.has_user_event = true;
-        if metadata.title.is_empty() {
-            metadata.title = text;
-        }
+    if !is_user_response_item(item) {
+        return;
     }
+    metadata.has_user_event = true;
+    if metadata.title.is_empty()
+        && let Some(text) = extract_user_message_text(item)
+    {
+        metadata.title = text;
+    }
+}
+
+// TODO(jif) unify once the discussion is settled
+fn is_user_response_item(item: &ResponseItem) -> bool {
+    let ResponseItem::Message { role, content, .. } = item else {
+        return false;
+    };
+    role == "user"
+        && !is_user_instructions(content.as_slice())
+        && !is_session_prefix_content(content.as_slice())
+}
+
+fn is_user_instructions(content: &[ContentItem]) -> bool {
+    if let [ContentItem::InputText { text }] = content {
+        text.starts_with(USER_INSTRUCTIONS_PREFIX) || text.starts_with(USER_INSTRUCTIONS_OPEN_TAG)
+    } else {
+        false
+    }
+}
+
+fn is_session_prefix_content(content: &[ContentItem]) -> bool {
+    if let [ContentItem::InputText { text }] = content {
+        is_session_prefix(text)
+    } else {
+        false
+    }
+}
+
+fn is_session_prefix(text: &str) -> bool {
+    let lowered = text.trim_start().to_ascii_lowercase();
+    lowered.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG) || lowered.starts_with(TURN_ABORTED_OPEN_TAG)
 }
 
 fn extract_user_message_text(item: &ResponseItem) -> Option<String> {
@@ -125,6 +164,7 @@ pub(crate) fn enum_to_string<T: Serialize>(value: &T) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::apply_rollout_item;
     use super::extract_user_message_text;
     use crate::model::ThreadMetadata;
     use chrono::DateTime;
@@ -132,6 +172,8 @@ mod tests {
     use codex_protocol::ThreadId;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::RolloutItem;
+    use codex_protocol::protocol::USER_INSTRUCTIONS_OPEN_TAG;
     use codex_protocol::protocol::USER_MESSAGE_BEGIN;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
@@ -158,10 +200,69 @@ mod tests {
     }
 
     #[test]
-    fn diff_fields_detects_changes() {
-        let id = ThreadId::from_string(&Uuid::now_v7().to_string()).expect("thread id");
+    fn user_instructions_do_not_count_as_user_events() {
+        let mut metadata = metadata_for_test();
+        let item = RolloutItem::ResponseItem(ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: format!(
+                    "# AGENTS.md instructions for /tmp\n\n{USER_INSTRUCTIONS_OPEN_TAG}test</user_instructions>"
+                ),
+            }],
+            end_turn: None,
+            phase: None,
+        });
+
+        apply_rollout_item(&mut metadata, &item, "test-provider");
+
+        assert_eq!(metadata.has_user_event, false);
+        assert_eq!(metadata.title, "");
+    }
+
+    #[test]
+    fn session_prefix_messages_do_not_count_as_user_events() {
+        let mut metadata = metadata_for_test();
+        let item = RolloutItem::ResponseItem(ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "\n  <ENVIRONMENT_CONTEXT>{\"cwd\":\"/tmp\"}</ENVIRONMENT_CONTEXT>"
+                    .to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        });
+
+        apply_rollout_item(&mut metadata, &item, "test-provider");
+
+        assert_eq!(metadata.has_user_event, false);
+        assert_eq!(metadata.title, "");
+    }
+
+    #[test]
+    fn image_only_user_messages_still_count_as_user_events() {
+        let mut metadata = metadata_for_test();
+        let item = RolloutItem::ResponseItem(ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputImage {
+                image_url: "https://example.com/image.png".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        });
+
+        apply_rollout_item(&mut metadata, &item, "test-provider");
+
+        assert_eq!(metadata.has_user_event, true);
+        assert_eq!(metadata.title, "");
+    }
+
+    fn metadata_for_test() -> ThreadMetadata {
+        let id = ThreadId::from_string(&Uuid::from_u128(42).to_string()).expect("thread id");
         let created_at = DateTime::<Utc>::from_timestamp(1_735_689_600, 0).expect("timestamp");
-        let base = ThreadMetadata {
+        ThreadMetadata {
             id,
             rollout_path: PathBuf::from("/tmp/a.jsonl"),
             created_at,
@@ -169,7 +270,7 @@ mod tests {
             source: "cli".to_string(),
             model_provider: "openai".to_string(),
             cwd: PathBuf::from("/tmp"),
-            title: "hello".to_string(),
+            title: String::new(),
             sandbox_policy: "read-only".to_string(),
             approval_mode: "on-request".to_string(),
             tokens_used: 1,
@@ -178,7 +279,14 @@ mod tests {
             git_sha: None,
             git_branch: None,
             git_origin_url: None,
-        };
+        }
+    }
+
+    #[test]
+    fn diff_fields_detects_changes() {
+        let mut base = metadata_for_test();
+        base.id = ThreadId::from_string(&Uuid::now_v7().to_string()).expect("thread id");
+        base.title = "hello".to_string();
         let mut other = base.clone();
         other.tokens_used = 2;
         other.title = "world".to_string();
