@@ -1,5 +1,5 @@
-name: 🪲 Bug Report
-description: Report an issue that should be fixed
+name: 🪲 CLI Bug
+description: Report an issue in the Codex CLI
 labels:
   - bug
   - needs triage
@@ -7,19 +7,16 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thank you for submitting a bug report! It helps make Codex better for everyone.
-
-        If you need help or support using Codex, and are not reporting a bug, please post on [codex/discussions](https://github.com/openai/codex/discussions), where you can ask questions or engage with others on ideas for how to improve codex.
+        Before submitting a new issue, please search for existing issues to see if your issue has already been reported.
+        If it has, please add a 👍 reaction (no need to leave a comment) to the existing issue instead of creating a new one.
 
         Make sure you are running the [latest](https://npmjs.com/package/@openai/codex) version of Codex CLI. The bug you are experiencing may already have been fixed.
-
-        Please try to include as much information as possible.
 
   - type: input
     id: version
     attributes:
-      label: What version of Codex is running?
-      description: (App) look in "About Codex" dialog; (CLI) use `codex --version`; (IDE Extension) look in extensions panel.
+      label: What version of Codex CLI is running?
+      description: use `codex --version`
     validations:
       required: true
   - type: input
@@ -32,13 +29,13 @@ body:
     id: model
     attributes:
       label: Which model were you using?
-      description: Like `gpt-4.1`, `o4-mini`, `o3`, etc.
+      description: Like `gpt-5.2`, `gpt-5.2-codex`, etc.
   - type: input
     id: platform
     attributes:
       label: What platform is your computer?
       description: |
-        For MacOS and Linux: copy the output of `uname -mprs`
+        For macOS and Linux: copy the output of `uname -mprs`
         For Windows: copy the output of `"$([Environment]::OSVersion | ForEach-Object VersionString) $(if ([Environment]::Is64BitOperatingSystem) { "x64" } else { "x86" })"` in the PowerShell console
   - type: input
     id: terminal
@@ -58,7 +55,7 @@ body:
     id: steps
     attributes:
       label: What steps can reproduce the bug?
-      description: Explain the bug and provide a code snippet that can reproduce it. Please include session id, token limit usage, context window usage if applicable.
+      description: Explain the bug and provide a code snippet that can reproduce it. Please include thread id if applicable.
     validations:
       required: true
   - type: textarea
