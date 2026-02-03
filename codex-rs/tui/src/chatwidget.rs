@@ -4053,7 +4053,7 @@ impl ChatWidget {
                 if total <= 0 {
                     None
                 } else {
-                    Some(format_tokens_compact(total))
+                    Some(format!("{} used", format_tokens_compact(total)))
                 }
             }
             StatusLineItem::ContextRemaining => self

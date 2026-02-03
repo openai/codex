@@ -76,7 +76,7 @@ impl StatusLineItem {
     pub(crate) fn render(&self) -> &'static str {
         match self {
             StatusLineItem::ModelName => "gpt-5.2-codex",
-            StatusLineItem::ModelWithReasoning => "gpt-5.2-codex (medium)",
+            StatusLineItem::ModelWithReasoning => "gpt-5.2-codex medium",
             StatusLineItem::CurrentDir => "~/project/path",
             StatusLineItem::ProjectRoot => "~/project",
             StatusLineItem::GitBranch => "feat/awesome-feature",
