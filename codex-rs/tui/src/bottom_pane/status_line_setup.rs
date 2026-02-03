@@ -83,7 +83,6 @@ impl StatusLineItem {
 
 pub(crate) struct StatusLineSetupView {
     picker: MultiSelectPicker,
-    app_event_tx: AppEventSender,
 }
 
 impl StatusLineSetupView {
@@ -155,7 +154,6 @@ impl StatusLineSetupView {
                 app_event.send(AppEvent::StatusLineSetupCancelled);
             })
             .build(),
-            app_event_tx,
         }
     }
 
@@ -181,7 +179,6 @@ impl BottomPaneView for StatusLineSetupView {
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
         self.picker.close();
-        self.app_event_tx.send(AppEvent::StatusLineSetupCancelled);
         CancellationEvent::Handled
     }
 }
