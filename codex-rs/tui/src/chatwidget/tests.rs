@@ -1261,7 +1261,7 @@ async fn plan_implementation_popup_skips_replayed_turn_complete() {
 }
 
 #[tokio::test]
-async fn plan_implementation_popup_skips_duplicate_live_turn_complete_after_replay() {
+async fn plan_implementation_popup_shows_once_when_replay_precedes_live_turn_complete() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, true);
     let plan_mask =
@@ -1276,8 +1276,14 @@ async fn plan_implementation_popup_skips_duplicate_live_turn_complete_after_repl
     chat.replay_initial_messages(vec![EventMsg::TurnComplete(TurnCompleteEvent {
         last_agent_message: Some("Plan details".to_string()),
     })]);
+    let replay_popup = render_bottom_popup(&chat, 80);
+    assert!(
+        !replay_popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected no prompt for replayed turn completion, got {replay_popup:?}"
+    );
+
     chat.handle_codex_event(Event {
-        id: "duplicate-turn-complete".to_string(),
+        id: "live-turn-complete-1".to_string(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             last_agent_message: Some("Plan details".to_string()),
         }),
@@ -1285,8 +1291,27 @@ async fn plan_implementation_popup_skips_duplicate_live_turn_complete_after_repl
 
     let popup = render_bottom_popup(&chat, 80);
     assert!(
-        !popup.contains(PLAN_IMPLEMENTATION_TITLE),
-        "expected no plan popup for duplicate turn completion, got {popup:?}"
+        popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected prompt for first live turn completion after replay, got {popup:?}"
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    let dismissed_popup = render_bottom_popup(&chat, 80);
+    assert!(
+        !dismissed_popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected prompt to dismiss on Esc, got {dismissed_popup:?}"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "live-turn-complete-2".to_string(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: Some("Plan details".to_string()),
+        }),
+    });
+    let duplicate_popup = render_bottom_popup(&chat, 80);
+    assert!(
+        !duplicate_popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected no prompt for duplicate live completion, got {duplicate_popup:?}"
     );
 }
 
