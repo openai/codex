@@ -25,7 +25,7 @@ use core_test_support::skip_if_no_network;
 use mcp_test_support::McpProcess;
 use mcp_test_support::create_apply_patch_sse_response;
 use mcp_test_support::create_final_assistant_message_sse_response;
-use mcp_test_support::create_mock_chat_completions_server;
+use mcp_test_support::create_mock_responses_server;
 use mcp_test_support::create_shell_command_sse_response;
 use mcp_test_support::format_with_current_shell;
 
@@ -87,7 +87,7 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
     ])
     .await?;
 
-    // Send a "codex" tool request, which should hit the completions endpoint.
+    // Send a "codex" tool request, which should hit the responses endpoint.
     // In turn, it should reply with a tool call, which the MCP should forward
     // as an elicitation.
     let codex_request_id = mcp_process
@@ -349,10 +349,8 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
     #![expect(clippy::expect_used, clippy::unwrap_used)]
 
     let server =
-        create_mock_chat_completions_server(vec![create_final_assistant_message_sse_response(
-            "Enjoy!",
-        )?])
-        .await;
+        create_mock_responses_server(vec![create_final_assistant_message_sse_response("Enjoy!")?])
+            .await;
 
     // Run `codex mcp` with a specific config.toml.
     let codex_home = TempDir::new()?;
@@ -360,7 +358,7 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
     let mut mcp_process = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp_process.initialize()).await??;
 
-    // Send a "codex" tool request, which should hit the completions endpoint.
+    // Send a "codex" tool request, which should hit the responses endpoint.
     let codex_request_id = mcp_process
         .send_codex_tool_call(CodexToolCallParam {
             prompt: "How are you?".to_string(),
@@ -400,18 +398,23 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
 
     let requests = server.received_requests().await.unwrap();
     let request = requests[0].body_json::<serde_json::Value>()?;
-    let instructions = request["messages"][0]["content"].as_str().unwrap();
+    let instructions = request["instructions"]
+        .as_str()
+        .expect("responses request should include instructions");
     assert!(instructions.starts_with("You are a helpful assistant."));
 
-    let developer_messages: Vec<&serde_json::Value> = request["messages"]
+    let developer_messages: Vec<&serde_json::Value> = request["input"]
         .as_array()
-        .unwrap()
+        .expect("responses request should include input items")
         .iter()
         .filter(|msg| msg.get("role").and_then(|role| role.as_str()) == Some("developer"))
         .collect();
     let developer_contents: Vec<&str> = developer_messages
         .iter()
-        .filter_map(|msg| msg.get("content").and_then(|value| value.as_str()))
+        .filter_map(|msg| msg.get("content").and_then(serde_json::Value::as_array))
+        .flat_map(|content| content.iter())
+        .filter(|span| span.get("type").and_then(serde_json::Value::as_str) == Some("input_text"))
+        .filter_map(|span| span.get("text").and_then(serde_json::Value::as_str))
         .collect();
     assert!(
         developer_contents
@@ -469,7 +472,7 @@ pub struct McpHandle {
 }
 
 async fn create_mcp_process(responses: Vec<String>) -> anyhow::Result<McpHandle> {
-    let server = create_mock_chat_completions_server(responses).await;
+    let server = create_mock_responses_server(responses).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
     let mut mcp_process = McpProcess::new(codex_home.path()).await?;
@@ -499,7 +502,7 @@ model_provider = "mock_provider"
 [model_providers.mock_provider]
 name = "Mock provider for test"
 base_url = "{server_uri}/v1"
-wire_api = "chat"
+wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 "#

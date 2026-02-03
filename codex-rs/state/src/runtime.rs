@@ -418,17 +418,7 @@ ON CONFLICT(id) DO UPDATE SET
         if tools.is_empty() {
             return Ok(());
         }
-        let mut tx = self.pool.begin().await?;
         let thread_id = thread_id.to_string();
-        let existing: Option<i64> =
-            sqlx::query_scalar("SELECT 1 FROM thread_dynamic_tools WHERE thread_id = ? LIMIT 1")
-                .bind(thread_id.as_str())
-                .fetch_optional(&mut *tx)
-                .await?;
-        if existing.is_some() {
-            tx.commit().await?;
-            return Ok(());
-        }
         for (idx, tool) in tools.iter().enumerate() {
             let position = i64::try_from(idx).unwrap_or(i64::MAX);
             let input_schema = serde_json::to_string(&tool.input_schema)?;
@@ -441,6 +431,7 @@ INSERT INTO thread_dynamic_tools (
     description,
     input_schema
 ) VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(thread_id, position) DO NOTHING
                 "#,
             )
             .bind(thread_id.as_str())
@@ -448,10 +439,9 @@ INSERT INTO thread_dynamic_tools (
             .bind(tool.name.as_str())
             .bind(tool.description.as_str())
             .bind(input_schema)
-            .execute(&mut *tx)
+            .execute(self.pool.as_ref())
             .await?;
         }
-        tx.commit().await?;
         Ok(())
     }
 

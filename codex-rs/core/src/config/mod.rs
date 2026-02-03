@@ -32,9 +32,10 @@ use crate::features::FeatureOverrides;
 use crate::features::Features;
 use crate::features::FeaturesToml;
 use crate::git_info::resolve_root_git_project_for_trust;
+use crate::model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use crate::model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use crate::model_provider_info::ModelProviderInfo;
-use crate::model_provider_info::OLLAMA_CHAT_PROVIDER_ID;
+use crate::model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
 use crate::model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use crate::model_provider_info::built_in_model_providers;
 use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
@@ -757,14 +758,20 @@ pub fn set_project_trust_level(
 pub fn set_default_oss_provider(codex_home: &Path, provider: &str) -> std::io::Result<()> {
     // Validate that the provider is one of the known OSS providers
     match provider {
-        LMSTUDIO_OSS_PROVIDER_ID | OLLAMA_OSS_PROVIDER_ID | OLLAMA_CHAT_PROVIDER_ID => {
+        LMSTUDIO_OSS_PROVIDER_ID | OLLAMA_OSS_PROVIDER_ID => {
             // Valid provider, continue
+        }
+        LEGACY_OLLAMA_CHAT_PROVIDER_ID => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                OLLAMA_CHAT_PROVIDER_REMOVED_ERROR,
+            ));
         }
         _ => {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!(
-                    "Invalid OSS provider '{provider}'. Must be one of: {LMSTUDIO_OSS_PROVIDER_ID}, {OLLAMA_OSS_PROVIDER_ID}, {OLLAMA_CHAT_PROVIDER_ID}"
+                    "Invalid OSS provider '{provider}'. Must be one of: {LMSTUDIO_OSS_PROVIDER_ID}, {OLLAMA_OSS_PROVIDER_ID}"
                 ),
             ));
         }
@@ -985,7 +992,7 @@ pub struct ConfigToml {
     pub experimental_compact_prompt_file: Option<AbsolutePathBuf>,
     pub experimental_use_unified_exec_tool: Option<bool>,
     pub experimental_use_freeform_apply_patch: Option<bool>,
-    /// Preferred OSS provider for local models, e.g. "lmstudio", "ollama", or "ollama-chat".
+    /// Preferred OSS provider for local models, e.g. "lmstudio" or "ollama".
     pub oss_provider: Option<String>,
 }
 
@@ -1411,10 +1418,12 @@ impl Config {
         let model_provider = model_providers
             .get(&model_provider_id)
             .ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    format!("Model provider `{model_provider_id}` not found"),
-                )
+                let message = if model_provider_id == LEGACY_OLLAMA_CHAT_PROVIDER_ID {
+                    OLLAMA_CHAT_PROVIDER_REMOVED_ERROR.to_string()
+                } else {
+                    format!("Model provider `{model_provider_id}` not found")
+                };
+                std::io::Error::new(std::io::ErrorKind::NotFound, message)
             })?
             .clone();
 
@@ -3576,7 +3585,7 @@ model = "gpt-5.1-codex"
         cfg: ConfigToml,
         model_provider_map: HashMap<String, ModelProviderInfo>,
         openai_provider: ModelProviderInfo,
-        openai_chat_completions_provider: ModelProviderInfo,
+        openai_custom_provider: ModelProviderInfo,
     }
 
     impl PrecedenceTestFixture {
@@ -3658,11 +3667,11 @@ profile = "gpt3"
 [analytics]
 enabled = true
 
-[model_providers.openai-chat-completions]
-name = "OpenAI using Chat Completions"
+[model_providers.openai-custom]
+name = "OpenAI custom"
 base_url = "https://api.openai.com/v1"
 env_key = "OPENAI_API_KEY"
-wire_api = "chat"
+wire_api = "responses"
 request_max_retries = 4            # retry failed HTTP requests
 stream_max_retries = 10            # retry dropped SSE streams
 stream_idle_timeout_ms = 300000    # 5m idle timeout
@@ -3676,7 +3685,7 @@ model_reasoning_summary = "detailed"
 
 [profiles.gpt3]
 model = "gpt-3.5-turbo"
-model_provider = "openai-chat-completions"
+model_provider = "openai-custom"
 
 [profiles.zdr]
 model = "o3"
@@ -3707,11 +3716,11 @@ model_verbosity = "high"
 
         let codex_home_temp_dir = TempDir::new().unwrap();
 
-        let openai_chat_completions_provider = ModelProviderInfo {
-            name: "OpenAI using Chat Completions".to_string(),
+        let openai_custom_provider = ModelProviderInfo {
+            name: "OpenAI custom".to_string(),
             base_url: Some("https://api.openai.com/v1".to_string()),
             env_key: Some("OPENAI_API_KEY".to_string()),
-            wire_api: crate::WireApi::Chat,
+            wire_api: crate::WireApi::Responses,
             env_key_instructions: None,
             experimental_bearer_token: None,
             query_params: None,
@@ -3725,10 +3734,7 @@ model_verbosity = "high"
         };
         let model_provider_map = {
             let mut model_provider_map = built_in_model_providers();
-            model_provider_map.insert(
-                "openai-chat-completions".to_string(),
-                openai_chat_completions_provider.clone(),
-            );
+            model_provider_map.insert("openai-custom".to_string(), openai_custom_provider.clone());
             model_provider_map
         };
 
@@ -3743,7 +3749,7 @@ model_verbosity = "high"
             cfg,
             model_provider_map,
             openai_provider,
-            openai_chat_completions_provider,
+            openai_custom_provider,
         })
     }
 
@@ -3864,8 +3870,8 @@ model_verbosity = "high"
             review_model: None,
             model_context_window: None,
             model_auto_compact_token_limit: None,
-            model_provider_id: "openai-chat-completions".to_string(),
-            model_provider: fixture.openai_chat_completions_provider.clone(),
+            model_provider_id: "openai-custom".to_string(),
+            model_provider: fixture.openai_custom_provider.clone(),
             approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
             enforce_residency: Constrained::allow_any(None),
@@ -4262,6 +4268,50 @@ trust_level = "trusted"
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
         assert!(error.to_string().contains("Invalid OSS provider"));
         assert!(error.to_string().contains("invalid_provider"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_set_default_oss_provider_rejects_legacy_ollama_chat_provider() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let codex_home = temp_dir.path();
+
+        let result = set_default_oss_provider(codex_home, LEGACY_OLLAMA_CHAT_PROVIDER_ID);
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(
+            error
+                .to_string()
+                .contains(OLLAMA_CHAT_PROVIDER_REMOVED_ERROR)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_load_config_rejects_legacy_ollama_chat_provider_with_helpful_error()
+    -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let cfg = ConfigToml {
+            model_provider: Some(LEGACY_OLLAMA_CHAT_PROVIDER_ID.to_string()),
+            ..Default::default()
+        };
+
+        let result = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        );
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        assert!(
+            error
+                .to_string()
+                .contains(OLLAMA_CHAT_PROVIDER_REMOVED_ERROR)
+        );
 
         Ok(())
     }

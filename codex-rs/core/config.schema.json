@@ -464,7 +464,7 @@
               "$ref": "#/definitions/WireApi"
             }
           ],
-          "default": "chat",
+          "default": "responses",
           "description": "Which wire protocol this provider expects."
         }
       },
@@ -1087,19 +1087,12 @@
       "type": "string"
     },
     "WireApi": {
-      "description": "Wire protocol that the provider speaks. Most third-party services only implement the classic OpenAI Chat Completions JSON schema, whereas OpenAI itself (and a handful of others) additionally expose the more modern *Responses* API. The two protocols use different request/response shapes and *cannot* be auto-detected at runtime, therefore each provider entry must declare which one it expects.",
+      "description": "Wire protocol that the provider speaks.",
       "oneOf": [
         {
           "description": "The Responses API exposed by OpenAI at `/v1/responses`.",
           "enum": [
             "responses"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Regular Chat Completions compatible with `/v1/chat/completions`.",
-          "enum": [
-            "chat"
           ],
           "type": "string"
         }
@@ -1423,7 +1416,7 @@
       "type": "array"
     },
     "oss_provider": {
-      "description": "Preferred OSS provider for local models, e.g. \"lmstudio\", \"ollama\", or \"ollama-chat\".",
+      "description": "Preferred OSS provider for local models, e.g. \"lmstudio\" or \"ollama\".",
       "type": "string"
     },
     "otel": {
