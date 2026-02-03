@@ -266,6 +266,13 @@ struct AppServerCommand {
     #[command(subcommand)]
     subcommand: Option<AppServerSubcommand>,
 
+    /// Configuration profile from config.toml to specify default options.
+    ///
+    /// Supports both `codex --profile <name> app-server` and
+    /// `codex app-server --profile <name>`.
+    #[arg(long = "profile", short = 'p')]
+    config_profile: Option<String>,
+
     /// Controls whether analytics are enabled by default.
     ///
     /// Analytics are disabled by default for app-server. Users have to explicitly opt in
@@ -538,9 +545,15 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         }
         Some(Subcommand::AppServer(app_server_cli)) => match app_server_cli.subcommand {
             None => {
+                let mut app_server_config_overrides = root_config_overrides;
+                append_app_server_profile_override(
+                    &mut app_server_config_overrides,
+                    interactive.config_profile.as_deref(),
+                    app_server_cli.config_profile.as_deref(),
+                );
                 codex_app_server::run_main(
                     codex_linux_sandbox_exe,
-                    root_config_overrides,
+                    app_server_config_overrides,
                     codex_core::config_loader::LoaderOverrides::default(),
                     app_server_cli.analytics_default_enabled,
                 )
@@ -816,6 +829,20 @@ fn prepend_config_flags(
         .splice(0..0, cli_config_overrides.raw_overrides);
 }
 
+fn append_app_server_profile_override(
+    config_overrides: &mut CliConfigOverrides,
+    top_level_profile: Option<&str>,
+    app_server_profile: Option<&str>,
+) {
+    let Some(profile) = app_server_profile.or(top_level_profile) else {
+        return;
+    };
+    let profile_value = toml::Value::String(profile.to_string());
+    config_overrides
+        .raw_overrides
+        .push(format!("profile={profile_value}"));
+}
+
 async fn run_interactive_tui(
     mut interactive: TuiCli,
     codex_linux_sandbox_exe: Option<PathBuf>,
@@ -1044,6 +1071,25 @@ mod tests {
             unreachable!()
         };
         app_server
+    }
+
+    fn app_server_overrides_from_args(args: &[&str]) -> Vec<String> {
+        let cli = MultitoolCli::try_parse_from(args).expect("parse");
+        let MultitoolCli {
+            config_overrides: mut root_overrides,
+            interactive,
+            subcommand,
+            feature_toggles: _,
+        } = cli;
+        let Subcommand::AppServer(app_server) = subcommand.expect("app-server present") else {
+            unreachable!()
+        };
+        append_app_server_profile_override(
+            &mut root_overrides,
+            interactive.config_profile.as_deref(),
+            app_server.config_profile.as_deref(),
+        );
+        root_overrides.raw_overrides
     }
 
     fn sample_exit_info(conversation_id: Option<&str>, thread_name: Option<&str>) -> AppExitInfo {
@@ -1277,6 +1323,45 @@ mod tests {
         let app_server =
             app_server_from_args(["codex", "app-server", "--analytics-default-enabled"].as_ref());
         assert!(app_server.analytics_default_enabled);
+    }
+
+    #[test]
+    fn app_server_profile_parses_after_subcommand() {
+        let app_server =
+            app_server_from_args(["codex", "app-server", "--profile", "local"].as_ref());
+        assert_eq!(app_server.config_profile.as_deref(), Some("local"));
+    }
+
+    #[test]
+    fn app_server_profile_override_uses_top_level_profile() {
+        let overrides = app_server_overrides_from_args(
+            ["codex", "--profile", "top-level", "app-server"].as_ref(),
+        );
+        assert_eq!(overrides, vec!["profile=\"top-level\"".to_string()]);
+    }
+
+    #[test]
+    fn app_server_profile_override_uses_subcommand_profile() {
+        let overrides = app_server_overrides_from_args(
+            ["codex", "app-server", "--profile", "subcommand"].as_ref(),
+        );
+        assert_eq!(overrides, vec!["profile=\"subcommand\"".to_string()]);
+    }
+
+    #[test]
+    fn app_server_profile_override_prefers_subcommand_profile() {
+        let overrides = app_server_overrides_from_args(
+            [
+                "codex",
+                "--profile",
+                "top-level",
+                "app-server",
+                "--profile",
+                "subcommand",
+            ]
+            .as_ref(),
+        );
+        assert_eq!(overrides, vec!["profile=\"subcommand\"".to_string()]);
     }
 
     #[test]
