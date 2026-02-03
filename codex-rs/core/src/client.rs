@@ -166,10 +166,6 @@ impl ModelClient {
     /// Refresh turn metadata in the background and update a cached header that request
     /// builders can read without blocking.
     fn prewarm_turn_metadata_header(&self, turn_metadata_cwd: Option<PathBuf>) {
-        if self.state.provider.wire_api != WireApi::Responses {
-            return;
-        }
-
         let turn_metadata_cwd =
             turn_metadata_cwd.map(|cwd| std::fs::canonicalize(&cwd).unwrap_or(cwd));
 
