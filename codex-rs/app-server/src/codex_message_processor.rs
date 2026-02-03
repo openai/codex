@@ -97,6 +97,10 @@ use codex_app_server_protocol::SkillsConfigWriteParams;
 use codex_app_server_protocol::SkillsConfigWriteResponse;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
+use codex_app_server_protocol::SkillsRemoteReadParams;
+use codex_app_server_protocol::SkillsRemoteReadResponse;
+use codex_app_server_protocol::SkillsRemoteWriteParams;
+use codex_app_server_protocol::SkillsRemoteWriteResponse;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
@@ -176,6 +180,8 @@ use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::rollout_date_parts;
 use codex_core::sandboxing::SandboxPermissions;
+use codex_core::skills::remote::download_remote_skill;
+use codex_core::skills::remote::list_remote_skills;
 use codex_core::state_db::get_state_db;
 use codex_core::token_data::parse_id_token;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
@@ -463,6 +469,12 @@ impl CodexMessageProcessor {
             }
             ClientRequest::SkillsList { request_id, params } => {
                 self.skills_list(request_id, params).await;
+            }
+            ClientRequest::SkillsRemoteRead { request_id, params } => {
+                self.skills_remote_read(request_id, params).await;
+            }
+            ClientRequest::SkillsRemoteWrite { request_id, params } => {
+                self.skills_remote_write(request_id, params).await;
             }
             ClientRequest::AppsList { request_id, params } => {
                 self.apps_list(request_id, params).await;
@@ -4051,6 +4063,61 @@ impl CodexMessageProcessor {
         self.outgoing
             .send_response(request_id, SkillsListResponse { data })
             .await;
+    }
+
+    async fn skills_remote_read(&self, request_id: RequestId, _params: SkillsRemoteReadParams) {
+        match list_remote_skills(&self.config).await {
+            Ok(skills) => {
+                let data = skills
+                    .into_iter()
+                    .map(|skill| codex_app_server_protocol::RemoteSkillSummary {
+                        id: skill.id,
+                        name: skill.name,
+                        description: skill.description,
+                    })
+                    .collect();
+                self.outgoing
+                    .send_response(request_id, SkillsRemoteReadResponse { data })
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to read remote skills: {err}"),
+                )
+                .await;
+            }
+        }
+    }
+
+    async fn skills_remote_write(&self, request_id: RequestId, params: SkillsRemoteWriteParams) {
+        let SkillsRemoteWriteParams {
+            hazelnut_id,
+            is_preload,
+        } = params;
+        let response = download_remote_skill(&self.config, hazelnut_id.as_str(), is_preload).await;
+
+        match response {
+            Ok(downloaded) => {
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        SkillsRemoteWriteResponse {
+                            id: downloaded.id,
+                            name: downloaded.name,
+                            path: downloaded.path,
+                        },
+                    )
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to download remote skill: {err}"),
+                )
+                .await;
+            }
+        }
     }
 
     async fn skills_config_write(&self, request_id: RequestId, params: SkillsConfigWriteParams) {
