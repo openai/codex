@@ -101,10 +101,6 @@ pub(crate) struct StatusLineSetupView {
 
 impl StatusLineSetupView {
     pub(crate) fn new(status_line_items: Option<&[String]>, app_event_tx: AppEventSender) -> Self {
-        let enabled_ids: HashSet<String> = status_line_items
-            .as_ref()
-            .map(|items| items.iter().cloned().collect())
-            .unwrap_or_default();
         let mut used_ids = HashSet::new();
         let mut items = Vec::new();
 
@@ -126,8 +122,7 @@ impl StatusLineSetupView {
             if used_ids.contains(&item_id) {
                 continue;
             }
-            let enabled = enabled_ids.contains(&item_id);
-            items.push(Self::status_line_select_item(item, enabled));
+            items.push(Self::status_line_select_item(item, false));
         }
 
         Self {
