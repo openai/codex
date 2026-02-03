@@ -616,6 +616,13 @@ server_request_definitions! {
         response: v2::FileChangeRequestApprovalResponse,
     },
 
+    /// CRAFT AGENTS: PreToolUse hook - sent BEFORE any tool execution.
+    /// Allows client to block, modify input, or allow tool execution.
+    ToolCallPreExecute => "item/toolCall/preExecute" {
+        params: v2::ToolCallPreExecuteParams,
+        response: v2::ToolCallPreExecuteResponse,
+    },
+
     /// EXPERIMENTAL - Request input from the user for a tool call.
     ToolRequestUserInput => "item/tool/requestUserInput" {
         params: v2::ToolRequestUserInputParams,

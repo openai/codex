@@ -1,0 +1,185 @@
+# Craft Agents Codex Release Workflow
+# This workflow builds and releases the Craft-modified Codex binaries.
+#
+# To release:
+# ```
+# git tag -a craft-v0.1.0 -m "Craft Release 0.1.0"
+# git push origin craft-v0.1.0
+# ```
+
+name: craft-release
+on:
+  push:
+    tags:
+      - "craft-v*.*.*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (build but do not publish)'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build - ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: codex-rs
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            artifact_name: codex-aarch64-apple-darwin
+          - runner: macos-13
+            target: x86_64-apple-darwin
+            artifact_name: codex-x86_64-apple-darwin
+          # Linux
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            artifact_name: codex-x86_64-unknown-linux-gnu
+          - runner: ubuntu-22.04
+            target: aarch64-unknown-linux-gnu
+            artifact_name: codex-aarch64-unknown-linux-gnu
+            cross: true
+          # Windows
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: codex-x86_64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux ARM64)
+        if: matrix.cross == true
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Configure cross-compilation (Linux ARM64)
+        if: matrix.cross == true
+        run: |
+          echo "[target.aarch64-unknown-linux-gnu]" >> ~/.cargo/config.toml
+          echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            codex-rs/target/
+          key: cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ matrix.target }}-
+
+      - name: Build release binary
+        shell: bash
+        run: |
+          cargo build --target ${{ matrix.target }} --release --bin codex
+
+      - name: Create artifact directory
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            cp target/${{ matrix.target }}/release/codex.exe artifacts/
+          else
+            cp target/${{ matrix.target }}/release/codex artifacts/
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: codex-rs/artifacts/
+          retention-days: 7
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/craft-v')
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+
+          # Package each platform
+          for dir in artifacts/codex-*; do
+            platform=$(basename "$dir")
+            echo "Packaging $platform..."
+
+            if [[ "$platform" == *"windows"* ]]; then
+              # Windows: create zip
+              cd "$dir"
+              zip -r "../../release-assets/${platform}.zip" .
+              cd ../..
+            else
+              # Unix: create tar.gz
+              tar -czvf "release-assets/${platform}.tar.gz" -C "$dir" .
+            fi
+          done
+
+          ls -la release-assets/
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#craft-v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Craft Codex v${{ steps.version.outputs.version }}
+          body: |
+            ## Craft Agents Codex v${{ steps.version.outputs.version }}
+
+            This is a modified version of OpenAI Codex with PreToolUse hook support for Craft Agents.
+
+            ### Changes from upstream
+            - Added `item/toolCall/preExecute` protocol message for tool interception
+            - Enables block/modify/allow decisions before tool execution
+
+            ### Download
+            - **macOS (Apple Silicon)**: `codex-aarch64-apple-darwin.tar.gz`
+            - **macOS (Intel)**: `codex-x86_64-apple-darwin.tar.gz`
+            - **Linux (x64)**: `codex-x86_64-unknown-linux-gnu.tar.gz`
+            - **Linux (ARM64)**: `codex-aarch64-unknown-linux-gnu.tar.gz`
+            - **Windows (x64)**: `codex-x86_64-pc-windows-msvc.zip`
+          files: release-assets/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

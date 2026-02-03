@@ -2687,6 +2687,89 @@ pub struct FileChangeRequestApprovalResponse {
     pub decision: FileChangeApprovalDecision,
 }
 
+// ============================================================================
+// CRAFT AGENTS: PreToolUse Hook Protocol Types
+// These types enable client-side tool interception for permission validation,
+// input modification, and blocking before tool execution.
+// ============================================================================
+
+/// Type of tool being executed, used for PreToolUse hook.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ToolCallType {
+    /// Bash/shell command execution
+    Bash,
+    /// File write operation
+    FileWrite,
+    /// File edit/patch operation
+    FileEdit,
+    /// MCP tool call
+    Mcp,
+    /// Custom tool call
+    Custom,
+    /// Function tool call
+    Function,
+    /// Local shell execution
+    LocalShell,
+}
+
+/// Request parameters for PreToolUse hook.
+/// Sent to client BEFORE any tool execution to allow interception.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ToolCallPreExecuteParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    /// The type of tool being executed.
+    pub tool_type: ToolCallType,
+    /// The name of the tool (e.g., "bash", "mcp__github__create_issue").
+    pub tool_name: String,
+    /// The tool input as JSON. Structure depends on tool_type.
+    pub input: JsonValue,
+    /// For MCP tools: the server name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub mcp_server: Option<String>,
+    /// For MCP tools: the actual tool name within the server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub mcp_tool: Option<String>,
+}
+
+/// Decision for PreToolUse hook response.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ToolCallPreExecuteDecision {
+    /// Allow the tool to execute with original input.
+    Allow,
+    /// Block the tool execution. The reason will be returned to the model.
+    Block {
+        /// Error message to return to the model (guides retry behavior).
+        reason: String,
+    },
+    /// Allow execution but with modified input.
+    Modify {
+        /// Modified input to use instead of the original.
+        input: JsonValue,
+    },
+}
+
+/// Response for PreToolUse hook.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ToolCallPreExecuteResponse {
+    pub decision: ToolCallPreExecuteDecision,
+}
+
+// ============================================================================
+// End CRAFT AGENTS PreToolUse types
+// ============================================================================
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
