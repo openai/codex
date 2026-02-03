@@ -4430,20 +4430,6 @@ async fn try_run_sampling_request(
                 if let Some(state) = plan_mode_state.as_mut() {
                     flush_proposed_plan_segments_all(&sess, &turn_context, state).await;
                 }
-                if let Some(usage) = token_usage.as_ref() {
-                    info!(
-                        target: "codex_core::stream_events_utils",
-                        "TokenUsage: {}",
-                        json!({
-                            "response_id": response_id,
-                            "input_tokens": usage.input_tokens,
-                            "cached_input_tokens": usage.cached_input_tokens,
-                            "output_tokens": usage.output_tokens,
-                            "reasoning_output_tokens": usage.reasoning_output_tokens,
-                            "total_tokens": usage.total_tokens,
-                        })
-                    );
-                }
                 sess.update_token_usage_info(&turn_context, token_usage.as_ref())
                     .await;
                 should_emit_turn_diff = true;
