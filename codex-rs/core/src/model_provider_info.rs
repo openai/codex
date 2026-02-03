@@ -30,6 +30,7 @@ const MAX_STREAM_MAX_RETRIES: u64 = 100;
 const MAX_REQUEST_MAX_RETRIES: u64 = 100;
 
 const OPENAI_PROVIDER_NAME: &str = "OpenAI";
+const CHAT_WIRE_API_REMOVED_ERROR: &str = "`wire_api = \"chat\"` is no longer supported.\nHow to fix: set `wire_api = \"responses\"` in your provider config.\nMore info: https://github.com/openai/codex/discussions/7782";
 
 /// Wire protocol that the provider speaks.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, JsonSchema)]
@@ -48,9 +49,7 @@ impl<'de> Deserialize<'de> for WireApi {
         let value = String::deserialize(deserializer)?;
         match value.as_str() {
             "responses" => Ok(Self::Responses),
-            "chat" => Err(serde::de::Error::custom(
-                "`wire_api = \"chat\"` is no longer supported. Support of `chat/completions` API has been removed; use `wire_api = \"responses\"`. See https://github.com/openai/codex/discussions/7782 for details.",
-            )),
+            "chat" => Err(serde::de::Error::custom(CHAT_WIRE_API_REMOVED_ERROR)),
             _ => Err(serde::de::Error::unknown_variant(&value, &["responses"])),
         }
     }
@@ -453,10 +452,6 @@ wire_api = "chat"
         "#;
 
         let err = toml::from_str::<ModelProviderInfo>(provider_toml).unwrap_err();
-        assert!(
-            err.to_string().contains(
-                "`wire_api = \"chat\"` is no longer supported. Support of `chat/completions` API has been removed; use `wire_api = \"responses\"`. See https://github.com/openai/codex/discussions/7782 for details.",
-            )
-        );
+        assert!(err.to_string().contains(CHAT_WIRE_API_REMOVED_ERROR));
     }
 }
