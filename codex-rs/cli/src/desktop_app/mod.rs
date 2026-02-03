@@ -1,12 +1,9 @@
-use std::path::PathBuf;
-
 #[cfg(target_os = "macos")]
 mod mac;
 
 /// Run the app install/open logic for the current OS.
-#[cfg(target_os = "macos")]
 pub async fn run_app_open_or_install(
-    workspace: PathBuf,
+    workspace: std::path::PathBuf,
     download_url: String,
 ) -> anyhow::Result<()> {
     #[cfg(target_os = "macos")]

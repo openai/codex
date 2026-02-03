@@ -1,5 +1,3 @@
-#![cfg(target_os = "macos")]
-
 use anyhow::Context as _;
 use std::path::Path;
 use std::path::PathBuf;
