@@ -44,7 +44,7 @@ jobs:
           - runner: macos-14
             target: aarch64-apple-darwin
             artifact_name: codex-aarch64-apple-darwin
-          - runner: macos-13
+          - runner: macos-15-large
             target: x86_64-apple-darwin
             artifact_name: codex-x86_64-apple-darwin
           # Linux
