@@ -13,7 +13,6 @@ use codex_client::TransportError;
 use futures::SinkExt;
 use futures::StreamExt;
 use http::HeaderMap;
-use http::HeaderValue;
 use serde_json::Value;
 use std::sync::Arc;
 use std::sync::OnceLock;
