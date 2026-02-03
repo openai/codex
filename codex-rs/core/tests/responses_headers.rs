@@ -493,10 +493,11 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
         None
     );
 
-    let null_device = if cfg!(windows) { "NUL" } else { "/dev/null" };
+    let git_config_global = cwd.join("empty-git-config");
+    std::fs::write(&git_config_global, "").expect("write empty git config");
     let run_git = |args: &[&str]| {
         let output = Command::new("git")
-            .env("GIT_CONFIG_GLOBAL", null_device)
+            .env("GIT_CONFIG_GLOBAL", &git_config_global)
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .args(args)
             .current_dir(cwd)
