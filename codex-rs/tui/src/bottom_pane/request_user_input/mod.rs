@@ -27,6 +27,7 @@ use crate::bottom_pane::bottom_pane_view::BottomPaneView;
 use crate::bottom_pane::scroll_state::ScrollState;
 use crate::bottom_pane::selection_popup_common::GenericDisplayRow;
 use crate::bottom_pane::selection_popup_common::measure_rows_height;
+use crate::history_cell;
 use crate::render::renderable::Renderable;
 
 use codex_core::protocol::Op;
@@ -722,8 +723,17 @@ impl RequestUserInputOverlay {
         self.app_event_tx
             .send(AppEvent::CodexOp(Op::UserInputAnswer {
                 id: self.request.turn_id.clone(),
-                response: RequestUserInputResponse { answers },
+                response: RequestUserInputResponse {
+                    answers: answers.clone(),
+                },
             }));
+        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+            history_cell::RequestUserInputResultCell {
+                questions: self.request.questions.clone(),
+                answers,
+                interrupted: false,
+            },
+        )));
         if let Some(next) = self.queue.pop_front() {
             self.request = next;
             self.reset_for_request();
@@ -966,6 +976,8 @@ impl BottomPaneView for RequestUserInputOverlay {
         }
 
         if matches!(key_event.code, KeyCode::Esc) {
+            // TODO: Emit interrupted request_user_input results (including committed answers)
+            // once core supports persisting them reliably without follow-up turn issues.
             self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
             self.done = true;
             return;
@@ -1173,6 +1185,8 @@ impl BottomPaneView for RequestUserInputOverlay {
     fn on_ctrl_c(&mut self) -> CancellationEvent {
         if self.confirm_unanswered_active() {
             self.close_unanswered_confirmation();
+            // TODO: Emit interrupted request_user_input results (including committed answers)
+            // once core supports persisting them reliably without follow-up turn issues.
             self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
             self.done = true;
             return CancellationEvent::Handled;
@@ -1182,6 +1196,8 @@ impl BottomPaneView for RequestUserInputOverlay {
             return CancellationEvent::Handled;
         }
 
+        // TODO: Emit interrupted request_user_input results (including committed answers)
+        // once core supports persisting them reliably without follow-up turn issues.
         self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
         self.done = true;
         CancellationEvent::Handled
@@ -1234,6 +1250,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
+    use std::collections::HashMap;
     use tokio::sync::mpsc::unbounded_channel;
     use unicode_width::UnicodeWidthStr;
 
@@ -1243,6 +1260,18 @@ mod tests {
     ) {
         let (tx_raw, rx) = unbounded_channel::<AppEvent>();
         (AppEventSender::new(tx_raw), rx)
+    }
+
+    fn expect_interrupt_only(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>) {
+        let event = rx.try_recv().expect("expected interrupt AppEvent");
+        let AppEvent::CodexOp(op) = event else {
+            panic!("expected CodexOp");
+        };
+        assert_eq!(op, Op::Interrupt);
+        assert!(
+            rx.try_recv().is_err(),
+            "unexpected AppEvents before interrupt completion"
+        );
     }
 
     fn question_with_options(id: &str, header: &str) -> RequestUserInputQuestion {
@@ -1390,6 +1419,33 @@ mod tests {
     }
 
     #[test]
+    fn interrupt_discards_queued_requests_and_emits_interrupt() {
+        let (tx, mut rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event("turn-1", vec![question_with_options("q1", "First")]),
+            tx,
+            true,
+            false,
+            false,
+        );
+        overlay.try_consume_user_input_request(RequestUserInputEvent {
+            call_id: "call-2".to_string(),
+            turn_id: "turn-2".to_string(),
+            questions: vec![question_with_options("q2", "Second")],
+        });
+        overlay.try_consume_user_input_request(RequestUserInputEvent {
+            call_id: "call-3".to_string(),
+            turn_id: "turn-3".to_string(),
+            questions: vec![question_with_options("q3", "Third")],
+        });
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
+
+        assert!(overlay.done, "expected overlay to be done");
+        expect_interrupt_only(&mut rx);
+    }
+
+    #[test]
     fn options_can_submit_empty_when_unanswered() {
         let (tx, mut rx) = test_sender();
         let mut overlay = RequestUserInputOverlay::new(
@@ -1403,7 +1459,7 @@ mod tests {
         overlay.submit_answers();
 
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(Op::UserInputAnswer { id, response }) = event else {
+        let AppEvent::CodexOp(Op::UserInputAnswer { id, response, .. }) = event else {
             panic!("expected UserInputAnswer");
         };
         assert_eq!(id, "turn-1");
@@ -1454,15 +1510,30 @@ mod tests {
         let first_answer = &overlay.answers[0];
         assert!(first_answer.answer_committed);
         assert_eq!(first_answer.options_state.selected_idx, Some(0));
-        assert!(rx.try_recv().is_err());
+        assert!(
+            rx.try_recv().is_err(),
+            "unexpected AppEvent before full submission"
+        );
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
         let event = rx.try_recv().expect("expected AppEvent");
         let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
             panic!("expected UserInputAnswer");
         };
-        let answer = response.answers.get("q1").expect("answer missing");
-        assert_eq!(answer.answers, vec!["Option 1".to_string()]);
+        let mut expected = HashMap::new();
+        expected.insert(
+            "q1".to_string(),
+            RequestUserInputAnswer {
+                answers: vec!["Option 1".to_string()],
+            },
+        );
+        expected.insert(
+            "q2".to_string(),
+            RequestUserInputAnswer {
+                answers: vec!["Option 1".to_string()],
+            },
+        );
+        assert_eq!(response.answers, expected);
     }
 
     #[test]
@@ -1630,6 +1701,10 @@ mod tests {
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
         assert!(overlay.confirm_unanswered_active());
+        assert!(
+            rx.try_recv().is_err(),
+            "unexpected AppEvent before confirmation submit"
+        );
         overlay.handle_key_event(KeyEvent::from(KeyCode::Char('1')));
         overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
@@ -1657,11 +1732,7 @@ mod tests {
         overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
 
         assert_eq!(overlay.done, true);
-        let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(op) = event else {
-            panic!("expected CodexOp");
-        };
-        assert_eq!(op, Op::Interrupt);
+        expect_interrupt_only(&mut rx);
     }
 
     #[test]
@@ -1678,11 +1749,7 @@ mod tests {
         overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
 
         assert_eq!(overlay.done, true);
-        let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(op) = event else {
-            panic!("expected CodexOp");
-        };
-        assert_eq!(op, Op::Interrupt);
+        expect_interrupt_only(&mut rx);
     }
 
     #[test]
@@ -1697,16 +1764,13 @@ mod tests {
         );
         let answer = overlay.current_answer_mut().expect("answer missing");
         answer.options_state.selected_idx = Some(0);
+        answer.answer_committed = true;
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Tab));
         overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
 
         assert_eq!(overlay.done, true);
-        let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(op) = event else {
-            panic!("expected CodexOp");
-        };
-        assert_eq!(op, Op::Interrupt);
+        expect_interrupt_only(&mut rx);
     }
 
     #[test]
@@ -1721,17 +1785,42 @@ mod tests {
         );
         let answer = overlay.current_answer_mut().expect("answer missing");
         answer.options_state.selected_idx = Some(0);
+        answer.answer_committed = true;
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Tab));
         overlay.handle_key_event(KeyEvent::from(KeyCode::Char('a')));
         overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
 
         assert_eq!(overlay.done, true);
-        let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(op) = event else {
-            panic!("expected CodexOp");
-        };
-        assert_eq!(op, Op::Interrupt);
+        expect_interrupt_only(&mut rx);
+    }
+
+    #[test]
+    fn esc_drops_committed_answers() {
+        let (tx, mut rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![
+                    question_with_options("q1", "First"),
+                    question_without_options("q2", "Second"),
+                ],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        assert!(
+            rx.try_recv().is_err(),
+            "unexpected AppEvent before interruption"
+        );
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
+
+        expect_interrupt_only(&mut rx);
     }
 
     #[test]
@@ -1961,6 +2050,7 @@ mod tests {
         overlay.composer.move_cursor_to_end();
         overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
         assert_eq!(overlay.answers[0].answer_committed, true);
+        let _ = rx.try_recv();
 
         overlay.move_question(false);
         overlay

@@ -84,6 +84,9 @@ Key effects when disabled:
   `prepare_submission_text`.
 - When `slash_commands_enabled` is `false`, slash-context paste-burst exceptions are disabled.
 - When `image_paste_enabled` is `false`, file-path paste image attachment is skipped.
+- `ChatWidget` may toggle `image_paste_enabled` at runtime based on the selected model's
+  `input_modalities`; attach and submit paths also re-check support and emit a warning instead of
+  dropping the draft.
 
 Built-in slash command availability is centralized in
 `codex-rs/tui/src/bottom_pane/slash_commands.rs` and reused by both the composer and the command
@@ -252,6 +255,11 @@ Non-char input must not leak burst state across unrelated actions:
   inserting, deleting, flushing a burst, applying a paste placeholder, etc.
 - Shortcut overlay toggling via `?` is gated on `!is_in_paste_burst()` so pastes cannot flip UI
   modes while streaming.
+- Mention popup selection has two payloads: visible `$name` text and hidden
+  `mention_paths[name] -> canonical target` linkage. The generic
+  `set_text_content` path intentionally clears linkage for fresh drafts; restore
+  paths that rehydrate blocked/interrupted submissions must use the
+  mention-preserving setter so retry keeps the originally selected target.
 
 ## Tests that pin behavior
 

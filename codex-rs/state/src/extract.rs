@@ -151,6 +151,7 @@ mod tests {
                 },
             ],
             end_turn: None,
+            phase: None,
         };
         let actual = extract_user_message_text(&item);
         assert_eq!(actual.as_deref(), Some("actual question"));

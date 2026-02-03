@@ -56,6 +56,7 @@ use codex_exec::exec_events::Usage;
 use codex_exec::exec_events::WebSearchItem;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
@@ -63,10 +64,8 @@ use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
 use codex_protocol::protocol::ExecOutputStream;
-use mcp_types::CallToolResult;
-use mcp_types::ContentBlock;
-use mcp_types::TextContent;
 use pretty_assertions::assert_eq;
+use rmcp::model::Content;
 use serde_json::json;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -118,7 +117,7 @@ fn task_started_produces_turn_started_event() {
         "t1",
         EventMsg::TurnStarted(codex_core::protocol::TurnStartedEvent {
             model_context_window: Some(32_000),
-            collaboration_mode_kind: ModeKind::Custom,
+            collaboration_mode_kind: ModeKind::Default,
         }),
     ));
 
@@ -385,6 +384,7 @@ fn mcp_tool_call_begin_and_end_emit_item_events() {
                 content: Vec::new(),
                 is_error: None,
                 structured_content: None,
+                meta: None,
             }),
         }),
     );
@@ -499,13 +499,10 @@ fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
             invocation,
             duration: Duration::from_millis(10),
             result: Ok(CallToolResult {
-                content: vec![ContentBlock::TextContent(TextContent {
-                    annotations: None,
-                    text: "done".to_string(),
-                    r#type: "text".to_string(),
-                })],
+                content: vec![serde_json::to_value(Content::text("done")).unwrap()],
                 is_error: None,
                 structured_content: Some(json!({ "status": "ok" })),
+                meta: None,
             }),
         }),
     );
@@ -520,11 +517,7 @@ fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
                     tool: "tool_z".to_string(),
                     arguments: serde_json::Value::Null,
                     result: Some(McpToolCallItemResult {
-                        content: vec![ContentBlock::TextContent(TextContent {
-                            annotations: None,
-                            text: "done".to_string(),
-                            r#type: "text".to_string(),
-                        })],
+                        content: vec![serde_json::to_value(Content::text("done")).unwrap()],
                         structured_content: Some(json!({ "status": "ok" })),
                     }),
                     error: None,

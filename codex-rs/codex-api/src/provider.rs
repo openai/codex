@@ -8,14 +8,6 @@ use std::collections::HashMap;
 use std::time::Duration;
 use url::Url;
 
-/// Wire-level APIs supported by a `Provider`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WireApi {
-    Responses,
-    Chat,
-    Compact,
-}
-
 /// High-level retry configuration for a provider.
 ///
 /// This is converted into a `RetryPolicy` used by `codex-client` to drive
@@ -52,7 +44,6 @@ pub struct Provider {
     pub name: String,
     pub base_url: String,
     pub query_params: Option<HashMap<String, String>>,
-    pub wire: WireApi,
     pub headers: HeaderMap,
     pub retry: RetryConfig,
     pub stream_idle_timeout: Duration,
@@ -95,7 +86,7 @@ impl Provider {
     }
 
     pub fn is_azure_responses_endpoint(&self) -> bool {
-        is_azure_responses_wire_base_url(self.wire.clone(), &self.name, Some(&self.base_url))
+        is_azure_responses_wire_base_url(&self.name, Some(&self.base_url))
     }
 
     pub fn websocket_url_for_path(&self, path: &str) -> Result<Url, url::ParseError> {
@@ -112,11 +103,7 @@ impl Provider {
     }
 }
 
-pub fn is_azure_responses_wire_base_url(wire: WireApi, name: &str, base_url: Option<&str>) -> bool {
-    if wire != WireApi::Responses {
-        return false;
-    }
-
+pub fn is_azure_responses_wire_base_url(name: &str, base_url: Option<&str>) -> bool {
     if name.eq_ignore_ascii_case("azure") {
         return true;
     }
@@ -157,13 +144,12 @@ mod tests {
 
         for base_url in positive_cases {
             assert!(
-                is_azure_responses_wire_base_url(WireApi::Responses, "test", Some(base_url)),
+                is_azure_responses_wire_base_url("test", Some(base_url)),
                 "expected {base_url} to be detected as Azure"
             );
         }
 
         assert!(is_azure_responses_wire_base_url(
-            WireApi::Responses,
             "Azure",
             Some("https://example.com")
         ));
@@ -176,15 +162,9 @@ mod tests {
 
         for base_url in negative_cases {
             assert!(
-                !is_azure_responses_wire_base_url(WireApi::Responses, "test", Some(base_url)),
+                !is_azure_responses_wire_base_url("test", Some(base_url)),
                 "expected {base_url} not to be detected as Azure"
             );
         }
-
-        assert!(!is_azure_responses_wire_base_url(
-            WireApi::Chat,
-            "Azure",
-            Some("https://foo.openai.azure.com/openai")
-        ));
     }
 }

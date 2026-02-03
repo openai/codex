@@ -902,6 +902,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
                     text: format!("reply-{idx}"),
                 }],
                 end_turn: None,
+                phase: None,
             }),
         };
         writeln!(file, "{}", serde_json::to_string(&response_line)?)?;
