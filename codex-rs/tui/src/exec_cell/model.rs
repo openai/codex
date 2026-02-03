@@ -138,7 +138,12 @@ impl ExecCell {
     }
 
     pub(super) fn is_exploring_call(call: &ExecCall) -> bool {
-        !matches!(call.source, ExecCommandSource::UserShell)
+        !matches!(
+            call.source,
+            ExecCommandSource::UserShell
+                | ExecCommandSource::HookTurnStart
+                | ExecCommandSource::HookTurnEnd
+        )
             && !call.parsed.is_empty()
             && call.parsed.iter().all(|p| {
                 matches!(

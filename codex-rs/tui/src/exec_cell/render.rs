@@ -367,8 +367,15 @@ impl ExecCell {
             None => spinner(call.start_time, self.animations_enabled()),
         };
         let is_interaction = call.is_unified_exec_interaction();
+        let hook_title = match call.source {
+            ExecCommandSource::HookTurnStart => Some("Hook(TurnStart)"),
+            ExecCommandSource::HookTurnEnd => Some("Hook(TurnEnd)"),
+            _ => None,
+        };
         let title = if is_interaction {
             ""
+        } else if let Some(hook_title) = hook_title {
+            hook_title
         } else if self.is_active() {
             "Running"
         } else if call.is_user_shell_command() {
