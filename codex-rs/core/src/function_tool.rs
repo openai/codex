@@ -8,4 +8,7 @@ pub enum FunctionCallError {
     MissingLocalShellCallId,
     #[error("Fatal error: {0}")]
     Fatal(String),
+    /// CRAFT AGENTS: Tool execution was blocked by PreToolUse hook.
+    #[error("Blocked: {0}")]
+    Blocked(String),
 }

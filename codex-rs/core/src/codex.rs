@@ -62,6 +62,10 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::protocol::ToolCallPreExecuteDecision;
+use codex_protocol::protocol::ToolCallPreExecuteRequestEvent;
+use codex_protocol::protocol::ToolCallPreExecuteResponse;
+use codex_protocol::protocol::ToolCallType;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::request_user_input::RequestUserInputArgs;
@@ -1590,6 +1594,56 @@ impl Session {
         rx_approve.await.unwrap_or_default()
     }
 
+    /// CRAFT AGENTS: Emit a PreToolUse hook request event and await the client's decision.
+    ///
+    /// The request is keyed by `call_id` so matching responses are delivered to the correct
+    /// in-flight tool call. If the task is aborted, this returns Allow (default permissive).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn request_tool_preexecute(
+        &self,
+        turn_context: &TurnContext,
+        call_id: String,
+        tool_type: ToolCallType,
+        tool_name: String,
+        input: String,
+        mcp_server: Option<String>,
+        mcp_tool: Option<String>,
+    ) -> ToolCallPreExecuteResponse {
+        // Add the tx callback to the map before sending the request.
+        let (tx_response, rx_response) = oneshot::channel();
+        let prev_entry = {
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.insert_pending_tool_preexecute(call_id.clone(), tx_response)
+                }
+                None => None,
+            }
+        };
+        if prev_entry.is_some() {
+            warn!("Overwriting existing pending tool preexecute for call_id: {call_id}");
+        }
+
+        let event = EventMsg::ToolCallPreExecuteRequest(ToolCallPreExecuteRequestEvent {
+            call_id,
+            turn_id: turn_context.sub_id.clone(),
+            tool_type,
+            tool_name,
+            input,
+            mcp_server,
+            mcp_tool,
+        });
+        self.send_event(turn_context, event).await;
+
+        // Return the response, defaulting to Allow if the channel is closed (e.g., task aborted).
+        rx_response.await.unwrap_or_else(|_| ToolCallPreExecuteResponse {
+            decision: ToolCallPreExecuteDecision::Allow,
+            reason: None,
+            modified_input: None,
+        })
+    }
+
     pub async fn request_patch_approval(
         &self,
         turn_context: &TurnContext,
@@ -1722,6 +1776,32 @@ impl Session {
             }
             None => {
                 warn!("No pending approval found for sub_id: {sub_id}");
+            }
+        }
+    }
+
+    /// CRAFT AGENTS: Notify the response for a pending PreToolUse hook request.
+    pub async fn notify_tool_preexecute(
+        &self,
+        call_id: &str,
+        response: ToolCallPreExecuteResponse,
+    ) {
+        let entry = {
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.remove_pending_tool_preexecute(call_id)
+                }
+                None => None,
+            }
+        };
+        match entry {
+            Some(tx_response) => {
+                tx_response.send(response).ok();
+            }
+            None => {
+                warn!("CRAFT AGENTS: No pending tool preexecute found for call_id: {call_id}");
             }
         }
     }

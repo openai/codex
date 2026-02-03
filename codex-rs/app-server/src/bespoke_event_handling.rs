@@ -57,6 +57,10 @@ use codex_app_server_protocol::ThreadNameUpdatedNotification;
 use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
+use codex_app_server_protocol::ToolCallPreExecuteDecision as V2ToolCallPreExecuteDecision;
+use codex_app_server_protocol::ToolCallPreExecuteParams;
+use codex_app_server_protocol::ToolCallPreExecuteResponse;
+use codex_app_server_protocol::ToolCallType as V2ToolCallType;
 use codex_app_server_protocol::ToolRequestUserInputOption;
 use codex_app_server_protocol::ToolRequestUserInputParams;
 use codex_app_server_protocol::ToolRequestUserInputQuestion;
@@ -84,6 +88,10 @@ use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
 use codex_core::protocol::TokenCountEvent;
+use codex_core::protocol::ToolCallPreExecuteDecision as CoreToolCallPreExecuteDecision;
+use codex_core::protocol::ToolCallPreExecuteRequestEvent;
+use codex_core::protocol::ToolCallPreExecuteResponse as CoreToolCallPreExecuteResponse;
+use codex_core::protocol::ToolCallType as CoreToolCallType;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::review_format::format_review_findings_block;
 use codex_core::review_prompts;
@@ -272,6 +280,54 @@ pub(crate) async fn apply_bespoke_event_handling(
                 });
             }
         },
+        // CRAFT AGENTS: PreToolUse hook - sent BEFORE any tool execution
+        EventMsg::ToolCallPreExecuteRequest(ToolCallPreExecuteRequestEvent {
+            call_id,
+            turn_id,
+            tool_type,
+            tool_name,
+            input,
+            mcp_server,
+            mcp_tool,
+        }) => {
+            // Only supported on V2 API
+            if matches!(api_version, ApiVersion::V2) {
+                let v2_tool_type = match tool_type {
+                    CoreToolCallType::Bash => V2ToolCallType::Bash,
+                    CoreToolCallType::FileWrite => V2ToolCallType::FileWrite,
+                    CoreToolCallType::FileEdit => V2ToolCallType::FileEdit,
+                    CoreToolCallType::Mcp => V2ToolCallType::Mcp,
+                    CoreToolCallType::Custom => V2ToolCallType::Custom,
+                    CoreToolCallType::Function => V2ToolCallType::Function,
+                    CoreToolCallType::LocalShell => V2ToolCallType::LocalShell,
+                };
+                let input_json: JsonValue = serde_json::from_str(&input).unwrap_or(JsonValue::Null);
+                let params = ToolCallPreExecuteParams {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: turn_id.clone(),
+                    item_id: call_id.clone(),
+                    tool_type: v2_tool_type,
+                    tool_name: tool_name.clone(),
+                    input: input_json,
+                    mcp_server,
+                    mcp_tool,
+                };
+                let rx = outgoing
+                    .send_request(ServerRequestPayload::ToolCallPreExecute(params))
+                    .await;
+                tokio::spawn(async move {
+                    on_tool_preexecute_response(event_turn_id, call_id, rx, conversation).await;
+                });
+            } else {
+                // V1 API: default to Allow
+                let allow_response = CoreToolCallPreExecuteResponse {
+                    decision: CoreToolCallPreExecuteDecision::Allow,
+                    reason: None,
+                    modified_input: None,
+                };
+                conversation.notify_tool_preexecute(&call_id, allow_response).await;
+            }
+        }
         EventMsg::RequestUserInput(request) => {
             if matches!(api_version, ApiVersion::V2) {
                 let questions = request
@@ -1479,6 +1535,65 @@ async fn on_exec_approval_response(
     {
         error!("failed to submit ExecApproval: {err}");
     }
+}
+
+/// CRAFT AGENTS: Handle PreToolUse hook response from the client.
+async fn on_tool_preexecute_response(
+    _event_turn_id: String,
+    call_id: String,
+    receiver: oneshot::Receiver<JsonValue>,
+    conversation: Arc<CodexThread>,
+) {
+    let response = receiver.await;
+    let value = match response {
+        Ok(value) => value,
+        Err(err) => {
+            error!("CRAFT AGENTS: tool preexecute request failed: {err:?}");
+            // Default to Allow on error to avoid blocking everything
+            let allow_response = CoreToolCallPreExecuteResponse {
+                decision: CoreToolCallPreExecuteDecision::Allow,
+                reason: None,
+                modified_input: None,
+            };
+            conversation.notify_tool_preexecute(&call_id, allow_response).await;
+            return;
+        }
+    };
+
+    let response = serde_json::from_value::<ToolCallPreExecuteResponse>(value).unwrap_or_else(|err| {
+        error!("CRAFT AGENTS: failed to deserialize ToolCallPreExecuteResponse: {err}");
+        // Default to Allow on parse error
+        ToolCallPreExecuteResponse {
+            decision: V2ToolCallPreExecuteDecision::Allow,
+        }
+    });
+
+    // Convert V2 response to Core response
+    let core_response = CoreToolCallPreExecuteResponse {
+        decision: match response.decision {
+            V2ToolCallPreExecuteDecision::Allow => CoreToolCallPreExecuteDecision::Allow,
+            V2ToolCallPreExecuteDecision::Block { reason } => {
+                // For Block, we store the reason in the response
+                return conversation.notify_tool_preexecute(&call_id, CoreToolCallPreExecuteResponse {
+                    decision: CoreToolCallPreExecuteDecision::Block,
+                    reason: Some(reason),
+                    modified_input: None,
+                }).await;
+            }
+            V2ToolCallPreExecuteDecision::Modify { input } => {
+                // For Modify, we store the modified input
+                return conversation.notify_tool_preexecute(&call_id, CoreToolCallPreExecuteResponse {
+                    decision: CoreToolCallPreExecuteDecision::Modify,
+                    reason: None,
+                    modified_input: Some(serde_json::to_string(&input).unwrap_or_default()),
+                }).await;
+            }
+        },
+        reason: None,
+        modified_input: None,
+    };
+
+    conversation.notify_tool_preexecute(&call_id, core_response).await;
 }
 
 async fn on_request_user_input_response(

@@ -15,10 +15,13 @@ use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::ShellToolCallParams;
+use codex_protocol::protocol::ToolCallPreExecuteDecision;
+use codex_protocol::protocol::ToolCallType;
 use rmcp::model::Tool;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::instrument;
+use tracing::warn;
 
 #[derive(Clone, Debug)]
 pub struct ToolCall {
@@ -141,10 +144,76 @@ impl ToolRouter {
         let ToolCall {
             tool_name,
             call_id,
-            payload,
+            mut payload,
         } = call;
         let payload_outputs_custom = matches!(payload, ToolPayload::Custom { .. });
         let failure_call_id = call_id.clone();
+
+        // CRAFT AGENTS: PreToolUse hook - intercept before execution
+        let (tool_type, input_json, mcp_server, mcp_tool) = match &payload {
+            ToolPayload::Function { arguments } => {
+                (ToolCallType::Function, arguments.clone(), None, None)
+            }
+            ToolPayload::Custom { input } => {
+                (ToolCallType::Custom, input.clone(), None, None)
+            }
+            ToolPayload::LocalShell { params } => {
+                let input = serde_json::to_string(params).unwrap_or_default();
+                (ToolCallType::LocalShell, input, None, None)
+            }
+            ToolPayload::Mcp { server, tool, raw_arguments } => {
+                (ToolCallType::Mcp, raw_arguments.clone(), Some(server.clone()), Some(tool.clone()))
+            }
+        };
+
+        let preexecute_response = session.request_tool_preexecute(
+            &turn,
+            call_id.clone(),
+            tool_type,
+            tool_name.clone(),
+            input_json,
+            mcp_server,
+            mcp_tool,
+        ).await;
+
+        match preexecute_response.decision {
+            ToolCallPreExecuteDecision::Block => {
+                let reason = preexecute_response.reason.unwrap_or_else(|| "Blocked by permission system".to_string());
+                return Ok(Self::failure_response(
+                    failure_call_id,
+                    payload_outputs_custom,
+                    FunctionCallError::Blocked(reason),
+                ));
+            }
+            ToolCallPreExecuteDecision::Modify => {
+                // Update the payload with modified input
+                if let Some(modified_input) = preexecute_response.modified_input {
+                    payload = match payload {
+                        ToolPayload::Function { .. } => {
+                            ToolPayload::Function { arguments: modified_input }
+                        }
+                        ToolPayload::Custom { .. } => {
+                            ToolPayload::Custom { input: modified_input }
+                        }
+                        ToolPayload::LocalShell { .. } => {
+                            match serde_json::from_str(&modified_input) {
+                                Ok(params) => ToolPayload::LocalShell { params },
+                                Err(e) => {
+                                    warn!("CRAFT AGENTS: Failed to parse modified LocalShell params: {e}");
+                                    payload // Keep original on parse error
+                                }
+                            }
+                        }
+                        ToolPayload::Mcp { server, tool, .. } => {
+                            ToolPayload::Mcp { server, tool, raw_arguments: modified_input }
+                        }
+                    };
+                }
+            }
+            ToolCallPreExecuteDecision::Allow => {
+                // Continue with original payload
+            }
+        }
 
         let invocation = ToolInvocation {
             session,
