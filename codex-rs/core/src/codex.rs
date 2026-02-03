@@ -1650,6 +1650,8 @@ impl Session {
             decision: ToolCallPreExecuteDecision::Allow,
             reason: None,
             modified_input: None,
+            prompt_metadata: None,
+            user_response: None,
         })
     }
 

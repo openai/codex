@@ -2739,6 +2739,57 @@ pub struct ToolCallPreExecuteParams {
     pub mcp_tool: Option<String>,
 }
 
+/// Type of permission prompt to display when decision is AskUser.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub enum PermissionPromptType {
+    /// Shell command execution
+    Bash,
+    /// File write operation (Write, Edit, MultiEdit, NotebookEdit)
+    FileWrite,
+    /// MCP tool that may mutate data
+    McpMutation,
+    /// API endpoint call that may mutate data
+    ApiMutation,
+}
+
+/// Metadata for displaying a permission prompt when decision is AskUser.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionPromptMetadata {
+    /// Type of permission being requested
+    pub prompt_type: PermissionPromptType,
+    /// Human-readable description of the operation
+    pub description: String,
+    /// For bash: the command being executed
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub command: Option<String>,
+    /// For file operations: the target file path
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub file_path: Option<String>,
+    /// For MCP/API: the tool or endpoint name
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tool_name: Option<String>,
+}
+
+/// User's decision on a permission prompt.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum UserPermissionDecision {
+    /// User approved the operation
+    Approved,
+    /// User denied the operation
+    Denied,
+    /// Permission request timed out
+    TimedOut,
+}
+
 /// Decision for PreToolUse hook response.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -2755,6 +2806,21 @@ pub enum ToolCallPreExecuteDecision {
     Modify {
         /// Modified input to use instead of the original.
         input: JsonValue,
+    },
+    /// Ask user for permission before proceeding.
+    /// Client should display a permission prompt and then call respondToToolCallPreExecute
+    /// again with the user's decision in the user_response field.
+    AskUser {
+        /// Metadata for displaying the permission prompt
+        prompt: PermissionPromptMetadata,
+    },
+    /// User's response to an AskUser request (sent by client after prompting).
+    UserResponse {
+        /// The user's decision
+        decision: UserPermissionDecision,
+        /// If true, auto-approve similar operations for the rest of the session
+        #[serde(default)]
+        accept_for_session: bool,
     },
 }
 

@@ -213,6 +213,16 @@ impl ToolRouter {
             ToolCallPreExecuteDecision::Allow => {
                 // Continue with original payload
             }
+            ToolCallPreExecuteDecision::AskUser => {
+                // AskUser should have been handled by the client and converted to Allow/Block.
+                // If we get here, something went wrong - treat as Block for safety.
+                warn!("CRAFT AGENTS: Received AskUser decision in router - blocking");
+                return Ok(Self::failure_response(
+                    failure_call_id,
+                    payload_outputs_custom,
+                    FunctionCallError::Blocked("Permission pending - AskUser response expected".to_string()),
+                ));
+            }
         }
 
         let invocation = ToolInvocation {
