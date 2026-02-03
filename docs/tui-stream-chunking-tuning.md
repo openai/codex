@@ -5,7 +5,7 @@ changing the underlying policy shape.
 
 ## Scope
 
-Use this guide when adjusting thresholds or timing constants in
+Use this guide when adjusting queue-pressure thresholds and hysteresis windows in
 `codex-rs/tui/src/streaming/chunking.rs`.
 
 This guide is about tuning behavior, not redesigning the policy.
@@ -14,7 +14,7 @@ This guide is about tuning behavior, not redesigning the policy.
 
 - Keep the baseline behavior intact:
   - `Smooth` mode drains one line per baseline tick.
-  - `CatchUp` mode drains bounded batches.
+  - `CatchUp` mode drains queued backlog immediately.
 - Capture trace logs with:
   - `codex_tui::streaming::commit_tick`
 - Evaluate on sustained, bursty, and mixed-output prompts.
@@ -27,17 +27,9 @@ Tune for all three goals together:
 
 - low visible lag under bursty output
 - low mode flapping (`Smooth <-> CatchUp` chatter)
-- smooth perceived motion during catch-up (not single-frame bursts)
+- stable catch-up entry/exit behavior under mixed workloads
 
 ## Constants and what they control
-
-### Baseline cadence
-
-- `BASELINE_COMMIT_TICK`
-  - Controls smooth-mode drain cadence and tick quantization for paced
-    catch-up.
-  - Lower values increase visual update frequency and CPU/wakeups.
-  - Higher values reduce update frequency and can increase visible lag.
 
 ### Enter/exit thresholds
 
@@ -58,18 +50,6 @@ Tune for all three goals together:
   - Too long can delay needed catch-up for near-term bursts.
   - Severe backlog bypasses this hold by design.
 
-### Catch-up pacing
-
-- `CATCH_UP_TARGET`, `SEVERE_CATCH_UP_TARGET`
-  - Lower target duration drains faster (less lag, choppier risk).
-  - Higher target duration drains slower (smoother, more lag risk).
-- `CATCH_UP_MIN_BATCH_LINES`
-  - Raises minimum work per catch-up tick.
-  - If too high, catch-up can look jumpy for small queues.
-- `CATCH_UP_MAX_BATCH_LINES`
-  - Caps worst-case per-tick burst size.
-  - If too low, backlog may persist too long under heavy bursts.
-
 ### Severe-backlog gates
 
 - `SEVERE_QUEUE_DEPTH_LINES`, `SEVERE_OLDEST_AGE`
@@ -82,9 +62,7 @@ Tune in this order to keep cause/effect clear:
 
 1. Entry/exit thresholds (`ENTER_*`, `EXIT_*`)
 2. Hold windows (`EXIT_HOLD`, `REENTER_CATCH_UP_HOLD`)
-3. Target durations (`CATCH_UP_TARGET`, `SEVERE_CATCH_UP_TARGET`)
-4. Batch bounds (`CATCH_UP_MIN_BATCH_LINES`, `CATCH_UP_MAX_BATCH_LINES`)
-5. Severe gates (`SEVERE_*`)
+3. Severe gates (`SEVERE_*`)
 
 Change one logical group at a time and re-measure before the next group.
 
@@ -96,18 +74,16 @@ Change one logical group at a time and re-measure before the next group.
   - increase `EXIT_HOLD`
   - increase `REENTER_CATCH_UP_HOLD`
   - tighten exit thresholds (lower `EXIT_*`)
-- Catch-up feels too bursty:
-  - increase `CATCH_UP_TARGET`
-  - decrease `CATCH_UP_MIN_BATCH_LINES`
-  - decrease `CATCH_UP_MAX_BATCH_LINES`
-- Catch-up clears backlog too slowly:
-  - decrease `CATCH_UP_TARGET`
-  - increase `CATCH_UP_MAX_BATCH_LINES`
-  - lower severe gates (`SEVERE_*`) to enter severe pacing sooner
+- Catch-up engages too often for short bursts:
+  - increase `ENTER_QUEUE_DEPTH_LINES` and/or `ENTER_OLDEST_AGE`
+  - increase `REENTER_CATCH_UP_HOLD`
+- Catch-up engages too late:
+  - lower `ENTER_QUEUE_DEPTH_LINES` and/or `ENTER_OLDEST_AGE`
+  - lower severe gates (`SEVERE_*`) to bypass re-entry hold sooner
 
 ## Validation checklist after each tuning pass
 
 - `cargo test -p codex-tui` passes.
 - Trace window shows bounded queue-age behavior.
 - Mode transitions are not concentrated in repeated short-interval cycles.
-- Catch-up drains backlogs without large one-frame jumps.
+- Catch-up clears backlog quickly once mode enters `CatchUp`.

@@ -185,7 +185,8 @@ fn apply_commit_tick_plan(
 /// Applies one drain step to the main stream controller.
 ///
 /// [`DrainPlan::Single`] maps to one-line drain; [`DrainPlan::Batch`] maps to
-/// bounded multi-line drain.
+/// multi-line drain (including instant catch-up when policy requests the full
+/// queued backlog).
 fn drain_stream_controller(
     controller: &mut StreamController,
     drain_plan: DrainPlan,

@@ -58,7 +58,7 @@ Two modes are used:
 - `Smooth`
   - Baseline behavior: one line drained per baseline commit tick.
 - `CatchUp`
-  - Multiple lines drained per tick via `Batch(n)`.
+  - Drain current queued backlog per tick via `Batch(queued_lines)`.
 
 Entry and exit use hysteresis:
 
@@ -80,9 +80,6 @@ experimental and may change as we gather more trace data.
   - `queued_lines <= 2` AND `oldest_age <= 40ms`
 - Exit hold (`CatchUp -> Smooth`): `250ms`
 - Re-entry hold after catch-up exit: `250ms`
-- Catch-up convergence target: `1200ms`
-- Severe backlog convergence target: `800ms`
-- Catch-up batch clamp: `2..=24` lines per tick
 - Severe backlog thresholds:
   - `queued_lines >= 64` OR `oldest_age >= 300ms`
 
@@ -90,16 +87,8 @@ experimental and may change as we gather more trace data.
 
 In `Smooth`, plan is always `Single`.
 
-In `CatchUp`, plan is `Batch(n)` where `n` is computed to converge backlog over
-an intended time horizon, then bounded:
-
-- Compute target tick count from target duration and baseline tick duration.
-- `n = ceil(queued_lines / target_tick_count)`
-- Clamp to min/max batch bounds.
-- Never exceed currently queued lines.
-
-Severe backlog uses a shorter convergence target, so catch-up responds faster
-when pressure is high.
+In `CatchUp`, plan is `Batch(queued_lines)`, which drains the currently queued
+backlog for immediate convergence.
 
 ## Why this design
 
@@ -107,9 +96,7 @@ This keeps normal animation semantics intact, while making backlog behavior
 adaptive:
 
 - Under normal load, behavior stays familiar and stable.
-- Under pressure, queue age is reduced without sacrificing ordering.
-- Bounded batching keeps progress visually continuous instead of bursting all at
-  once.
+- Under pressure, queue age is reduced quickly without sacrificing ordering.
 - Hysteresis avoids rapid mode flapping.
 
 ## Invariants
@@ -117,7 +104,7 @@ adaptive:
 - Queue order is preserved.
 - Empty queue resets policy back to `Smooth`.
 - `CatchUp` exits only after sustained low pressure.
-- Catch-up batching is bounded.
+- Catch-up drains are immediate while in `CatchUp`.
 
 ## Observability
 
