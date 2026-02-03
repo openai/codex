@@ -564,7 +564,8 @@ fn footer_from_props_lines(
     show_queue_hint: bool,
 ) -> Vec<Line<'static>> {
     // If status line content is present, show it for base modes.
-    if let Some(status_line) = &props.status_line_value
+    if props.status_line_enabled
+        && let Some(status_line) = &props.status_line_value
         && matches!(
             props.mode,
             FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
