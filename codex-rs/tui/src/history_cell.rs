@@ -2147,6 +2147,7 @@ impl HistoryCell for FinalMessageSeparator {
         let mut label_parts = Vec::new();
         if let Some(elapsed_seconds) = self
             .elapsed_seconds
+            .filter(|seconds| *seconds > 60)
             .map(super::status_indicator_widget::fmt_elapsed_compact)
         {
             label_parts.push(format!("Worked for {elapsed_seconds}"));
@@ -2358,7 +2359,7 @@ mod tests {
     }
 
     #[test]
-    fn final_message_separator_includes_runtime_metrics() {
+    fn final_message_separator_hides_short_worked_label_and_includes_runtime_metrics() {
         let summary = RuntimeMetricsSummary {
             tool_calls: RuntimeMetricTotals {
                 count: 3,
@@ -2385,12 +2386,21 @@ mod tests {
         let rendered = render_lines(&cell.display_lines(200));
 
         assert_eq!(rendered.len(), 1);
-        assert!(rendered[0].contains("Worked for 12s"));
+        assert!(!rendered[0].contains("Worked for"));
         assert!(rendered[0].contains("Local tools: 3 calls (2.5s)"));
         assert!(rendered[0].contains("Inference: 2 calls (1.2s)"));
         assert!(rendered[0].contains("WebSocket: 1 events send (700ms)"));
         assert!(rendered[0].contains("Streams: 6 events (900ms)"));
         assert!(rendered[0].contains("4 events received (1.2s)"));
+    }
+
+    #[test]
+    fn final_message_separator_includes_worked_label_after_one_minute() {
+        let cell = FinalMessageSeparator::new(Some(61), None);
+        let rendered = render_lines(&cell.display_lines(200));
+
+        assert_eq!(rendered.len(), 1);
+        assert!(rendered[0].contains("Worked for"));
     }
 
     #[test]
