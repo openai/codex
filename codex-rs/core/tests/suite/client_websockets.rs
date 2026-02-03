@@ -211,6 +211,7 @@ fn message_item(text: &str) -> ResponseItem {
         role: "user".into(),
         content: vec![ContentItem::InputText { text: text.into() }],
         end_turn: None,
+        phase: None,
     }
 }
 

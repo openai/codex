@@ -1051,6 +1051,11 @@ impl Session {
         state.get_total_token_usage(state.server_reasoning_included())
     }
 
+    async fn get_estimated_token_count(&self, turn_context: &TurnContext) -> Option<i64> {
+        let state = self.state.lock().await;
+        state.history.estimate_token_count(turn_context)
+    }
+
     pub(crate) async fn get_base_instructions(&self) -> BaseInstructions {
         let state = self.state.lock().await;
         BaseInstructions {
@@ -1834,6 +1839,7 @@ impl Session {
                 text: format!("Warning: {}", message.into()),
             }],
             end_turn: None,
+            phase: None,
         };
 
         self.record_conversation_items(ctx, &[item]).await;
@@ -3309,6 +3315,7 @@ pub(crate) async fn run_turn(
     let model_info = turn_context.client.get_model_info();
     let auto_compact_limit = model_info.auto_compact_token_limit().unwrap_or(i64::MAX);
     let total_usage_tokens = sess.get_total_token_usage().await;
+
     let event = EventMsg::TurnStarted(TurnStartedEvent {
         model_context_window: turn_context.client.get_model_context_window(),
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
@@ -3463,6 +3470,19 @@ pub(crate) async fn run_turn(
                 } = sampling_request_output;
                 let total_usage_tokens = sess.get_total_token_usage().await;
                 let token_limit_reached = total_usage_tokens >= auto_compact_limit;
+
+                let estimated_token_count =
+                    sess.get_estimated_token_count(turn_context.as_ref()).await;
+
+                info!(
+                    turn_id = %turn_context.sub_id,
+                    total_usage_tokens,
+                    estimated_token_count = ?estimated_token_count,
+                    auto_compact_limit,
+                    token_limit_reached,
+                    needs_follow_up,
+                    "post sampling token usage"
+                );
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if token_limit_reached && needs_follow_up {
@@ -4542,6 +4562,7 @@ mod tests {
                 text: text.to_string(),
             }],
             end_turn: None,
+            phase: None,
         }
     }
 
@@ -4823,6 +4844,7 @@ mod tests {
                     text: "turn 1 user".to_string(),
                 }],
                 end_turn: None,
+                phase: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -4831,6 +4853,7 @@ mod tests {
                     text: "turn 1 assistant".to_string(),
                 }],
                 end_turn: None,
+                phase: None,
             },
         ];
         sess.record_into_history(&turn_1, tc.as_ref()).await;
@@ -4843,6 +4866,7 @@ mod tests {
                     text: "turn 2 user".to_string(),
                 }],
                 end_turn: None,
+                phase: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -4851,6 +4875,7 @@ mod tests {
                     text: "turn 2 assistant".to_string(),
                 }],
                 end_turn: None,
+                phase: None,
             },
         ];
         sess.record_into_history(&turn_2, tc.as_ref()).await;
@@ -4883,6 +4908,7 @@ mod tests {
                 text: "turn 1 user".to_string(),
             }],
             end_turn: None,
+            phase: None,
         }];
         sess.record_into_history(&turn_1, tc.as_ref()).await;
 
@@ -5832,6 +5858,7 @@ mod tests {
                 text: "first user".to_string(),
             }],
             end_turn: None,
+            phase: None,
         };
         live_history.record_items(std::iter::once(&user1), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(user1.clone()));
@@ -5843,6 +5870,7 @@ mod tests {
                 text: "assistant reply one".to_string(),
             }],
             end_turn: None,
+            phase: None,
         };
         live_history.record_items(std::iter::once(&assistant1), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(assistant1.clone()));
@@ -5868,6 +5896,7 @@ mod tests {
                 text: "second user".to_string(),
             }],
             end_turn: None,
+            phase: None,
         };
         live_history.record_items(std::iter::once(&user2), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(user2.clone()));
@@ -5879,6 +5908,7 @@ mod tests {
                 text: "assistant reply two".to_string(),
             }],
             end_turn: None,
+            phase: None,
         };
         live_history.record_items(std::iter::once(&assistant2), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(assistant2.clone()));
@@ -5904,6 +5934,7 @@ mod tests {
                 text: "third user".to_string(),
             }],
             end_turn: None,
+            phase: None,
         };
         live_history.record_items(std::iter::once(&user3), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(user3));
@@ -5915,6 +5946,7 @@ mod tests {
                 text: "assistant reply three".to_string(),
             }],
             end_turn: None,
+            phase: None,
         };
         live_history.record_items(std::iter::once(&assistant3), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(assistant3));
