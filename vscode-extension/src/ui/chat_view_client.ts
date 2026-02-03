@@ -4511,6 +4511,7 @@ function main(): void {
 
           gridEl.appendChild(tile);
         }
+        placeTopLevel(div);
         continue;
       }
 
@@ -4535,6 +4536,7 @@ function main(): void {
           })();
         const text = summaryQ ? `🔎 ${summaryQ}` : "🔎";
         if (row.textContent !== text) row.textContent = text;
+        placeTopLevel(div);
         continue;
       }
 
@@ -5078,6 +5080,7 @@ function main(): void {
         if (pre) pre.remove();
         const mdEl = ensureMd(det, "body");
         renderMarkdownInto(mdEl, block.text);
+        placeTopLevel(det);
         continue;
       }
 
@@ -5096,6 +5099,7 @@ function main(): void {
           if (pre) pre.remove();
           const mdEl = ensureMd(det, "body");
           renderMarkdownInto(mdEl, block.text);
+          placeTopLevel(det);
           continue;
         }
 
@@ -5112,6 +5116,7 @@ function main(): void {
           if (pre) pre.remove();
           const mdEl = ensureMd(det, "body");
           renderMarkdownInto(mdEl, block.text);
+          placeTopLevel(det);
           continue;
         }
 
@@ -5120,6 +5125,7 @@ function main(): void {
         if (pre) pre.remove();
         const mdEl = ensureMd(div, "body");
         renderMarkdownInto(mdEl, block.text);
+        placeTopLevel(div);
         continue;
       }
 
@@ -5130,6 +5136,7 @@ function main(): void {
         if (pre) pre.remove();
         const mdEl = ensureMd(div, "body");
         renderMarkdownInto(mdEl, block.text);
+        placeTopLevel(div);
         continue;
       }
 
@@ -5146,6 +5153,7 @@ function main(): void {
         if (pre) pre.remove();
         const mdEl = ensureMd(det, "body");
         renderMarkdownInto(mdEl, block.text);
+        placeTopLevel(det);
         continue;
       }
 
