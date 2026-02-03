@@ -774,6 +774,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::ListCustomPromptsResponse(_)
             | EventMsg::ListSkillsResponse(_)
             | EventMsg::RawResponseItem(_)
+            | EventMsg::HookInput(_)
             | EventMsg::UserMessage(_)
             | EventMsg::EnteredReviewMode(_)
             | EventMsg::ExitedReviewMode(_)

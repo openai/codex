@@ -143,8 +143,7 @@ impl ExecCell {
             ExecCommandSource::UserShell
                 | ExecCommandSource::HookTurnStart
                 | ExecCommandSource::HookTurnEnd
-        )
-            && !call.parsed.is_empty()
+        ) && !call.parsed.is_empty()
             && call.parsed.iter().all(|p| {
                 matches!(
                     p,

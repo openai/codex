@@ -1,4 +1,5 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
@@ -11,15 +12,15 @@ use crate::exec::ExecExpiration;
 use crate::exec::process_exec_tool_call;
 use crate::exec_env::create_env;
 use crate::protocol::AskForApproval;
-use crate::protocol::ExecCommandSource;
 use crate::protocol::EventMsg;
+use crate::protocol::ExecCommandSource;
 use crate::protocol::HookInput;
 use crate::protocol::HookKind;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::runtimes::shell::ShellRequest;
-use crate::tools::sandboxing::default_exec_approval_requirement;
 use crate::tools::sandboxing::ToolError;
+use crate::tools::sandboxing::default_exec_approval_requirement;
 
 const HOOKS_FILENAME: &str = "hook.toml";
 
@@ -132,7 +133,11 @@ pub(crate) async fn run_hook(
         exec_approval_requirement,
     };
 
-    if requires_approval(&req, turn_context.approval_policy, &turn_context.sandbox_policy) {
+    if requires_approval(
+        &req,
+        turn_context.approval_policy,
+        &turn_context.sandbox_policy,
+    ) {
         let decision = session
             .request_command_approval(
                 turn_context,
@@ -152,7 +157,10 @@ pub(crate) async fn run_hook(
         ) {
             let finish_ctx = ToolEventCtx::new(session, turn_context, &call_id, None);
             let _ = emitter
-                .finish(finish_ctx, Err(ToolError::Rejected("rejected by user".to_string())))
+                .finish(
+                    finish_ctx,
+                    Err(ToolError::Rejected("rejected by user".to_string())),
+                )
                 .await;
             return None;
         }
@@ -169,19 +177,20 @@ pub(crate) async fn run_hook(
         Ok(output) => output.stderr.text.clone(),
         Err(_) => String::new(),
     };
+    let exit_code = match &run_result {
+        Ok(output) => output.exit_code,
+        Err(_) => -1,
+    };
 
     let finish_ctx = ToolEventCtx::new(session, turn_context, &call_id, None);
-    let _ = emitter.finish(finish_ctx, run_result.map_err(ToolError::Codex)).await;
+    let _ = emitter
+        .finish(finish_ctx, run_result.map_err(ToolError::Codex))
+        .await;
 
     let stderr = stderr.trim().to_string();
     if stderr.is_empty() {
         return None;
     }
-
-    let exit_code = match &run_result {
-        Ok(output) => output.exit_code,
-        Err(_) => -1,
-    };
 
     let hook_input = HookInput {
         hook: kind,

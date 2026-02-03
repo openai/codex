@@ -116,11 +116,10 @@ impl Session {
         input: Vec<UserInput>,
         task: T,
     ) {
+        let task: Arc<dyn SessionTask> = Arc::new(task);
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
         self.seed_initial_context_if_needed(turn_context.as_ref())
             .await;
-
-        let task: Arc<dyn SessionTask> = Arc::new(task);
         let task_kind = task.kind();
 
         let cancellation_token = CancellationToken::new();
@@ -202,7 +201,7 @@ impl Session {
         }
         let event = EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message });
         self.send_event(turn_context.as_ref(), event).await;
-        self.maybe_start_next_hook_turn().await;
+        self.maybe_start_next_hook_turn();
     }
 
     async fn register_new_active_task(&self, task: RunningTask) {

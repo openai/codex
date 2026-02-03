@@ -55,7 +55,6 @@ use codex_core::protocol::DeprecationNoticeEvent;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::HookInput;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
@@ -3539,9 +3538,7 @@ impl ChatWidget {
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
                 self.on_background_event(message)
             }
-            EventMsg::HookInput(ev) => {
-                self.on_hook_input(ev);
-            }
+            EventMsg::HookInput(_) => {}
             EventMsg::UndoStarted(ev) => self.on_undo_started(ev),
             EventMsg::UndoCompleted(ev) => self.on_undo_completed(ev),
             EventMsg::StreamError(StreamErrorEvent {
@@ -3648,14 +3645,6 @@ impl ChatWidget {
 
         // User messages reset separator state so the next agent response doesn't add a stray break.
         self.needs_final_message_separator = false;
-    }
-
-    fn on_hook_input(&mut self, event: HookInput) {
-        self.add_to_history(history_cell::new_hook_input(
-            event.hook,
-            event.stderr,
-        ));
-        self.request_redraw();
     }
 
     /// Exit the UI immediately without waiting for shutdown.

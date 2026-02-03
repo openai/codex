@@ -2268,23 +2268,27 @@ impl Session {
         active.is_some()
     }
 
-    pub(crate) async fn maybe_start_next_hook_turn(self: &Arc<Self>) {
-        if self.has_active_turn().await {
-            return;
-        }
+    pub(crate) fn maybe_start_next_hook_turn(self: &Arc<Self>) {
+        let session = Arc::clone(self);
+        tokio::spawn(async move {
+            if session.has_active_turn().await {
+                return;
+            }
 
-        let Some(next) = self.take_next_hook_input().await else {
-            return;
-        };
+            let Some(next) = session.take_next_hook_input().await else {
+                return;
+            };
 
-        let sub_id = next.sub_id.unwrap_or_else(|| self.next_hook_sub_id());
-        let turn_context = self.new_default_turn_with_sub_id(sub_id).await;
-        self.spawn_task(
-            Arc::clone(&turn_context),
-            Vec::new(),
-            RegularTask::new(Some(next.input)),
-        )
-        .await;
+            let sub_id = next.sub_id.unwrap_or_else(|| session.next_hook_sub_id());
+            let turn_context = session.new_default_turn_with_sub_id(sub_id).await;
+            session
+                .spawn_task(
+                    Arc::clone(&turn_context),
+                    Vec::new(),
+                    RegularTask::new(Some(next.input)),
+                )
+                .await;
+        });
     }
 
     pub async fn list_resources(
@@ -2658,6 +2662,12 @@ mod handlers {
 
     pub async fn interrupt(sess: &Arc<Session>) {
         sess.interrupt_task().await;
+    }
+
+    pub async fn hook_input(sess: &Arc<Session>, sub_id: String, input: HookInput) {
+        sess.enqueue_hook_input_with_sub_id(Some(sub_id), input)
+            .await;
+        sess.maybe_start_next_hook_turn();
     }
 
     pub async fn override_turn_context(
@@ -3376,12 +3386,6 @@ pub(crate) async fn run_turn(
 ) -> Option<String> {
     if input.is_empty() && hook_inputs.is_empty() {
         return None;
-    }
-
-    pub async fn hook_input(sess: &Arc<Session>, sub_id: String, input: HookInput) {
-        sess.enqueue_hook_input_with_sub_id(Some(sub_id), input)
-            .await;
-        sess.maybe_start_next_hook_turn().await;
     }
 
     let model_info = turn_context.client.get_model_info();

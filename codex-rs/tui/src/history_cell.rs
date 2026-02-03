@@ -41,7 +41,6 @@ use codex_common::format_env_display::format_env_display;
 use codex_core::config::Config;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_core::protocol::FileChange;
-use codex_core::protocol::HookKind;
 use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SessionConfiguredEvent;
@@ -1540,54 +1539,6 @@ fn decode_mcp_image(block: &serde_json::Value) -> Option<DynamicImage> {
 #[allow(clippy::disallowed_methods)]
 pub(crate) fn new_warning_event(message: String) -> PrefixedWrappedHistoryCell {
     PrefixedWrappedHistoryCell::new(message.yellow(), "⚠ ".yellow(), "  ")
-}
-
-#[derive(Debug)]
-pub(crate) struct HookInputHistoryCell {
-    hook: HookKind,
-    stderr: String,
-}
-
-impl HookInputHistoryCell {
-    pub(crate) fn new(hook: HookKind, stderr: String) -> Self {
-        Self { hook, stderr }
-    }
-}
-
-impl HistoryCell for HookInputHistoryCell {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        if width == 0 {
-            return Vec::new();
-        }
-
-        let hook_label = match self.hook {
-            HookKind::TurnStart => "HookInput (TurnStart)",
-            HookKind::TurnEnd => "HookInput (TurnEnd)",
-        };
-        let mut lines: Vec<Line<'static>> = vec![hook_label.bold().into()];
-
-        let wrap_width = width.saturating_sub(4).max(1) as usize;
-        let mut body_lines = Vec::new();
-        for raw_line in self.stderr.lines() {
-            if raw_line.is_empty() {
-                body_lines.push(Line::from(""));
-                continue;
-            }
-            let wrapped = textwrap::wrap(raw_line, wrap_width);
-            body_lines.extend(wrapped.into_iter().map(|line| Line::from(line.to_string())));
-        }
-        lines.extend(prefix_lines(body_lines, "  └ ".dim(), "    ".into()));
-
-        lines
-    }
-
-    fn desired_height(&self, width: u16) -> u16 {
-        self.display_lines(width).len() as u16
-    }
-}
-
-pub(crate) fn new_hook_input(hook: HookKind, stderr: String) -> HookInputHistoryCell {
-    HookInputHistoryCell::new(hook, stderr)
 }
 
 #[derive(Debug)]

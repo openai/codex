@@ -50,17 +50,23 @@ impl SessionTask for RegularTask {
             hook_inputs.push(hook_input);
         }
 
-        if !cancellation_token.is_cancelled() {
-            if let Some(hook_input) =
+        if !cancellation_token.is_cancelled()
+            && let Some(hook_input) =
                 hooks::run_hook(&sess, &ctx, HookKind::TurnStart, &cancellation_token).await
-            {
-                hook_inputs.push(hook_input);
-            }
+        {
+            hook_inputs.push(hook_input);
         }
 
-        let last_agent_message = run_turn(sess, Arc::clone(&ctx), input, hook_inputs, cancellation_token.clone())
-            .instrument(run_turn_span)
-            .await;
+        let run_session = Arc::clone(&sess);
+        let last_agent_message = run_turn(
+            run_session,
+            Arc::clone(&ctx),
+            input,
+            hook_inputs,
+            cancellation_token.clone(),
+        )
+        .instrument(run_turn_span)
+        .await;
 
         if cancellation_token.is_cancelled() {
             return None;
@@ -70,6 +76,7 @@ impl SessionTask for RegularTask {
             hooks::run_hook(&sess, &ctx, HookKind::TurnEnd, &cancellation_token).await
         {
             sess.enqueue_hook_input(hook_input).await;
+            sess.maybe_start_next_hook_turn();
         }
 
         last_agent_message
