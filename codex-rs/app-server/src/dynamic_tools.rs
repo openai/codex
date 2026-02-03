@@ -1,7 +1,9 @@
 use codex_app_server_protocol::DynamicToolCallResponse;
 use codex_app_server_protocol::DynamicToolCallResult;
 use codex_core::CodexThread;
+use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
+use codex_protocol::dynamic_tools::DynamicToolResult as CoreDynamicToolResult;
 use codex_protocol::protocol::Op;
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -19,9 +21,10 @@ pub(crate) async fn on_call_response(
             error!("request failed: {err:?}");
             let fallback = CoreDynamicToolResponse {
                 call_id: call_id.clone(),
-                output: Some("dynamic tool request failed".to_string()),
+                result: CoreDynamicToolResult::Output {
+                    output: "dynamic tool request failed".to_string(),
+                },
                 success: false,
-                content_items: None,
             };
             if let Err(err) = conversation
                 .submit(Op::DynamicToolResponse {
@@ -46,18 +49,18 @@ pub(crate) async fn on_call_response(
         }
     });
 
-    let (output, content_items) = match response.result {
-        DynamicToolCallResult::ContentItems { content_items } => (
-            None,
-            Some(content_items.into_iter().map(Into::into).collect()),
-        ),
-        DynamicToolCallResult::Output { output } => (Some(output), None),
+    let result = match response.result {
+        DynamicToolCallResult::ContentItems { content_items } => {
+            CoreDynamicToolResult::ContentItems {
+                content_items: content_items.into_iter().map(map_content_item).collect(),
+            }
+        }
+        DynamicToolCallResult::Output { output } => CoreDynamicToolResult::Output { output },
     };
     let response = CoreDynamicToolResponse {
         call_id: call_id.clone(),
-        output,
+        result,
         success: response.success,
-        content_items,
     };
     if let Err(err) = conversation
         .submit(Op::DynamicToolResponse {
@@ -67,5 +70,18 @@ pub(crate) async fn on_call_response(
         .await
     {
         error!("failed to submit DynamicToolResponse: {err}");
+    }
+}
+
+fn map_content_item(
+    item: codex_app_server_protocol::DynamicToolCallOutputContentItem,
+) -> CoreDynamicToolCallOutputContentItem {
+    match item {
+        codex_app_server_protocol::DynamicToolCallOutputContentItem::InputText { text } => {
+            CoreDynamicToolCallOutputContentItem::InputText { text }
+        }
+        codex_app_server_protocol::DynamicToolCallOutputContentItem::InputImage { image_url } => {
+            CoreDynamicToolCallOutputContentItem::InputImage { image_url }
+        }
     }
 }

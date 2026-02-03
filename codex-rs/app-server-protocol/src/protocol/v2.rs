@@ -14,7 +14,6 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
-use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
@@ -2692,9 +2691,10 @@ pub enum DynamicToolCallResult {
 
 /// App-server-facing dynamic tool output items.
 ///
-/// This mirrors `FunctionCallOutputContentItem` today, but is intentionally
-/// defined separately so the app-server API can evolve without forcing matching
-/// protocol changes at the same time.
+/// This is intentionally defined separately from
+/// `codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem` and
+/// `codex_protocol::models::FunctionCallOutputContentItem` so the app-server API
+/// can evolve independently.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type")]
@@ -2708,28 +2708,6 @@ pub enum DynamicToolCallOutputContentItem {
         #[serde(alias = "image_url")]
         image_url: String,
     },
-}
-
-impl From<DynamicToolCallOutputContentItem> for FunctionCallOutputContentItem {
-    fn from(item: DynamicToolCallOutputContentItem) -> Self {
-        match item {
-            DynamicToolCallOutputContentItem::InputText { text } => Self::InputText { text },
-            DynamicToolCallOutputContentItem::InputImage { image_url } => {
-                Self::InputImage { image_url }
-            }
-        }
-    }
-}
-
-impl From<FunctionCallOutputContentItem> for DynamicToolCallOutputContentItem {
-    fn from(item: FunctionCallOutputContentItem) -> Self {
-        match item {
-            FunctionCallOutputContentItem::InputText { text } => Self::InputText { text },
-            FunctionCallOutputContentItem::InputImage { image_url } => {
-                Self::InputImage { image_url }
-            }
-        }
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -2917,7 +2895,6 @@ mod tests {
     use codex_protocol::items::TurnItem;
     use codex_protocol::items::UserMessageItem;
     use codex_protocol::items::WebSearchItem;
-    use codex_protocol::models::FunctionCallOutputContentItem;
     use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
     use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
     use codex_protocol::user_input::UserInput as CoreUserInput;
@@ -3116,21 +3093,6 @@ mod tests {
                     }
                 ]
             })
-        );
-    }
-
-    #[test]
-    fn dynamic_tool_content_item_maps_to_function_call_output_content_item() {
-        let item = DynamicToolCallOutputContentItem::InputImage {
-            image_url: "data:image/png;base64,AAA".to_string(),
-        };
-
-        let converted: FunctionCallOutputContentItem = item.into();
-        assert_eq!(
-            converted,
-            FunctionCallOutputContentItem::InputImage {
-                image_url: "data:image/png;base64,AAA".to_string(),
-            }
         );
     }
 

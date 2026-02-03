@@ -89,6 +89,7 @@ use codex_core::review_format::format_review_findings_block;
 use codex_core::review_prompts;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
+use codex_protocol::dynamic_tools::DynamicToolResult as CoreDynamicToolResult;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUserInputAnswer;
@@ -352,9 +353,10 @@ pub(crate) async fn apply_bespoke_event_handling(
                         id: call_id.clone(),
                         response: CoreDynamicToolResponse {
                             call_id,
-                            output: Some("dynamic tool calls require api v2".to_string()),
+                            result: CoreDynamicToolResult::Output {
+                                output: "dynamic tool calls require api v2".to_string(),
+                            },
                             success: false,
-                            content_items: None,
                         },
                     })
                     .await;
