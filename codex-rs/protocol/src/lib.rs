@@ -1,4 +1,5 @@
 pub mod account;
+pub mod artificial_messages;
 mod thread_id;
 pub use thread_id::ThreadId;
 pub mod approvals;

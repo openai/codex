@@ -1,3 +1,4 @@
+use codex_protocol::artificial_messages::ArtificialMessage;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -64,18 +65,12 @@ impl SkillInstructions {
 
 impl From<SkillInstructions> for ResponseItem {
     fn from(si: SkillInstructions) -> Self {
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: format!(
-                    "<skill>\n<name>{}</name>\n<path>{}</path>\n{}\n</skill>",
-                    si.name, si.path, si.contents
-                ),
-            }],
-            end_turn: None,
-            phase: None,
+        ArtificialMessage::Skill {
+            name: si.name,
+            path: si.path,
+            body: si.contents,
         }
+        .to_response_item()
     }
 }
 
@@ -83,6 +78,15 @@ impl From<SkillInstructions> for ResponseItem {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    fn demo_skill_message() -> String {
+        ArtificialMessage::Skill {
+            name: "demo-skill".to_string(),
+            path: "skills/demo/SKILL.md".to_string(),
+            body: "body".to_string(),
+        }
+        .render()
+    }
 
     #[test]
     fn test_user_instructions() {
@@ -146,18 +150,15 @@ mod tests {
             panic!("expected one InputText content item");
         };
 
-        assert_eq!(
-            text,
-            "<skill>\n<name>demo-skill</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
-        );
+        let expected = demo_skill_message();
+        assert_eq!(text, &expected);
     }
 
     #[test]
     fn test_is_skill_instructions() {
         assert!(SkillInstructions::is_skill_instructions(&[
             ContentItem::InputText {
-                text: "<skill>\n<name>demo-skill</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>"
-                    .to_string(),
+                text: demo_skill_message(),
             }
         ]));
         assert!(!SkillInstructions::is_skill_instructions(&[

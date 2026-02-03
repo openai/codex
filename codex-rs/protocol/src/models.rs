@@ -8,6 +8,7 @@ use serde::Serialize;
 use serde::ser::Serializer;
 use ts_rs::TS;
 
+use crate::artificial_messages::ArtificialMessage;
 use crate::config_types::CollaborationMode;
 use crate::config_types::SandboxMode;
 use crate::protocol::AskForApproval;
@@ -336,20 +337,16 @@ impl DeveloperInstructions {
         request_rule_enabled: bool,
         writable_roots: Option<Vec<WritableRoot>>,
     ) -> Self {
-        let start_tag = DeveloperInstructions::new("<permissions instructions>");
-        let end_tag = DeveloperInstructions::new("</permissions instructions>");
-        start_tag
-            .concat(DeveloperInstructions::sandbox_text(
-                sandbox_mode,
-                network_access,
-            ))
+        let body = DeveloperInstructions::sandbox_text(sandbox_mode, network_access)
             .concat(DeveloperInstructions::from(
                 approval_policy,
                 exec_policy,
                 request_rule_enabled,
             ))
             .concat(DeveloperInstructions::from_writable_roots(writable_roots))
-            .concat(end_tag)
+            .into_text();
+
+        DeveloperInstructions::new(ArtificialMessage::Permission { body }.render())
     }
 
     fn from_writable_roots(writable_roots: Option<Vec<WritableRoot>>) -> Self {

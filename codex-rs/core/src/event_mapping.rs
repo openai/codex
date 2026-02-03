@@ -146,6 +146,7 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
 #[cfg(test)]
 mod tests {
     use super::parse_turn_item;
+    use codex_protocol::artificial_messages::ArtificialMessage;
     use codex_protocol::items::AgentMessageContent;
     use codex_protocol::items::TurnItem;
     use codex_protocol::items::WebSearchItem;
@@ -284,6 +285,12 @@ mod tests {
 
     #[test]
     fn skips_user_instructions_and_env() {
+        let skill_message = ArtificialMessage::Skill {
+            name: "demo".to_string(),
+            path: "skills/demo/SKILL.md".to_string(),
+            body: "body".to_string(),
+        }
+        .render();
         let items = vec![
             ResponseItem::Message {
                 id: None,
@@ -316,8 +323,7 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>"
-                        .to_string(),
+                    text: skill_message,
                 }],
                 end_turn: None,
             phase: None,

@@ -201,6 +201,7 @@ use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_async_utils::OrCancelExt;
 use codex_otel::OtelManager;
+use codex_protocol::artificial_messages::ArtificialMessage;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -1802,15 +1803,10 @@ impl Session {
         self.services
             .otel_manager
             .counter("codex.model_warning", 1, &[]);
-        let item = ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: format!("Warning: {}", message.into()),
-            }],
-            end_turn: None,
-            phase: None,
+        let item = ArtificialMessage::ModelWarning {
+            body: message.into(),
         };
+        .to_response_item();
 
         self.record_conversation_items(ctx, &[item]).await;
     }
@@ -5573,10 +5569,14 @@ mod tests {
         match last {
             ResponseItem::Message { role, content, .. } => {
                 assert_eq!(role, "user");
+                let expected_warning = ArtificialMessage::ModelWarning {
+                    body: "too many unified exec processes".to_string(),
+                }
+                .render();
                 assert_eq!(
                     content,
                     &vec![ContentItem::InputText {
-                        text: "Warning: too many unified exec processes".to_string(),
+                        text: expected_warning,
                     }]
                 );
             }

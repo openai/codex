@@ -5,6 +5,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_execpolicy::Policy;
+use codex_protocol::artificial_messages::ArtificialMessage;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -34,7 +35,10 @@ fn permissions_texts(input: &[serde_json::Value]) -> Vec<String> {
                 .first()?
                 .get("text")?
                 .as_str()?;
-            if text.contains("<permissions instructions>") {
+            if matches!(
+                ArtificialMessage::parse(text),
+                Ok(ArtificialMessage::Permission { .. })
+            ) {
                 Some(text.to_string())
             } else {
                 None
