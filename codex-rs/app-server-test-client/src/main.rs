@@ -1,7 +1,9 @@
 use std::collections::VecDeque;
+use std::fs;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Write;
+use std::path::Path;
 use std::process::Child;
 use std::process::ChildStdin;
 use std::process::ChildStdout;
@@ -24,6 +26,7 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
+use codex_app_server_protocol::DynamicToolSpec;
 use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
@@ -83,6 +86,15 @@ struct Cli {
     )]
     config_overrides: Vec<String>,
 
+    /// JSON array of dynamic tool specs or a single tool object.
+    /// Prefix a filename with '@' to read from a file.
+    ///
+    /// Example:
+    ///   --dynamic-tools '[{"name":"demo","description":"Demo","inputSchema":{"type":"object"}}]'
+    ///   --dynamic-tools @/path/to/tools.json
+    #[arg(long, value_name = "json-or-@file", global = true)]
+    dynamic_tools: Option<String>,
+
     #[command(subcommand)]
     command: CliCommand,
 }
@@ -140,23 +152,29 @@ fn main() -> Result<()> {
     let Cli {
         codex_bin,
         config_overrides,
+        dynamic_tools,
         command,
     } = Cli::parse();
 
+    let dynamic_tools = parse_dynamic_tools_arg(&dynamic_tools)?;
+
     match command {
         CliCommand::SendMessage { user_message } => {
+            ensure_dynamic_tools_unused(&dynamic_tools, "send-message")?;
             send_message(&codex_bin, &config_overrides, user_message)
         }
         CliCommand::SendMessageV2 { user_message } => {
-            send_message_v2(&codex_bin, &config_overrides, user_message)
+            send_message_v2(&codex_bin, &config_overrides, user_message, &dynamic_tools)
         }
         CliCommand::TriggerCmdApproval { user_message } => {
-            trigger_cmd_approval(&codex_bin, &config_overrides, user_message)
+            trigger_cmd_approval(&codex_bin, &config_overrides, user_message, &dynamic_tools)
         }
         CliCommand::TriggerPatchApproval { user_message } => {
-            trigger_patch_approval(&codex_bin, &config_overrides, user_message)
+            trigger_patch_approval(&codex_bin, &config_overrides, user_message, &dynamic_tools)
         }
-        CliCommand::NoTriggerCmdApproval => no_trigger_cmd_approval(&codex_bin, &config_overrides),
+        CliCommand::NoTriggerCmdApproval => {
+            no_trigger_cmd_approval(&codex_bin, &config_overrides, &dynamic_tools)
+        }
         CliCommand::SendFollowUpV2 {
             first_message,
             follow_up_message,
@@ -165,10 +183,20 @@ fn main() -> Result<()> {
             &config_overrides,
             first_message,
             follow_up_message,
+            &dynamic_tools,
         ),
-        CliCommand::TestLogin => test_login(&codex_bin, &config_overrides),
-        CliCommand::GetAccountRateLimits => get_account_rate_limits(&codex_bin, &config_overrides),
-        CliCommand::ModelList => model_list(&codex_bin, &config_overrides),
+        CliCommand::TestLogin => {
+            ensure_dynamic_tools_unused(&dynamic_tools, "test-login")?;
+            test_login(&codex_bin, &config_overrides)
+        }
+        CliCommand::GetAccountRateLimits => {
+            ensure_dynamic_tools_unused(&dynamic_tools, "get-account-rate-limits")?;
+            get_account_rate_limits(&codex_bin, &config_overrides)
+        }
+        CliCommand::ModelList => {
+            ensure_dynamic_tools_unused(&dynamic_tools, "model-list")?;
+            model_list(&codex_bin, &config_overrides)
+        }
     }
 }
 
@@ -198,14 +226,23 @@ fn send_message_v2(
     codex_bin: &str,
     config_overrides: &[String],
     user_message: String,
+    dynamic_tools: &Option<Vec<DynamicToolSpec>>,
 ) -> Result<()> {
-    send_message_v2_with_policies(codex_bin, config_overrides, user_message, None, None)
+    send_message_v2_with_policies(
+        codex_bin,
+        config_overrides,
+        user_message,
+        None,
+        None,
+        dynamic_tools,
+    )
 }
 
 fn trigger_cmd_approval(
     codex_bin: &str,
     config_overrides: &[String],
     user_message: Option<String>,
+    dynamic_tools: &Option<Vec<DynamicToolSpec>>,
 ) -> Result<()> {
     let default_prompt =
         "Run `touch /tmp/should-trigger-approval` so I can confirm the file exists.";
@@ -216,6 +253,7 @@ fn trigger_cmd_approval(
         message,
         Some(AskForApproval::OnRequest),
         Some(SandboxPolicy::ReadOnly),
+        dynamic_tools,
     )
 }
 
@@ -223,6 +261,7 @@ fn trigger_patch_approval(
     codex_bin: &str,
     config_overrides: &[String],
     user_message: Option<String>,
+    dynamic_tools: &Option<Vec<DynamicToolSpec>>,
 ) -> Result<()> {
     let default_prompt =
         "Create a file named APPROVAL_DEMO.txt containing a short hello message using apply_patch.";
@@ -233,12 +272,24 @@ fn trigger_patch_approval(
         message,
         Some(AskForApproval::OnRequest),
         Some(SandboxPolicy::ReadOnly),
+        dynamic_tools,
     )
 }
 
-fn no_trigger_cmd_approval(codex_bin: &str, config_overrides: &[String]) -> Result<()> {
+fn no_trigger_cmd_approval(
+    codex_bin: &str,
+    config_overrides: &[String],
+    dynamic_tools: &Option<Vec<DynamicToolSpec>>,
+) -> Result<()> {
     let prompt = "Run `touch should_not_trigger_approval.txt`";
-    send_message_v2_with_policies(codex_bin, config_overrides, prompt.to_string(), None, None)
+    send_message_v2_with_policies(
+        codex_bin,
+        config_overrides,
+        prompt.to_string(),
+        None,
+        None,
+        dynamic_tools,
+    )
 }
 
 fn send_message_v2_with_policies(
@@ -247,13 +298,17 @@ fn send_message_v2_with_policies(
     user_message: String,
     approval_policy: Option<AskForApproval>,
     sandbox_policy: Option<SandboxPolicy>,
+    dynamic_tools: &Option<Vec<DynamicToolSpec>>,
 ) -> Result<()> {
     let mut client = CodexClient::spawn(codex_bin, config_overrides)?;
 
     let initialize = client.initialize()?;
     println!("< initialize response: {initialize:?}");
 
-    let thread_response = client.thread_start(ThreadStartParams::default())?;
+    let thread_response = client.thread_start(ThreadStartParams {
+        dynamic_tools: dynamic_tools.clone(),
+        ..Default::default()
+    })?;
     println!("< thread/start response: {thread_response:?}");
     let mut turn_params = TurnStartParams {
         thread_id: thread_response.thread.id.clone(),
@@ -280,13 +335,17 @@ fn send_follow_up_v2(
     config_overrides: &[String],
     first_message: String,
     follow_up_message: String,
+    dynamic_tools: &Option<Vec<DynamicToolSpec>>,
 ) -> Result<()> {
     let mut client = CodexClient::spawn(codex_bin, config_overrides)?;
 
     let initialize = client.initialize()?;
     println!("< initialize response: {initialize:?}");
 
-    let thread_response = client.thread_start(ThreadStartParams::default())?;
+    let thread_response = client.thread_start(ThreadStartParams {
+        dynamic_tools: dynamic_tools.clone(),
+        ..Default::default()
+    })?;
     println!("< thread/start response: {thread_response:?}");
 
     let first_turn_params = TurnStartParams {
@@ -370,6 +429,40 @@ fn model_list(codex_bin: &str, config_overrides: &[String]) -> Result<()> {
     println!("< model/list response: {response:?}");
 
     Ok(())
+}
+
+fn ensure_dynamic_tools_unused(
+    dynamic_tools: &Option<Vec<DynamicToolSpec>>,
+    command: &str,
+) -> Result<()> {
+    if dynamic_tools.is_some() {
+        bail!(
+            "dynamic tools are only supported for v2 thread/start; remove --dynamic-tools for {command} or use send-message-v2"
+        );
+    }
+    Ok(())
+}
+
+fn parse_dynamic_tools_arg(dynamic_tools: &Option<String>) -> Result<Option<Vec<DynamicToolSpec>>> {
+    let Some(raw_arg) = dynamic_tools.as_deref() else {
+        return Ok(None);
+    };
+
+    let raw_json = if let Some(path) = raw_arg.strip_prefix('@') {
+        fs::read_to_string(Path::new(path))
+            .with_context(|| format!("read dynamic tools file {path}"))?
+    } else {
+        raw_arg.to_string()
+    };
+
+    let value: Value = serde_json::from_str(&raw_json).context("parse dynamic tools JSON")?;
+    let tools = match value {
+        Value::Array(_) => serde_json::from_value(value).context("decode dynamic tools array")?,
+        Value::Object(_) => vec![serde_json::from_value(value).context("decode dynamic tool")?],
+        _ => bail!("dynamic tools JSON must be an object or array"),
+    };
+
+    Ok(Some(tools))
 }
 
 struct CodexClient {

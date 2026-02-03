@@ -50,6 +50,7 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
+use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::openai_models::ModelInfo;
@@ -72,14 +73,12 @@ use codex_rmcp_client::OAuthCredentialsStoreMode;
 use futures::future::BoxFuture;
 use futures::prelude::*;
 use futures::stream::FuturesOrdered;
-use mcp_types::CallToolResult;
-use mcp_types::ListResourceTemplatesRequestParams;
-use mcp_types::ListResourceTemplatesResult;
-use mcp_types::ListResourcesRequestParams;
-use mcp_types::ListResourcesResult;
-use mcp_types::ReadResourceRequestParams;
-use mcp_types::ReadResourceResult;
-use mcp_types::RequestId;
+use rmcp::model::ListResourceTemplatesResult;
+use rmcp::model::ListResourcesResult;
+use rmcp::model::PaginatedRequestParam;
+use rmcp::model::ReadResourceRequestParam;
+use rmcp::model::ReadResourceResult;
+use rmcp::model::RequestId;
 use serde_json;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -119,6 +118,7 @@ use crate::error::Result as CodexResult;
 use crate::exec::StreamOutput;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::feedback_tags;
+use crate::git_info::get_git_repo_root;
 use crate::instructions::UserInstructions;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::auth::compute_auth_statuses;
@@ -333,9 +333,36 @@ impl Codex {
             .clone()
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
-        // Respect explicit thread-start tools; fall back to persisted tools when resuming a thread.
+
+        // Respect thread-start tools. When missing (resumed/forked threads), read from the db
+        // first, then fall back to rollout-file tools.
+        let persisted_tools = if dynamic_tools.is_empty()
+            && config.features.enabled(Feature::Sqlite)
+        {
+            let thread_id = match &conversation_history {
+                InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
+                InitialHistory::Forked(_) => conversation_history.forked_from_id(),
+                InitialHistory::New => None,
+            };
+            match thread_id {
+                Some(thread_id) => {
+                    let state_db_ctx = state_db::open_if_present(
+                        config.codex_home.as_path(),
+                        config.model_provider_id.as_str(),
+                    )
+                    .await;
+                    state_db::get_dynamic_tools(state_db_ctx.as_deref(), thread_id, "codex_spawn")
+                        .await
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
         let dynamic_tools = if dynamic_tools.is_empty() {
-            conversation_history.get_dynamic_tools().unwrap_or_default()
+            persisted_tools
+                .or_else(|| conversation_history.get_dynamic_tools())
+                .unwrap_or_default()
         } else {
             dynamic_tools
         };
@@ -504,7 +531,6 @@ pub(crate) struct TurnContext {
     pub(crate) truncation_policy: TruncationPolicy,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
 }
-
 impl TurnContext {
     pub(crate) fn resolve_path(&self, path: Option<String>) -> PathBuf {
         path.as_ref()
@@ -1023,6 +1049,11 @@ impl Session {
     async fn get_total_token_usage(&self) -> i64 {
         let state = self.state.lock().await;
         state.get_total_token_usage(state.server_reasoning_included())
+    }
+
+    async fn get_estimated_token_count(&self, turn_context: &TurnContext) -> Option<i64> {
+        let state = self.state.lock().await;
+        state.history.estimate_token_count(turn_context)
     }
 
     pub(crate) async fn get_base_instructions(&self) -> BaseInstructions {
@@ -1808,6 +1839,7 @@ impl Session {
                 text: format!("Warning: {}", message.into()),
             }],
             end_turn: None,
+            phase: None,
         };
 
         self.record_conversation_items(ctx, &[item]).await;
@@ -2197,7 +2229,7 @@ impl Session {
     pub async fn list_resources(
         &self,
         server: &str,
-        params: Option<ListResourcesRequestParams>,
+        params: Option<PaginatedRequestParam>,
     ) -> anyhow::Result<ListResourcesResult> {
         self.services
             .mcp_connection_manager
@@ -2210,7 +2242,7 @@ impl Session {
     pub async fn list_resource_templates(
         &self,
         server: &str,
-        params: Option<ListResourceTemplatesRequestParams>,
+        params: Option<PaginatedRequestParam>,
     ) -> anyhow::Result<ListResourceTemplatesResult> {
         self.services
             .mcp_connection_manager
@@ -2223,7 +2255,7 @@ impl Session {
     pub async fn read_resource(
         &self,
         server: &str,
-        params: ReadResourceRequestParams,
+        params: ReadResourceRequestParam,
     ) -> anyhow::Result<ReadResourceResult> {
         self.services
             .mcp_connection_manager
@@ -2550,10 +2582,10 @@ mod handlers {
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::config_types::Settings;
     use codex_protocol::dynamic_tools::DynamicToolResponse;
+    use codex_protocol::mcp::RequestId as ProtocolRequestId;
     use codex_protocol::user_input::UserInput;
     use codex_rmcp_client::ElicitationAction;
     use codex_rmcp_client::ElicitationResponse;
-    use mcp_types::RequestId;
     use std::path::PathBuf;
     use std::sync::Arc;
     use tracing::info;
@@ -2682,7 +2714,7 @@ mod handlers {
     pub async fn resolve_elicitation(
         sess: &Arc<Session>,
         server_name: String,
-        request_id: RequestId,
+        request_id: ProtocolRequestId,
         decision: codex_protocol::approvals::ElicitationAction,
     ) {
         let action = match decision {
@@ -2697,6 +2729,12 @@ mod handlers {
             ElicitationAction::Decline | ElicitationAction::Cancel => None,
         };
         let response = ElicitationResponse { action, content };
+        let request_id = match request_id {
+            ProtocolRequestId::String(value) => {
+                rmcp::model::NumberOrString::String(std::sync::Arc::from(value))
+            }
+            ProtocolRequestId::Integer(value) => rmcp::model::NumberOrString::Number(value),
+        };
         if let Err(err) = sess
             .resolve_elicitation(server_name, request_id, response)
             .await
@@ -3277,6 +3315,7 @@ pub(crate) async fn run_turn(
     let model_info = turn_context.client.get_model_info();
     let auto_compact_limit = model_info.auto_compact_token_limit().unwrap_or(i64::MAX);
     let total_usage_tokens = sess.get_total_token_usage().await;
+
     let event = EventMsg::TurnStarted(TurnStartedEvent {
         model_context_window: turn_context.client.get_model_context_window(),
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
@@ -3379,7 +3418,9 @@ pub(crate) async fn run_turn(
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
 
-    let mut client_session = turn_context.client.new_session();
+    let mut client_session = turn_context
+        .client
+        .new_session(Some(turn_context.cwd.clone()));
 
     loop {
         // Note that pending_input would be something like a message the user
@@ -3429,6 +3470,19 @@ pub(crate) async fn run_turn(
                 } = sampling_request_output;
                 let total_usage_tokens = sess.get_total_token_usage().await;
                 let token_limit_reached = total_usage_tokens >= auto_compact_limit;
+
+                let estimated_token_count =
+                    sess.get_estimated_token_count(turn_context.as_ref()).await;
+
+                info!(
+                    turn_id = %turn_context.sub_id,
+                    total_usage_tokens,
+                    estimated_token_count = ?estimated_token_count,
+                    auto_compact_limit,
+                    token_limit_reached,
+                    needs_follow_up,
+                    "post sampling token usage"
+                );
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if token_limit_reached && needs_follow_up {
@@ -4442,8 +4496,6 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
 
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
-
-use crate::git_info::get_git_repo_root;
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context_with_rx;
 
@@ -4489,8 +4541,7 @@ mod tests {
     use std::time::Duration;
     use tokio::time::sleep;
 
-    use mcp_types::ContentBlock;
-    use mcp_types::TextContent;
+    use codex_protocol::mcp::CallToolResult as McpCallToolResult;
     use pretty_assertions::assert_eq;
     use serde::Deserialize;
     use serde_json::json;
@@ -4511,6 +4562,7 @@ mod tests {
                 text: text.to_string(),
             }],
             end_turn: None,
+            phase: None,
         }
     }
 
@@ -4792,6 +4844,7 @@ mod tests {
                     text: "turn 1 user".to_string(),
                 }],
                 end_turn: None,
+                phase: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -4800,6 +4853,7 @@ mod tests {
                     text: "turn 1 assistant".to_string(),
                 }],
                 end_turn: None,
+                phase: None,
             },
         ];
         sess.record_into_history(&turn_1, tc.as_ref()).await;
@@ -4812,6 +4866,7 @@ mod tests {
                     text: "turn 2 user".to_string(),
                 }],
                 end_turn: None,
+                phase: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -4820,6 +4875,7 @@ mod tests {
                     text: "turn 2 assistant".to_string(),
                 }],
                 end_turn: None,
+                phase: None,
             },
         ];
         sess.record_into_history(&turn_2, tc.as_ref()).await;
@@ -4852,6 +4908,7 @@ mod tests {
                 text: "turn 1 user".to_string(),
             }],
             end_turn: None,
+            phase: None,
         }];
         sess.record_into_history(&turn_1, tc.as_ref()).await;
 
@@ -5074,7 +5131,7 @@ mod tests {
 
     #[test]
     fn prefers_structured_content_when_present() {
-        let ctr = CallToolResult {
+        let ctr = McpCallToolResult {
             // Content present but should be ignored because structured_content is set.
             content: vec![text_block("ignored")],
             is_error: None,
@@ -5082,6 +5139,7 @@ mod tests {
                 "ok": true,
                 "value": 42
             })),
+            meta: None,
         };
 
         let got = FunctionCallOutputPayload::from(&ctr);
@@ -5120,10 +5178,11 @@ mod tests {
 
     #[test]
     fn falls_back_to_content_when_structured_is_null() {
-        let ctr = CallToolResult {
+        let ctr = McpCallToolResult {
             content: vec![text_block("hello"), text_block("world")],
             is_error: None,
             structured_content: Some(serde_json::Value::Null),
+            meta: None,
         };
 
         let got = FunctionCallOutputPayload::from(&ctr);
@@ -5139,10 +5198,11 @@ mod tests {
 
     #[test]
     fn success_flag_reflects_is_error_true() {
-        let ctr = CallToolResult {
+        let ctr = McpCallToolResult {
             content: vec![text_block("unused")],
             is_error: Some(true),
             structured_content: Some(json!({ "message": "bad" })),
+            meta: None,
         };
 
         let got = FunctionCallOutputPayload::from(&ctr);
@@ -5157,10 +5217,11 @@ mod tests {
 
     #[test]
     fn success_flag_true_with_no_error_and_content_used() {
-        let ctr = CallToolResult {
+        let ctr = McpCallToolResult {
             content: vec![text_block("alpha")],
             is_error: Some(false),
             structured_content: None,
+            meta: None,
         };
 
         let got = FunctionCallOutputPayload::from(&ctr);
@@ -5211,11 +5272,10 @@ mod tests {
         }
     }
 
-    fn text_block(s: &str) -> ContentBlock {
-        ContentBlock::TextContent(TextContent {
-            annotations: None,
-            text: s.to_string(),
-            r#type: "text".to_string(),
+    fn text_block(s: &str) -> serde_json::Value {
+        json!({
+            "type": "text",
+            "text": s,
         })
     }
 
@@ -5798,6 +5858,7 @@ mod tests {
                 text: "first user".to_string(),
             }],
             end_turn: None,
+            phase: None,
         };
         live_history.record_items(std::iter::once(&user1), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(user1.clone()));
@@ -5809,6 +5870,7 @@ mod tests {
                 text: "assistant reply one".to_string(),
             }],
             end_turn: None,
+            phase: None,
         };
         live_history.record_items(std::iter::once(&assistant1), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(assistant1.clone()));
@@ -5834,6 +5896,7 @@ mod tests {
                 text: "second user".to_string(),
             }],
             end_turn: None,
+            phase: None,
         };
         live_history.record_items(std::iter::once(&user2), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(user2.clone()));
@@ -5845,6 +5908,7 @@ mod tests {
                 text: "assistant reply two".to_string(),
             }],
             end_turn: None,
+            phase: None,
         };
         live_history.record_items(std::iter::once(&assistant2), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(assistant2.clone()));
@@ -5870,6 +5934,7 @@ mod tests {
                 text: "third user".to_string(),
             }],
             end_turn: None,
+            phase: None,
         };
         live_history.record_items(std::iter::once(&user3), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(user3));
@@ -5881,6 +5946,7 @@ mod tests {
                 text: "assistant reply three".to_string(),
             }],
             end_turn: None,
+            phase: None,
         };
         live_history.record_items(std::iter::once(&assistant3), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(assistant3));

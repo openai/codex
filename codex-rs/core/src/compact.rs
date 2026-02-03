@@ -311,6 +311,7 @@ fn build_compacted_history_with_limit(
                 text: message.clone(),
             }],
             end_turn: None,
+            phase: None,
         });
     }
 
@@ -325,6 +326,7 @@ fn build_compacted_history_with_limit(
         role: "user".to_string(),
         content: vec![ContentItem::InputText { text: summary_text }],
         end_turn: None,
+        phase: None,
     });
 
     history
@@ -335,7 +337,9 @@ async fn drain_to_completed(
     turn_context: &TurnContext,
     prompt: &Prompt,
 ) -> CodexResult<()> {
-    let mut client_session = turn_context.client.new_session();
+    let mut client_session = turn_context
+        .client
+        .new_session(Some(turn_context.cwd.clone()));
     let mut stream = client_session.stream(prompt).await?;
     loop {
         let maybe_event = stream.next().await;
@@ -414,6 +418,7 @@ mod tests {
                     text: "ignored".to_string(),
                 }],
                 end_turn: None,
+                phase: None,
             },
             ResponseItem::Message {
                 id: Some("user".to_string()),
@@ -422,6 +427,7 @@ mod tests {
                     text: "first".to_string(),
                 }],
                 end_turn: None,
+                phase: None,
             },
             ResponseItem::Other,
         ];
@@ -442,6 +448,7 @@ mod tests {
                         .to_string(),
                 }],
                 end_turn: None,
+            phase: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -450,6 +457,7 @@ mod tests {
                     text: "<ENVIRONMENT_CONTEXT>cwd=/tmp</ENVIRONMENT_CONTEXT>".to_string(),
                 }],
                 end_turn: None,
+            phase: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -458,6 +466,7 @@ mod tests {
                     text: "real user message".to_string(),
                 }],
                 end_turn: None,
+            phase: None,
             },
         ];
 
@@ -543,6 +552,7 @@ mod tests {
                     text: marker.clone(),
                 }],
                 end_turn: None,
+                phase: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -551,6 +561,7 @@ mod tests {
                     text: "real user message".to_string(),
                 }],
                 end_turn: None,
+                phase: None,
             },
         ];
 

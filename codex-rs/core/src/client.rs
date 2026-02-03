@@ -1,10 +1,13 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::RwLock;
 
 use crate::api_bridge::CoreAuthProvider;
 use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::map_api_error;
 use crate::auth::UnauthorizedRecovery;
+use crate::turn_metadata::build_turn_metadata_header;
 use codex_api::AggregateStreamExt;
 use codex_api::ChatClient as ApiChatClient;
 use codex_api::CompactClient as ApiCompactClient;
@@ -72,6 +75,13 @@ use crate::transport_manager::TransportManager;
 
 pub const WEB_SEARCH_ELIGIBLE_HEADER: &str = "x-oai-web-search-eligible";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
+pub const X_CODEX_TURN_METADATA_HEADER: &str = "x-codex-turn-metadata";
+
+#[derive(Debug, Default)]
+struct TurnMetadataCache {
+    cwd: Option<PathBuf>,
+    header: Option<HeaderValue>,
+}
 
 #[derive(Debug)]
 struct ModelClientState {
@@ -85,6 +95,7 @@ struct ModelClientState {
     summary: ReasoningSummaryConfig,
     session_source: SessionSource,
     transport_manager: TransportManager,
+    turn_metadata_cache: Arc<RwLock<TurnMetadataCache>>,
 }
 
 #[derive(Debug, Clone)]
@@ -136,17 +147,51 @@ impl ModelClient {
                 summary,
                 session_source,
                 transport_manager,
+                turn_metadata_cache: Arc::new(RwLock::new(TurnMetadataCache::default())),
             }),
         }
     }
 
-    pub fn new_session(&self) -> ModelClientSession {
+    pub fn new_session(&self, turn_metadata_cwd: Option<PathBuf>) -> ModelClientSession {
+        self.prewarm_turn_metadata_header(turn_metadata_cwd);
         ModelClientSession {
             state: Arc::clone(&self.state),
             connection: None,
             websocket_last_items: Vec::new(),
             transport_manager: self.state.transport_manager.clone(),
             turn_state: Arc::new(OnceLock::new()),
+        }
+    }
+
+    /// Refresh turn metadata in the background and update a cached header that request
+    /// builders can read without blocking.
+    fn prewarm_turn_metadata_header(&self, turn_metadata_cwd: Option<PathBuf>) {
+        let turn_metadata_cwd =
+            turn_metadata_cwd.map(|cwd| std::fs::canonicalize(&cwd).unwrap_or(cwd));
+
+        if let Ok(mut cache) = self.state.turn_metadata_cache.write()
+            && cache.cwd != turn_metadata_cwd
+        {
+            cache.cwd = turn_metadata_cwd.clone();
+            cache.header = None;
+        }
+
+        let Some(cwd) = turn_metadata_cwd else {
+            return;
+        };
+        let turn_metadata_cache = Arc::clone(&self.state.turn_metadata_cache);
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let _task = handle.spawn(async move {
+                let header = build_turn_metadata_header(cwd.as_path())
+                    .await
+                    .and_then(|value| HeaderValue::from_str(value.as_str()).ok());
+
+                if let Ok(mut cache) = turn_metadata_cache.write()
+                    && cache.cwd.as_ref() == Some(&cwd)
+                {
+                    cache.header = header;
+                }
+            });
         }
     }
 }
@@ -257,6 +302,14 @@ impl ModelClient {
 }
 
 impl ModelClientSession {
+    fn turn_metadata_header(&self) -> Option<HeaderValue> {
+        self.state
+            .turn_metadata_cache
+            .try_read()
+            .ok()
+            .and_then(|cache| cache.header.clone())
+    }
+
     /// Streams a single model turn using either the Responses or Chat
     /// Completions wire API, depending on the configured provider.
     ///
@@ -332,6 +385,7 @@ impl ModelClientSession {
         prompt: &Prompt,
         compression: Compression,
     ) -> ApiResponsesOptions {
+        let turn_metadata_header = self.turn_metadata_header();
         let model_info = &self.state.model_info;
 
         let default_reasoning_effort = model_info.default_reasoning_level;
@@ -380,7 +434,11 @@ impl ModelClientSession {
             store_override: None,
             conversation_id: Some(conversation_id),
             session_source: Some(self.state.session_source.clone()),
-            extra_headers: build_responses_headers(&self.state.config, Some(&self.turn_state)),
+            extra_headers: build_responses_headers(
+                &self.state.config,
+                Some(&self.turn_state),
+                turn_metadata_header.as_ref(),
+            ),
             compression,
             turn_state: Some(Arc::clone(&self.turn_state)),
         }
@@ -713,6 +771,7 @@ fn experimental_feature_headers(config: &Config) -> ApiHeaderMap {
 fn build_responses_headers(
     config: &Config,
     turn_state: Option<&Arc<OnceLock<String>>>,
+    turn_metadata_header: Option<&HeaderValue>,
 ) -> ApiHeaderMap {
     let mut headers = experimental_feature_headers(config);
     headers.insert(
@@ -730,6 +789,9 @@ fn build_responses_headers(
         && let Ok(header_value) = HeaderValue::from_str(state)
     {
         headers.insert(X_CODEX_TURN_STATE_HEADER, header_value);
+    }
+    if let Some(header_value) = turn_metadata_header {
+        headers.insert(X_CODEX_TURN_METADATA_HEADER, header_value.clone());
     }
     headers
 }

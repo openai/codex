@@ -12,14 +12,10 @@ use codex_mcp_server::ExecApprovalElicitRequestParams;
 use codex_mcp_server::ExecApprovalResponse;
 use codex_mcp_server::PatchApprovalElicitRequestParams;
 use codex_mcp_server::PatchApprovalResponse;
-use mcp_types::ElicitRequest;
-use mcp_types::ElicitRequestParamsRequestedSchema;
-use mcp_types::JSONRPC_VERSION;
-use mcp_types::JSONRPCRequest;
-use mcp_types::JSONRPCResponse;
-use mcp_types::ModelContextProtocolRequest;
-use mcp_types::RequestId;
 use pretty_assertions::assert_eq;
+use rmcp::model::JsonRpcResponse;
+use rmcp::model::JsonRpcVersion2_0;
+use rmcp::model::RequestId;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -106,22 +102,27 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
     )
     .await??;
 
+    assert_eq!(elicitation_request.jsonrpc, JsonRpcVersion2_0);
+    assert_eq!(elicitation_request.request.method, "elicitation/create");
+
     let elicitation_request_id = elicitation_request.id.clone();
     let params = serde_json::from_value::<ExecApprovalElicitRequestParams>(
         elicitation_request
+            .request
             .params
             .clone()
             .ok_or_else(|| anyhow::anyhow!("elicitation_request.params must be set"))?,
     )?;
-    let expected_elicitation_request = create_expected_elicitation_request(
-        elicitation_request_id.clone(),
-        expected_shell_command,
-        workdir_for_shell_function_call.path(),
-        codex_request_id.to_string(),
-        params.codex_event_id.clone(),
-        params.thread_id,
-    )?;
-    assert_eq!(expected_elicitation_request, elicitation_request);
+    assert_eq!(
+        elicitation_request.request.params,
+        Some(create_expected_elicitation_request_params(
+            expected_shell_command,
+            workdir_for_shell_function_call.path(),
+            codex_request_id.to_string(),
+            params.codex_event_id.clone(),
+            params.thread_id,
+        )?)
+    );
 
     // Accept the `git init` request by responding to the elicitation.
     mcp_process
@@ -146,13 +147,13 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
     // Verify the original `codex` tool call completes and that the file was created.
     let codex_response = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp_process.read_stream_until_response_message(RequestId::Integer(codex_request_id)),
+        mcp_process.read_stream_until_response_message(RequestId::Number(codex_request_id)),
     )
     .await??;
     assert_eq!(
-        JSONRPCResponse {
-            jsonrpc: JSONRPC_VERSION.into(),
-            id: RequestId::Integer(codex_request_id),
+        JsonRpcResponse {
+            jsonrpc: JsonRpcVersion2_0,
+            id: RequestId::Number(codex_request_id),
             result: json!({
                 "content": [
                     {
@@ -174,41 +175,32 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn create_expected_elicitation_request(
-    elicitation_request_id: RequestId,
+fn create_expected_elicitation_request_params(
     command: Vec<String>,
     workdir: &Path,
     codex_mcp_tool_call_id: String,
     codex_event_id: String,
     thread_id: codex_protocol::ThreadId,
-) -> anyhow::Result<JSONRPCRequest> {
+) -> anyhow::Result<serde_json::Value> {
     let expected_message = format!(
         "Allow Codex to run `{}` in `{}`?",
         shlex::try_join(command.iter().map(std::convert::AsRef::as_ref))?,
         workdir.to_string_lossy()
     );
     let codex_parsed_cmd = parse_command::parse_command(&command);
-    Ok(JSONRPCRequest {
-        jsonrpc: JSONRPC_VERSION.into(),
-        id: elicitation_request_id,
-        method: ElicitRequest::METHOD.to_string(),
-        params: Some(serde_json::to_value(&ExecApprovalElicitRequestParams {
-            message: expected_message,
-            requested_schema: ElicitRequestParamsRequestedSchema {
-                r#type: "object".to_string(),
-                properties: json!({}),
-                required: None,
-            },
-            thread_id,
-            codex_elicitation: "exec-approval".to_string(),
-            codex_mcp_tool_call_id,
-            codex_event_id,
-            codex_command: command,
-            codex_cwd: workdir.to_path_buf(),
-            codex_call_id: "call1234".to_string(),
-            codex_parsed_cmd,
-        })?),
-    })
+    let params_json = serde_json::to_value(ExecApprovalElicitRequestParams {
+        message: expected_message,
+        requested_schema: json!({"type":"object","properties":{}}),
+        thread_id,
+        codex_elicitation: "exec-approval".to_string(),
+        codex_mcp_tool_call_id,
+        codex_event_id,
+        codex_command: command,
+        codex_cwd: workdir.to_path_buf(),
+        codex_call_id: "call1234".to_string(),
+        codex_parsed_cmd,
+    })?;
+    Ok(params_json)
 }
 
 /// Test that patch approval triggers an elicitation request to the MCP and that
@@ -267,9 +259,13 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
     )
     .await??;
 
+    assert_eq!(elicitation_request.jsonrpc, JsonRpcVersion2_0);
+    assert_eq!(elicitation_request.request.method, "elicitation/create");
+
     let elicitation_request_id = elicitation_request.id.clone();
     let params = serde_json::from_value::<PatchApprovalElicitRequestParams>(
         elicitation_request
+            .request
             .params
             .clone()
             .ok_or_else(|| anyhow::anyhow!("elicitation_request.params must be set"))?,
@@ -284,16 +280,17 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
         },
     );
 
-    let expected_elicitation_request = create_expected_patch_approval_elicitation_request(
-        elicitation_request_id.clone(),
-        expected_changes,
-        None, // No grant_root expected
-        None, // No reason expected
-        codex_request_id.to_string(),
-        params.codex_event_id.clone(),
-        params.thread_id,
-    )?;
-    assert_eq!(expected_elicitation_request, elicitation_request);
+    assert_eq!(
+        elicitation_request.request.params,
+        Some(create_expected_patch_approval_elicitation_request_params(
+            expected_changes,
+            None, // No grant_root expected
+            None, // No reason expected
+            codex_request_id.to_string(),
+            params.codex_event_id.clone(),
+            params.thread_id,
+        )?)
+    );
 
     // Accept the patch approval request by responding to the elicitation
     mcp_process
@@ -308,13 +305,13 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
     // Verify the original `codex` tool call completes
     let codex_response = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp_process.read_stream_until_response_message(RequestId::Integer(codex_request_id)),
+        mcp_process.read_stream_until_response_message(RequestId::Number(codex_request_id)),
     )
     .await??;
     assert_eq!(
-        JSONRPCResponse {
-            jsonrpc: JSONRPC_VERSION.into(),
-            id: RequestId::Integer(codex_request_id),
+        JsonRpcResponse {
+            jsonrpc: JsonRpcVersion2_0,
+            id: RequestId::Number(codex_request_id),
             result: json!({
                 "content": [
                     {
@@ -375,11 +372,11 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
 
     let codex_response = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp_process.read_stream_until_response_message(RequestId::Integer(codex_request_id)),
+        mcp_process.read_stream_until_response_message(RequestId::Number(codex_request_id)),
     )
     .await??;
-    assert_eq!(codex_response.jsonrpc, JSONRPC_VERSION);
-    assert_eq!(codex_response.id, RequestId::Integer(codex_request_id));
+    assert_eq!(codex_response.jsonrpc, JsonRpcVersion2_0);
+    assert_eq!(codex_response.id, RequestId::Number(codex_request_id));
     assert_eq!(
         codex_response.result,
         json!({
@@ -430,42 +427,33 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn create_expected_patch_approval_elicitation_request(
-    elicitation_request_id: RequestId,
+fn create_expected_patch_approval_elicitation_request_params(
     changes: HashMap<PathBuf, FileChange>,
     grant_root: Option<PathBuf>,
     reason: Option<String>,
     codex_mcp_tool_call_id: String,
     codex_event_id: String,
     thread_id: codex_protocol::ThreadId,
-) -> anyhow::Result<JSONRPCRequest> {
+) -> anyhow::Result<serde_json::Value> {
     let mut message_lines = Vec::new();
     if let Some(r) = &reason {
         message_lines.push(r.clone());
     }
     message_lines.push("Allow Codex to apply proposed code changes?".to_string());
+    let params_json = serde_json::to_value(PatchApprovalElicitRequestParams {
+        message: message_lines.join("\n"),
+        requested_schema: json!({"type":"object","properties":{}}),
+        thread_id,
+        codex_elicitation: "patch-approval".to_string(),
+        codex_mcp_tool_call_id,
+        codex_event_id,
+        codex_reason: reason,
+        codex_grant_root: grant_root,
+        codex_changes: changes,
+        codex_call_id: "call1234".to_string(),
+    })?;
 
-    Ok(JSONRPCRequest {
-        jsonrpc: JSONRPC_VERSION.into(),
-        id: elicitation_request_id,
-        method: ElicitRequest::METHOD.to_string(),
-        params: Some(serde_json::to_value(&PatchApprovalElicitRequestParams {
-            message: message_lines.join("\n"),
-            requested_schema: ElicitRequestParamsRequestedSchema {
-                r#type: "object".to_string(),
-                properties: json!({}),
-                required: None,
-            },
-            thread_id,
-            codex_elicitation: "patch-approval".to_string(),
-            codex_mcp_tool_call_id,
-            codex_event_id,
-            codex_reason: reason,
-            codex_grant_root: grant_root,
-            codex_changes: changes,
-            codex_call_id: "call1234".to_string(),
-        })?),
-    })
+    Ok(params_json)
 }
 
 /// This handle is used to ensure that the MockServer and TempDir are not dropped while

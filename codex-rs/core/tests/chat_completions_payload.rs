@@ -102,7 +102,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
         SessionSource::Exec,
         TransportManager::new(),
     )
-    .new_session();
+    .new_session(None);
 
     let mut prompt = Prompt::default();
     prompt.input = input;
@@ -139,6 +139,7 @@ fn user_message(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         end_turn: None,
+        phase: None,
     }
 }
 
@@ -150,6 +151,7 @@ fn assistant_message(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         end_turn: None,
+        phase: None,
     }
 }
 
