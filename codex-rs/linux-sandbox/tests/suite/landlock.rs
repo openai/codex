@@ -33,6 +33,8 @@ const NETWORK_TIMEOUT_MS: u64 = 2_000;
 #[cfg(target_arch = "aarch64")]
 const NETWORK_TIMEOUT_MS: u64 = 10_000;
 
+const BWRAP_UNAVAILABLE_ERR: &str = "build-time bubblewrap is not available in this build.";
+
 fn create_env_from_core_vars() -> HashMap<String, String> {
     let policy = ShellEnvironmentPolicy::default();
     create_env(&policy)
@@ -59,11 +61,20 @@ async fn run_cmd_output(
         .expect("sandboxed command should succeed")
 }
 
-#[expect(clippy::expect_used)]
 async fn run_cmd_result(
     cmd: &[&str],
     writable_roots: &[PathBuf],
     timeout_ms: u64,
+) -> Result<codex_core::exec::ExecToolCallOutput> {
+    run_cmd_result_with_bwrap(cmd, writable_roots, timeout_ms, false).await
+}
+
+#[expect(clippy::expect_used)]
+async fn run_cmd_result_with_bwrap(
+    cmd: &[&str],
+    writable_roots: &[PathBuf],
+    timeout_ms: u64,
+    use_bwrap_sandbox: bool,
 ) -> Result<codex_core::exec::ExecToolCallOutput> {
     let cwd = std::env::current_dir().expect("cwd should exist");
     let sandbox_cwd = cwd.clone();
@@ -98,10 +109,27 @@ async fn run_cmd_result(
         &sandbox_policy,
         sandbox_cwd.as_path(),
         &codex_linux_sandbox_exe,
-        true,
+        use_bwrap_sandbox,
         None,
     )
     .await
+}
+
+fn is_bwrap_unavailable_output(output: &codex_core::exec::ExecToolCallOutput) -> bool {
+    output.stderr.text.contains(BWRAP_UNAVAILABLE_ERR)
+}
+
+async fn should_skip_bwrap_tests() -> bool {
+    match run_cmd_result_with_bwrap(&["bash", "-lc", "true"], &[], NETWORK_TIMEOUT_MS, true).await {
+        Ok(output) => is_bwrap_unavailable_output(&output),
+        Err(CodexErr::Sandbox(SandboxErr::Denied { output })) => {
+            is_bwrap_unavailable_output(&output)
+        }
+        // Probe timeouts are not actionable for the bwrap-specific assertions below;
+        // skip rather than fail the whole suite.
+        Err(CodexErr::Sandbox(SandboxErr::Timeout { .. })) => true,
+        Err(err) => panic!("bwrap availability probe failed unexpectedly: {err:?}"),
+    }
 }
 
 fn expect_denied(
@@ -218,7 +246,7 @@ async fn assert_network_blocked(cmd: &[&str]) {
         &sandbox_policy,
         sandbox_cwd.as_path(),
         &codex_linux_sandbox_exe,
-        true,
+        false,
         None,
     )
     .await;
@@ -271,6 +299,11 @@ async fn sandbox_blocks_nc() {
 
 #[tokio::test]
 async fn sandbox_blocks_git_and_codex_writes_inside_writable_root() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: vendored bwrap was not built in this environment");
+        return;
+    }
+
     let tmpdir = tempfile::tempdir().expect("tempdir");
     let dot_git = tmpdir.path().join(".git");
     let dot_codex = tmpdir.path().join(".codex");
@@ -281,7 +314,7 @@ async fn sandbox_blocks_git_and_codex_writes_inside_writable_root() {
     let codex_target = dot_codex.join("config.toml");
 
     let git_output = expect_denied(
-        run_cmd_result(
+        run_cmd_result_with_bwrap(
             &[
                 "bash",
                 "-lc",
@@ -289,13 +322,14 @@ async fn sandbox_blocks_git_and_codex_writes_inside_writable_root() {
             ],
             &[tmpdir.path().to_path_buf()],
             LONG_TIMEOUT_MS,
+            true,
         )
         .await,
         ".git write should be denied under bubblewrap",
     );
 
     let codex_output = expect_denied(
-        run_cmd_result(
+        run_cmd_result_with_bwrap(
             &[
                 "bash",
                 "-lc",
@@ -303,6 +337,7 @@ async fn sandbox_blocks_git_and_codex_writes_inside_writable_root() {
             ],
             &[tmpdir.path().to_path_buf()],
             LONG_TIMEOUT_MS,
+            true,
         )
         .await,
         ".codex write should be denied under bubblewrap",
@@ -313,6 +348,11 @@ async fn sandbox_blocks_git_and_codex_writes_inside_writable_root() {
 
 #[tokio::test]
 async fn sandbox_blocks_codex_symlink_replacement_attack() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: vendored bwrap was not built in this environment");
+        return;
+    }
+
     use std::os::unix::fs::symlink;
 
     let tmpdir = tempfile::tempdir().expect("tempdir");
@@ -325,7 +365,7 @@ async fn sandbox_blocks_codex_symlink_replacement_attack() {
     let codex_target = dot_codex.join("config.toml");
 
     let codex_output = expect_denied(
-        run_cmd_result(
+        run_cmd_result_with_bwrap(
             &[
                 "bash",
                 "-lc",
@@ -333,6 +373,7 @@ async fn sandbox_blocks_codex_symlink_replacement_attack() {
             ],
             &[tmpdir.path().to_path_buf()],
             LONG_TIMEOUT_MS,
+            true,
         )
         .await,
         ".codex symlink replacement should be denied",
