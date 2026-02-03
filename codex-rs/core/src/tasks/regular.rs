@@ -2,6 +2,9 @@ use std::sync::Arc;
 
 use crate::codex::TurnContext;
 use crate::codex::run_turn;
+use crate::hooks;
+use crate::protocol::HookInput;
+use crate::protocol::HookKind;
 use crate::state::TaskKind;
 use async_trait::async_trait;
 use codex_protocol::user_input::UserInput;
@@ -12,8 +15,16 @@ use tracing::trace_span;
 use super::SessionTask;
 use super::SessionTaskContext;
 
-#[derive(Clone, Copy, Default)]
-pub(crate) struct RegularTask;
+#[derive(Clone, Default)]
+pub(crate) struct RegularTask {
+    hook_input: Option<HookInput>,
+}
+
+impl RegularTask {
+    pub(crate) fn new(hook_input: Option<HookInput>) -> Self {
+        Self { hook_input }
+    }
+}
 
 #[async_trait]
 impl SessionTask for RegularTask {
@@ -34,8 +45,33 @@ impl SessionTask for RegularTask {
         sess.services
             .otel_manager
             .apply_traceparent_parent(&run_turn_span);
-        run_turn(sess, ctx, input, cancellation_token)
+        let mut hook_inputs = Vec::new();
+        if let Some(hook_input) = self.hook_input.clone() {
+            hook_inputs.push(hook_input);
+        }
+
+        if !cancellation_token.is_cancelled() {
+            if let Some(hook_input) =
+                hooks::run_hook(&sess, &ctx, HookKind::TurnStart, &cancellation_token).await
+            {
+                hook_inputs.push(hook_input);
+            }
+        }
+
+        let last_agent_message = run_turn(sess, Arc::clone(&ctx), input, hook_inputs, cancellation_token.clone())
             .instrument(run_turn_span)
-            .await
+            .await;
+
+        if cancellation_token.is_cancelled() {
+            return None;
+        }
+
+        if let Some(hook_input) =
+            hooks::run_hook(&sess, &ctx, HookKind::TurnEnd, &cancellation_token).await
+        {
+            sess.enqueue_hook_input(hook_input).await;
+        }
+
+        last_agent_message
     }
 }

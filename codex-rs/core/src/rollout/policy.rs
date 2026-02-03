@@ -47,7 +47,8 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::ExitedReviewMode(_)
         | EventMsg::ThreadRolledBack(_)
         | EventMsg::UndoCompleted(_)
-        | EventMsg::TurnAborted(_) => true,
+        | EventMsg::TurnAborted(_)
+        | EventMsg::HookInput(_) => true,
         EventMsg::ItemCompleted(event) => {
             // Plan items are derived from streaming tags and are not part of the
             // raw ResponseItem history, so we persist their completion to replay

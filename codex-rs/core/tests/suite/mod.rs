@@ -33,6 +33,7 @@ mod exec;
 mod exec_policy;
 mod fork_thread;
 mod grep_files;
+mod hooks;
 mod hierarchical_agents;
 mod image_rollout;
 mod items;

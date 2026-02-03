@@ -202,6 +202,7 @@ impl Session {
         }
         let event = EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message });
         self.send_event(turn_context.as_ref(), event).await;
+        self.maybe_start_next_hook_turn().await;
     }
 
     async fn register_new_active_task(&self, task: RunningTask) {

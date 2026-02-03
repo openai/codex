@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -145,6 +146,8 @@ use crate::protocol::ErrorEvent;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecApprovalRequestEvent;
+use crate::protocol::HookInput;
+use crate::protocol::HookKind;
 use crate::protocol::McpServerRefreshConfig;
 use crate::protocol::Op;
 use crate::protocol::PlanDeltaEvent;
@@ -189,6 +192,7 @@ use crate::state::SessionServices;
 use crate::state::SessionState;
 use crate::state_db;
 use crate::tasks::GhostSnapshotTask;
+use crate::tasks::RegularTask;
 use crate::tasks::ReviewTask;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
@@ -500,9 +504,16 @@ pub(crate) struct Session {
     /// session.
     features: Features,
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
+    pending_hook_inputs: Mutex<VecDeque<PendingHookInput>>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) services: SessionServices,
     next_internal_sub_id: AtomicU64,
+}
+
+#[derive(Debug, Clone)]
+struct PendingHookInput {
+    sub_id: Option<String>,
+    input: HookInput,
 }
 
 /// The context needed for a single turn of the thread.
@@ -958,6 +969,7 @@ impl Session {
             state: Mutex::new(state),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
+            pending_hook_inputs: Mutex::new(VecDeque::new()),
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
@@ -1044,6 +1056,13 @@ impl Session {
             .next_internal_sub_id
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         format!("auto-compact-{id}")
+    }
+
+    fn next_hook_sub_id(&self) -> String {
+        let id = self
+            .next_internal_sub_id
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        format!("hook-{id}")
     }
 
     async fn get_total_token_usage(&self) -> i64 {
@@ -2226,6 +2245,48 @@ impl Session {
         }
     }
 
+    pub(crate) async fn enqueue_hook_input(&self, input: HookInput) {
+        self.enqueue_hook_input_with_sub_id(None, input).await;
+    }
+
+    pub(crate) async fn enqueue_hook_input_with_sub_id(
+        &self,
+        sub_id: Option<String>,
+        input: HookInput,
+    ) {
+        let mut pending = self.pending_hook_inputs.lock().await;
+        pending.push_back(PendingHookInput { sub_id, input });
+    }
+
+    async fn take_next_hook_input(&self) -> Option<PendingHookInput> {
+        let mut pending = self.pending_hook_inputs.lock().await;
+        pending.pop_front()
+    }
+
+    async fn has_active_turn(&self) -> bool {
+        let active = self.active_turn.lock().await;
+        active.is_some()
+    }
+
+    pub(crate) async fn maybe_start_next_hook_turn(self: &Arc<Self>) {
+        if self.has_active_turn().await {
+            return;
+        }
+
+        let Some(next) = self.take_next_hook_input().await else {
+            return;
+        };
+
+        let sub_id = next.sub_id.unwrap_or_else(|| self.next_hook_sub_id());
+        let turn_context = self.new_default_turn_with_sub_id(sub_id).await;
+        self.spawn_task(
+            Arc::clone(&turn_context),
+            Vec::new(),
+            RegularTask::new(Some(next.input)),
+        )
+        .await;
+    }
+
     pub async fn list_resources(
         &self,
         server: &str,
@@ -2468,6 +2529,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 handlers::user_input_or_turn(&sess, sub.id.clone(), sub.op, &mut previous_context)
                     .await;
             }
+            Op::HookInput { input } => {
+                handlers::hook_input(&sess, sub.id.clone(), input).await;
+            }
             Op::ExecApproval { id, decision } => {
                 handlers::exec_approval(&sess, id, decision).await;
             }
@@ -2564,6 +2628,7 @@ mod handlers {
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::HookInput;
     use codex_protocol::protocol::ListCustomPromptsResponseEvent;
     use codex_protocol::protocol::ListSkillsResponseEvent;
     use codex_protocol::protocol::McpServerRefreshConfig;
@@ -2689,7 +2754,7 @@ mod handlers {
 
             sess.refresh_mcp_servers_if_requested(&current_context)
                 .await;
-            sess.spawn_task(Arc::clone(&current_context), items, RegularTask)
+            sess.spawn_task(Arc::clone(&current_context), items, RegularTask::default())
                 .await;
             *previous_context = Some(current_context);
         }
@@ -3306,10 +3371,17 @@ pub(crate) async fn run_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
+    hook_inputs: Vec<HookInput>,
     cancellation_token: CancellationToken,
 ) -> Option<String> {
-    if input.is_empty() {
+    if input.is_empty() && hook_inputs.is_empty() {
         return None;
+    }
+
+    pub async fn hook_input(sess: &Arc<Session>, sub_id: String, input: HookInput) {
+        sess.enqueue_hook_input_with_sub_id(Some(sub_id), input)
+            .await;
+        sess.maybe_start_next_hook_turn().await;
     }
 
     let model_info = turn_context.client.get_model_info();
@@ -3401,10 +3473,12 @@ pub(crate) async fn run_turn(
             .await;
     }
 
-    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
-    let response_item: ResponseItem = initial_input_for_turn.clone().into();
-    sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
-        .await;
+    if !input.is_empty() {
+        let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
+        let response_item: ResponseItem = initial_input_for_turn.clone().into();
+        sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
+            .await;
+    }
 
     if !skill_items.is_empty() {
         sess.record_conversation_items(&turn_context, &skill_items)
@@ -3414,6 +3488,10 @@ pub(crate) async fn run_turn(
     sess.maybe_start_ghost_snapshot(Arc::clone(&turn_context), cancellation_token.child_token())
         .await;
     let mut last_agent_message: Option<String> = None;
+    let hook_input_items = hook_inputs
+        .iter()
+        .map(hook_input_message)
+        .collect::<Vec<ResponseItem>>();
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
@@ -3437,7 +3515,9 @@ pub(crate) async fn run_turn(
         let sampling_request_input: Vec<ResponseItem> = {
             sess.record_conversation_items(&turn_context, &pending_input)
                 .await;
-            sess.clone_history().await.for_prompt()
+            let mut items = sess.clone_history().await.for_prompt();
+            items.extend(hook_input_items.clone());
+            items
         };
 
         let sampling_request_input_messages = sampling_request_input
@@ -3535,6 +3615,22 @@ pub(crate) async fn run_turn(
     }
 
     last_agent_message
+}
+
+fn hook_input_message(hook_input: &HookInput) -> ResponseItem {
+    let hook_label = match hook_input.hook {
+        HookKind::TurnStart => "TurnStart",
+        HookKind::TurnEnd => "TurnEnd",
+    };
+    let stderr = &hook_input.stderr;
+    let text = format!("HookInput ({hook_label}): {stderr}");
+    ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText { text }],
+        end_turn: None,
+        phase: None,
+    }
 }
 
 async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) {
@@ -5412,6 +5508,7 @@ mod tests {
             state: Mutex::new(state),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
+            pending_hook_inputs: Mutex::new(VecDeque::new()),
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
@@ -5532,6 +5629,7 @@ mod tests {
             state: Mutex::new(state),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
+            pending_hook_inputs: Mutex::new(VecDeque::new()),
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
