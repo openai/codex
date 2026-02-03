@@ -123,34 +123,6 @@
         }
       ]
     },
-    "Annotations": {
-      "description": "Optional annotations for the client. The client can use annotations to inform how objects are used or displayed",
-      "properties": {
-        "audience": {
-          "items": {
-            "$ref": "#/definitions/Role"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "lastModified": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "priority": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
     "ApplyPatchApprovalParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -258,36 +230,6 @@
         }
       ]
     },
-    "AudioContent": {
-      "description": "Audio provided to or from an LLM.",
-      "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Annotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "data": {
-          "type": "string"
-        },
-        "mimeType": {
-          "type": "string"
-        },
-        "type": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "data",
-        "mimeType",
-        "type"
-      ],
-      "type": "object"
-    },
     "AuthMode": {
       "description": "Authentication mode for OpenAI-backed providers.",
       "oneOf": [
@@ -332,27 +274,6 @@
       "title": "AuthStatusChangeNotification",
       "type": "object"
     },
-    "BlobResourceContents": {
-      "properties": {
-        "blob": {
-          "type": "string"
-        },
-        "mimeType": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "uri": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "blob",
-        "uri"
-      ],
-      "type": "object"
-    },
     "ByteRange": {
       "properties": {
         "end": {
@@ -377,10 +298,9 @@
     "CallToolResult": {
       "description": "The server's response to a tool call.",
       "properties": {
+        "_meta": true,
         "content": {
-          "items": {
-            "$ref": "#/definitions/ContentBlock"
-          },
+          "items": true,
           "type": "array"
         },
         "isError": {
@@ -2105,25 +2025,6 @@
       "title": "CommandExecutionRequestApprovalResponse",
       "type": "object"
     },
-    "ContentBlock": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/TextContent"
-        },
-        {
-          "$ref": "#/definitions/ImageContent"
-        },
-        {
-          "$ref": "#/definitions/AudioContent"
-        },
-        {
-          "$ref": "#/definitions/ResourceLink"
-        },
-        {
-          "$ref": "#/definitions/EmbeddedResource"
-        }
-      ]
-    },
     "ContentItem": {
       "oneOf": [
         {
@@ -2382,42 +2283,6 @@
       ],
       "title": "DynamicToolCallResponse",
       "type": "object"
-    },
-    "EmbeddedResource": {
-      "description": "The contents of a resource, embedded into a prompt or tool call result.\n\nIt is up to the client how best to render embedded resources for the benefit of the LLM and/or the user.",
-      "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Annotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "resource": {
-          "$ref": "#/definitions/EmbeddedResourceResource"
-        },
-        "type": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "resource",
-        "type"
-      ],
-      "type": "object"
-    },
-    "EmbeddedResourceResource": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/TextResourceContents"
-        },
-        {
-          "$ref": "#/definitions/BlobResourceContents"
-        }
-      ]
     },
     "EventMsg": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -5408,36 +5273,6 @@
       ],
       "type": "object"
     },
-    "ImageContent": {
-      "description": "An image provided to or from an LLM.",
-      "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Annotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "data": {
-          "type": "string"
-        },
-        "mimeType": {
-          "type": "string"
-        },
-        "type": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "data",
-        "mimeType",
-        "type"
-      ],
-      "type": "object"
-    },
     "InitializeCapabilities": {
       "description": "Client-declared capabilities negotiated during initialize.",
       "properties": {
@@ -6539,7 +6374,8 @@
           "format": "int64",
           "type": "integer"
         }
-      ]
+      ],
+      "description": "ID of a request, which can be either a string or an integer."
     },
     "RequestUserInputQuestion": {
       "properties": {
@@ -6595,19 +6431,18 @@
     "Resource": {
       "description": "A known resource that the server is capable of reading.",
       "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Annotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
+        "_meta": true,
+        "annotations": true,
         "description": {
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "icons": {
+          "items": true,
+          "type": [
+            "array",
             "null"
           ]
         },
@@ -6639,61 +6474,6 @@
       },
       "required": [
         "name",
-        "uri"
-      ],
-      "type": "object"
-    },
-    "ResourceLink": {
-      "description": "A resource that the server is capable of reading, included in a prompt or tool call result.\n\nNote: resource links returned by tools are not guaranteed to appear in the results of `resources/list` requests.",
-      "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Annotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "description": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "mimeType": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "name": {
-          "type": "string"
-        },
-        "size": {
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "title": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "type": {
-          "type": "string"
-        },
-        "uri": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "name",
-        "type",
         "uri"
       ],
       "type": "object"
@@ -6701,16 +6481,7 @@
     "ResourceTemplate": {
       "description": "A template description for resources available on the server.",
       "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Annotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
+        "annotations": true,
         "description": {
           "type": [
             "string",
@@ -7430,14 +7201,6 @@
           "type": "object"
         }
       ]
-    },
-    "Role": {
-      "description": "The sender or recipient of messages and data in a conversation.",
-      "enum": [
-        "assistant",
-        "user"
-      ],
-      "type": "string"
     },
     "SandboxMode": {
       "enum": [
@@ -8841,32 +8604,6 @@
         }
       ]
     },
-    "TextContent": {
-      "description": "Text provided to or from an LLM.",
-      "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Annotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "text": {
-          "type": "string"
-        },
-        "type": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "text",
-        "type"
-      ],
-      "type": "object"
-    },
     "TextElement": {
       "properties": {
         "byte_range": {
@@ -8887,27 +8624,6 @@
       },
       "required": [
         "byte_range"
-      ],
-      "type": "object"
-    },
-    "TextResourceContents": {
-      "properties": {
-        "mimeType": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "text": {
-          "type": "string"
-        },
-        "uri": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "text",
-        "uri"
       ],
       "type": "object"
     },
@@ -8971,38 +8687,26 @@
     "Tool": {
       "description": "Definition for a tool the client can call.",
       "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ToolAnnotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
+        "_meta": true,
+        "annotations": true,
         "description": {
           "type": [
             "string",
             "null"
           ]
         },
-        "inputSchema": {
-          "$ref": "#/definitions/ToolInputSchema"
+        "icons": {
+          "items": true,
+          "type": [
+            "array",
+            "null"
+          ]
         },
+        "inputSchema": true,
         "name": {
           "type": "string"
         },
-        "outputSchema": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ToolOutputSchema"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
+        "outputSchema": true,
         "title": {
           "type": [
             "string",
@@ -9014,82 +8718,6 @@
         "inputSchema",
         "name"
       ],
-      "type": "object"
-    },
-    "ToolAnnotations": {
-      "description": "Additional properties describing a Tool to clients.\n\nNOTE: all properties in ToolAnnotations are **hints**. They are not guaranteed to provide a faithful description of tool behavior (including descriptive properties like `title`).\n\nClients should never make tool use decisions based on ToolAnnotations received from untrusted servers.",
-      "properties": {
-        "destructiveHint": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "idempotentHint": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "openWorldHint": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "readOnlyHint": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "title": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "ToolInputSchema": {
-      "description": "A JSON Schema object defining the expected parameters for the tool.",
-      "properties": {
-        "properties": true,
-        "required": {
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "type": {
-          "default": "object",
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
-    "ToolOutputSchema": {
-      "description": "An optional JSON Schema object defining the structure of the tool's output returned in the structuredContent field of a CallToolResult.",
-      "properties": {
-        "properties": true,
-        "required": {
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "type": {
-          "default": "object",
-          "type": "string"
-        }
-      },
       "type": "object"
     },
     "ToolRequestUserInputAnswer": {
@@ -9940,34 +9568,6 @@
         },
         "type": "object"
       },
-      "Annotations": {
-        "description": "Optional annotations for the client. The client can use annotations to inform how objects are used or displayed",
-        "properties": {
-          "audience": {
-            "items": {
-              "$ref": "#/definitions/v2/Role"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "lastModified": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "priority": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
-            ]
-          }
-        },
-        "type": "object"
-      },
       "AppInfo": {
         "properties": {
           "description": {
@@ -10072,36 +9672,6 @@
         ],
         "type": "string"
       },
-      "AudioContent": {
-        "description": "Audio provided to or from an LLM.",
-        "properties": {
-          "annotations": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/Annotations"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "data": {
-            "type": "string"
-          },
-          "mimeType": {
-            "type": "string"
-          },
-          "type": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "data",
-          "mimeType",
-          "type"
-        ],
-        "type": "object"
-      },
       "AuthMode": {
         "description": "Authentication mode for OpenAI-backed providers.",
         "oneOf": [
@@ -10127,27 +9697,6 @@
             "type": "string"
           }
         ]
-      },
-      "BlobResourceContents": {
-        "properties": {
-          "blob": {
-            "type": "string"
-          },
-          "mimeType": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "uri": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "blob",
-          "uri"
-        ],
-        "type": "object"
       },
       "ByteRange": {
         "properties": {
@@ -11280,25 +10829,6 @@
         "title": "ConfigWriteResponse",
         "type": "object"
       },
-      "ContentBlock": {
-        "anyOf": [
-          {
-            "$ref": "#/definitions/v2/TextContent"
-          },
-          {
-            "$ref": "#/definitions/v2/ImageContent"
-          },
-          {
-            "$ref": "#/definitions/v2/AudioContent"
-          },
-          {
-            "$ref": "#/definitions/v2/ResourceLink"
-          },
-          {
-            "$ref": "#/definitions/v2/EmbeddedResource"
-          }
-        ]
-      },
       "ContentItem": {
         "oneOf": [
           {
@@ -11439,42 +10969,6 @@
           "name"
         ],
         "type": "object"
-      },
-      "EmbeddedResource": {
-        "description": "The contents of a resource, embedded into a prompt or tool call result.\n\nIt is up to the client how best to render embedded resources for the benefit of the LLM and/or the user.",
-        "properties": {
-          "annotations": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/Annotations"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "resource": {
-            "$ref": "#/definitions/v2/EmbeddedResourceResource"
-          },
-          "type": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "resource",
-          "type"
-        ],
-        "type": "object"
-      },
-      "EmbeddedResourceResource": {
-        "anyOf": [
-          {
-            "$ref": "#/definitions/v2/TextResourceContents"
-          },
-          {
-            "$ref": "#/definitions/v2/BlobResourceContents"
-          }
-        ]
       },
       "ErrorNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -11767,36 +11261,6 @@
             ]
           }
         },
-        "type": "object"
-      },
-      "ImageContent": {
-        "description": "An image provided to or from an LLM.",
-        "properties": {
-          "annotations": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/Annotations"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "data": {
-            "type": "string"
-          },
-          "mimeType": {
-            "type": "string"
-          },
-          "type": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "data",
-          "mimeType",
-          "type"
-        ],
         "type": "object"
       },
       "ItemCompletedNotification": {
@@ -12242,9 +11706,7 @@
       "McpToolCallResult": {
         "properties": {
           "content": {
-            "items": {
-              "$ref": "#/definitions/v2/ContentBlock"
-            },
+            "items": true,
             "type": "array"
           },
           "structuredContent": true
@@ -12882,19 +12344,18 @@
       "Resource": {
         "description": "A known resource that the server is capable of reading.",
         "properties": {
-          "annotations": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/Annotations"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
+          "_meta": true,
+          "annotations": true,
           "description": {
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "icons": {
+            "items": true,
+            "type": [
+              "array",
               "null"
             ]
           },
@@ -12926,61 +12387,6 @@
         },
         "required": [
           "name",
-          "uri"
-        ],
-        "type": "object"
-      },
-      "ResourceLink": {
-        "description": "A resource that the server is capable of reading, included in a prompt or tool call result.\n\nNote: resource links returned by tools are not guaranteed to appear in the results of `resources/list` requests.",
-        "properties": {
-          "annotations": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/Annotations"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "description": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "mimeType": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "name": {
-            "type": "string"
-          },
-          "size": {
-            "format": "int64",
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "title": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "type": {
-            "type": "string"
-          },
-          "uri": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "name",
-          "type",
           "uri"
         ],
         "type": "object"
@@ -12988,16 +12394,7 @@
       "ResourceTemplate": {
         "description": "A template description for resources available on the server.",
         "properties": {
-          "annotations": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/Annotations"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
+          "annotations": true,
           "description": {
             "type": [
               "string",
@@ -13519,14 +12916,6 @@
             "type": "object"
           }
         ]
-      },
-      "Role": {
-        "description": "The sender or recipient of messages and data in a conversation.",
-        "enum": [
-          "assistant",
-          "user"
-        ],
-        "type": "string"
       },
       "SandboxMode": {
         "enum": [
@@ -14050,32 +13439,6 @@
         "title": "TerminalInteractionNotification",
         "type": "object"
       },
-      "TextContent": {
-        "description": "Text provided to or from an LLM.",
-        "properties": {
-          "annotations": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/Annotations"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "text": {
-            "type": "string"
-          },
-          "type": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "text",
-          "type"
-        ],
-        "type": "object"
-      },
       "TextElement": {
         "properties": {
           "byteRange": {
@@ -14132,27 +13495,6 @@
         "required": [
           "end",
           "start"
-        ],
-        "type": "object"
-      },
-      "TextResourceContents": {
-        "properties": {
-          "mimeType": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "text": {
-            "type": "string"
-          },
-          "uri": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "text",
-          "uri"
         ],
         "type": "object"
       },
@@ -15499,38 +14841,26 @@
       "Tool": {
         "description": "Definition for a tool the client can call.",
         "properties": {
-          "annotations": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ToolAnnotations"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
+          "_meta": true,
+          "annotations": true,
           "description": {
             "type": [
               "string",
               "null"
             ]
           },
-          "inputSchema": {
-            "$ref": "#/definitions/v2/ToolInputSchema"
+          "icons": {
+            "items": true,
+            "type": [
+              "array",
+              "null"
+            ]
           },
+          "inputSchema": true,
           "name": {
             "type": "string"
           },
-          "outputSchema": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ToolOutputSchema"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
+          "outputSchema": true,
           "title": {
             "type": [
               "string",
@@ -15542,82 +14872,6 @@
           "inputSchema",
           "name"
         ],
-        "type": "object"
-      },
-      "ToolAnnotations": {
-        "description": "Additional properties describing a Tool to clients.\n\nNOTE: all properties in ToolAnnotations are **hints**. They are not guaranteed to provide a faithful description of tool behavior (including descriptive properties like `title`).\n\nClients should never make tool use decisions based on ToolAnnotations received from untrusted servers.",
-        "properties": {
-          "destructiveHint": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "idempotentHint": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "openWorldHint": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "readOnlyHint": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "title": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "type": "object"
-      },
-      "ToolInputSchema": {
-        "description": "A JSON Schema object defining the expected parameters for the tool.",
-        "properties": {
-          "properties": true,
-          "required": {
-            "items": {
-              "type": "string"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "type": {
-            "default": "object",
-            "type": "string"
-          }
-        },
-        "type": "object"
-      },
-      "ToolOutputSchema": {
-        "description": "An optional JSON Schema object defining the structure of the tool's output returned in the structuredContent field of a CallToolResult.",
-        "properties": {
-          "properties": true,
-          "required": {
-            "items": {
-              "type": "string"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "type": {
-            "default": "object",
-            "type": "string"
-          }
-        },
         "type": "object"
       },
       "ToolsV2": {

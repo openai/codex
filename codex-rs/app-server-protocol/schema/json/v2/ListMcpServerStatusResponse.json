@@ -1,34 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
-    "Annotations": {
-      "description": "Optional annotations for the client. The client can use annotations to inform how objects are used or displayed",
-      "properties": {
-        "audience": {
-          "items": {
-            "$ref": "#/definitions/Role"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "lastModified": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "priority": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
     "McpAuthStatus": {
       "enum": [
         "unsupported",
@@ -77,19 +49,18 @@
     "Resource": {
       "description": "A known resource that the server is capable of reading.",
       "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Annotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
+        "_meta": true,
+        "annotations": true,
         "description": {
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "icons": {
+          "items": true,
+          "type": [
+            "array",
             "null"
           ]
         },
@@ -128,16 +99,7 @@
     "ResourceTemplate": {
       "description": "A template description for resources available on the server.",
       "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Annotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
+        "annotations": true,
         "description": {
           "type": [
             "string",
@@ -169,49 +131,29 @@
       ],
       "type": "object"
     },
-    "Role": {
-      "description": "The sender or recipient of messages and data in a conversation.",
-      "enum": [
-        "assistant",
-        "user"
-      ],
-      "type": "string"
-    },
     "Tool": {
       "description": "Definition for a tool the client can call.",
       "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ToolAnnotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
+        "_meta": true,
+        "annotations": true,
         "description": {
           "type": [
             "string",
             "null"
           ]
         },
-        "inputSchema": {
-          "$ref": "#/definitions/ToolInputSchema"
+        "icons": {
+          "items": true,
+          "type": [
+            "array",
+            "null"
+          ]
         },
+        "inputSchema": true,
         "name": {
           "type": "string"
         },
-        "outputSchema": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ToolOutputSchema"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
+        "outputSchema": true,
         "title": {
           "type": [
             "string",
@@ -223,82 +165,6 @@
         "inputSchema",
         "name"
       ],
-      "type": "object"
-    },
-    "ToolAnnotations": {
-      "description": "Additional properties describing a Tool to clients.\n\nNOTE: all properties in ToolAnnotations are **hints**. They are not guaranteed to provide a faithful description of tool behavior (including descriptive properties like `title`).\n\nClients should never make tool use decisions based on ToolAnnotations received from untrusted servers.",
-      "properties": {
-        "destructiveHint": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "idempotentHint": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "openWorldHint": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "readOnlyHint": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "title": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "ToolInputSchema": {
-      "description": "A JSON Schema object defining the expected parameters for the tool.",
-      "properties": {
-        "properties": true,
-        "required": {
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "type": {
-          "default": "object",
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
-    "ToolOutputSchema": {
-      "description": "An optional JSON Schema object defining the structure of the tool's output returned in the structuredContent field of a CallToolResult.",
-      "properties": {
-        "properties": true,
-        "required": {
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "type": {
-          "default": "object",
-          "type": "string"
-        }
-      },
       "type": "object"
     }
   },
