@@ -94,3 +94,66 @@ pub struct ApplyPatchApprovalRequestEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grant_root: Option<PathBuf>,
 }
+
+// ============================================================================
+// CRAFT AGENTS: PreToolUse Hook Event Types
+// ============================================================================
+
+/// Type of tool being executed, for PreToolUse hook.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ToolCallType {
+    Bash,
+    FileWrite,
+    FileEdit,
+    Mcp,
+    Custom,
+    Function,
+    LocalShell,
+}
+
+/// CRAFT AGENTS: Event requesting PreToolUse hook decision.
+/// Sent to client BEFORE any tool execution to allow interception.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolCallPreExecuteRequestEvent {
+    /// Identifier for the tool call.
+    pub call_id: String,
+    /// Turn ID that this tool call belongs to.
+    #[serde(default)]
+    pub turn_id: String,
+    /// The type of tool being executed.
+    pub tool_type: ToolCallType,
+    /// The name of the tool (e.g., "bash", "mcp__github__create_issue").
+    pub tool_name: String,
+    /// The tool input as JSON string.
+    pub input: String,
+    /// For MCP tools: the server name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mcp_server: Option<String>,
+    /// For MCP tools: the actual tool name within the server.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mcp_tool: Option<String>,
+}
+
+/// CRAFT AGENTS: Decision from PreToolUse hook.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ToolCallPreExecuteDecision {
+    Allow,
+    Block,
+    Modify,
+}
+
+/// CRAFT AGENTS: Response to PreToolUse hook request.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolCallPreExecuteResponse {
+    pub decision: ToolCallPreExecuteDecision,
+    /// If decision is Block, the reason to return to the model.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// If decision is Modify, the modified input as JSON string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modified_input: Option<String>,
+}

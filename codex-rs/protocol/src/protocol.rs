@@ -53,6 +53,11 @@ pub use crate::approvals::ApplyPatchApprovalRequestEvent;
 pub use crate::approvals::ElicitationAction;
 pub use crate::approvals::ExecApprovalRequestEvent;
 pub use crate::approvals::ExecPolicyAmendment;
+// CRAFT AGENTS: PreToolUse hook types
+pub use crate::approvals::ToolCallPreExecuteDecision;
+pub use crate::approvals::ToolCallPreExecuteRequestEvent;
+pub use crate::approvals::ToolCallPreExecuteResponse;
+pub use crate::approvals::ToolCallType;
 pub use crate::request_user_input::RequestUserInputEvent;
 
 /// Open/close tags for special user-input blocks. Used across crates to avoid
@@ -781,6 +786,10 @@ pub enum EventMsg {
     ElicitationRequest(ElicitationRequestEvent),
 
     ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent),
+
+    /// CRAFT AGENTS: PreToolUse hook request for tool interception.
+    /// Sent BEFORE any tool execution to allow client to block/modify/allow.
+    ToolCallPreExecuteRequest(ToolCallPreExecuteRequestEvent),
 
     /// Notification advising the user that something they are using has been
     /// deprecated and should be phased out.
