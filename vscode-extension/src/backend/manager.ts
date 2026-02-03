@@ -1222,8 +1222,8 @@ export class BackendManager implements vscode.Disposable {
     const oc = this.opencode.get(session.backendKey);
     if (oc) {
       const trimmed = text.trim();
-      if (!trimmed) {
-        throw new Error("Message must include text");
+      if (!trimmed && images.length === 0) {
+        throw new Error("Message must include text or images");
       }
 
       const turnId = randomUUID();
@@ -1248,9 +1248,8 @@ export class BackendManager implements vscode.Disposable {
         }
         return undefined;
       })();
-      const parts: Array<Record<string, unknown>> = [
-        { type: "text", text: trimmed },
-      ];
+      const parts: Array<Record<string, unknown>> = [];
+      if (trimmed) parts.push({ type: "text", text: trimmed });
       for (const img of images) {
         if (img.kind === "localImage") {
           const mime = imageMimeFromPath(img.path);
@@ -1294,7 +1293,9 @@ export class BackendManager implements vscode.Disposable {
         void _exhaustive;
       }
 
-      this.output.appendLine(`\n>> (${session.title}) ${trimmed}`);
+      const imageSuffix = images.length > 0 ? ` [images=${images.length}]` : "";
+      const preview = trimmed ? trimmed : "(image only)";
+      this.output.appendLine(`\n>> (${session.title}) ${preview}${imageSuffix}`);
       this.output.append(`<< (${session.title}) `);
 
       try {
