@@ -1,14 +1,14 @@
+//! Types used when representing Model Context Protocol (MCP) values inside the
+//! Codex protocol.
+//!
+//! We intentionally keep these types TS/JSON-schema friendly (via `ts-rs` and
+//! `schemars`) so they can be embedded in Codex's own protocol structures.
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
-/// Types used when representing Model Context Protocol (MCP) values inside the
-/// Codex protocol.
-///
-/// We intentionally keep these types TS/JSON-schema friendly (via `ts-rs` and
-/// `schemars`) so they can be embedded in Codex's own protocol structures.
-
+/// ID of a request, which can be either a string or an integer.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(untagged)]
 pub enum RequestId {
@@ -26,6 +26,7 @@ impl std::fmt::Display for RequestId {
     }
 }
 
+/// Definition for a tool the client can call.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Tool {
@@ -51,6 +52,7 @@ pub struct Tool {
     pub meta: Option<serde_json::Value>,
 }
 
+/// A known resource that the server is capable of reading.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Resource {
@@ -80,6 +82,7 @@ pub struct Resource {
     pub meta: Option<serde_json::Value>,
 }
 
+/// A template description for resources available on the server.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceTemplate {
@@ -99,6 +102,7 @@ pub struct ResourceTemplate {
     pub mime_type: Option<String>,
 }
 
+/// The server's response to a tool call.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct CallToolResult {
