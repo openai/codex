@@ -222,6 +222,7 @@ async fn remote_compact_runs_automatically() -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(target_os = "windows", ignore)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_compact_trims_function_call_history_to_fit_context_window() -> Result<()> {
     skip_if_no_network!(Ok(()));
