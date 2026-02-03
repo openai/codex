@@ -685,6 +685,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
+    if (type === "cycleCollaborationMode") {
+      const sessionId = anyMsg["sessionId"];
+      if (typeof sessionId !== "string" || !sessionId) return;
+      await vscode.commands.executeCommand("codez.cycleCollaborationMode", {
+        sessionId,
+      });
+      return;
+    }
+
     if (type === "settingsRequest") {
       const requestId = anyMsg["requestId"];
       const op = anyMsg["op"];

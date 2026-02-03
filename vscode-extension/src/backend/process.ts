@@ -30,6 +30,8 @@ import type { ThreadListParams } from "../generated/v2/ThreadListParams";
 import type { ThreadListResponse } from "../generated/v2/ThreadListResponse";
 import type { AppsListParams } from "../generated/v2/AppsListParams";
 import type { AppsListResponse } from "../generated/v2/AppsListResponse";
+import type { CollaborationModeListParams } from "../generated/v2/CollaborationModeListParams";
+import type { CollaborationModeListResponse } from "../generated/v2/CollaborationModeListResponse";
 import type { ListMcpServerStatusParams } from "../generated/v2/ListMcpServerStatusParams";
 import type { ListMcpServerStatusResponse } from "../generated/v2/ListMcpServerStatusResponse";
 import type { GetAccountParams } from "../generated/v2/GetAccountParams";
@@ -239,6 +241,15 @@ export class BackendProcess implements vscode.Disposable {
       },
     };
     return this.rpc.request<AppsListResponse>(request);
+  }
+
+  public async collaborationModeList(
+    params: CollaborationModeListParams,
+  ): Promise<CollaborationModeListResponse> {
+    return this.rpc.request<CollaborationModeListResponse>({
+      method: "collaborationMode/list",
+      params,
+    });
   }
 
   public async mcpServerStatusList(

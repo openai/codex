@@ -35,6 +35,7 @@ import type { ModelListResponse } from "../generated/v2/ModelListResponse";
 import type { Model } from "../generated/v2/Model";
 import type { ReasoningEffort } from "../generated/ReasoningEffort";
 import type { Personality } from "../generated/Personality";
+import type { CollaborationMode } from "../generated/CollaborationMode";
 import type { GetAccountResponse } from "../generated/v2/GetAccountResponse";
 import type { GetAccountRateLimitsResponse } from "../generated/v2/GetAccountRateLimitsResponse";
 import type { LoginAccountParams } from "../generated/v2/LoginAccountParams";
@@ -49,6 +50,7 @@ import type { ThreadSourceKind } from "../generated/v2/ThreadSourceKind";
 import type { Turn } from "../generated/v2/Turn";
 import type { AppInfo } from "../generated/v2/AppInfo";
 import type { AppsListResponse } from "../generated/v2/AppsListResponse";
+import type { CollaborationModeMask } from "../generated/CollaborationModeMask";
 import type { AnyServerNotification } from "./types";
 import type { FuzzyFileSearchResponse } from "../generated/FuzzyFileSearchResponse";
 import type { ListMcpServerStatusResponse } from "../generated/v2/ListMcpServerStatusResponse";
@@ -62,6 +64,7 @@ type ModelSettings = {
   reasoning: string | null;
   agent?: string | null;
   personality?: Personality | null;
+  collaborationMode?: CollaborationMode | null;
 };
 
 function imageMimeFromPath(filePath: string): string | null {
@@ -612,6 +615,8 @@ export class BackendManager implements vscode.Disposable {
       workspaceFolderUri: folder.uri.toString(),
       title: folder.name,
       threadId: res.thread.id,
+      personality: modelSettings?.personality ?? null,
+      collaborationModePresetName: null,
     };
     this.sessions.add(backendKey, session);
     this.output.appendLine(
@@ -893,6 +898,29 @@ export class BackendManager implements vscode.Disposable {
       throw new Error("Backend is not running for this workspace folder");
 
     return await this.fetchAllApps(proc);
+  }
+
+  public async listCollaborationModePresetsForSession(
+    session: Session,
+  ): Promise<CollaborationModeMask[]> {
+    if (session.backendId === "opencode") {
+      return [];
+    }
+
+    const folder = this.resolveWorkspaceFolder(session.workspaceFolderUri);
+    if (!folder) {
+      throw new Error(
+        `WorkspaceFolder not found for session: ${session.workspaceFolderUri}`,
+      );
+    }
+
+    await this.startForBackendId(folder, session.backendId);
+    const proc = this.processes.get(session.backendKey);
+    if (!proc)
+      throw new Error("Backend is not running for this workspace folder");
+
+    const res = await proc.collaborationModeList({});
+    return res.data ?? [];
   }
 
   public async pickSession(
@@ -1275,6 +1303,7 @@ export class BackendManager implements vscode.Disposable {
       { kind: "imageUrl"; url: string } | { kind: "localImage"; path: string }
     >,
     modelSettings: ModelSettings | null | undefined,
+    extraInput: UserInput[] = [],
   ): Promise<void> {
     const folder = this.resolveWorkspaceFolder(session.workspaceFolderUri);
     if (!folder) {
@@ -1425,6 +1454,7 @@ export class BackendManager implements vscode.Disposable {
 
     const input: UserInput[] = [];
     if (text.trim()) input.push({ type: "text", text, text_elements: [] });
+    input.push(...extraInput);
     for (const img of images) {
       if (!img) continue;
       if (img.kind === "imageUrl") {
@@ -1446,18 +1476,19 @@ export class BackendManager implements vscode.Disposable {
       throw new Error("Message must include text or images");
     }
     const effort = this.toReasoningEffort(modelSettings?.reasoning ?? null);
+    const collaborationMode = modelSettings?.collaborationMode ?? null;
     const params: TurnStartParams = {
       threadId: session.threadId,
       input,
       cwd: null,
       approvalPolicy: null,
       sandboxPolicy: null,
-      model: modelSettings?.model ?? null,
-      effort,
+      model: collaborationMode ? null : (modelSettings?.model ?? null),
+      effort: collaborationMode ? null : effort,
       summary: null,
-      personality: null,
+      personality: modelSettings?.personality ?? null,
       outputSchema: null,
-      collaborationMode: null,
+      collaborationMode,
     };
 
     const imageSuffix = images.length > 0 ? ` [images=${images.length}]` : "";

@@ -23,6 +23,8 @@ import type { ThreadItem } from "./generated/v2/ThreadItem";
 import type { ThreadSourceKind } from "./generated/v2/ThreadSourceKind";
 import type { ThreadTokenUsage } from "./generated/v2/ThreadTokenUsage";
 import type { Turn } from "./generated/v2/Turn";
+import type { CollaborationMode } from "./generated/CollaborationMode";
+import type { CollaborationModeMask } from "./generated/CollaborationModeMask";
 import type { BackendId, Session } from "./sessions";
 import { SessionStore } from "./sessions";
 import {
@@ -426,6 +428,7 @@ type SessionRuntime = {
     string,
     (decision: "accept" | "acceptForSession" | "decline" | "cancel") => void
   >;
+  pendingAppMentions: Array<{ name: string; path: string }>;
 };
 
 const runtimeBySessionId = new Map<string, SessionRuntime>();
@@ -438,6 +441,11 @@ let globalRateLimitStatusText: string | null = null;
 let globalRateLimitStatusTooltip: string | null = null;
 let customPrompts: CustomPromptSummary[] = [];
 const pendingModelFetchByBackend = new Map<string, Promise<void>>();
+const pendingCollaborationFetchByBackend = new Map<string, Promise<void>>();
+const collaborationPresetsByBackend = new Map<
+  string,
+  CollaborationModeMask[]
+>();
 const PROMPTS_CMD_PREFIX = "prompts";
 const loggedAgentScanErrors = new Set<string>();
 const UNHANDLED_DEBUG_MAX_CHARS = 100_000;
@@ -1207,6 +1215,7 @@ export function activate(context: vscode.ExtensionContext): void {
             threadId: s.threadId,
             customTitle: s.customTitle ?? false,
             personality: null,
+            collaborationModePresetName: null,
           });
         }
       }
@@ -1437,6 +1446,7 @@ export function activate(context: vscode.ExtensionContext): void {
           title: normalizeSessionTitle(thread.preview || "Resumed"),
           threadId: thread.id,
           personality: null,
+          collaborationModePresetName: null,
         };
 
         sessions.add(session.backendKey, session);
@@ -1516,6 +1526,7 @@ export function activate(context: vscode.ExtensionContext): void {
           customTitle: true,
           threadId: src.threadId,
           personality: src.personality ?? null,
+          collaborationModePresetName: src.collaborationModePresetName ?? null,
         };
 
         sessions.add(session.backendKey, session);
@@ -2081,6 +2092,68 @@ export function activate(context: vscode.ExtensionContext): void {
         if (!picked) return;
 
         chatView?.insertIntoInput(`$${picked.skill.name} `);
+      },
+    ),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "codez.cycleCollaborationMode",
+      async (args?: unknown) => {
+        if (!backendManager)
+          throw new Error("backendManager is not initialized");
+        if (!sessions) throw new Error("sessions is not initialized");
+        if (!extensionContext) throw new Error("extensionContext is not set");
+
+        const session =
+          parseSessionArg(args, sessions) ??
+          (activeSessionId ? sessions.getById(activeSessionId) : null);
+        if (!session) return;
+        if (session.backendId === "opencode") {
+          chatView?.toast(
+            "info",
+            "opencode backend では mode 切替は未対応です。",
+          );
+          return;
+        }
+
+        const presets = await ensureCollaborationPresetsFetched(session);
+        const modeOrder: Record<string, number> = {
+          plan: 1,
+          code: 2,
+          pair_programming: 3,
+          execute: 4,
+          custom: 5,
+        };
+        const sorted = [...presets].sort((a, b) => {
+          const ao = modeOrder[a.mode ?? "custom"] ?? 999;
+          const bo = modeOrder[b.mode ?? "custom"] ?? 999;
+          if (ao !== bo) return ao - bo;
+          return a.name.localeCompare(b.name);
+        });
+
+        const candidates: Array<{ name: string | null; label: string }> = [
+          { name: null, label: "default" },
+          ...sorted.map((p) => ({
+            name: p.name,
+            label: p.name,
+          })),
+        ];
+
+        const currentName = session.collaborationModePresetName ?? null;
+        const currentIndex = Math.max(
+          0,
+          candidates.findIndex((c) => c.name === currentName),
+        );
+        const next = candidates[(currentIndex + 1) % candidates.length]!;
+
+        session.collaborationModePresetName = next.name;
+        saveSessions(extensionContext, sessions);
+
+        chatView?.toast(
+          "info",
+          `Mode: ${next.label} (Shift+Tab to cycle, /collab to pick)`,
+        );
       },
     ),
   );
@@ -2972,15 +3045,75 @@ async function sendUserInput(
   chatView?.refresh();
   schedulePersistRuntime(session.id);
 
+  let collaborationMode: CollaborationMode | null = null;
+  if (
+    session.backendId !== "opencode" &&
+    session.collaborationModePresetName &&
+    session.collaborationModePresetName.trim()
+  ) {
+    const presets = await ensureCollaborationPresetsFetched(session);
+    const preset =
+      presets.find((p) => p.name === session.collaborationModePresetName) ??
+      null;
+    if (!preset) {
+      rt.sending = false;
+      const msg = `collaboration mode preset not found: ${session.collaborationModePresetName}`;
+      upsertBlock(session.id, {
+        id: newLocalId("collabMissing"),
+        type: "error",
+        title: "Collaboration mode",
+        text: msg,
+      });
+      chatView?.refresh();
+      throw new Error(msg);
+    }
+    if (!preset.model) {
+      rt.sending = false;
+      const msg = `collaboration preset '${preset.name}' has no model; cannot apply.`;
+      upsertBlock(session.id, {
+        id: newLocalId("collabInvalid"),
+        type: "error",
+        title: "Collaboration mode",
+        text: msg,
+      });
+      chatView?.refresh();
+      throw new Error(msg);
+    }
+    collaborationMode = {
+      mode: preset.mode ?? "custom",
+      settings: {
+        model: preset.model,
+        reasoning_effort: preset.reasoning_effort ?? null,
+        developer_instructions: preset.developer_instructions ?? null,
+      },
+    };
+  }
+
+  const mentionInputs =
+    session.backendId !== "opencode"
+      ? rt.pendingAppMentions
+          .filter(
+            (m) =>
+              Boolean(m.name) && Boolean(m.path) && text.includes(`$${m.name}`),
+          )
+          .map((m) => ({
+            type: "mention" as const,
+            name: m.name,
+            path: m.path,
+          }))
+      : [];
+  rt.pendingAppMentions.length = 0;
+
   const personality = session.personality ?? null;
   const modelSettings =
-    modelState || personality
+    modelState || personality || collaborationMode
       ? {
           model: modelState?.model ?? null,
           provider: modelState?.provider ?? null,
           reasoning: modelState?.reasoning ?? null,
           agent: modelState?.agent ?? null,
           personality,
+          collaborationMode,
         }
       : null;
 
@@ -2990,6 +3123,7 @@ async function sendUserInput(
       text,
       backendImages,
       modelSettings,
+      mentionInputs,
     );
   } catch (err) {
     const errText = formatUnknownError(err);
@@ -3197,6 +3331,16 @@ async function handleSlashCommand(
         { title: "Apps: Insert into prompt" },
       );
       if (!picked) return true;
+      const rt = ensureRuntime(session.id);
+      const name = String(picked.app.name || "").trim();
+      const id = String(picked.app.id || "").trim();
+      if (name && id) {
+        const path = `app://${id}`;
+        const existing = rt.pendingAppMentions.find(
+          (m) => m.name === name && m.path === path,
+        );
+        if (!existing) rt.pendingAppMentions.push({ name, path });
+      }
       chatView?.insertIntoInput(`$${picked.app.name} `);
       return true;
     } catch (err) {
@@ -3269,6 +3413,83 @@ async function handleSlashCommand(
       id: newLocalId("personalitySet"),
       type: "info",
       title: "Personality",
+      text: `Set to ${picked.label}.`,
+    });
+    chatView?.refresh();
+    schedulePersistRuntime(session.id);
+    return true;
+  }
+  if (cmd === "collab") {
+    if (arg) {
+      upsertBlock(session.id, {
+        id: newLocalId("collabError"),
+        type: "error",
+        title: "Slash command error",
+        text: "/collab does not take arguments.",
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+      return true;
+    }
+
+    if (session.backendId === "opencode") {
+      upsertBlock(session.id, {
+        id: newLocalId("collabUnsupported"),
+        type: "info",
+        title: "Collaboration mode",
+        text: "opencode backend では /collab は未対応です。",
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+      return true;
+    }
+
+    if (!backendManager) throw new Error("backendManager is not initialized");
+    if (!sessions) throw new Error("sessions is not initialized");
+    if (!extensionContext) throw new Error("extensionContext is not set");
+
+    const presets = await ensureCollaborationPresetsFetched(session);
+    if (presets.length === 0) {
+      upsertBlock(session.id, {
+        id: newLocalId("collabEmpty"),
+        type: "info",
+        title: "Collaboration mode",
+        text: "利用可能な collaboration preset がありません。",
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+      return true;
+    }
+
+    const items: Array<vscode.QuickPickItem & { presetName: string | null }> = [
+      {
+        label: "default",
+        description: "Disable collaboration preset (use normal settings)",
+        presetName: null,
+      },
+      ...presets.map((p) => ({
+        label: p.name,
+        description: p.mode ? `mode=${p.mode}` : "",
+        detail: p.model ? `model=${p.model}` : "",
+        presetName: p.name,
+      })),
+    ];
+
+    const picked = await vscode.window.showQuickPick(items, {
+      title: "Collaboration mode",
+      placeHolder: "Pick a collaboration preset (Shift+Tab cycles).",
+      matchOnDescription: true,
+      matchOnDetail: true,
+    });
+    if (!picked) return true;
+
+    session.collaborationModePresetName = picked.presetName;
+    saveSessions(extensionContext, sessions);
+
+    upsertBlock(session.id, {
+      id: newLocalId("collabSet"),
+      type: "info",
+      title: "Collaboration mode",
       text: `Set to ${picked.label}.`,
     });
     chatView?.refresh();
@@ -3648,6 +3869,7 @@ async function handleSlashCommand(
         "- /status: Show status",
         "- /mcp: List MCP servers",
         "- /apps: Browse apps",
+        "- /collab: Change collaboration mode (Shift+Tab)",
         "- /personality: Set personality",
         "- /diff: Open Latest Diff",
         "- /rename <title>: Rename session",
@@ -4256,6 +4478,7 @@ function ensureRuntime(sessionId: string): SessionRuntime {
     legacyWebSearchTargetByCallId: new Map(),
     pendingApprovals: new Map(),
     approvalResolvers: new Map(),
+    pendingAppMentions: [],
   };
   runtimeBySessionId.set(sessionId, rt);
   return rt;
@@ -4286,6 +4509,36 @@ async function ensureModelsFetched(session: Session): Promise<void> {
     .finally(() => pendingModelFetchByBackend.delete(backendKey));
   pendingModelFetchByBackend.set(backendKey, promise);
   await promise;
+}
+
+async function ensureCollaborationPresetsFetched(
+  session: Session,
+): Promise<CollaborationModeMask[]> {
+  if (!backendManager) return [];
+  const backendKey = session.backendKey;
+  const cached = collaborationPresetsByBackend.get(backendKey);
+  if (cached) return cached;
+  const pending = pendingCollaborationFetchByBackend.get(backendKey);
+  if (pending) {
+    await pending;
+    return collaborationPresetsByBackend.get(backendKey) ?? [];
+  }
+
+  const promise = backendManager
+    .listCollaborationModePresetsForSession(session)
+    .then((presets) => {
+      collaborationPresetsByBackend.set(backendKey, presets);
+    })
+    .catch((err) => {
+      outputChannel?.appendLine(
+        `[collab] Failed to list collaboration presets: ${String((err as Error)?.message ?? err)}`,
+      );
+      collaborationPresetsByBackend.set(backendKey, []);
+    })
+    .finally(() => pendingCollaborationFetchByBackend.delete(backendKey));
+  pendingCollaborationFetchByBackend.set(backendKey, promise);
+  await promise;
+  return collaborationPresetsByBackend.get(backendKey) ?? [];
 }
 
 function buildChatState(): ChatViewState {
@@ -7040,6 +7293,7 @@ type PersistedSessionV2 = Pick<
   | "threadId"
   | "customTitle"
   | "personality"
+  | "collaborationModePresetName"
 >;
 
 function readPersistedSessionsV1(
@@ -7096,6 +7350,7 @@ function loadSessions(
     const customTitle = o["customTitle"];
     const threadId = o["threadId"];
     const personality = o["personality"];
+    const collaborationModePresetName = o["collaborationModePresetName"];
 
     if (
       typeof id !== "string" ||
@@ -7114,6 +7369,11 @@ function loadSessions(
       personality === "friendly" || personality === "pragmatic"
         ? personality
         : null;
+    const collaborationModePresetNameVal =
+      typeof collaborationModePresetName === "string" &&
+      collaborationModePresetName.trim()
+        ? collaborationModePresetName.trim()
+        : null;
 
     store.add(backendKey, {
       id,
@@ -7124,6 +7384,7 @@ function loadSessions(
       customTitle: typeof customTitle === "boolean" ? customTitle : false,
       threadId,
       personality: personalityVal,
+      collaborationModePresetName: collaborationModePresetNameVal,
     });
   }
 }
@@ -7148,6 +7409,7 @@ function toPersistedSessionV2(session: Session): PersistedSessionV2 {
     customTitle,
     threadId,
     personality,
+    collaborationModePresetName,
   } = session;
   return {
     id,
@@ -7158,6 +7420,7 @@ function toPersistedSessionV2(session: Session): PersistedSessionV2 {
     customTitle,
     threadId,
     personality: personality ?? null,
+    collaborationModePresetName: collaborationModePresetName ?? null,
   };
 }
 

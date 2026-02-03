@@ -2322,6 +2322,12 @@ function main(): void {
       kind: "slash",
     },
     {
+      insert: "/collab ",
+      label: "/collab",
+      detail: "Change collaboration mode",
+      kind: "slash",
+    },
+    {
       insert: "/personality ",
       label: "/personality",
       detail: "Set personality",
@@ -5326,6 +5332,20 @@ function main(): void {
   });
 
   inputEl.addEventListener("keydown", (e) => {
+    if (
+      (e as KeyboardEvent).key === "Tab" &&
+      (e as KeyboardEvent).shiftKey &&
+      !(e as KeyboardEvent).altKey &&
+      !(e as KeyboardEvent).ctrlKey &&
+      !(e as KeyboardEvent).metaKey &&
+      suggestItems.length === 0
+    ) {
+      const sessionId = state.activeSession?.id ?? null;
+      if (!sessionId) return;
+      e.preventDefault();
+      vscode.postMessage({ type: "cycleCollaborationMode", sessionId });
+      return;
+    }
     if (
       (e as KeyboardEvent).key === "Enter" &&
       !(e as KeyboardEvent).shiftKey

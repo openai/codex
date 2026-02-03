@@ -7,6 +7,7 @@
 - **Slash Commands**
   - `/apps` を追加（app 一覧から選択して `$<slug>` を入力欄へ挿入）
   - `/personality` を追加（friendly/pragmatic を選択して、以降のターンの personality を上書き）
+  - `/collab` を追加（collaboration mode preset を選択。入力欄で Shift+Tab でも cycle）
 - **Sessions / History**
   - `/resume` の履歴ピッカーに `archived` / `sortKey` / `sourceKinds` フィルタを追加
   - archived スレッドを選んだ場合、復元前に `thread/unarchive` を実行
