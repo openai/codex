@@ -535,6 +535,7 @@ pub(crate) struct App {
 
     /// Controls the animation thread that sends CommitTick events.
     pub(crate) commit_anim_running: Arc<AtomicBool>,
+    status_line_invalid_items_warned: Arc<AtomicBool>,
 
     // Esc-backtracking state grouped
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
@@ -605,6 +606,7 @@ impl App {
             is_first_run: false,
             feedback_audience: self.feedback_audience,
             model: Some(self.chat_widget.current_model().to_string()),
+            status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
             otel_manager: self.otel_manager.clone(),
         }
     }
@@ -991,6 +993,8 @@ impl App {
             otel_manager.counter("codex.status_line", 1, &[]);
         }
 
+        let status_line_invalid_items_warned = Arc::new(AtomicBool::new(false));
+
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let mut chat_widget = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
@@ -1011,6 +1015,7 @@ impl App {
                     is_first_run,
                     feedback_audience,
                     model: Some(model.clone()),
+                    status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     otel_manager: otel_manager.clone(),
                 };
                 ChatWidget::new(init, thread_manager.clone())
@@ -1040,6 +1045,7 @@ impl App {
                     is_first_run,
                     feedback_audience,
                     model: config.model.clone(),
+                    status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     otel_manager: otel_manager.clone(),
                 };
                 ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
@@ -1069,6 +1075,7 @@ impl App {
                     is_first_run,
                     feedback_audience,
                     model: config.model.clone(),
+                    status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     otel_manager: otel_manager.clone(),
                 };
                 ChatWidget::new_from_existing(init, forked.thread, forked.session_configured)
@@ -1100,6 +1107,7 @@ impl App {
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
+            status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
             feedback: feedback.clone(),
@@ -1308,6 +1316,7 @@ impl App {
                     is_first_run: false,
                     feedback_audience: self.feedback_audience,
                     model: Some(model),
+                    status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
                     otel_manager: self.otel_manager.clone(),
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
@@ -2686,6 +2695,7 @@ mod tests {
             has_emitted_history_lines: false,
             enhanced_keys_supported: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
+            status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
             feedback: codex_feedback::CodexFeedback::new(),
@@ -2739,6 +2749,7 @@ mod tests {
                 has_emitted_history_lines: false,
                 enhanced_keys_supported: false,
                 commit_anim_running: Arc::new(AtomicBool::new(false)),
+                status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
                 backtrack: BacktrackState::default(),
                 backtrack_render_pending: false,
                 feedback: codex_feedback::CodexFeedback::new(),

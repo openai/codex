@@ -766,6 +766,7 @@ async fn helpers_are_available_and_do_not_panic() {
         is_first_run: true,
         feedback_audience: FeedbackAudience::External,
         model: Some(resolved_model),
+        status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         otel_manager,
     };
     let mut w = ChatWidget::new(init, thread_manager);
@@ -895,6 +896,7 @@ async fn make_chatwidget_manual(
         feedback_audience: FeedbackAudience::External,
         current_rollout_path: None,
         current_cwd: None,
+        status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         status_line_branch: None,
         status_line_branch_cwd: None,
         status_line_branch_pending: false,
@@ -2517,6 +2519,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         is_first_run: true,
         feedback_audience: FeedbackAudience::External,
         model: Some(resolved_model.clone()),
+        status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         otel_manager,
     };
 
@@ -2562,6 +2565,7 @@ async fn experimental_mode_plan_applies_on_startup() {
         is_first_run: true,
         feedback_audience: FeedbackAudience::External,
         model: Some(resolved_model.clone()),
+        status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         otel_manager,
     };
 
@@ -4784,6 +4788,34 @@ async fn warning_event_adds_warning_history_cell() {
     assert!(
         rendered.contains("test warning message"),
         "warning cell missing content: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn status_line_invalid_items_warn_once() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.tui_status_line = Some(vec![
+        "model_name".to_string(),
+        "bogus_item".to_string(),
+        "lines_changed".to_string(),
+        "bogus_item".to_string(),
+    ]);
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.refresh_status_line();
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one warning history cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("bogus_item"),
+        "warning cell missing invalid item content: {rendered}"
+    );
+
+    chat.refresh_status_line();
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        cells.is_empty(),
+        "expected invalid status line warning to emit only once"
     );
 }
 

@@ -26,6 +26,8 @@ use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -35,6 +37,7 @@ use crate::diff_render::calculate_add_remove_from_diff;
 use crate::status::RateLimitWindowDisplay;
 use crate::status::format_directory_display;
 use crate::status::format_tokens_compact;
+use crate::text_formatting::proper_join;
 use crate::version::CODEX_CLI_VERSION;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_backend_client::Client as BackendClient;
@@ -398,6 +401,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) is_first_run: bool,
     pub(crate) feedback_audience: FeedbackAudience,
     pub(crate) model: Option<String>,
+    pub(crate) status_line_invalid_items_warned: Arc<AtomicBool>,
     pub(crate) otel_manager: OtelManager,
 }
 
@@ -591,6 +595,7 @@ pub(crate) struct ChatWidget {
     current_rollout_path: Option<PathBuf>,
     // Current working directory (if known)
     current_cwd: Option<PathBuf>,
+    status_line_invalid_items_warned: Arc<AtomicBool>,
     status_line_branch: Option<String>,
     status_line_branch_cwd: Option<PathBuf>,
     status_line_branch_pending: bool,
@@ -814,7 +819,25 @@ impl ChatWidget {
     }
 
     pub(crate) fn refresh_status_line(&mut self) {
-        let items = self.status_line_items();
+        let (items, invalid_items) = self.status_line_items_with_invalids();
+        if self.thread_id.is_some()
+            && !invalid_items.is_empty()
+            && self
+                .status_line_invalid_items_warned
+                .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        {
+            let label = if invalid_items.len() == 1 {
+                "item"
+            } else {
+                "items"
+            };
+            let message = format!(
+                "Ignored invalid status line {label}: {}.",
+                proper_join(invalid_items.as_slice())
+            );
+            self.on_warning(message);
+        }
         let enabled = !items.is_empty();
         self.bottom_pane.set_status_line_enabled(enabled);
         if !enabled {
@@ -2306,6 +2329,7 @@ impl ChatWidget {
             is_first_run,
             feedback_audience,
             model,
+            status_line_invalid_items_warned,
             otel_manager,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
@@ -2411,6 +2435,7 @@ impl ChatWidget {
             feedback_audience,
             current_rollout_path: None,
             current_cwd,
+            status_line_invalid_items_warned,
             status_line_branch: None,
             status_line_branch_cwd: None,
             status_line_branch_pending: false,
@@ -2468,6 +2493,7 @@ impl ChatWidget {
             is_first_run,
             feedback_audience,
             model,
+            status_line_invalid_items_warned,
             otel_manager,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
@@ -2572,6 +2598,7 @@ impl ChatWidget {
             feedback_audience,
             current_rollout_path: None,
             current_cwd,
+            status_line_invalid_items_warned,
             status_line_branch: None,
             status_line_branch_cwd: None,
             status_line_branch_pending: false,
@@ -2615,10 +2642,11 @@ impl ChatWidget {
             auth_manager,
             models_manager,
             feedback,
+            is_first_run: _,
             feedback_audience,
             model,
+            status_line_invalid_items_warned,
             otel_manager,
-            ..
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
         let mut rng = rand::rng();
@@ -2722,6 +2750,7 @@ impl ChatWidget {
             feedback_audience,
             current_rollout_path: None,
             current_cwd,
+            status_line_invalid_items_warned,
             status_line_branch: None,
             status_line_branch_cwd: None,
             status_line_branch_pending: false,
@@ -3924,17 +3953,24 @@ impl ChatWidget {
         self.bottom_pane.show_view(Box::new(view));
     }
 
-    fn status_line_items(&self) -> Vec<StatusLineItem> {
-        self.config
-            .tui_status_line
-            .as_ref()
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|id| id.parse::<StatusLineItem>().ok())
-                    .collect()
-            })
-            .unwrap_or_default()
+    fn status_line_items_with_invalids(&self) -> (Vec<StatusLineItem>, Vec<String>) {
+        let mut invalid = Vec::new();
+        let mut invalid_seen = HashSet::new();
+        let mut items = Vec::new();
+        let Some(config_items) = self.config.tui_status_line.as_ref() else {
+            return (items, invalid);
+        };
+        for id in config_items {
+            match id.parse::<StatusLineItem>() {
+                Ok(item) => items.push(item),
+                Err(_) => {
+                    if invalid_seen.insert(id.clone()) {
+                        invalid.push(format!(r#""{id}""#));
+                    }
+                }
+            }
+        }
+        (items, invalid)
     }
 
     fn status_line_cwd(&self) -> &Path {
