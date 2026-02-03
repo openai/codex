@@ -97,8 +97,13 @@ pub struct SecretsManager {
 
 impl SecretsManager {
     pub fn new(codex_home: PathBuf, backend_kind: SecretsBackendKind) -> Self {
-        let keyring_store: Arc<dyn KeyringStore> = Arc::new(DefaultKeyringStore);
-        Self::new_with_keyring_store(codex_home, backend_kind, keyring_store)
+        let backend: Arc<dyn SecretsBackend> = match backend_kind {
+            SecretsBackendKind::Local => {
+                let keyring_store: Arc<dyn KeyringStore> = Arc::new(DefaultKeyringStore);
+                Arc::new(LocalSecretsBackend::new(codex_home, keyring_store))
+            }
+        };
+        Self { backend }
     }
 
     pub fn new_with_keyring_store(
