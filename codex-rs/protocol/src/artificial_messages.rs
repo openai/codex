@@ -3,7 +3,8 @@
 //! The `artificial_messages!` macro invocation in this module defines:
 //!
 //! - The `ArtificialMessage` enum variants declared below (`Skill`, `ModelWarning`,
-//!   `Permission`) with their configured string fields.
+//!   `Permission`, `UserShellCommand`, `CollaborationMode`, `PersonalitySpec`,
+//!   `ExecPolicyAmendment`) with their configured string fields.
 //! - `ArtificialMessage::tag(&self) -> &'static str`: returns the top-level XML tag for
 //!   the current variant (for example `skill`).
 //! - `ArtificialMessage::role(&self) -> &'static str`: returns the role that should be
@@ -56,6 +57,34 @@ artificial_messages! {
     },
     Permission {
         tag: TAG_PERMISSION,
+        role: "developer",
+        fields: {
+            raw(body)
+        }
+    },
+    UserShellCommand {
+        tag: TAG_USER_SHELL_COMMAND,
+        role: "user",
+        fields: {
+            raw(body)
+        }
+    },
+    CollaborationMode {
+        tag: TAG_COLLABORATION_MODE,
+        role: "developer",
+        fields: {
+            raw(body)
+        }
+    },
+    PersonalitySpec {
+        tag: TAG_SPEC,
+        role: "developer",
+        fields: {
+            raw(body)
+        }
+    },
+    ExecPolicyAmendment {
+        tag: TAG_EXEC_POLICY_AMENDMENT,
         role: "developer",
         fields: {
             raw(body)
@@ -147,5 +176,65 @@ mod tests {
             err,
             ArtificialMessageParseError::UnknownTopLevelTag("unknown".to_string())
         );
+    }
+
+    #[test]
+    fn render_and_parse_user_shell_command_round_trip() {
+        let message = ArtificialMessage::UserShellCommand {
+            body: "<command>echo hi</command>".to_string(),
+        };
+        let rendered = message.render();
+        assert_eq!(
+            rendered,
+            "<user_shell_cmd><command>echo hi</command></user_shell_cmd>"
+        );
+
+        let parsed = ArtificialMessage::parse(&rendered).expect("parse user shell command");
+        assert_eq!(parsed, message);
+    }
+
+    #[test]
+    fn render_and_parse_collaboration_mode_round_trip() {
+        let message = ArtificialMessage::CollaborationMode {
+            body: "plan first".to_string(),
+        };
+        let rendered = message.render();
+        assert_eq!(
+            rendered,
+            "<collaboration_mode>plan first</collaboration_mode>"
+        );
+
+        let parsed = ArtificialMessage::parse(&rendered).expect("parse collaboration mode");
+        assert_eq!(parsed, message);
+    }
+
+    #[test]
+    fn render_and_parse_personality_spec_round_trip() {
+        let message = ArtificialMessage::PersonalitySpec {
+            body: "be pragmatic".to_string(),
+        };
+        let rendered = message.render();
+        assert_eq!(
+            rendered,
+            "<personality_spec>be pragmatic</personality_spec>"
+        );
+
+        let parsed = ArtificialMessage::parse(&rendered).expect("parse personality spec");
+        assert_eq!(parsed, message);
+    }
+
+    #[test]
+    fn render_and_parse_exec_policy_amendment_round_trip() {
+        let message = ArtificialMessage::ExecPolicyAmendment {
+            body: "Approved command prefix saved:\n- `echo`".to_string(),
+        };
+        let rendered = message.render();
+        assert_eq!(
+            rendered,
+            "<exec_policy_amendment>Approved command prefix saved:\n- `echo`</exec_policy_amendment>"
+        );
+
+        let parsed = ArtificialMessage::parse(&rendered).expect("parse exec policy amendment");
+        assert_eq!(parsed, message);
     }
 }

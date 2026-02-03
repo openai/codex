@@ -12,8 +12,6 @@ use crate::artificial_messages::ArtificialMessage;
 use crate::config_types::CollaborationMode;
 use crate::config_types::SandboxMode;
 use crate::protocol::AskForApproval;
-use crate::protocol::COLLABORATION_MODE_CLOSE_TAG;
-use crate::protocol::COLLABORATION_MODE_OPEN_TAG;
 use crate::protocol::NetworkAccess;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::WritableRoot;
@@ -276,10 +274,10 @@ impl DeveloperInstructions {
     }
 
     pub fn personality_spec_message(spec: String) -> Self {
-        let message = format!(
-            "<personality_spec> The user has requested a new communication style. Future messages should adhere to the following personality: \n{spec} </personality_spec>"
+        let body = format!(
+            " The user has requested a new communication style. Future messages should adhere to the following personality: \n{spec} "
         );
-        DeveloperInstructions::new(message)
+        DeveloperInstructions::new(ArtificialMessage::PersonalitySpec { body }.render())
     }
 
     pub fn from_policy(
@@ -323,9 +321,8 @@ impl DeveloperInstructions {
             .as_ref()
             .filter(|instructions| !instructions.is_empty())
             .map(|instructions| {
-                DeveloperInstructions::new(format!(
-                    "{COLLABORATION_MODE_OPEN_TAG}{instructions}{COLLABORATION_MODE_CLOSE_TAG}"
-                ))
+                let body = instructions.to_string();
+                DeveloperInstructions::new(ArtificialMessage::CollaborationMode { body }.render())
             })
     }
 

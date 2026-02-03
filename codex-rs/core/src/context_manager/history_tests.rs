@@ -456,7 +456,12 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
             "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
         ),
         user_input_text_msg(&demo_skill_message()),
-        user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
+        user_input_text_msg(
+            &ArtificialMessage::UserShellCommand {
+                body: "echo 42".to_string(),
+            }
+            .render(),
+        ),
         user_input_text_msg("turn 1 user"),
         assistant_msg("turn 1 assistant"),
         user_input_text_msg("turn 2 user"),
@@ -473,7 +478,12 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
             "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
         ),
         user_input_text_msg(&demo_skill_message()),
-        user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
+        user_input_text_msg(
+            &ArtificialMessage::UserShellCommand {
+                body: "echo 42".to_string(),
+            }
+            .render(),
+        ),
         user_input_text_msg("turn 1 user"),
         assistant_msg("turn 1 assistant"),
     ];
@@ -487,7 +497,12 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
             "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
         ),
         user_input_text_msg(&demo_skill_message()),
-        user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
+        user_input_text_msg(
+            &ArtificialMessage::UserShellCommand {
+                body: "echo 42".to_string(),
+            }
+            .render(),
+        ),
     ];
 
     let mut history = create_history_with_items(vec![
@@ -497,7 +512,12 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
             "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
         ),
         user_input_text_msg(&demo_skill_message()),
-        user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
+        user_input_text_msg(
+            &ArtificialMessage::UserShellCommand {
+                body: "echo 42".to_string(),
+            }
+            .render(),
+        ),
         user_input_text_msg("turn 1 user"),
         assistant_msg("turn 1 assistant"),
         user_input_text_msg("turn 2 user"),
@@ -513,7 +533,12 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
             "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
         ),
         user_input_text_msg(&demo_skill_message()),
-        user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
+        user_input_text_msg(
+            &ArtificialMessage::UserShellCommand {
+                body: "echo 42".to_string(),
+            }
+            .render(),
+        ),
         user_input_text_msg("turn 1 user"),
         assistant_msg("turn 1 assistant"),
         user_input_text_msg("turn 2 user"),

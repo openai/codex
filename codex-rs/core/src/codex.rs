@@ -1523,8 +1523,9 @@ impl Session {
             warn!("execpolicy amendment for {sub_id} had no command prefix");
             return;
         };
-        let text = format!("Approved command prefix saved:\n{prefixes}");
-        let message: ResponseItem = DeveloperInstructions::new(text.clone()).into();
+        let body = format!("Approved command prefix saved:\n{prefixes}");
+        let message =
+            ArtificialMessage::ExecPolicyAmendment { body: body.clone() }.to_response_item();
 
         if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
             self.record_conversation_items(&turn_context, std::slice::from_ref(&message))
@@ -1535,7 +1536,9 @@ impl Session {
         if self
             .inject_response_items(vec![ResponseInputItem::Message {
                 role: "developer".to_string(),
-                content: vec![ContentItem::InputText { text }],
+                content: vec![ContentItem::InputText {
+                    text: ArtificialMessage::ExecPolicyAmendment { body }.render(),
+                }],
             }])
             .await
             .is_err()
@@ -1805,7 +1808,7 @@ impl Session {
             .counter("codex.model_warning", 1, &[]);
         let item = ArtificialMessage::ModelWarning {
             body: message.into(),
-        };
+        }
         .to_response_item();
 
         self.record_conversation_items(ctx, &[item]).await;

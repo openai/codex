@@ -16,6 +16,7 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
+use codex_protocol::artificial_messages::ArtificialMessage;
 use codex_protocol::config_types::Personality;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -439,9 +440,10 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
     let request = response_mock.single_request();
     let developer_texts = request.message_input_texts("developer");
     assert!(
-        developer_texts
-            .iter()
-            .any(|text| text.contains("<personality_spec>")),
+        developer_texts.iter().any(|text| matches!(
+            ArtificialMessage::parse(text),
+            Ok(ArtificialMessage::PersonalitySpec { .. })
+        )),
         "expected a personality update message in developer input, got {developer_texts:?}"
     );
     let instructions_text = request.instructions_text();

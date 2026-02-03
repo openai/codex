@@ -8,7 +8,7 @@ use crate::truncate::approx_token_count;
 use crate::truncate::approx_tokens_from_byte_count;
 use crate::truncate::truncate_function_output_items_with_policy;
 use crate::truncate::truncate_text;
-use crate::user_shell_command::is_user_shell_command_text;
+use codex_protocol::artificial_messages::ArtificialMessage;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -378,7 +378,12 @@ pub(crate) fn is_user_turn_boundary(item: &ResponseItem) -> bool {
     for content_item in content {
         match content_item {
             ContentItem::InputText { text } => {
-                if is_session_prefix(text) || is_user_shell_command_text(text) {
+                if is_session_prefix(text)
+                    || matches!(
+                        ArtificialMessage::parse(text),
+                        Ok(ArtificialMessage::UserShellCommand { .. })
+                    )
+                {
                     return false;
                 }
             }

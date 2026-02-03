@@ -1,6 +1,4 @@
 use anyhow::Result;
-use codex_core::protocol::COLLABORATION_MODE_CLOSE_TAG;
-use codex_core::protocol::COLLABORATION_MODE_OPEN_TAG;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_protocol::artificial_messages::ArtificialMessage;
@@ -61,7 +59,10 @@ fn developer_texts(input: &[Value]) -> Vec<String> {
 }
 
 fn collab_xml(text: &str) -> String {
-    format!("{COLLABORATION_MODE_OPEN_TAG}{text}{COLLABORATION_MODE_CLOSE_TAG}")
+    ArtificialMessage::CollaborationMode {
+        body: text.to_string(),
+    }
+    .render()
 }
 
 fn count_exact(texts: &[String], target: &str) -> usize {

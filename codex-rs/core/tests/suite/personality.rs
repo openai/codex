@@ -6,6 +6,7 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
+use codex_protocol::artificial_messages::ArtificialMessage;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
@@ -44,6 +45,13 @@ const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective so
 
 fn sse_completed(id: &str) -> String {
     sse(vec![ev_response_created(id), ev_completed(id)])
+}
+
+fn is_personality_spec_message(text: &str) -> bool {
+    matches!(
+        ArtificialMessage::parse(text),
+        Ok(ArtificialMessage::PersonalitySpec { .. })
+    )
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -116,7 +124,7 @@ async fn user_turn_personality_none_does_not_add_update_message() -> anyhow::Res
     assert!(
         !developer_texts
             .iter()
-            .any(|text| text.contains("<personality_spec>")),
+            .any(|text| is_personality_spec_message(text)),
         "did not expect a personality update message when personality is None"
     );
 
@@ -169,7 +177,7 @@ async fn config_personality_some_sets_instructions_template() -> anyhow::Result<
     let developer_texts = request.message_input_texts("developer");
     for text in developer_texts {
         assert!(
-            !text.contains("<personality_spec>"),
+            !is_personality_spec_message(&text),
             "expected no personality update message in developer input"
         );
     }
@@ -258,7 +266,7 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
     let developer_texts = request.message_input_texts("developer");
     let personality_text = developer_texts
         .iter()
-        .find(|text| text.contains("<personality_spec>"))
+        .find(|text| is_personality_spec_message(text))
         .expect("expected personality update message in developer input");
 
     assert!(
@@ -355,7 +363,7 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
     let developer_texts = request.message_input_texts("developer");
     let personality_text = developer_texts
         .iter()
-        .find(|text| text.contains("<personality_spec>"));
+        .find(|text| is_personality_spec_message(text));
     assert!(
         personality_text.is_none(),
         "expected no personality preamble for unchanged personality, got {personality_text:?}"
@@ -461,7 +469,7 @@ async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()>
     let developer_texts = request.message_input_texts("developer");
     let personality_text = developer_texts
         .iter()
-        .find(|text| text.contains("<personality_spec>"));
+        .find(|text| is_personality_spec_message(text));
     assert!(
         personality_text.is_none(),
         "expected no personality preamble, got {personality_text:?}"
@@ -835,7 +843,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
     let developer_texts = request.message_input_texts("developer");
     let personality_text = developer_texts
         .iter()
-        .find(|text| text.contains("<personality_spec>"))
+        .find(|text| is_personality_spec_message(text))
         .expect("expected personality update message in developer input");
 
     assert!(
