@@ -8,11 +8,12 @@ Craft Agents is a multi-backend AI assistant that supports both Anthropic Claude
 
 ## Fork Additions
 
-| Hook | Purpose |
-|------|---------|
+| Hook                       | Purpose                                                                                                          |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `item/toolCall/preExecute` | **Pre-tool approval** - Intercept ALL tool calls before execution, allowing the host app to approve/block/modify |
 
 This enables:
+
 - **Unified permission system** - Same permission behavior as Claude Agent SDK's `PreToolUse` hook
 - **Explore mode** - Block write operations while allowing reads
 - **Source management** - Block tools from inactive MCP sources with auto-activation support
@@ -54,6 +55,7 @@ git merge upstream/main
 ## Upstream Documentation
 
 For general Codex CLI usage, see the upstream repo:
+
 - [openai/codex](https://github.com/openai/codex)
 - [Codex Documentation](https://developers.openai.com/codex)
 

@@ -11,6 +11,7 @@ OpenAI's Codex does not support client-side tool interception. Craft Agent requi
 3. **Allow** tool execution after validation
 
 This is critical for:
+
 - Permission modes (safe/ask/allow-all)
 - Config file validation before writes
 - Source auto-activation
@@ -21,16 +22,20 @@ See [Issue #2109](https://github.com/openai/codex/issues/2109) - 367+ upvotes re
 ## Changes from Upstream
 
 ### Protocol Types
+
 - `codex-rs/app-server-protocol/src/protocol/v2.rs`: Added PreToolUse types
+
   - `ToolCallType`: Enum for tool types (Bash, FileWrite, FileEdit, Mcp, Custom, Function, LocalShell)
   - `ToolCallPreExecuteParams`: Request parameters sent before tool execution
   - `ToolCallPreExecuteDecision`: Allow/Block/Modify decision enum
   - `ToolCallPreExecuteResponse`: Response with decision
 
 - `codex-rs/app-server-protocol/src/protocol/common.rs`: Added request definition
+
   - `ToolCallPreExecute => "item/toolCall/preExecute"`
 
 - `codex-rs/protocol/src/approvals.rs`: Added core event types
+
   - `ToolCallType`: Core enum mirroring V2
   - `ToolCallPreExecuteRequestEvent`: Event sent from core to app-server
   - `ToolCallPreExecuteDecision`: Core decision enum
@@ -40,15 +45,19 @@ See [Issue #2109](https://github.com/openai/codex/issues/2109) - 367+ upvotes re
   - `EventMsg::ToolCallPreExecuteRequest`
 
 ### Core Implementation
+
 - `codex-rs/core/src/codex.rs`:
+
   - `request_tool_preexecute()`: Emits PreToolUse event and awaits client decision
   - `notify_tool_preexecute()`: Receives response and unblocks pending request
 
 - `codex-rs/core/src/state/turn.rs`:
+
   - `pending_tool_preexecutes`: HashMap for tracking in-flight requests
   - `insert_pending_tool_preexecute()` / `remove_pending_tool_preexecute()`
 
 - `codex-rs/core/src/tools/router.rs`:
+
   - Intercepts ALL tool calls before dispatch
   - Extracts tool type, input, and MCP server info
   - Calls `request_tool_preexecute()` and handles decision:
@@ -60,6 +69,7 @@ See [Issue #2109](https://github.com/openai/codex/issues/2109) - 367+ upvotes re
   - `FunctionCallError::Blocked`: New variant for blocked tools
 
 ### App-Server Implementation
+
 - `codex-rs/app-server/src/bespoke_event_handling.rs`:
   - Handles `EventMsg::ToolCallPreExecuteRequest`
   - Converts core types to V2 protocol types
@@ -68,6 +78,7 @@ See [Issue #2109](https://github.com/openai/codex/issues/2109) - 367+ upvotes re
   - V1 API defaults to Allow (backwards compatible)
 
 ### CI/CD
+
 - `.github/workflows/craft-release.yml`: Cross-platform release workflow
   - Triggers on `craft-v*.*.*` tags
   - Builds for macOS (arm64/x64), Linux (x64/arm64), Windows (x64)
@@ -97,12 +108,19 @@ TypeScript clients receive `item/toolCall/preExecute` requests with:
 interface ToolCallPreExecuteParams {
   threadId: string;
   turnId: string;
-  itemId: string;      // call_id for matching
-  toolType: 'bash' | 'fileWrite' | 'fileEdit' | 'mcp' | 'custom' | 'function' | 'localShell';
+  itemId: string; // call_id for matching
+  toolType:
+    | "bash"
+    | "fileWrite"
+    | "fileEdit"
+    | "mcp"
+    | "custom"
+    | "function"
+    | "localShell";
   toolName: string;
   input: JsonValue;
-  mcpServer?: string;  // For MCP tools
-  mcpTool?: string;    // For MCP tools
+  mcpServer?: string; // For MCP tools
+  mcpTool?: string; // For MCP tools
 }
 ```
 
@@ -111,21 +129,23 @@ Respond with:
 ```typescript
 interface ToolCallPreExecuteResponse {
   decision:
-    | { type: 'allow' }
-    | { type: 'block'; reason: string }
-    | { type: 'modify'; input: JsonValue };
+    | { type: "allow" }
+    | { type: "block"; reason: string }
+    | { type: "modify"; input: JsonValue };
 }
 ```
 
 ## Usage
 
 ### Building
+
 ```bash
 cd codex-rs
 cargo build --release --bin codex
 ```
 
 ### Release
+
 ```bash
 git tag -a craft-v0.1.0 -m "Craft Release 0.1.0"
 git push origin craft-v0.1.0
