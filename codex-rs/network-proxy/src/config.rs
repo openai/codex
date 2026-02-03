@@ -5,6 +5,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::net::IpAddr;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use tracing::warn;
 use url::Url;
 
@@ -38,6 +39,8 @@ pub struct NetworkProxySettings {
     pub mode: NetworkMode,
     #[serde(default)]
     pub policy: NetworkPolicy,
+    #[serde(default)]
+    pub mitm: MitmConfig,
 }
 
 impl Default for NetworkProxySettings {
@@ -54,6 +57,7 @@ impl Default for NetworkProxySettings {
             dangerously_allow_non_loopback_admin: false,
             mode: NetworkMode::default(),
             policy: NetworkPolicy::default(),
+            mitm: MitmConfig::default(),
         }
     }
 }
@@ -75,6 +79,7 @@ pub struct NetworkPolicy {
 pub enum NetworkMode {
     /// Limited (read-only) access: only GET/HEAD/OPTIONS are allowed for HTTP. HTTPS CONNECT is
     /// blocked unless MITM is enabled so the proxy can enforce method policy on inner requests.
+    /// SOCKS5 remains blocked in limited mode.
     Limited,
     /// Full network access: all HTTP methods are allowed, and HTTPS CONNECTs are tunneled without
     /// MITM interception.
@@ -91,6 +96,32 @@ impl NetworkMode {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MitmConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub inspect: bool,
+    #[serde(default = "default_mitm_max_body_bytes")]
+    pub max_body_bytes: usize,
+    #[serde(default = "default_ca_cert_path")]
+    pub ca_cert_path: PathBuf,
+    #[serde(default = "default_ca_key_path")]
+    pub ca_key_path: PathBuf,
+}
+
+impl Default for MitmConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            inspect: false,
+            max_body_bytes: default_mitm_max_body_bytes(),
+            ca_cert_path: default_ca_cert_path(),
+            ca_key_path: default_ca_key_path(),
+        }
+    }
+}
+
 fn default_proxy_url() -> String {
     "http://127.0.0.1:3128".to_string()
 }
@@ -101,6 +132,18 @@ fn default_admin_url() -> String {
 
 fn default_socks_url() -> String {
     "http://127.0.0.1:8081".to_string()
+}
+
+fn default_ca_cert_path() -> PathBuf {
+    PathBuf::from("proxy/ca.pem")
+}
+
+fn default_ca_key_path() -> PathBuf {
+    PathBuf::from("proxy/ca.key")
+}
+
+fn default_mitm_max_body_bytes() -> usize {
+    4096
 }
 
 /// Clamp non-loopback bind addresses to loopback unless explicitly allowed.

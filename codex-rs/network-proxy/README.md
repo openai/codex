@@ -35,6 +35,15 @@ dangerously_allow_non_loopback_proxy = false
 dangerously_allow_non_loopback_admin = false
 mode = "full" # default when unset; use "limited" for read-only mode
 
+[network_proxy.mitm]
+# When enabled, HTTPS CONNECT can be terminated so limited-mode method policy still applies.
+# CA cert/key paths are relative to CODEX_HOME by default.
+enabled = false
+ca_cert_path = "proxy/ca.pem"
+ca_key_path = "proxy/ca.key"
+# Maximum size of request/response bodies MITM will buffer for inspection.
+max_body_bytes = 1048576
+
 [network_proxy.policy]
 # Hosts must match the allowlist (unless denied).
 # If `allowed_domains` is empty, the proxy blocks requests until an allowlist is configured.
@@ -55,6 +64,15 @@ allow_unix_sockets = ["/tmp/example.sock"]
 ```bash
 cargo run -p codex-network-proxy --
 ```
+
+If you plan to enable MITM, initialize the default directory first:
+
+```bash
+cargo run -p codex-network-proxy -- init
+```
+
+The proxy will generate a local CA on first MITM use if the files do not exist. Import the
+generated CA cert into your system trust store to avoid TLS errors.
 
 ### 3) Point a client at it
 
@@ -79,10 +97,12 @@ When a request is blocked, the proxy responds with `403` and includes:
   - `blocked-by-allowlist`
   - `blocked-by-denylist`
   - `blocked-by-method-policy`
+  - `blocked-by-mitm-required`
   - `blocked-by-policy`
 
-In "limited" mode, only `GET`, `HEAD`, and `OPTIONS` are allowed. HTTPS `CONNECT` and SOCKS5 are
-blocked because they would bypass method enforcement.
+In "limited" mode, only `GET`, `HEAD`, and `OPTIONS` are allowed. HTTPS `CONNECT` requests require
+MITM to enforce limited-mode method policy; otherwise they are blocked. SOCKS5 remains blocked in
+limited mode.
 
 ## Library API
 
@@ -164,7 +184,7 @@ what it can reasonably guarantee.
   allowlisted (best-effort DNS lookup).
 - Limited mode enforcement:
   - only `GET`, `HEAD`, and `OPTIONS` are allowed
-  - HTTPS `CONNECT` remains a tunnel; limited-mode method enforcement does not apply to HTTPS
+  - HTTPS CONNECT is blocked unless MITM is enabled
 - Listener safety defaults:
   - the admin API is unauthenticated; non-loopback binds are clamped unless explicitly enabled via
     `dangerously_allow_non_loopback_admin`
