@@ -2013,6 +2013,59 @@
           "type": "object"
         },
         {
+          "description": "List of remote skills available to the agent.",
+          "properties": {
+            "skills": {
+              "items": {
+                "$ref": "#/definitions/RemoteSkillSummary"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "list_remote_skills_response"
+              ],
+              "title": "ListRemoteSkillsResponseEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "skills",
+            "type"
+          ],
+          "title": "ListRemoteSkillsResponseEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Remote skill downloaded to local cache.",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "remote_skill_downloaded"
+              ],
+              "title": "RemoteSkillDownloadedEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "path",
+            "type"
+          ],
+          "title": "RemoteSkillDownloadedEventMsg",
+          "type": "object"
+        },
+        {
           "description": "Notification that skill data may have been updated and clients may want to reload.",
           "properties": {
             "type": {
@@ -3428,6 +3481,25 @@
           "type": "object"
         }
       ]
+    },
+    "RemoteSkillSummary": {
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "description",
+        "id",
+        "name"
+      ],
+      "type": "object"
     },
     "RequestId": {
       "anyOf": [
@@ -6534,6 +6606,59 @@
         "type"
       ],
       "title": "ListSkillsResponseEventMsg",
+      "type": "object"
+    },
+    {
+      "description": "List of remote skills available to the agent.",
+      "properties": {
+        "skills": {
+          "items": {
+            "$ref": "#/definitions/RemoteSkillSummary"
+          },
+          "type": "array"
+        },
+        "type": {
+          "enum": [
+            "list_remote_skills_response"
+          ],
+          "title": "ListRemoteSkillsResponseEventMsgType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "skills",
+        "type"
+      ],
+      "title": "ListRemoteSkillsResponseEventMsg",
+      "type": "object"
+    },
+    {
+      "description": "Remote skill downloaded to local cache.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "remote_skill_downloaded"
+          ],
+          "title": "RemoteSkillDownloadedEventMsgType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "path",
+        "type"
+      ],
+      "title": "RemoteSkillDownloadedEventMsg",
       "type": "object"
     },
     {

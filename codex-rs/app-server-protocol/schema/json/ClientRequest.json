@@ -2183,6 +2183,24 @@
       },
       "type": "object"
     },
+    "SkillsRemoteReadParams": {
+      "type": "object"
+    },
+    "SkillsRemoteWriteParams": {
+      "properties": {
+        "hazelnutId": {
+          "type": "string"
+        },
+        "isPreload": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "hazelnutId",
+        "isPreload"
+      ],
+      "type": "object"
+    },
     "TextElement": {
       "properties": {
         "byteRange": {
@@ -3310,6 +3328,54 @@
         "params"
       ],
       "title": "Skills/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "skills/remote/read"
+          ],
+          "title": "Skills/remote/readRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/SkillsRemoteReadParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Skills/remote/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "skills/remote/write"
+          ],
+          "title": "Skills/remote/writeRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/SkillsRemoteWriteParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Skills/remote/writeRequest",
       "type": "object"
     },
     {
