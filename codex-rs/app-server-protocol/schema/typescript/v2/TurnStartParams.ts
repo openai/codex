@@ -12,6 +12,10 @@ import type { UserInput } from "./UserInput";
 
 export type TurnStartParams = { threadId: string, input: Array<UserInput>, 
 /**
+ * Experimental: additional skill roots to scan for this and subsequent turns.
+ */
+additionalRoots?: Array<string>, 
+/**
  * Override the working directory for this turn and subsequent turns.
  */
 cwd: string | null, 

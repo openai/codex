@@ -1476,21 +1476,14 @@ pub struct ThreadReadResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct SkillRoot {
-    pub path: PathBuf,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
 pub struct SkillsListParams {
     /// When empty, defaults to the current session working directory.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cwds: Vec<PathBuf>,
 
-    /// Additional skill roots to scan alongside the defaults.
+    /// Experimental: additional skill roots to scan alongside the defaults.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub additional_roots: Vec<SkillRoot>,
+    pub additional_roots: Vec<PathBuf>,
 
     /// When true, bypass the skills cache and re-scan skills from disk.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -1839,6 +1832,9 @@ pub enum TurnStatus {
 pub struct TurnStartParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
+    /// Experimental: additional skill roots to scan for this and subsequent turns.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_roots: Vec<PathBuf>,
     /// Override the working directory for this turn and subsequent turns.
     pub cwd: Option<PathBuf>,
     /// Override the approval policy for this turn and subsequent turns.
@@ -3044,15 +3040,13 @@ mod tests {
         assert_eq!(
             serde_json::to_value(SkillsListParams {
                 cwds: vec![PathBuf::from("/repo")],
-                additional_roots: vec![SkillRoot {
-                    path: PathBuf::from("/opt/skills"),
-                }],
+                additional_roots: vec![PathBuf::from("/opt/skills")],
                 force_reload: true,
             })
             .unwrap(),
             json!({
                 "cwds": ["/repo"],
-                "additionalRoots": [{ "path": "/opt/skills" }],
+                "additionalRoots": ["/opt/skills"],
                 "forceReload": true,
             }),
         );

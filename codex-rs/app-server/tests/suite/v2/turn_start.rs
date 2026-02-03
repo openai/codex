@@ -409,6 +409,92 @@ async fn turn_start_accepts_collaboration_mode_override_v2() -> Result<()> {
 }
 
 #[tokio::test]
+async fn turn_start_additional_roots_injects_skill_instructions() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Done"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let response_mock = responses::mount_sse_once(&server, body).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::default(),
+    )?;
+
+    let additional_root = TempDir::new()?;
+    let skill_body = "extra skill body";
+    let skill_path = write_skill_at(
+        additional_root.path(),
+        "desktop-extra",
+        "desktop-extra-skill",
+        "desktop extra skill",
+        skill_body,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "please run $desktop-extra-skill".to_string(),
+                text_elements: Vec::new(),
+            }],
+            additional_roots: vec![additional_root.path().to_path_buf()],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let _turn: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let request = response_mock.single_request();
+    let user_texts = request.message_input_texts("user");
+    let skill_path = std::fs::canonicalize(skill_path)?;
+    let skill_path_str = skill_path.to_string_lossy();
+    assert!(
+        user_texts.iter().any(|text| {
+            text.contains("<skill>\n<name>desktop-extra-skill</name>")
+                && text.contains(skill_body)
+                && text.contains(skill_path_str.as_ref())
+        }),
+        "expected skill instructions from additional roots in user input, got {user_texts:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn turn_start_accepts_personality_override_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1015,6 +1101,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             personality: None,
             output_schema: None,
             collaboration_mode: None,
+            additional_roots: vec![],
         })
         .await?;
     timeout(
@@ -1046,6 +1133,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             personality: None,
             output_schema: None,
             collaboration_mode: None,
+            additional_roots: vec![],
         })
         .await?;
     timeout(
@@ -1792,4 +1880,19 @@ stream_max_retries = 0
 "#
         ),
     )
+}
+
+fn write_skill_at(
+    root: &Path,
+    dir: &str,
+    name: &str,
+    description: &str,
+    body: &str,
+) -> std::io::Result<std::path::PathBuf> {
+    let skill_dir = root.join(dir);
+    std::fs::create_dir_all(&skill_dir)?;
+    let contents = format!("---\nname: {name}\ndescription: {description}\n---\n\n{body}\n");
+    let skill_path = skill_dir.join("SKILL.md");
+    std::fs::write(&skill_path, contents)?;
+    Ok(skill_path)
 }

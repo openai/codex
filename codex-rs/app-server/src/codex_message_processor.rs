@@ -4041,12 +4041,10 @@ impl CodexMessageProcessor {
         };
 
         let skills_manager = self.thread_manager.skills_manager();
-        let additional_root_paths: Vec<PathBuf> =
-            additional_roots.into_iter().map(|root| root.path).collect();
         let mut data = Vec::new();
         for cwd in cwds {
             let outcome = skills_manager
-                .skills_for_cwd_with_additional_roots(&cwd, force_reload, &additional_root_paths)
+                .skills_for_cwd_with_additional_roots(&cwd, force_reload, &additional_roots)
                 .await;
             let errors = errors_to_info(&outcome.errors);
             let skills = skills_to_info(&outcome.skills, &outcome.disabled_paths);
@@ -4121,7 +4119,22 @@ impl CodexMessageProcessor {
     }
 
     async fn turn_start(&self, request_id: RequestId, params: TurnStartParams) {
-        let (_, thread) = match self.load_thread(&params.thread_id).await {
+        let TurnStartParams {
+            thread_id,
+            input,
+            additional_roots,
+            cwd,
+            approval_policy,
+            sandbox_policy,
+            model,
+            effort,
+            summary,
+            personality,
+            output_schema,
+            collaboration_mode,
+        } = params;
+
+        let (_, thread) = match self.load_thread(&thread_id).await {
             Ok(v) => v,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -4130,34 +4143,35 @@ impl CodexMessageProcessor {
         };
 
         // Map v2 input items to core input items.
-        let mapped_items: Vec<CoreInputItem> = params
-            .input
-            .into_iter()
-            .map(V2UserInput::into_core)
-            .collect();
+        let mapped_items: Vec<CoreInputItem> =
+            input.into_iter().map(V2UserInput::into_core).collect();
 
-        let has_any_overrides = params.cwd.is_some()
-            || params.approval_policy.is_some()
-            || params.sandbox_policy.is_some()
-            || params.model.is_some()
-            || params.effort.is_some()
-            || params.summary.is_some()
-            || params.collaboration_mode.is_some()
-            || params.personality.is_some();
+        if !additional_roots.is_empty() {
+            let _ = thread.submit(Op::SetSkillRoots { additional_roots }).await;
+        }
 
-        // If any overrides are provided, update the session turn context first.
-        if has_any_overrides {
+        let has_turn_context_overrides = cwd.is_some()
+            || approval_policy.is_some()
+            || sandbox_policy.is_some()
+            || model.is_some()
+            || effort.is_some()
+            || summary.is_some()
+            || collaboration_mode.is_some()
+            || personality.is_some();
+
+        // If any turn-context overrides are provided, update the session turn context first.
+        if has_turn_context_overrides {
             let _ = thread
                 .submit(Op::OverrideTurnContext {
-                    cwd: params.cwd,
-                    approval_policy: params.approval_policy.map(AskForApproval::to_core),
-                    sandbox_policy: params.sandbox_policy.map(|p| p.to_core()),
+                    cwd,
+                    approval_policy: approval_policy.map(AskForApproval::to_core),
+                    sandbox_policy: sandbox_policy.map(|p| p.to_core()),
                     windows_sandbox_level: None,
-                    model: params.model,
-                    effort: params.effort.map(Some),
-                    summary: params.summary,
-                    collaboration_mode: params.collaboration_mode,
-                    personality: params.personality,
+                    model,
+                    effort: effort.map(Some),
+                    summary,
+                    collaboration_mode,
+                    personality,
                 })
                 .await;
         }
@@ -4166,7 +4180,7 @@ impl CodexMessageProcessor {
         let turn_id = thread
             .submit(Op::UserInput {
                 items: mapped_items,
-                final_output_json_schema: params.output_schema,
+                final_output_json_schema: output_schema,
             })
             .await;
 
@@ -4183,10 +4197,7 @@ impl CodexMessageProcessor {
                 self.outgoing.send_response(request_id, response).await;
 
                 // Emit v2 turn/started notification.
-                let notif = TurnStartedNotification {
-                    thread_id: params.thread_id,
-                    turn,
-                };
+                let notif = TurnStartedNotification { thread_id, turn };
                 self.outgoing
                     .send_server_notification(ServerNotification::TurnStarted(notif))
                     .await;

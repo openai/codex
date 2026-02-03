@@ -365,6 +365,7 @@ impl Codex {
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
             thread_name: None,
+            additional_roots: Vec::new(),
             original_config_do_not_use: Arc::clone(&config),
             session_source,
             dynamic_tools,
@@ -503,6 +504,7 @@ pub(crate) struct TurnContext {
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
     pub(crate) truncation_policy: TruncationPolicy,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
+    pub(crate) additional_roots: Vec<PathBuf>,
 }
 
 impl TurnContext {
@@ -560,6 +562,8 @@ pub(crate) struct SessionConfiguration {
     codex_home: PathBuf,
     /// Optional user-facing name for the thread, updated during the session.
     thread_name: Option<String>,
+    /// Additional roots to include in skills discovery for turns in this session.
+    additional_roots: Vec<PathBuf>,
 
     // TODO(pakrym): Remove config from here
     original_config_do_not_use: Arc<Config>,
@@ -609,6 +613,9 @@ impl SessionConfiguration {
         if let Some(cwd) = updates.cwd.clone() {
             next_configuration.cwd = cwd;
         }
+        if let Some(additional_roots) = updates.additional_roots.clone() {
+            next_configuration.additional_roots = additional_roots;
+        }
         Ok(next_configuration)
     }
 }
@@ -623,6 +630,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) reasoning_summary: Option<ReasoningSummaryConfig>,
     pub(crate) final_output_json_schema: Option<Option<Value>>,
     pub(crate) personality: Option<Personality>,
+    pub(crate) additional_roots: Option<Vec<PathBuf>>,
 }
 
 impl Session {
@@ -705,6 +713,7 @@ impl Session {
             tool_call_gate: Arc::new(ReadinessFlag::new()),
             truncation_policy: model_info.truncation_policy.into(),
             dynamic_tools: session_configuration.dynamic_tools.clone(),
+            additional_roots: session_configuration.additional_roots.clone(),
         }
     }
 
@@ -2432,6 +2441,17 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 )
                 .await;
             }
+            Op::SetSkillRoots { additional_roots } => {
+                handlers::override_turn_context(
+                    &sess,
+                    sub.id.clone(),
+                    SessionSettingsUpdate {
+                        additional_roots: Some(additional_roots),
+                        ..Default::default()
+                    },
+                )
+                .await;
+            }
             Op::UserInput { .. } | Op::UserTurn { .. } => {
                 handlers::user_input_or_turn(&sess, sub.id.clone(), sub.op, &mut previous_context)
                     .await;
@@ -2620,6 +2640,7 @@ mod handlers {
                         reasoning_summary: Some(summary),
                         final_output_json_schema: Some(final_output_json_schema),
                         personality,
+                        additional_roots: None,
                     },
                 )
             }
@@ -3176,6 +3197,7 @@ async fn spawn_review_thread(
         tool_call_gate: Arc::new(ReadinessFlag::new()),
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         truncation_policy: model_info.truncation_policy.into(),
+        additional_roots: parent_turn_context.additional_roots.clone(),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -3289,7 +3311,11 @@ pub(crate) async fn run_turn(
     let skills_outcome = Some(
         sess.services
             .skills_manager
-            .skills_for_cwd(&turn_context.cwd, false)
+            .skills_for_cwd_with_additional_roots(
+                &turn_context.cwd,
+                false,
+                &turn_context.additional_roots,
+            )
             .await,
     );
 
@@ -4940,6 +4966,7 @@ mod tests {
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
             thread_name: None,
+            additional_roots: Vec::new(),
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
@@ -5023,6 +5050,7 @@ mod tests {
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
             thread_name: None,
+            additional_roots: Vec::new(),
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
@@ -5290,6 +5318,7 @@ mod tests {
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
             thread_name: None,
+            additional_roots: Vec::new(),
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
@@ -5410,6 +5439,7 @@ mod tests {
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
             thread_name: None,
+            additional_roots: Vec::new(),
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),

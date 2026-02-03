@@ -13834,17 +13834,6 @@
         ],
         "type": "object"
       },
-      "SkillRoot": {
-        "properties": {
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "path"
-        ],
-        "type": "object"
-      },
       "SkillScope": {
         "enum": [
           "user",
@@ -13952,9 +13941,9 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
           "additionalRoots": {
-            "description": "Additional skill roots to scan alongside the defaults.",
+            "description": "Experimental: additional skill roots to scan alongside the defaults.",
             "items": {
-              "$ref": "#/definitions/v2/SkillRoot"
+              "type": "string"
             },
             "type": "array"
           },
@@ -15834,6 +15823,13 @@
       "TurnStartParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "additionalRoots": {
+            "description": "Experimental: additional skill roots to scan for this and subsequent turns.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "approvalPolicy": {
             "anyOf": [
               {

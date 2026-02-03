@@ -191,6 +191,12 @@ pub enum Op {
         personality: Option<Personality>,
     },
 
+    /// Experimental: set additional roots used for skill discovery on future turns.
+    SetSkillRoots {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        additional_roots: Vec<PathBuf>,
+    },
+
     /// Approve a command execution
     ExecApproval {
         /// The id of the submission we are approving

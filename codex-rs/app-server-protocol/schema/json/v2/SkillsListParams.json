@@ -1,23 +1,10 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "definitions": {
-    "SkillRoot": {
-      "properties": {
-        "path": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "path"
-      ],
-      "type": "object"
-    }
-  },
   "properties": {
     "additionalRoots": {
-      "description": "Additional skill roots to scan alongside the defaults.",
+      "description": "Experimental: additional skill roots to scan alongside the defaults.",
       "items": {
-        "$ref": "#/definitions/SkillRoot"
+        "type": "string"
       },
       "type": "array"
     },

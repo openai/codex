@@ -2138,17 +2138,6 @@
       ],
       "type": "object"
     },
-    "SkillRoot": {
-      "properties": {
-        "path": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "path"
-      ],
-      "type": "object"
-    },
     "SkillsConfigWriteParams": {
       "properties": {
         "enabled": {
@@ -2167,9 +2156,9 @@
     "SkillsListParams": {
       "properties": {
         "additionalRoots": {
-          "description": "Additional skill roots to scan alongside the defaults.",
+          "description": "Experimental: additional skill roots to scan alongside the defaults.",
           "items": {
-            "$ref": "#/definitions/SkillRoot"
+            "type": "string"
           },
           "type": "array"
         },
@@ -2660,6 +2649,13 @@
     },
     "TurnStartParams": {
       "properties": {
+        "additionalRoots": {
+          "description": "Experimental: additional skill roots to scan for this and subsequent turns.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "approvalPolicy": {
           "anyOf": [
             {

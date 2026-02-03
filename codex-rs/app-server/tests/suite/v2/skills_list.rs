@@ -7,7 +7,6 @@ use app_test_support::McpProcess;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::SkillRoot;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use pretty_assertions::assert_eq;
@@ -41,9 +40,7 @@ async fn skills_list_includes_additional_roots() -> Result<()> {
     let request_id = mcp
         .send_skills_list_request(SkillsListParams {
             cwds: vec![cwd.path().to_path_buf()],
-            additional_roots: vec![SkillRoot {
-                path: additional_root.path().to_path_buf(),
-            }],
+            additional_roots: vec![additional_root.path().to_path_buf()],
             force_reload: true,
         })
         .await?;

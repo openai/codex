@@ -374,6 +374,13 @@
     }
   },
   "properties": {
+    "additionalRoots": {
+      "description": "Experimental: additional skill roots to scan for this and subsequent turns.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "approvalPolicy": {
       "anyOf": [
         {

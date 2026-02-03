@@ -92,7 +92,7 @@ Example (from OpenAI's official VSCode extension):
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
 - `model/list` — list available models (with reasoning effort options).
 - `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination).
-- `skills/list` — list skills for one or more `cwd` values (optional `additionalRoots` and `forceReload`).
+- `skills/list` — list skills for one or more `cwd` values (optional experimental `additionalRoots` and `forceReload`).
 - `app/list` — list available apps.
 - `skills/config/write` — write user-level skill config by path.
 - `mcpServer/oauth/login` — start an OAuth login for a configured MCP server; returns an `authorization_url` and later emits `mcpServer/oauthLogin/completed` once the browser flow finishes.
@@ -574,7 +574,7 @@ Use `skills/list` to fetch the available skills (optionally scoped by `cwds`, wi
 ```json
 { "method": "skills/list", "id": 25, "params": {
     "cwds": ["/Users/me/project"],
-    "additionalRoots": [{ "path": "/Users/me/.chatgpt/skills" }],
+    "additionalRoots": ["/Users/me/.chatgpt/skills"],
     "forceReload": false
 } }
 { "id": 25, "result": {
@@ -599,6 +599,9 @@ Use `skills/list` to fetch the available skills (optionally scoped by `cwds`, wi
     }]
 } }
 ```
+
+`turn/start` also accepts experimental `additionalRoots` so skill mentions can resolve from
+the same extra directories during turn execution.
 
 To enable or disable a skill by path:
 
