@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "GitSha": {
+      "type": "string"
+    }
+  },
+  "properties": {
+    "diff": {
+      "type": "string"
+    },
+    "sha": {
+      "$ref": "#/definitions/GitSha"
+    }
+  },
+  "required": [
+    "diff",
+    "sha"
+  ],
+  "title": "GitDiffToRemoteResponse",
+  "type": "object"
+}

@@ -1,0 +1,5358 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "AbsolutePathBuf": {
+      "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
+      "type": "string"
+    },
+    "AgentMessageContent": {
+      "oneOf": [
+        {
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "Text"
+              ],
+              "title": "TextAgentMessageContentType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "type"
+          ],
+          "title": "TextAgentMessageContent",
+          "type": "object"
+        }
+      ]
+    },
+    "AgentStatus": {
+      "description": "Agent lifecycle status, derived from emitted events.",
+      "oneOf": [
+        {
+          "description": "Agent is waiting for initialization.",
+          "enum": [
+            "pending_init"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Agent is currently running.",
+          "enum": [
+            "running"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Agent is done. Contains the final assistant message.",
+          "properties": {
+            "completed": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "completed"
+          ],
+          "title": "CompletedAgentStatus",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Agent encountered an error.",
+          "properties": {
+            "errored": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "errored"
+          ],
+          "title": "ErroredAgentStatus",
+          "type": "object"
+        },
+        {
+          "description": "Agent has been shutdown.",
+          "enum": [
+            "shutdown"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Agent is not found.",
+          "enum": [
+            "not_found"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "Annotations": {
+      "description": "Optional annotations for the client. The client can use annotations to inform how objects are used or displayed",
+      "properties": {
+        "audience": {
+          "items": {
+            "$ref": "#/definitions/Role"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "lastModified": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "priority": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "AskForApproval": {
+      "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Codex.",
+      "oneOf": [
+        {
+          "description": "Under this policy, only \"known safe\" commands—as determined by `is_safe_command()`—that **only read files** are auto‑approved. Everything else will ask the user to approve.",
+          "enum": [
+            "untrusted"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "*All* commands are auto‑approved, but they are expected to run inside a sandbox where network access is disabled and writes are confined to a specific set of paths. If the command fails, it will be escalated to the user to approve execution without a sandbox.",
+          "enum": [
+            "on-failure"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The model decides when to ask the user for approval.",
+          "enum": [
+            "on-request"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Never ask the user to approve commands. Failures are immediately returned to the model, and never escalated to the user for approval.",
+          "enum": [
+            "never"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "AudioContent": {
+      "description": "Audio provided to or from an LLM.",
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "mimeType",
+        "type"
+      ],
+      "type": "object"
+    },
+    "BlobResourceContents": {
+      "properties": {
+        "blob": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "blob",
+        "uri"
+      ],
+      "type": "object"
+    },
+    "ByteRange": {
+      "properties": {
+        "end": {
+          "description": "End byte offset (exclusive) within the UTF-8 text buffer.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "start": {
+          "description": "Start byte offset (inclusive) within the UTF-8 text buffer.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "end",
+        "start"
+      ],
+      "type": "object"
+    },
+    "CallToolResult": {
+      "description": "The server's response to a tool call.",
+      "properties": {
+        "content": {
+          "items": {
+            "$ref": "#/definitions/ContentBlock"
+          },
+          "type": "array"
+        },
+        "isError": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "structuredContent": true
+      },
+      "required": [
+        "content"
+      ],
+      "type": "object"
+    },
+    "CodexErrorInfo": {
+      "description": "Codex errors that we expose to clients.",
+      "oneOf": [
+        {
+          "enum": [
+            "context_window_exceeded",
+            "usage_limit_exceeded",
+            "internal_server_error",
+            "unauthorized",
+            "bad_request",
+            "sandbox_error",
+            "thread_rollback_failed",
+            "other"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "model_cap": {
+              "properties": {
+                "model": {
+                  "type": "string"
+                },
+                "reset_after_seconds": {
+                  "format": "uint64",
+                  "minimum": 0.0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "model"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "model_cap"
+          ],
+          "title": "ModelCapCodexErrorInfo",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "http_connection_failed": {
+              "properties": {
+                "http_status_code": {
+                  "format": "uint16",
+                  "minimum": 0.0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "http_connection_failed"
+          ],
+          "title": "HttpConnectionFailedCodexErrorInfo",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Failed to connect to the response SSE stream.",
+          "properties": {
+            "response_stream_connection_failed": {
+              "properties": {
+                "http_status_code": {
+                  "format": "uint16",
+                  "minimum": 0.0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "response_stream_connection_failed"
+          ],
+          "title": "ResponseStreamConnectionFailedCodexErrorInfo",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The response SSE stream disconnected in the middle of a turnbefore completion.",
+          "properties": {
+            "response_stream_disconnected": {
+              "properties": {
+                "http_status_code": {
+                  "format": "uint16",
+                  "minimum": 0.0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "response_stream_disconnected"
+          ],
+          "title": "ResponseStreamDisconnectedCodexErrorInfo",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Reached the retry limit for responses.",
+          "properties": {
+            "response_too_many_failed_attempts": {
+              "properties": {
+                "http_status_code": {
+                  "format": "uint16",
+                  "minimum": 0.0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "response_too_many_failed_attempts"
+          ],
+          "title": "ResponseTooManyFailedAttemptsCodexErrorInfo",
+          "type": "object"
+        }
+      ]
+    },
+    "ContentBlock": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/TextContent"
+        },
+        {
+          "$ref": "#/definitions/ImageContent"
+        },
+        {
+          "$ref": "#/definitions/AudioContent"
+        },
+        {
+          "$ref": "#/definitions/ResourceLink"
+        },
+        {
+          "$ref": "#/definitions/EmbeddedResource"
+        }
+      ]
+    },
+    "ContentItem": {
+      "oneOf": [
+        {
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "input_text"
+              ],
+              "title": "InputTextContentItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "type"
+          ],
+          "title": "InputTextContentItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "image_url": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "input_image"
+              ],
+              "title": "InputImageContentItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "image_url",
+            "type"
+          ],
+          "title": "InputImageContentItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "output_text"
+              ],
+              "title": "OutputTextContentItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "type"
+          ],
+          "title": "OutputTextContentItem",
+          "type": "object"
+        }
+      ]
+    },
+    "CreditsSnapshot": {
+      "properties": {
+        "balance": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "has_credits": {
+          "type": "boolean"
+        },
+        "unlimited": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "has_credits",
+        "unlimited"
+      ],
+      "type": "object"
+    },
+    "CustomPrompt": {
+      "properties": {
+        "argument_hint": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "content": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "content",
+        "name",
+        "path"
+      ],
+      "type": "object"
+    },
+    "Duration": {
+      "properties": {
+        "nanos": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "secs": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "nanos",
+        "secs"
+      ],
+      "type": "object"
+    },
+    "EmbeddedResource": {
+      "description": "The contents of a resource, embedded into a prompt or tool call result.\n\nIt is up to the client how best to render embedded resources for the benefit of the LLM and/or the user.",
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resource": {
+          "$ref": "#/definitions/EmbeddedResourceResource"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource",
+        "type"
+      ],
+      "type": "object"
+    },
+    "EmbeddedResourceResource": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/TextResourceContents"
+        },
+        {
+          "$ref": "#/definitions/BlobResourceContents"
+        }
+      ]
+    },
+    "EventMsg": {
+      "description": "Response event from the agent NOTE: Make sure none of these values have optional types, as it will mess up the extension code-gen.",
+      "oneOf": [
+        {
+          "description": "Error while executing a submission",
+          "properties": {
+            "codex_error_info": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/CodexErrorInfo"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "message": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "error"
+              ],
+              "title": "ErrorEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "message",
+            "type"
+          ],
+          "title": "ErrorEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Warning issued while processing a submission. Unlike `Error`, this indicates the turn continued but the user should still be notified.",
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "warning"
+              ],
+              "title": "WarningEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "message",
+            "type"
+          ],
+          "title": "WarningEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Conversation history was compacted (either automatically or manually).",
+          "properties": {
+            "type": {
+              "enum": [
+                "context_compacted"
+              ],
+              "title": "ContextCompactedEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "ContextCompactedEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Conversation history was rolled back by dropping the last N user turns.",
+          "properties": {
+            "num_turns": {
+              "description": "Number of user turns that were removed from context.",
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "type": {
+              "enum": [
+                "thread_rolled_back"
+              ],
+              "title": "ThreadRolledBackEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "num_turns",
+            "type"
+          ],
+          "title": "ThreadRolledBackEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Agent has started a turn. v1 wire format uses `task_started`; accept `turn_started` for v2 interop.",
+          "properties": {
+            "collaboration_mode_kind": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ModeKind"
+                }
+              ],
+              "default": "code"
+            },
+            "model_context_window": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "task_started"
+              ],
+              "title": "TaskStartedEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "TaskStartedEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Agent has completed all actions. v1 wire format uses `task_complete`; accept `turn_complete` for v2 interop.",
+          "properties": {
+            "last_agent_message": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "task_complete"
+              ],
+              "title": "TaskCompleteEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "TaskCompleteEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Usage update for the current session, including totals and last turn. Optional means unknown — UIs should not display when `None`.",
+          "properties": {
+            "info": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/TokenUsageInfo"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "rate_limits": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/RateLimitSnapshot"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "enum": [
+                "token_count"
+              ],
+              "title": "TokenCountEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "TokenCountEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Agent text output message",
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "agent_message"
+              ],
+              "title": "AgentMessageEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "message",
+            "type"
+          ],
+          "title": "AgentMessageEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "User/system input message (what was sent to the model)",
+          "properties": {
+            "images": {
+              "description": "Image URLs sourced from `UserInput::Image`. These are safe to replay in legacy UI history events and correspond to images sent to the model.",
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "local_images": {
+              "default": [],
+              "description": "Local file paths sourced from `UserInput::LocalImage`. These are kept so the UI can reattach images when editing history, and should not be sent to the model or treated as API-ready URLs.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "message": {
+              "type": "string"
+            },
+            "text_elements": {
+              "default": [],
+              "description": "UI-defined spans within `message` used to render or persist special elements.",
+              "items": {
+                "$ref": "#/definitions/TextElement"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "user_message"
+              ],
+              "title": "UserMessageEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "message",
+            "type"
+          ],
+          "title": "UserMessageEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Agent text output delta message",
+          "properties": {
+            "delta": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "agent_message_delta"
+              ],
+              "title": "AgentMessageDeltaEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "delta",
+            "type"
+          ],
+          "title": "AgentMessageDeltaEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Reasoning event from agent.",
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "agent_reasoning"
+              ],
+              "title": "AgentReasoningEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "type"
+          ],
+          "title": "AgentReasoningEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Agent reasoning delta event from agent.",
+          "properties": {
+            "delta": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "agent_reasoning_delta"
+              ],
+              "title": "AgentReasoningDeltaEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "delta",
+            "type"
+          ],
+          "title": "AgentReasoningDeltaEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Raw chain-of-thought from agent.",
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "agent_reasoning_raw_content"
+              ],
+              "title": "AgentReasoningRawContentEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "type"
+          ],
+          "title": "AgentReasoningRawContentEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Agent reasoning content delta event from agent.",
+          "properties": {
+            "delta": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "agent_reasoning_raw_content_delta"
+              ],
+              "title": "AgentReasoningRawContentDeltaEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "delta",
+            "type"
+          ],
+          "title": "AgentReasoningRawContentDeltaEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Signaled when the model begins a new reasoning summary section (e.g., a new titled block).",
+          "properties": {
+            "item_id": {
+              "default": "",
+              "type": "string"
+            },
+            "summary_index": {
+              "default": 0,
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": {
+              "enum": [
+                "agent_reasoning_section_break"
+              ],
+              "title": "AgentReasoningSectionBreakEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "AgentReasoningSectionBreakEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Ack the client's configure message.",
+          "properties": {
+            "approval_policy": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/AskForApproval"
+                }
+              ],
+              "description": "When to escalate for approval for execution"
+            },
+            "cwd": {
+              "description": "Working directory that should be treated as the *root* of the session.",
+              "type": "string"
+            },
+            "forked_from_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ThreadId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "history_entry_count": {
+              "description": "Current number of entries in the history log.",
+              "format": "uint",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "history_log_id": {
+              "description": "Identifier of the history log file (inode on Unix, 0 otherwise).",
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "initial_messages": {
+              "description": "Optional initial messages (as events) for resumed sessions. When present, UIs can use these to seed the history.",
+              "items": {
+                "$ref": "#/definitions/EventMsg"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "model": {
+              "description": "Tell the client what model is being queried.",
+              "type": "string"
+            },
+            "model_provider_id": {
+              "type": "string"
+            },
+            "reasoning_effort": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ReasoningEffort"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The effort the model is putting into reasoning about the user's request."
+            },
+            "rollout_path": {
+              "description": "Path in which the rollout is stored. Can be `None` for ephemeral threads",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sandbox_policy": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/SandboxPolicy"
+                }
+              ],
+              "description": "How to sandbox commands executed in the system"
+            },
+            "session_id": {
+              "$ref": "#/definitions/ThreadId"
+            },
+            "thread_name": {
+              "description": "Optional user-facing thread name (may be unset).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "session_configured"
+              ],
+              "title": "SessionConfiguredEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "approval_policy",
+            "cwd",
+            "history_entry_count",
+            "history_log_id",
+            "model",
+            "model_provider_id",
+            "sandbox_policy",
+            "session_id",
+            "type"
+          ],
+          "title": "SessionConfiguredEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Updated session metadata (e.g., thread name changes).",
+          "properties": {
+            "thread_id": {
+              "$ref": "#/definitions/ThreadId"
+            },
+            "thread_name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "thread_name_updated"
+              ],
+              "title": "ThreadNameUpdatedEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "thread_id",
+            "type"
+          ],
+          "title": "ThreadNameUpdatedEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Incremental MCP startup progress updates.",
+          "properties": {
+            "server": {
+              "description": "Server name being started.",
+              "type": "string"
+            },
+            "status": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/McpStartupStatus"
+                }
+              ],
+              "description": "Current startup status."
+            },
+            "type": {
+              "enum": [
+                "mcp_startup_update"
+              ],
+              "title": "McpStartupUpdateEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "server",
+            "status",
+            "type"
+          ],
+          "title": "McpStartupUpdateEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Aggregate MCP startup completion summary.",
+          "properties": {
+            "cancelled": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "failed": {
+              "items": {
+                "$ref": "#/definitions/McpStartupFailure"
+              },
+              "type": "array"
+            },
+            "ready": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "mcp_startup_complete"
+              ],
+              "title": "McpStartupCompleteEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cancelled",
+            "failed",
+            "ready",
+            "type"
+          ],
+          "title": "McpStartupCompleteEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "call_id": {
+              "description": "Identifier so this can be paired with the McpToolCallEnd event.",
+              "type": "string"
+            },
+            "invocation": {
+              "$ref": "#/definitions/McpInvocation"
+            },
+            "type": {
+              "enum": [
+                "mcp_tool_call_begin"
+              ],
+              "title": "McpToolCallBeginEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "invocation",
+            "type"
+          ],
+          "title": "McpToolCallBeginEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "call_id": {
+              "description": "Identifier for the corresponding McpToolCallBegin that finished.",
+              "type": "string"
+            },
+            "duration": {
+              "$ref": "#/definitions/Duration"
+            },
+            "invocation": {
+              "$ref": "#/definitions/McpInvocation"
+            },
+            "result": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/Result_of_CallToolResult_or_String"
+                }
+              ],
+              "description": "Result of the tool call. Note this could be an error."
+            },
+            "type": {
+              "enum": [
+                "mcp_tool_call_end"
+              ],
+              "title": "McpToolCallEndEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "duration",
+            "invocation",
+            "result",
+            "type"
+          ],
+          "title": "McpToolCallEndEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "web_search_begin"
+              ],
+              "title": "WebSearchBeginEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "type"
+          ],
+          "title": "WebSearchBeginEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "action": {
+              "$ref": "#/definitions/WebSearchAction"
+            },
+            "call_id": {
+              "type": "string"
+            },
+            "query": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "web_search_end"
+              ],
+              "title": "WebSearchEndEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "action",
+            "call_id",
+            "query",
+            "type"
+          ],
+          "title": "WebSearchEndEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Notification that the server is about to execute a command.",
+          "properties": {
+            "call_id": {
+              "description": "Identifier so this can be paired with the ExecCommandEnd event.",
+              "type": "string"
+            },
+            "command": {
+              "description": "The command to be executed.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "cwd": {
+              "description": "The command's working directory if not the default cwd for the agent.",
+              "type": "string"
+            },
+            "interaction_input": {
+              "description": "Raw input sent to a unified exec session (if this is an interaction event).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "parsed_cmd": {
+              "items": {
+                "$ref": "#/definitions/ParsedCommand"
+              },
+              "type": "array"
+            },
+            "process_id": {
+              "description": "Identifier for the underlying PTY process (when available).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ExecCommandSource"
+                }
+              ],
+              "default": "agent",
+              "description": "Where the command originated. Defaults to Agent for backward compatibility."
+            },
+            "turn_id": {
+              "description": "Turn ID that this command belongs to.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "exec_command_begin"
+              ],
+              "title": "ExecCommandBeginEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "command",
+            "cwd",
+            "parsed_cmd",
+            "turn_id",
+            "type"
+          ],
+          "title": "ExecCommandBeginEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Incremental chunk of output from a running command.",
+          "properties": {
+            "call_id": {
+              "description": "Identifier for the ExecCommandBegin that produced this chunk.",
+              "type": "string"
+            },
+            "chunk": {
+              "description": "Raw bytes from the stream (may not be valid UTF-8).",
+              "type": "string"
+            },
+            "stream": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ExecOutputStream"
+                }
+              ],
+              "description": "Which stream produced this chunk."
+            },
+            "type": {
+              "enum": [
+                "exec_command_output_delta"
+              ],
+              "title": "ExecCommandOutputDeltaEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "chunk",
+            "stream",
+            "type"
+          ],
+          "title": "ExecCommandOutputDeltaEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Terminal interaction for an in-progress command (stdin sent and stdout observed).",
+          "properties": {
+            "call_id": {
+              "description": "Identifier for the ExecCommandBegin that produced this chunk.",
+              "type": "string"
+            },
+            "process_id": {
+              "description": "Process id associated with the running command.",
+              "type": "string"
+            },
+            "stdin": {
+              "description": "Stdin sent to the running session.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "terminal_interaction"
+              ],
+              "title": "TerminalInteractionEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "process_id",
+            "stdin",
+            "type"
+          ],
+          "title": "TerminalInteractionEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "aggregated_output": {
+              "default": "",
+              "description": "Captured aggregated output",
+              "type": "string"
+            },
+            "call_id": {
+              "description": "Identifier for the ExecCommandBegin that finished.",
+              "type": "string"
+            },
+            "command": {
+              "description": "The command that was executed.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "cwd": {
+              "description": "The command's working directory if not the default cwd for the agent.",
+              "type": "string"
+            },
+            "duration": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/Duration"
+                }
+              ],
+              "description": "The duration of the command execution."
+            },
+            "exit_code": {
+              "description": "The command's exit code.",
+              "format": "int32",
+              "type": "integer"
+            },
+            "formatted_output": {
+              "description": "Formatted output from the command, as seen by the model.",
+              "type": "string"
+            },
+            "interaction_input": {
+              "description": "Raw input sent to a unified exec session (if this is an interaction event).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "parsed_cmd": {
+              "items": {
+                "$ref": "#/definitions/ParsedCommand"
+              },
+              "type": "array"
+            },
+            "process_id": {
+              "description": "Identifier for the underlying PTY process (when available).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ExecCommandSource"
+                }
+              ],
+              "default": "agent",
+              "description": "Where the command originated. Defaults to Agent for backward compatibility."
+            },
+            "stderr": {
+              "description": "Captured stderr",
+              "type": "string"
+            },
+            "stdout": {
+              "description": "Captured stdout",
+              "type": "string"
+            },
+            "turn_id": {
+              "description": "Turn ID that this command belongs to.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "exec_command_end"
+              ],
+              "title": "ExecCommandEndEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "command",
+            "cwd",
+            "duration",
+            "exit_code",
+            "formatted_output",
+            "parsed_cmd",
+            "stderr",
+            "stdout",
+            "turn_id",
+            "type"
+          ],
+          "title": "ExecCommandEndEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Notification that the agent attached a local image via the view_image tool.",
+          "properties": {
+            "call_id": {
+              "description": "Identifier for the originating tool call.",
+              "type": "string"
+            },
+            "path": {
+              "description": "Local filesystem path provided to the tool.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "view_image_tool_call"
+              ],
+              "title": "ViewImageToolCallEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "path",
+            "type"
+          ],
+          "title": "ViewImageToolCallEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "call_id": {
+              "description": "Identifier for the associated exec call, if available.",
+              "type": "string"
+            },
+            "command": {
+              "description": "The command to be executed.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "cwd": {
+              "description": "The command's working directory.",
+              "type": "string"
+            },
+            "parsed_cmd": {
+              "items": {
+                "$ref": "#/definitions/ParsedCommand"
+              },
+              "type": "array"
+            },
+            "proposed_execpolicy_amendment": {
+              "description": "Proposed execpolicy amendment that can be applied to allow future runs.",
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "reason": {
+              "description": "Optional human-readable reason for the approval (e.g. retry without sandbox).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "turn_id": {
+              "default": "",
+              "description": "Turn ID that this command belongs to. Uses `#[serde(default)]` for backwards compatibility.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "exec_approval_request"
+              ],
+              "title": "ExecApprovalRequestEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "command",
+            "cwd",
+            "parsed_cmd",
+            "type"
+          ],
+          "title": "ExecApprovalRequestEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "call_id": {
+              "description": "Responses API call id for the associated tool call, if available.",
+              "type": "string"
+            },
+            "questions": {
+              "items": {
+                "$ref": "#/definitions/RequestUserInputQuestion"
+              },
+              "type": "array"
+            },
+            "turn_id": {
+              "default": "",
+              "description": "Turn ID that this request belongs to. Uses `#[serde(default)]` for backwards compatibility.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "request_user_input"
+              ],
+              "title": "RequestUserInputEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "questions",
+            "type"
+          ],
+          "title": "RequestUserInputEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "arguments": true,
+            "callId": {
+              "type": "string"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "turnId": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "dynamic_tool_call_request"
+              ],
+              "title": "DynamicToolCallRequestEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "arguments",
+            "callId",
+            "tool",
+            "turnId",
+            "type"
+          ],
+          "title": "DynamicToolCallRequestEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "message": {
+              "type": "string"
+            },
+            "server_name": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "elicitation_request"
+              ],
+              "title": "ElicitationRequestEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "message",
+            "server_name",
+            "type"
+          ],
+          "title": "ElicitationRequestEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "call_id": {
+              "description": "Responses API call id for the associated patch apply call, if available.",
+              "type": "string"
+            },
+            "changes": {
+              "additionalProperties": {
+                "$ref": "#/definitions/FileChange"
+              },
+              "type": "object"
+            },
+            "grant_root": {
+              "description": "When set, the agent is asking the user to allow writes under this root for the remainder of the session.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reason": {
+              "description": "Optional explanatory reason (e.g. request for extra write access).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "turn_id": {
+              "default": "",
+              "description": "Turn ID that this patch belongs to. Uses `#[serde(default)]` for backwards compatibility with older senders.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "apply_patch_approval_request"
+              ],
+              "title": "ApplyPatchApprovalRequestEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "changes",
+            "type"
+          ],
+          "title": "ApplyPatchApprovalRequestEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Notification advising the user that something they are using has been deprecated and should be phased out.",
+          "properties": {
+            "details": {
+              "description": "Optional extra guidance, such as migration steps or rationale.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "summary": {
+              "description": "Concise summary of what is deprecated.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "deprecation_notice"
+              ],
+              "title": "DeprecationNoticeEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "summary",
+            "type"
+          ],
+          "title": "DeprecationNoticeEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "background_event"
+              ],
+              "title": "BackgroundEventEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "message",
+            "type"
+          ],
+          "title": "BackgroundEventEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "message": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "undo_started"
+              ],
+              "title": "UndoStartedEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "UndoStartedEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "message": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "success": {
+              "type": "boolean"
+            },
+            "type": {
+              "enum": [
+                "undo_completed"
+              ],
+              "title": "UndoCompletedEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "success",
+            "type"
+          ],
+          "title": "UndoCompletedEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Notification that a model stream experienced an error or disconnect and the system is handling it (e.g., retrying with backoff).",
+          "properties": {
+            "additional_details": {
+              "default": null,
+              "description": "Optional details about the underlying stream failure (often the same human-readable message that is surfaced as the terminal error if retries are exhausted).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "codex_error_info": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/CodexErrorInfo"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "message": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "stream_error"
+              ],
+              "title": "StreamErrorEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "message",
+            "type"
+          ],
+          "title": "StreamErrorEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Notification that the agent is about to apply a code patch. Mirrors `ExecCommandBegin` so front‑ends can show progress indicators.",
+          "properties": {
+            "auto_approved": {
+              "description": "If true, there was no ApplyPatchApprovalRequest for this patch.",
+              "type": "boolean"
+            },
+            "call_id": {
+              "description": "Identifier so this can be paired with the PatchApplyEnd event.",
+              "type": "string"
+            },
+            "changes": {
+              "additionalProperties": {
+                "$ref": "#/definitions/FileChange"
+              },
+              "description": "The changes to be applied.",
+              "type": "object"
+            },
+            "turn_id": {
+              "default": "",
+              "description": "Turn ID that this patch belongs to. Uses `#[serde(default)]` for backwards compatibility.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "patch_apply_begin"
+              ],
+              "title": "PatchApplyBeginEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "auto_approved",
+            "call_id",
+            "changes",
+            "type"
+          ],
+          "title": "PatchApplyBeginEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Notification that a patch application has finished.",
+          "properties": {
+            "call_id": {
+              "description": "Identifier for the PatchApplyBegin that finished.",
+              "type": "string"
+            },
+            "changes": {
+              "additionalProperties": {
+                "$ref": "#/definitions/FileChange"
+              },
+              "default": {},
+              "description": "The changes that were applied (mirrors PatchApplyBeginEvent::changes).",
+              "type": "object"
+            },
+            "stderr": {
+              "description": "Captured stderr (parser errors, IO failures, etc.).",
+              "type": "string"
+            },
+            "stdout": {
+              "description": "Captured stdout (summary printed by apply_patch).",
+              "type": "string"
+            },
+            "success": {
+              "description": "Whether the patch was applied successfully.",
+              "type": "boolean"
+            },
+            "turn_id": {
+              "default": "",
+              "description": "Turn ID that this patch belongs to. Uses `#[serde(default)]` for backwards compatibility.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "patch_apply_end"
+              ],
+              "title": "PatchApplyEndEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "stderr",
+            "stdout",
+            "success",
+            "type"
+          ],
+          "title": "PatchApplyEndEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "turn_diff"
+              ],
+              "title": "TurnDiffEventMsgType",
+              "type": "string"
+            },
+            "unified_diff": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "unified_diff"
+          ],
+          "title": "TurnDiffEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Response to GetHistoryEntryRequest.",
+          "properties": {
+            "entry": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/HistoryEntry"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The entry at the requested offset, if available and parseable."
+            },
+            "log_id": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "offset": {
+              "format": "uint",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "type": {
+              "enum": [
+                "get_history_entry_response"
+              ],
+              "title": "GetHistoryEntryResponseEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "log_id",
+            "offset",
+            "type"
+          ],
+          "title": "GetHistoryEntryResponseEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "List of MCP tools available to the agent.",
+          "properties": {
+            "auth_statuses": {
+              "additionalProperties": {
+                "$ref": "#/definitions/McpAuthStatus"
+              },
+              "description": "Authentication status for each configured MCP server.",
+              "type": "object"
+            },
+            "resource_templates": {
+              "additionalProperties": {
+                "items": {
+                  "$ref": "#/definitions/ResourceTemplate"
+                },
+                "type": "array"
+              },
+              "description": "Known resource templates grouped by server name.",
+              "type": "object"
+            },
+            "resources": {
+              "additionalProperties": {
+                "items": {
+                  "$ref": "#/definitions/Resource"
+                },
+                "type": "array"
+              },
+              "description": "Known resources grouped by server name.",
+              "type": "object"
+            },
+            "tools": {
+              "additionalProperties": {
+                "$ref": "#/definitions/Tool"
+              },
+              "description": "Fully qualified tool name -> tool definition.",
+              "type": "object"
+            },
+            "type": {
+              "enum": [
+                "mcp_list_tools_response"
+              ],
+              "title": "McpListToolsResponseEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "auth_statuses",
+            "resource_templates",
+            "resources",
+            "tools",
+            "type"
+          ],
+          "title": "McpListToolsResponseEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "List of custom prompts available to the agent.",
+          "properties": {
+            "custom_prompts": {
+              "items": {
+                "$ref": "#/definitions/CustomPrompt"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "list_custom_prompts_response"
+              ],
+              "title": "ListCustomPromptsResponseEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "custom_prompts",
+            "type"
+          ],
+          "title": "ListCustomPromptsResponseEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "List of skills available to the agent.",
+          "properties": {
+            "skills": {
+              "items": {
+                "$ref": "#/definitions/SkillsListEntry"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "list_skills_response"
+              ],
+              "title": "ListSkillsResponseEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "skills",
+            "type"
+          ],
+          "title": "ListSkillsResponseEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Notification that skill data may have been updated and clients may want to reload.",
+          "properties": {
+            "type": {
+              "enum": [
+                "skills_update_available"
+              ],
+              "title": "SkillsUpdateAvailableEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "SkillsUpdateAvailableEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "explanation": {
+              "default": null,
+              "description": "Arguments for the `update_plan` todo/checklist tool (not plan mode).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "plan": {
+              "items": {
+                "$ref": "#/definitions/PlanItemArg"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "plan_update"
+              ],
+              "title": "PlanUpdateEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "plan",
+            "type"
+          ],
+          "title": "PlanUpdateEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "reason": {
+              "$ref": "#/definitions/TurnAbortReason"
+            },
+            "type": {
+              "enum": [
+                "turn_aborted"
+              ],
+              "title": "TurnAbortedEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "reason",
+            "type"
+          ],
+          "title": "TurnAbortedEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Notification that the agent is shutting down.",
+          "properties": {
+            "type": {
+              "enum": [
+                "shutdown_complete"
+              ],
+              "title": "ShutdownCompleteEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "ShutdownCompleteEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Entered review mode.",
+          "properties": {
+            "target": {
+              "$ref": "#/definitions/ReviewTarget"
+            },
+            "type": {
+              "enum": [
+                "entered_review_mode"
+              ],
+              "title": "EnteredReviewModeEventMsgType",
+              "type": "string"
+            },
+            "user_facing_hint": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "target",
+            "type"
+          ],
+          "title": "EnteredReviewModeEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Exited review mode with an optional final result to apply.",
+          "properties": {
+            "review_output": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ReviewOutputEvent"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "enum": [
+                "exited_review_mode"
+              ],
+              "title": "ExitedReviewModeEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "ExitedReviewModeEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "item": {
+              "$ref": "#/definitions/ResponseItem"
+            },
+            "type": {
+              "enum": [
+                "raw_response_item"
+              ],
+              "title": "RawResponseItemEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "item",
+            "type"
+          ],
+          "title": "RawResponseItemEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "item": {
+              "$ref": "#/definitions/TurnItem"
+            },
+            "thread_id": {
+              "$ref": "#/definitions/ThreadId"
+            },
+            "turn_id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "item_started"
+              ],
+              "title": "ItemStartedEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "item",
+            "thread_id",
+            "turn_id",
+            "type"
+          ],
+          "title": "ItemStartedEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "item": {
+              "$ref": "#/definitions/TurnItem"
+            },
+            "thread_id": {
+              "$ref": "#/definitions/ThreadId"
+            },
+            "turn_id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "item_completed"
+              ],
+              "title": "ItemCompletedEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "item",
+            "thread_id",
+            "turn_id",
+            "type"
+          ],
+          "title": "ItemCompletedEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "delta": {
+              "type": "string"
+            },
+            "item_id": {
+              "type": "string"
+            },
+            "thread_id": {
+              "type": "string"
+            },
+            "turn_id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "agent_message_content_delta"
+              ],
+              "title": "AgentMessageContentDeltaEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "delta",
+            "item_id",
+            "thread_id",
+            "turn_id",
+            "type"
+          ],
+          "title": "AgentMessageContentDeltaEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "delta": {
+              "type": "string"
+            },
+            "item_id": {
+              "type": "string"
+            },
+            "thread_id": {
+              "type": "string"
+            },
+            "turn_id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "plan_delta"
+              ],
+              "title": "PlanDeltaEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "delta",
+            "item_id",
+            "thread_id",
+            "turn_id",
+            "type"
+          ],
+          "title": "PlanDeltaEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "delta": {
+              "type": "string"
+            },
+            "item_id": {
+              "type": "string"
+            },
+            "summary_index": {
+              "default": 0,
+              "format": "int64",
+              "type": "integer"
+            },
+            "thread_id": {
+              "type": "string"
+            },
+            "turn_id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "reasoning_content_delta"
+              ],
+              "title": "ReasoningContentDeltaEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "delta",
+            "item_id",
+            "thread_id",
+            "turn_id",
+            "type"
+          ],
+          "title": "ReasoningContentDeltaEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "content_index": {
+              "default": 0,
+              "format": "int64",
+              "type": "integer"
+            },
+            "delta": {
+              "type": "string"
+            },
+            "item_id": {
+              "type": "string"
+            },
+            "thread_id": {
+              "type": "string"
+            },
+            "turn_id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "reasoning_raw_content_delta"
+              ],
+              "title": "ReasoningRawContentDeltaEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "delta",
+            "item_id",
+            "thread_id",
+            "turn_id",
+            "type"
+          ],
+          "title": "ReasoningRawContentDeltaEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Collab interaction: agent spawn begin.",
+          "properties": {
+            "call_id": {
+              "description": "Identifier for the collab tool call.",
+              "type": "string"
+            },
+            "prompt": {
+              "description": "Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the beginning.",
+              "type": "string"
+            },
+            "sender_thread_id": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ThreadId"
+                }
+              ],
+              "description": "Thread ID of the sender."
+            },
+            "type": {
+              "enum": [
+                "collab_agent_spawn_begin"
+              ],
+              "title": "CollabAgentSpawnBeginEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "prompt",
+            "sender_thread_id",
+            "type"
+          ],
+          "title": "CollabAgentSpawnBeginEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Collab interaction: agent spawn end.",
+          "properties": {
+            "call_id": {
+              "description": "Identifier for the collab tool call.",
+              "type": "string"
+            },
+            "new_thread_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ThreadId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Thread ID of the newly spawned agent, if it was created."
+            },
+            "prompt": {
+              "description": "Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the beginning.",
+              "type": "string"
+            },
+            "sender_thread_id": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ThreadId"
+                }
+              ],
+              "description": "Thread ID of the sender."
+            },
+            "status": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/AgentStatus"
+                }
+              ],
+              "description": "Last known status of the new agent reported to the sender agent."
+            },
+            "type": {
+              "enum": [
+                "collab_agent_spawn_end"
+              ],
+              "title": "CollabAgentSpawnEndEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "prompt",
+            "sender_thread_id",
+            "status",
+            "type"
+          ],
+          "title": "CollabAgentSpawnEndEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Collab interaction: agent interaction begin.",
+          "properties": {
+            "call_id": {
+              "description": "Identifier for the collab tool call.",
+              "type": "string"
+            },
+            "prompt": {
+              "description": "Prompt sent from the sender to the receiver. Can be empty to prevent CoT leaking at the beginning.",
+              "type": "string"
+            },
+            "receiver_thread_id": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ThreadId"
+                }
+              ],
+              "description": "Thread ID of the receiver."
+            },
+            "sender_thread_id": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ThreadId"
+                }
+              ],
+              "description": "Thread ID of the sender."
+            },
+            "type": {
+              "enum": [
+                "collab_agent_interaction_begin"
+              ],
+              "title": "CollabAgentInteractionBeginEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "prompt",
+            "receiver_thread_id",
+            "sender_thread_id",
+            "type"
+          ],
+          "title": "CollabAgentInteractionBeginEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Collab interaction: agent interaction end.",
+          "properties": {
+            "call_id": {
+              "description": "Identifier for the collab tool call.",
+              "type": "string"
+            },
+            "prompt": {
+              "description": "Prompt sent from the sender to the receiver. Can be empty to prevent CoT leaking at the beginning.",
+              "type": "string"
+            },
+            "receiver_thread_id": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ThreadId"
+                }
+              ],
+              "description": "Thread ID of the receiver."
+            },
+            "sender_thread_id": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ThreadId"
+                }
+              ],
+              "description": "Thread ID of the sender."
+            },
+            "status": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/AgentStatus"
+                }
+              ],
+              "description": "Last known status of the receiver agent reported to the sender agent."
+            },
+            "type": {
+              "enum": [
+                "collab_agent_interaction_end"
+              ],
+              "title": "CollabAgentInteractionEndEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "prompt",
+            "receiver_thread_id",
+            "sender_thread_id",
+            "status",
+            "type"
+          ],
+          "title": "CollabAgentInteractionEndEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Collab interaction: waiting begin.",
+          "properties": {
+            "call_id": {
+              "description": "ID of the waiting call.",
+              "type": "string"
+            },
+            "receiver_thread_ids": {
+              "description": "Thread ID of the receivers.",
+              "items": {
+                "$ref": "#/definitions/ThreadId"
+              },
+              "type": "array"
+            },
+            "sender_thread_id": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ThreadId"
+                }
+              ],
+              "description": "Thread ID of the sender."
+            },
+            "type": {
+              "enum": [
+                "collab_waiting_begin"
+              ],
+              "title": "CollabWaitingBeginEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "receiver_thread_ids",
+            "sender_thread_id",
+            "type"
+          ],
+          "title": "CollabWaitingBeginEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Collab interaction: waiting end.",
+          "properties": {
+            "call_id": {
+              "description": "ID of the waiting call.",
+              "type": "string"
+            },
+            "sender_thread_id": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ThreadId"
+                }
+              ],
+              "description": "Thread ID of the sender."
+            },
+            "statuses": {
+              "additionalProperties": {
+                "$ref": "#/definitions/AgentStatus"
+              },
+              "description": "Last known status of the receiver agents reported to the sender agent.",
+              "type": "object"
+            },
+            "type": {
+              "enum": [
+                "collab_waiting_end"
+              ],
+              "title": "CollabWaitingEndEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "sender_thread_id",
+            "statuses",
+            "type"
+          ],
+          "title": "CollabWaitingEndEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Collab interaction: close begin.",
+          "properties": {
+            "call_id": {
+              "description": "Identifier for the collab tool call.",
+              "type": "string"
+            },
+            "receiver_thread_id": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ThreadId"
+                }
+              ],
+              "description": "Thread ID of the receiver."
+            },
+            "sender_thread_id": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ThreadId"
+                }
+              ],
+              "description": "Thread ID of the sender."
+            },
+            "type": {
+              "enum": [
+                "collab_close_begin"
+              ],
+              "title": "CollabCloseBeginEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "receiver_thread_id",
+            "sender_thread_id",
+            "type"
+          ],
+          "title": "CollabCloseBeginEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Collab interaction: close end.",
+          "properties": {
+            "call_id": {
+              "description": "Identifier for the collab tool call.",
+              "type": "string"
+            },
+            "receiver_thread_id": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ThreadId"
+                }
+              ],
+              "description": "Thread ID of the receiver."
+            },
+            "sender_thread_id": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ThreadId"
+                }
+              ],
+              "description": "Thread ID of the sender."
+            },
+            "status": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/AgentStatus"
+                }
+              ],
+              "description": "Last known status of the receiver agent reported to the sender agent before the close."
+            },
+            "type": {
+              "enum": [
+                "collab_close_end"
+              ],
+              "title": "CollabCloseEndEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "receiver_thread_id",
+            "sender_thread_id",
+            "status",
+            "type"
+          ],
+          "title": "CollabCloseEndEventMsg",
+          "type": "object"
+        }
+      ]
+    },
+    "ExecCommandSource": {
+      "enum": [
+        "agent",
+        "user_shell",
+        "unified_exec_startup",
+        "unified_exec_interaction"
+      ],
+      "type": "string"
+    },
+    "ExecOutputStream": {
+      "enum": [
+        "stdout",
+        "stderr"
+      ],
+      "type": "string"
+    },
+    "FileChange": {
+      "oneOf": [
+        {
+          "properties": {
+            "content": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "add"
+              ],
+              "title": "AddFileChangeType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "content",
+            "type"
+          ],
+          "title": "AddFileChange",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "content": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "delete"
+              ],
+              "title": "DeleteFileChangeType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "content",
+            "type"
+          ],
+          "title": "DeleteFileChange",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "move_path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "update"
+              ],
+              "title": "UpdateFileChangeType",
+              "type": "string"
+            },
+            "unified_diff": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "unified_diff"
+          ],
+          "title": "UpdateFileChange",
+          "type": "object"
+        }
+      ]
+    },
+    "FunctionCallOutputContentItem": {
+      "description": "Responses API compatible content items that can be returned by a tool call. This is a subset of ContentItem with the types we support as function call outputs.",
+      "oneOf": [
+        {
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "input_text"
+              ],
+              "title": "InputTextFunctionCallOutputContentItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "type"
+          ],
+          "title": "InputTextFunctionCallOutputContentItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "image_url": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "input_image"
+              ],
+              "title": "InputImageFunctionCallOutputContentItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "image_url",
+            "type"
+          ],
+          "title": "InputImageFunctionCallOutputContentItem",
+          "type": "object"
+        }
+      ]
+    },
+    "FunctionCallOutputPayload": {
+      "description": "The payload we send back to OpenAI when reporting a tool call result.\n\n`content` preserves the historical plain-string payload so downstream integrations (tests, logging, etc.) can keep treating tool output as `String`. When an MCP server returns richer data we additionally populate `content_items` with the structured form that the Responses/Chat Completions APIs understand.",
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "content_items": {
+          "items": {
+            "$ref": "#/definitions/FunctionCallOutputContentItem"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "success": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "content"
+      ],
+      "type": "object"
+    },
+    "GhostCommit": {
+      "description": "Details of a ghost commit created from a repository state.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "preexisting_untracked_dirs": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "preexisting_untracked_files": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "preexisting_untracked_dirs",
+        "preexisting_untracked_files"
+      ],
+      "type": "object"
+    },
+    "HistoryEntry": {
+      "properties": {
+        "conversation_id": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "ts": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "conversation_id",
+        "text",
+        "ts"
+      ],
+      "type": "object"
+    },
+    "ImageContent": {
+      "description": "An image provided to or from an LLM.",
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "mimeType",
+        "type"
+      ],
+      "type": "object"
+    },
+    "LocalShellAction": {
+      "oneOf": [
+        {
+          "properties": {
+            "command": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "env": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "timeout_ms": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "exec"
+              ],
+              "title": "ExecLocalShellActionType",
+              "type": "string"
+            },
+            "user": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "working_directory": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "command",
+            "type"
+          ],
+          "title": "ExecLocalShellAction",
+          "type": "object"
+        }
+      ]
+    },
+    "LocalShellStatus": {
+      "enum": [
+        "completed",
+        "in_progress",
+        "incomplete"
+      ],
+      "type": "string"
+    },
+    "McpAuthStatus": {
+      "enum": [
+        "unsupported",
+        "not_logged_in",
+        "bearer_token",
+        "o_auth"
+      ],
+      "type": "string"
+    },
+    "McpInvocation": {
+      "properties": {
+        "arguments": {
+          "description": "Arguments to the tool call."
+        },
+        "server": {
+          "description": "Name of the MCP server as defined in the config.",
+          "type": "string"
+        },
+        "tool": {
+          "description": "Name of the tool as given by the MCP server.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "server",
+        "tool"
+      ],
+      "type": "object"
+    },
+    "McpStartupFailure": {
+      "properties": {
+        "error": {
+          "type": "string"
+        },
+        "server": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "error",
+        "server"
+      ],
+      "type": "object"
+    },
+    "McpStartupStatus": {
+      "oneOf": [
+        {
+          "properties": {
+            "state": {
+              "enum": [
+                "starting"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "title": "StateMcpStartupStatus",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "state": {
+              "enum": [
+                "ready"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "title": "StateMcpStartupStatus2",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "error": {
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "failed"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "error",
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "state": {
+              "enum": [
+                "cancelled"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "title": "StateMcpStartupStatus3",
+          "type": "object"
+        }
+      ]
+    },
+    "ModeKind": {
+      "description": "Initial collaboration mode to use when the TUI starts.",
+      "enum": [
+        "plan",
+        "code",
+        "pair_programming",
+        "execute",
+        "custom"
+      ],
+      "type": "string"
+    },
+    "NetworkAccess": {
+      "description": "Represents whether outbound network access is available to the agent.",
+      "enum": [
+        "restricted",
+        "enabled"
+      ],
+      "type": "string"
+    },
+    "ParsedCommand": {
+      "oneOf": [
+        {
+          "properties": {
+            "cmd": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "path": {
+              "description": "(Best effort) Path to the file being read by the command. When possible, this is an absolute path, though when relative, it should be resolved against the `cwd`` that will be used to run the command to derive the absolute path.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "read"
+              ],
+              "title": "ReadParsedCommandType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd",
+            "name",
+            "path",
+            "type"
+          ],
+          "title": "ReadParsedCommand",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "cmd": {
+              "type": "string"
+            },
+            "path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "list_files"
+              ],
+              "title": "ListFilesParsedCommandType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd",
+            "type"
+          ],
+          "title": "ListFilesParsedCommand",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "cmd": {
+              "type": "string"
+            },
+            "path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "query": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "search"
+              ],
+              "title": "SearchParsedCommandType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd",
+            "type"
+          ],
+          "title": "SearchParsedCommand",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "cmd": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "unknown"
+              ],
+              "title": "UnknownParsedCommandType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd",
+            "type"
+          ],
+          "title": "UnknownParsedCommand",
+          "type": "object"
+        }
+      ]
+    },
+    "PlanItemArg": {
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "$ref": "#/definitions/StepStatus"
+        },
+        "step": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "step"
+      ],
+      "type": "object"
+    },
+    "PlanType": {
+      "enum": [
+        "free",
+        "go",
+        "plus",
+        "pro",
+        "team",
+        "business",
+        "enterprise",
+        "edu",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "RateLimitSnapshot": {
+      "properties": {
+        "credits": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CreditsSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "plan_type": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PlanType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "primary": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RateLimitWindow"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "secondary": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RateLimitWindow"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "RateLimitWindow": {
+      "properties": {
+        "resets_at": {
+          "description": "Unix timestamp (seconds since epoch) when the window resets.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "used_percent": {
+          "description": "Percentage (0-100) of the window that has been consumed.",
+          "format": "double",
+          "type": "number"
+        },
+        "window_minutes": {
+          "description": "Rolling window duration, in minutes.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "used_percent"
+      ],
+      "type": "object"
+    },
+    "ReasoningEffort": {
+      "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
+      "enum": [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "type": "string"
+    },
+    "ReasoningItemContent": {
+      "oneOf": [
+        {
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "reasoning_text"
+              ],
+              "title": "ReasoningTextReasoningItemContentType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "type"
+          ],
+          "title": "ReasoningTextReasoningItemContent",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "text"
+              ],
+              "title": "TextReasoningItemContentType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "type"
+          ],
+          "title": "TextReasoningItemContent",
+          "type": "object"
+        }
+      ]
+    },
+    "ReasoningItemReasoningSummary": {
+      "oneOf": [
+        {
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "summary_text"
+              ],
+              "title": "SummaryTextReasoningItemReasoningSummaryType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "type"
+          ],
+          "title": "SummaryTextReasoningItemReasoningSummary",
+          "type": "object"
+        }
+      ]
+    },
+    "RequestId": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "format": "int64",
+          "type": "integer"
+        }
+      ]
+    },
+    "RequestUserInputQuestion": {
+      "properties": {
+        "header": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "isOther": {
+          "default": false,
+          "type": "boolean"
+        },
+        "isSecret": {
+          "default": false,
+          "type": "boolean"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/definitions/RequestUserInputQuestionOption"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "question": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "header",
+        "id",
+        "question"
+      ],
+      "type": "object"
+    },
+    "RequestUserInputQuestionOption": {
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "description",
+        "label"
+      ],
+      "type": "object"
+    },
+    "Resource": {
+      "description": "A known resource that the server is capable of reading.",
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mimeType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "size": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "uri"
+      ],
+      "type": "object"
+    },
+    "ResourceLink": {
+      "description": "A resource that the server is capable of reading, included in a prompt or tool call result.\n\nNote: resource links returned by tools are not guaranteed to appear in the results of `resources/list` requests.",
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mimeType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "size": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "type",
+        "uri"
+      ],
+      "type": "object"
+    },
+    "ResourceTemplate": {
+      "description": "A template description for resources available on the server.",
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mimeType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uriTemplate": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "uriTemplate"
+      ],
+      "type": "object"
+    },
+    "ResponseItem": {
+      "oneOf": [
+        {
+          "properties": {
+            "content": {
+              "items": {
+                "$ref": "#/definitions/ContentItem"
+              },
+              "type": "array"
+            },
+            "end_turn": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "writeOnly": true
+            },
+            "role": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "message"
+              ],
+              "title": "MessageResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "content",
+            "role",
+            "type"
+          ],
+          "title": "MessageResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "content": {
+              "default": null,
+              "items": {
+                "$ref": "#/definitions/ReasoningItemContent"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "encrypted_content": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "writeOnly": true
+            },
+            "summary": {
+              "items": {
+                "$ref": "#/definitions/ReasoningItemReasoningSummary"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "reasoning"
+              ],
+              "title": "ReasoningResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "summary",
+            "type"
+          ],
+          "title": "ReasoningResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "action": {
+              "$ref": "#/definitions/LocalShellAction"
+            },
+            "call_id": {
+              "description": "Set when using the Responses API.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "description": "Set when using the chat completions API.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "writeOnly": true
+            },
+            "status": {
+              "$ref": "#/definitions/LocalShellStatus"
+            },
+            "type": {
+              "enum": [
+                "local_shell_call"
+              ],
+              "title": "LocalShellCallResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "action",
+            "status",
+            "type"
+          ],
+          "title": "LocalShellCallResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "arguments": {
+              "type": "string"
+            },
+            "call_id": {
+              "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "writeOnly": true
+            },
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "function_call"
+              ],
+              "title": "FunctionCallResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "arguments",
+            "call_id",
+            "name",
+            "type"
+          ],
+          "title": "FunctionCallResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "output": {
+              "$ref": "#/definitions/FunctionCallOutputPayload"
+            },
+            "type": {
+              "enum": [
+                "function_call_output"
+              ],
+              "title": "FunctionCallOutputResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "output",
+            "type"
+          ],
+          "title": "FunctionCallOutputResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "writeOnly": true
+            },
+            "input": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "custom_tool_call"
+              ],
+              "title": "CustomToolCallResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "input",
+            "name",
+            "type"
+          ],
+          "title": "CustomToolCallResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "output": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "custom_tool_call_output"
+              ],
+              "title": "CustomToolCallOutputResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "output",
+            "type"
+          ],
+          "title": "CustomToolCallOutputResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "action": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/WebSearchAction"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "writeOnly": true
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "web_search_call"
+              ],
+              "title": "WebSearchCallResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "WebSearchCallResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "ghost_commit": {
+              "$ref": "#/definitions/GhostCommit"
+            },
+            "type": {
+              "enum": [
+                "ghost_snapshot"
+              ],
+              "title": "GhostSnapshotResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "ghost_commit",
+            "type"
+          ],
+          "title": "GhostSnapshotResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "encrypted_content": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "compaction"
+              ],
+              "title": "CompactionResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "encrypted_content",
+            "type"
+          ],
+          "title": "CompactionResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "other"
+              ],
+              "title": "OtherResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "OtherResponseItem",
+          "type": "object"
+        }
+      ]
+    },
+    "Result_of_CallToolResult_or_String": {
+      "oneOf": [
+        {
+          "properties": {
+            "Ok": {
+              "$ref": "#/definitions/CallToolResult"
+            }
+          },
+          "required": [
+            "Ok"
+          ],
+          "title": "OkResult_of_CallToolResult_or_String",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "Err": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "Err"
+          ],
+          "title": "ErrResult_of_CallToolResult_or_String",
+          "type": "object"
+        }
+      ]
+    },
+    "ReviewCodeLocation": {
+      "description": "Location of the code related to a review finding.",
+      "properties": {
+        "absolute_file_path": {
+          "type": "string"
+        },
+        "line_range": {
+          "$ref": "#/definitions/ReviewLineRange"
+        }
+      },
+      "required": [
+        "absolute_file_path",
+        "line_range"
+      ],
+      "type": "object"
+    },
+    "ReviewFinding": {
+      "description": "A single review finding describing an observed issue or recommendation.",
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "code_location": {
+          "$ref": "#/definitions/ReviewCodeLocation"
+        },
+        "confidence_score": {
+          "format": "float",
+          "type": "number"
+        },
+        "priority": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "body",
+        "code_location",
+        "confidence_score",
+        "priority",
+        "title"
+      ],
+      "type": "object"
+    },
+    "ReviewLineRange": {
+      "description": "Inclusive line range in a file associated with the finding.",
+      "properties": {
+        "end": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "start": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "end",
+        "start"
+      ],
+      "type": "object"
+    },
+    "ReviewOutputEvent": {
+      "description": "Structured review result produced by a child review session.",
+      "properties": {
+        "findings": {
+          "items": {
+            "$ref": "#/definitions/ReviewFinding"
+          },
+          "type": "array"
+        },
+        "overall_confidence_score": {
+          "format": "float",
+          "type": "number"
+        },
+        "overall_correctness": {
+          "type": "string"
+        },
+        "overall_explanation": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "findings",
+        "overall_confidence_score",
+        "overall_correctness",
+        "overall_explanation"
+      ],
+      "type": "object"
+    },
+    "ReviewTarget": {
+      "oneOf": [
+        {
+          "description": "Review the working tree: staged, unstaged, and untracked files.",
+          "properties": {
+            "type": {
+              "enum": [
+                "uncommittedChanges"
+              ],
+              "title": "UncommittedChangesReviewTargetType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "UncommittedChangesReviewTarget",
+          "type": "object"
+        },
+        {
+          "description": "Review changes between the current branch and the given base branch.",
+          "properties": {
+            "branch": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "baseBranch"
+              ],
+              "title": "BaseBranchReviewTargetType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "branch",
+            "type"
+          ],
+          "title": "BaseBranchReviewTarget",
+          "type": "object"
+        },
+        {
+          "description": "Review the changes introduced by a specific commit.",
+          "properties": {
+            "sha": {
+              "type": "string"
+            },
+            "title": {
+              "description": "Optional human-readable label (e.g., commit subject) for UIs.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "commit"
+              ],
+              "title": "CommitReviewTargetType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "sha",
+            "type"
+          ],
+          "title": "CommitReviewTarget",
+          "type": "object"
+        },
+        {
+          "description": "Arbitrary instructions provided by the user.",
+          "properties": {
+            "instructions": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "custom"
+              ],
+              "title": "CustomReviewTargetType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "instructions",
+            "type"
+          ],
+          "title": "CustomReviewTarget",
+          "type": "object"
+        }
+      ]
+    },
+    "Role": {
+      "description": "The sender or recipient of messages and data in a conversation.",
+      "enum": [
+        "assistant",
+        "user"
+      ],
+      "type": "string"
+    },
+    "SandboxPolicy": {
+      "description": "Determines execution restrictions for model shell commands.",
+      "oneOf": [
+        {
+          "description": "No restrictions whatsoever. Use with caution.",
+          "properties": {
+            "type": {
+              "enum": [
+                "danger-full-access"
+              ],
+              "title": "DangerFullAccessSandboxPolicyType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "DangerFullAccessSandboxPolicy",
+          "type": "object"
+        },
+        {
+          "description": "Read-only access to the entire file-system.",
+          "properties": {
+            "type": {
+              "enum": [
+                "read-only"
+              ],
+              "title": "ReadOnlySandboxPolicyType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "ReadOnlySandboxPolicy",
+          "type": "object"
+        },
+        {
+          "description": "Indicates the process is already in an external sandbox. Allows full disk access while honoring the provided network setting.",
+          "properties": {
+            "network_access": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/NetworkAccess"
+                }
+              ],
+              "default": "restricted",
+              "description": "Whether the external sandbox permits outbound network traffic."
+            },
+            "type": {
+              "enum": [
+                "external-sandbox"
+              ],
+              "title": "ExternalSandboxSandboxPolicyType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "ExternalSandboxSandboxPolicy",
+          "type": "object"
+        },
+        {
+          "description": "Same as `ReadOnly` but additionally grants write access to the current working directory (\"workspace\").",
+          "properties": {
+            "exclude_slash_tmp": {
+              "default": false,
+              "description": "When set to `true`, will NOT include the `/tmp` among the default writable roots on UNIX. Defaults to `false`.",
+              "type": "boolean"
+            },
+            "exclude_tmpdir_env_var": {
+              "default": false,
+              "description": "When set to `true`, will NOT include the per-user `TMPDIR` environment variable among the default writable roots. Defaults to `false`.",
+              "type": "boolean"
+            },
+            "network_access": {
+              "default": false,
+              "description": "When set to `true`, outbound network access is allowed. `false` by default.",
+              "type": "boolean"
+            },
+            "type": {
+              "enum": [
+                "workspace-write"
+              ],
+              "title": "WorkspaceWriteSandboxPolicyType",
+              "type": "string"
+            },
+            "writable_roots": {
+              "description": "Additional folders (beyond cwd and possibly TMPDIR) that should be writable from within the sandbox.",
+              "items": {
+                "$ref": "#/definitions/AbsolutePathBuf"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "WorkspaceWriteSandboxPolicy",
+          "type": "object"
+        }
+      ]
+    },
+    "SkillDependencies": {
+      "properties": {
+        "tools": {
+          "items": {
+            "$ref": "#/definitions/SkillToolDependency"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "tools"
+      ],
+      "type": "object"
+    },
+    "SkillErrorInfo": {
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "path"
+      ],
+      "type": "object"
+    },
+    "SkillInterface": {
+      "properties": {
+        "brand_color": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "default_prompt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "display_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icon_large": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icon_small": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "short_description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "SkillMetadata": {
+      "properties": {
+        "dependencies": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SkillDependencies"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "interface": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SkillInterface"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/definitions/SkillScope"
+        },
+        "short_description": {
+          "description": "Legacy short_description from SKILL.md. Prefer SKILL.json interface.short_description.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "description",
+        "enabled",
+        "name",
+        "path",
+        "scope"
+      ],
+      "type": "object"
+    },
+    "SkillScope": {
+      "enum": [
+        "user",
+        "repo",
+        "system",
+        "admin"
+      ],
+      "type": "string"
+    },
+    "SkillToolDependency": {
+      "properties": {
+        "command": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "transport": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "type": "string"
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "value"
+      ],
+      "type": "object"
+    },
+    "SkillsListEntry": {
+      "properties": {
+        "cwd": {
+          "type": "string"
+        },
+        "errors": {
+          "items": {
+            "$ref": "#/definitions/SkillErrorInfo"
+          },
+          "type": "array"
+        },
+        "skills": {
+          "items": {
+            "$ref": "#/definitions/SkillMetadata"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "cwd",
+        "errors",
+        "skills"
+      ],
+      "type": "object"
+    },
+    "StepStatus": {
+      "enum": [
+        "pending",
+        "in_progress",
+        "completed"
+      ],
+      "type": "string"
+    },
+    "TextContent": {
+      "description": "Text provided to or from an LLM.",
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "type"
+      ],
+      "type": "object"
+    },
+    "TextElement": {
+      "properties": {
+        "byte_range": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ByteRange"
+            }
+          ],
+          "description": "Byte range in the parent `text` buffer that this element occupies."
+        },
+        "placeholder": {
+          "description": "Optional human-readable placeholder for the element, displayed in the UI.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "byte_range"
+      ],
+      "type": "object"
+    },
+    "TextResourceContents": {
+      "properties": {
+        "mimeType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "uri"
+      ],
+      "type": "object"
+    },
+    "ThreadId": {
+      "type": "string"
+    },
+    "TokenUsage": {
+      "properties": {
+        "cached_input_tokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "input_tokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "output_tokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "reasoning_output_tokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "total_tokens": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cached_input_tokens",
+        "input_tokens",
+        "output_tokens",
+        "reasoning_output_tokens",
+        "total_tokens"
+      ],
+      "type": "object"
+    },
+    "TokenUsageInfo": {
+      "properties": {
+        "last_token_usage": {
+          "$ref": "#/definitions/TokenUsage"
+        },
+        "model_context_window": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "total_token_usage": {
+          "$ref": "#/definitions/TokenUsage"
+        }
+      },
+      "required": [
+        "last_token_usage",
+        "total_token_usage"
+      ],
+      "type": "object"
+    },
+    "Tool": {
+      "description": "Definition for a tool the client can call.",
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolAnnotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "inputSchema": {
+          "$ref": "#/definitions/ToolInputSchema"
+        },
+        "name": {
+          "type": "string"
+        },
+        "outputSchema": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolOutputSchema"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "inputSchema",
+        "name"
+      ],
+      "type": "object"
+    },
+    "ToolAnnotations": {
+      "description": "Additional properties describing a Tool to clients.\n\nNOTE: all properties in ToolAnnotations are **hints**. They are not guaranteed to provide a faithful description of tool behavior (including descriptive properties like `title`).\n\nClients should never make tool use decisions based on ToolAnnotations received from untrusted servers.",
+      "properties": {
+        "destructiveHint": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "idempotentHint": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "openWorldHint": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "readOnlyHint": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ToolInputSchema": {
+      "description": "A JSON Schema object defining the expected parameters for the tool.",
+      "properties": {
+        "properties": true,
+        "required": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "type": {
+          "default": "object",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ToolOutputSchema": {
+      "description": "An optional JSON Schema object defining the structure of the tool's output returned in the structuredContent field of a CallToolResult.",
+      "properties": {
+        "properties": true,
+        "required": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "type": {
+          "default": "object",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "TurnAbortReason": {
+      "enum": [
+        "interrupted",
+        "replaced",
+        "review_ended"
+      ],
+      "type": "string"
+    },
+    "TurnItem": {
+      "oneOf": [
+        {
+          "properties": {
+            "content": {
+              "items": {
+                "$ref": "#/definitions/UserInput"
+              },
+              "type": "array"
+            },
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "UserMessage"
+              ],
+              "title": "UserMessageTurnItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "content",
+            "id",
+            "type"
+          ],
+          "title": "UserMessageTurnItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "content": {
+              "items": {
+                "$ref": "#/definitions/AgentMessageContent"
+              },
+              "type": "array"
+            },
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "AgentMessage"
+              ],
+              "title": "AgentMessageTurnItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "content",
+            "id",
+            "type"
+          ],
+          "title": "AgentMessageTurnItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "Plan"
+              ],
+              "title": "PlanTurnItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "text",
+            "type"
+          ],
+          "title": "PlanTurnItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "raw_content": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "summary_text": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "Reasoning"
+              ],
+              "title": "ReasoningTurnItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "summary_text",
+            "type"
+          ],
+          "title": "ReasoningTurnItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "action": {
+              "$ref": "#/definitions/WebSearchAction"
+            },
+            "id": {
+              "type": "string"
+            },
+            "query": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "WebSearch"
+              ],
+              "title": "WebSearchTurnItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "action",
+            "id",
+            "query",
+            "type"
+          ],
+          "title": "WebSearchTurnItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "ContextCompaction"
+              ],
+              "title": "ContextCompactionTurnItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "type"
+          ],
+          "title": "ContextCompactionTurnItem",
+          "type": "object"
+        }
+      ]
+    },
+    "UserInput": {
+      "description": "User input",
+      "oneOf": [
+        {
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "text_elements": {
+              "default": [],
+              "description": "UI-defined spans within `text` that should be treated as special elements. These are byte ranges into the UTF-8 `text` buffer and are used to render or persist rich input markers (e.g., image placeholders) across history and resume without mutating the literal text.",
+              "items": {
+                "$ref": "#/definitions/TextElement"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "text"
+              ],
+              "title": "TextUserInputType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "type"
+          ],
+          "title": "TextUserInput",
+          "type": "object"
+        },
+        {
+          "description": "Pre‑encoded data: URI image.",
+          "properties": {
+            "image_url": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "image"
+              ],
+              "title": "ImageUserInputType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "image_url",
+            "type"
+          ],
+          "title": "ImageUserInput",
+          "type": "object"
+        },
+        {
+          "description": "Local image path provided by the user.  This will be converted to an `Image` variant (base64 data URL) during request serialization.",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "local_image"
+              ],
+              "title": "LocalImageUserInputType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "LocalImageUserInput",
+          "type": "object"
+        },
+        {
+          "description": "Skill selected by the user (name + path to SKILL.md).",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "skill"
+              ],
+              "title": "SkillUserInputType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "path",
+            "type"
+          ],
+          "title": "SkillUserInput",
+          "type": "object"
+        },
+        {
+          "description": "Explicit mention selected by the user (name + app://connector id).",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "mention"
+              ],
+              "title": "MentionUserInputType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "path",
+            "type"
+          ],
+          "title": "MentionUserInput",
+          "type": "object"
+        }
+      ]
+    },
+    "WebSearchAction": {
+      "oneOf": [
+        {
+          "properties": {
+            "queries": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "query": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "search"
+              ],
+              "title": "SearchWebSearchActionType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "SearchWebSearchAction",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "open_page"
+              ],
+              "title": "OpenPageWebSearchActionType",
+              "type": "string"
+            },
+            "url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "OpenPageWebSearchAction",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "pattern": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "find_in_page"
+              ],
+              "title": "FindInPageWebSearchActionType",
+              "type": "string"
+            },
+            "url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "FindInPageWebSearchAction",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "other"
+              ],
+              "title": "OtherWebSearchActionType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "OtherWebSearchAction",
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "properties": {
+    "conversationId": {
+      "$ref": "#/definitions/ThreadId"
+    },
+    "initialMessages": {
+      "items": {
+        "$ref": "#/definitions/EventMsg"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "model": {
+      "type": "string"
+    },
+    "rolloutPath": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "conversationId",
+    "model",
+    "rolloutPath"
+  ],
+  "title": "ForkConversationResponse",
+  "type": "object"
+}

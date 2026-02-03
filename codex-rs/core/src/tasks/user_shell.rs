@@ -67,7 +67,7 @@ impl SessionTask for UserShellCommandTask {
 
         let event = EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: turn_context.client.get_model_context_window(),
-            collaboration_mode_kind: turn_context.collaboration_mode_kind,
+            collaboration_mode_kind: turn_context.collaboration_mode.mode,
         });
         let session = session.clone_session();
         session.send_event(turn_context.as_ref(), event).await;
