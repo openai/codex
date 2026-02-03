@@ -2280,6 +2280,7 @@ export class BackendManager implements vscode.Disposable {
               id: fileId,
               messageID,
               opencodeSeq: getOpencodeMessageSeq(messageID),
+              role,
               filename,
               mime,
               url,

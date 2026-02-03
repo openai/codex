@@ -5262,6 +5262,10 @@ function applyItemLifecycle(
         if (anyItem?.type === "opencodeFile") {
           const id = String(anyItem.id ?? "");
           if (!id) break;
+          const role =
+            typeof anyItem.role === "string" && anyItem.role.trim()
+              ? (String(anyItem.role).trim() as any)
+              : null;
           const filename =
             typeof anyItem.filename === "string" && anyItem.filename.trim()
               ? String(anyItem.filename).trim()
@@ -5274,11 +5278,61 @@ function applyItemLifecycle(
             typeof anyItem.url === "string" && anyItem.url.trim()
               ? String(anyItem.url).trim()
               : null;
+
+          const isImage = Boolean(mime && mime.startsWith("image/"));
+          const isDataUrl = Boolean(url && url.startsWith("data:"));
+          if (isImage && isDataUrl && url) {
+            const imageBlockId = `opencodeFileImage:${id}`;
+            if (!rt.blockIndexById.has(imageBlockId)) {
+              void (async () => {
+                try {
+                  const cached = await cacheImageDataUrl({
+                    prefix: `opencode-file-${sessionId}-${id}`,
+                    dataUrl: url,
+                  });
+                  const block: ChatBlock = {
+                    id: imageBlockId,
+                    type: "image",
+                    title: filename ?? "Attached image",
+                    src: "",
+                    imageKey: cached.imageKey,
+                    mimeType: cached.mimeType,
+                    byteLength: cached.byteLength,
+                    autoLoad: true,
+                    alt: filename ?? "image",
+                    caption: filename,
+                    role: role === "assistant" ? "assistant" : "user",
+                  };
+                  (block as any).opencodeSeq = opencodeSeq;
+                  (block as any).opencodeOffset = 7;
+                  upsertBlock(sessionId, block);
+                  chatView?.postBlockUpsert(sessionId, block);
+                  chatView?.refresh();
+                  schedulePersistRuntime(sessionId);
+                } catch (err) {
+                  outputChannel?.appendLine(
+                    `[opencode] failed to cache file part image: ${String(err)}`,
+                  );
+                }
+              })();
+            }
+            break;
+          }
+
+          const displayUrl = (() => {
+            if (!url) return null;
+            if (url.startsWith("data:")) return "(data URL omitted)";
+            return url.length > 200 ? `${url.slice(0, 200)}…` : url;
+          })();
           const lines: string[] = [];
           lines.push(filename ? `**${filename}**` : "**File**");
           if (mime) lines.push(`- mime: \`${mime}\``);
-          if (url) lines.push(`- url: ${url}`);
-          upsertOpencodeInfo({ id, title: "OpenCode File", text: lines.join("\n") });
+          if (displayUrl) lines.push(`- url: ${displayUrl}`);
+          upsertOpencodeInfo({
+            id,
+            title: "OpenCode File",
+            text: lines.join("\n"),
+          });
           break;
         }
 
