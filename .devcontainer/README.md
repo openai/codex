@@ -1,35 +1,61 @@
-# Codex devcontainer
+# Codex devcontainer profiles
 
-Use this devcontainer when you want to run Codex inside your own project container.
+This folder now ships two profiles:
 
-## Who this is for
+- `devcontainer.codex-dev.json` (default intent: develop the Codex repo itself)
+- `devcontainer.secure.json` (default intent: run Codex in a stricter, firewall-enforced project container)
 
-- developers using Codex on application repos
-- teams that want a consistent, secure dev environment
-- contributors working on this repo (also supported)
+`devcontainer.json` currently mirrors `devcontainer.codex-dev.json` so VS Code opens into the Codex contributor setup by default.
 
-## Quick start
+## Profile 1: Codex contributor (`devcontainer.codex-dev.json`)
 
-1. Put this `.devcontainer/` folder in your project.
-2. Open the project in VS Code.
-3. Run **Dev Containers: Rebuild and Reopen in Container**.
-4. In the container terminal, run `codex`.
+Use this when working on this repository:
 
-If you prefer API key auth, set `OPENAI_API_KEY` in your host environment before opening the container.
+- forces `linux/arm64` (`platform` + `runArgs`)
+- uses `CARGO_TARGET_DIR=${containerWorkspaceFolder}/codex-rs/target-arm64`
+- keeps firewall off by default (`CODEX_ENABLE_FIREWALL=0`) for lower friction
+- still includes persistent mounts and bootstrap (`post_install.py`)
 
-## What you get by default
+## Profile 2: Secure project (`devcontainer.secure.json`)
 
-- `codex` CLI preinstalled (`@openai/codex` via npm)
-- Node `22` + pnpm `10.28.2`
-- Python 3 + pip
-- Rust `1.92.0` with `clippy`, `rustfmt`, `rust-src`
-- musl targets: `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`
-- common tools: git, zsh, rg, fd, fzf, jq, curl
-- persistent state volumes for history, auth/config, Cargo cache, and Rustup
+Use this when you want stricter egress control:
 
-## How to use Codex after opening the container
+- enables firewall startup (`postStartCommand`)
+- uses IPv4 allowlisting + IPv6 default-deny
+- requires `NET_ADMIN` / `NET_RAW` caps
+- uses project-generic Cargo target dir (`/workspace/.cache/cargo-target`)
 
-Basic flow:
+## How to switch profiles
+
+Option A (quick swap in repo):
+
+```bash
+cp .devcontainer/devcontainer.secure.json .devcontainer/devcontainer.json
+```
+
+or
+
+```bash
+cp .devcontainer/devcontainer.codex-dev.json .devcontainer/devcontainer.json
+```
+
+Then run **Dev Containers: Rebuild and Reopen in Container**.
+
+Option B (CLI without copying):
+
+```bash
+devcontainer up --workspace-folder . --config .devcontainer/devcontainer.secure.json
+```
+
+or
+
+```bash
+devcontainer up --workspace-folder . --config .devcontainer/devcontainer.codex-dev.json
+```
+
+## Using Codex after opening the container
+
+The image preinstalls the Codex CLI. In the container terminal:
 
 ```bash
 codex
@@ -38,53 +64,6 @@ codex
 Useful checks:
 
 ```bash
-codex --help
 which codex
-```
-
-Typical usage is from your project root (`/workspace`), so Codex can inspect and edit files directly.
-
-## Firewall and network policy
-
-Strict mode is the default (`CODEX_ENABLE_FIREWALL=1`):
-
-- outbound traffic is allowlisted by domain via `OPENAI_ALLOWED_DOMAINS`
-- IPv4 is enforced with `iptables` + `ipset`
-- IPv6 is explicitly default-deny via `ip6tables` (prevents bypass)
-
-Default allowlist includes:
-
-- OpenAI: `api.openai.com`, `auth.openai.com`
-- GitHub: `github.com`, `api.github.com`, `codeload.github.com`, `raw.githubusercontent.com`, `objects.githubusercontent.com`
-- registries: `registry.npmjs.org`, `crates.io`, `index.crates.io`, `static.crates.io`, `static.rust-lang.org`, `pypi.org`, `files.pythonhosted.org`
-
-You can temporarily disable strict mode:
-
-```bash
-export CODEX_ENABLE_FIREWALL=0
-```
-
-Then rebuild/restart the container.
-
-## Adding more languages or tooling
-
-For project-specific stacks (Go, Java, .NET, etc.), add Dev Container features in `devcontainer.json`.
-
-Example:
-
-```json
-{
-  "features": {
-    "ghcr.io/devcontainers/features/go:1": { "version": "1.24" },
-    "ghcr.io/devcontainers/features/java:1": { "version": "21" }
-  }
-}
-```
-
-## Local Docker smoke build
-
-```bash
-docker build -f .devcontainer/Dockerfile -t codex-devcontainer-test .
-docker run --rm -it --cap-add=NET_ADMIN --cap-add=NET_RAW \
-  -v "$PWD":/workspace -w /workspace codex-devcontainer-test zsh
+codex --help
 ```
