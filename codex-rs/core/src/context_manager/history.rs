@@ -10,6 +10,7 @@ use crate::truncate::truncate_function_output_items_with_policy;
 use crate::truncate::truncate_text;
 use crate::user_shell_command::is_user_shell_command_text;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
@@ -134,7 +135,7 @@ impl ContextManager {
 
         match &mut self.items[index] {
             ResponseItem::FunctionCallOutput { output, .. } => {
-                let Some(content_items) = output.content_items.as_mut() else {
+                let Some(content_items) = output.content_items_mut() else {
                     return false;
                 };
                 let mut replaced = false;
@@ -268,19 +269,23 @@ impl ContextManager {
         let policy_with_serialization_budget = policy * 1.2;
         match item {
             ResponseItem::FunctionCallOutput { call_id, output } => {
-                let truncated =
-                    truncate_text(output.content.as_str(), policy_with_serialization_budget);
-                let truncated_items = output.content_items.as_ref().map(|items| {
-                    truncate_function_output_items_with_policy(
-                        items,
-                        policy_with_serialization_budget,
-                    )
-                });
+                let body = match &output.body {
+                    FunctionCallOutputBody::Text(content) => FunctionCallOutputBody::Text(
+                        truncate_text(content, policy_with_serialization_budget),
+                    ),
+                    FunctionCallOutputBody::ContentItems(items) => {
+                        FunctionCallOutputBody::ContentItems(
+                            truncate_function_output_items_with_policy(
+                                items,
+                                policy_with_serialization_budget,
+                            ),
+                        )
+                    }
+                };
                 ResponseItem::FunctionCallOutput {
                     call_id: call_id.clone(),
                     output: FunctionCallOutputPayload {
-                        content: truncated,
-                        content_items: truncated_items,
+                        body,
                         success: output.success,
                     },
                 }

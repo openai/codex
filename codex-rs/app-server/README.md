@@ -122,6 +122,7 @@ Start a fresh thread when you need a new Codex conversation.
     "approvalPolicy": "never",
     "sandbox": "workspaceWrite",
     "personality": "friendly",
+    // Experimental: requires opt-in
     "dynamicTools": [
         {
             "name": "lookup_ticket",
@@ -555,6 +556,41 @@ Order of messages:
 4. `item/completed` — returns the same `fileChange` item with `status` updated to `completed`, `failed`, or `declined` after the patch attempt. Rely on this to show success/failure and finalize the diff state in your UI.
 
 UI guidance for IDEs: surface an approval dialog as soon as the request arrives. The turn will proceed after the server receives a response to the approval request. The terminal `item/completed` notification will be sent with the appropriate status.
+
+### Dynamic tool calls (experimental)
+
+`dynamicTools` on `thread/start` and the corresponding `item/tool/call` request/response flow are experimental APIs. To enable them, set `initialize.params.capabilities.experimentalApi = true`.
+
+When a dynamic tool is invoked during a turn, the server sends an `item/tool/call` JSON-RPC request to the client:
+
+```json
+{
+  "method": "item/tool/call",
+  "id": 60,
+  "params": {
+    "threadId": "thr_123",
+    "turnId": "turn_123",
+    "callId": "call_123",
+    "tool": "lookup_ticket",
+    "arguments": { "id": "ABC-123" }
+  }
+}
+```
+
+The client must respond with content items. Use `inputText` for text and `inputImage` for image URLs/data URLs:
+
+```json
+{
+  "id": 60,
+  "result": {
+    "contentItems": [
+      { "type": "inputText", "text": "Ticket ABC-123 is open." },
+      { "type": "inputImage", "imageUrl": "data:image/png;base64,AAA" }
+    ],
+    "success": true
+  }
+}
+```
 
 ## Skills
 

@@ -1314,10 +1314,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     });
     prompt.input.push(ResponseItem::FunctionCallOutput {
         call_id: "function-call-id".into(),
-        output: FunctionCallOutputPayload {
-            content: "ok".into(),
-            ..Default::default()
-        },
+        output: FunctionCallOutputPayload::from_text("ok".into()),
     });
     prompt.input.push(ResponseItem::LocalShellCall {
         id: Some("local-shell-id".into()),
