@@ -6,8 +6,7 @@ use rand::Rng;
 const ANNOUNCEMENT_TIP_URL: &str =
     "https://raw.githubusercontent.com/openai/codex/main/announcement_tip.toml";
 
-const PAID_TOOLTIP: &str =
-    "*New* Try the **Codex App** with 2x rate limits until *April 2nd*. Run 'codex app' or visit https://chatgpt.com/codex";
+const PAID_TOOLTIP: &str = "*New* Try the **Codex App** with 2x rate limits until *April 2nd*. Run 'codex app' or visit https://chatgpt.com/codex";
 const OTHER_TOOLTIP: &str =
     "*New* Build faster with the **Codex App**. Run 'codex app' or visit https://chatgpt.com/codex";
 const FREE_GO_TOOLTIP: &str =
