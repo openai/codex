@@ -41,6 +41,42 @@ pub enum AuthMode {
     ChatgptAuthTokens,
 }
 
+macro_rules! experimental_reason_expr {
+    // If a request variant is explicitly marked experimental, that reason wins.
+    (#[experimental($reason:expr)] $params:ident $(, $inspect_params:tt)?) => {
+        Some($reason)
+    };
+    // `inspect_params: true` is used when a method is mostly stable but needs
+    // field-level gating from its params type (for example, ThreadStart).
+    ($params:ident, true) => {
+        crate::experimental_api::ExperimentalApi::experimental_reason($params)
+    };
+    ($params:ident $(, $inspect_params:tt)?) => {
+        None
+    };
+}
+
+macro_rules! experimental_method_entry {
+    (#[experimental($reason:expr)] => $wire:literal) => {
+        $wire
+    };
+    (#[experimental($reason:expr)]) => {
+        $reason
+    };
+    ($($tt:tt)*) => {
+        ""
+    };
+}
+
+macro_rules! experimental_type_entry {
+    (#[experimental($reason:expr)] $ty:ty) => {
+        stringify!($ty)
+    };
+    ($ty:ty) => {
+        ""
+    };
+}
+
 /// Generates an `enum ClientRequest` where each variant is a request that the
 /// client can send to the server. Each variant has associated `params` and
 /// `response` types. Also generates a `export_client_responses()` function to
@@ -48,9 +84,11 @@ pub enum AuthMode {
 macro_rules! client_request_definitions {
     (
         $(
-            $(#[$variant_meta:meta])*
+            $(#[experimental($reason:expr)])?
+            $(#[doc = $variant_doc:literal])*
             $variant:ident $(=> $wire:literal)? {
                 params: $(#[$params_meta:meta])* $params:ty,
+                $(inspect_params: $inspect_params:tt,)?
                 response: $response:ty,
             }
         ),* $(,)?
@@ -60,7 +98,7 @@ macro_rules! client_request_definitions {
         #[serde(tag = "method", rename_all = "camelCase")]
         pub enum ClientRequest {
             $(
-                $(#[$variant_meta])*
+                $(#[doc = $variant_doc])*
                 $(#[serde(rename = $wire)] #[ts(rename = $wire)])?
                 $variant {
                     #[serde(rename = "id")]
@@ -70,6 +108,38 @@ macro_rules! client_request_definitions {
                 },
             )*
         }
+
+        impl crate::experimental_api::ExperimentalApi for ClientRequest {
+            fn experimental_reason(&self) -> Option<&'static str> {
+                match self {
+                    $(
+                        Self::$variant { params: _params, .. } => {
+                            experimental_reason_expr!(
+                                $(#[experimental($reason)])?
+                                _params
+                                $(, $inspect_params)?
+                            )
+                        }
+                    )*
+                }
+            }
+        }
+
+        pub(crate) const EXPERIMENTAL_CLIENT_METHODS: &[&str] = &[
+            $(
+                experimental_method_entry!($(#[experimental($reason)])? $(=> $wire)?),
+            )*
+        ];
+        pub(crate) const EXPERIMENTAL_CLIENT_METHOD_PARAM_TYPES: &[&str] = &[
+            $(
+                experimental_type_entry!($(#[experimental($reason)])? $params),
+            )*
+        ];
+        pub(crate) const EXPERIMENTAL_CLIENT_METHOD_RESPONSE_TYPES: &[&str] = &[
+            $(
+                experimental_type_entry!($(#[experimental($reason)])? $response),
+            )*
+        ];
 
         pub fn export_client_responses(
             out_dir: &::std::path::Path,
@@ -112,8 +182,10 @@ client_request_definitions! {
 
     /// NEW APIs
     // Thread lifecycle
+    // Uses `inspect_params` because only some fields are experimental.
     ThreadStart => "thread/start" {
         params: v2::ThreadStartParams,
+        inspect_params: true,
         response: v2::ThreadStartResponse,
     },
     ThreadResume => "thread/resume" {
@@ -181,10 +253,17 @@ client_request_definitions! {
         params: v2::ModelListParams,
         response: v2::ModelListResponse,
     },
-    /// EXPERIMENTAL - list collaboration mode presets.
+    #[experimental("collaborationMode/list")]
+    /// Lists collaboration mode presets.
     CollaborationModeList => "collaborationMode/list" {
         params: v2::CollaborationModeListParams,
         response: v2::CollaborationModeListResponse,
+    },
+    #[experimental("mock/experimentalMethod")]
+    /// Test-only method used to validate experimental gating.
+    MockExperimentalMethod => "mock/experimentalMethod" {
+        params: v2::MockExperimentalMethodParams,
+        response: v2::MockExperimentalMethodResponse,
     },
 
     McpServerOauthLogin => "mcpServer/oauth/login" {
@@ -994,5 +1073,28 @@ mod tests {
             serde_json::to_value(&request)?,
         );
         Ok(())
+    }
+
+    #[test]
+    fn mock_experimental_method_is_marked_experimental() {
+        let request = ClientRequest::MockExperimentalMethod {
+            request_id: RequestId::Integer(1),
+            params: v2::MockExperimentalMethodParams::default(),
+        };
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
+        assert_eq!(reason, Some("mock/experimentalMethod"));
+    }
+
+    #[test]
+    fn thread_start_mock_field_is_marked_experimental() {
+        let request = ClientRequest::ThreadStart {
+            request_id: RequestId::Integer(1),
+            params: v2::ThreadStartParams {
+                mock_experimental_field: Some("mock".to_string()),
+                ..Default::default()
+            },
+        };
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
+        assert_eq!(reason, Some("thread/start.mockExperimentalField"));
     }
 }
