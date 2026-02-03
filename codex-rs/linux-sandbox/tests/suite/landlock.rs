@@ -98,7 +98,7 @@ async fn run_cmd_result(
         &sandbox_policy,
         sandbox_cwd.as_path(),
         &codex_linux_sandbox_exe,
-        false,
+        true,
         None,
     )
     .await
@@ -218,7 +218,7 @@ async fn assert_network_blocked(cmd: &[&str]) {
         &sandbox_policy,
         sandbox_cwd.as_path(),
         &codex_linux_sandbox_exe,
-        false,
+        true,
         None,
     )
     .await;
