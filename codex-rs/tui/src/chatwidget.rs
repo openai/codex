@@ -3395,6 +3395,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    // Expand directory mentions in the display text to markdown links for model input.
     fn expand_directory_mentions_for_model(
         &self,
         display_text: &str,
@@ -3415,6 +3416,7 @@ impl ChatWidget {
         }
 
         let mut elements = text_elements.to_vec();
+        // Rebuild left-to-right so byte ranges stay coherent.
         elements.sort_by_key(|e| e.byte_range.start);
 
         let mut rebuilt = String::with_capacity(display_text.len());
@@ -3433,6 +3435,7 @@ impl ChatWidget {
 
             let elem_text = &display_text[start..end];
             let payload = elem.placeholder(display_text).map(str::to_string);
+            // Treat only trailing-slash mentions that resolve to real directories.
             let resolved_dir = payload
                 .as_deref()
                 .filter(|payload| payload.ends_with('/'))
@@ -3447,8 +3450,10 @@ impl ChatWidget {
 
             if let Some(abs) = resolved_dir {
                 let abs_dir = normalize_dir_path_for_prompt(abs.as_path());
+                // Expand directory mention to a markdown link for model input.
                 rebuilt.push_str(&format!("[{elem_text}]({abs_dir})"));
             } else {
+                // Non-directory elements remain as text elements with remapped ranges.
                 let new_start = rebuilt.len();
                 rebuilt.push_str(elem_text);
                 let new_end = rebuilt.len();
