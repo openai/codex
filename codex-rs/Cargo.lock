@@ -1656,15 +1656,19 @@ dependencies = [
 name = "codex-linux-sandbox"
 version = "0.0.0"
 dependencies = [
+ "cc",
  "clap",
  "codex-core",
  "codex-utils-absolute-path",
  "landlock",
  "libc",
+ "pkg-config",
  "pretty_assertions",
  "seccompiler",
+ "serde_json",
  "tempfile",
  "tokio",
+ "which",
 ]
 
 [[package]]

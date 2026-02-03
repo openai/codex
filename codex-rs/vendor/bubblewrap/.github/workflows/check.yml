@@ -1,0 +1,105 @@
+name: CI checks
+
+on:
+  push:
+    branches:
+    - main
+  pull_request:
+    branches:
+    - main
+
+jobs:
+  meson:
+    name: Build with Meson and gcc, and test
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check out
+      uses: actions/checkout@v4
+    - name: Install build-dependencies
+      run: sudo ./ci/builddeps.sh
+    - name: Enable user namespaces
+      run: sudo ./ci/enable-userns.sh
+    - name: Create logs dir
+      run: mkdir test-logs
+    - name: setup
+      run: |
+        meson _build
+      env:
+        CFLAGS: >-
+          -O2
+          -Wp,-D_FORTIFY_SOURCE=2
+          -fsanitize=address
+          -fsanitize=undefined
+    - name: compile
+      run: ninja -C _build -v
+    - name: smoke-test
+      run: |
+        set -x
+        ./_build/bwrap --bind / / --tmpfs /tmp true
+      env:
+        ASAN_OPTIONS: detect_leaks=0
+    - name: test
+      run: |
+        BWRAP_MUST_WORK=1 meson test -C _build
+      env:
+        ASAN_OPTIONS: detect_leaks=0
+    - name: Collect overall test logs on failure
+      if: failure()
+      run: mv _build/meson-logs/testlog.txt test-logs/ || true
+    - name: install
+      run: |
+        DESTDIR="$(pwd)/DESTDIR" meson install -C _build
+        ( cd DESTDIR && find -ls )
+    - name: dist
+      run: |
+        BWRAP_MUST_WORK=1 meson dist -C _build
+    - name: Collect dist test logs on failure
+      if: failure()
+      run: mv _build/meson-private/dist-build/meson-logs/testlog.txt test-logs/disttestlog.txt || true
+    - name: use as subproject
+      run: |
+        mkdir tests/use-as-subproject/subprojects
+        tar -C tests/use-as-subproject/subprojects -xf _build/meson-dist/bubblewrap-*.tar.xz
+        mv tests/use-as-subproject/subprojects/bubblewrap-* tests/use-as-subproject/subprojects/bubblewrap
+        ( cd tests/use-as-subproject && meson _build )
+        ninja -C tests/use-as-subproject/_build -v
+        meson test -C tests/use-as-subproject/_build
+        DESTDIR="$(pwd)/DESTDIR-as-subproject" meson install -C tests/use-as-subproject/_build
+        ( cd DESTDIR-as-subproject && find -ls )
+        test -x DESTDIR-as-subproject/usr/local/libexec/not-flatpak-bwrap
+        test ! -e DESTDIR-as-subproject/usr/local/bin/bwrap
+        test ! -e DESTDIR-as-subproject/usr/local/libexec/bwrap
+        tests/use-as-subproject/assert-correct-rpath.py DESTDIR-as-subproject/usr/local/libexec/not-flatpak-bwrap
+    - name: Upload test logs
+      uses: actions/upload-artifact@v4
+      if: failure() || cancelled()
+      with:
+        name: test logs
+        path: test-logs
+
+  clang:
+    name: Build with clang and analyze
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        language:
+          - cpp
+    steps:
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v2
+      with:
+        languages: ${{ matrix.language }}
+    - name: Check out
+      uses: actions/checkout@v4
+    - name: Install build-dependencies
+      run: sudo ./ci/builddeps.sh --clang
+    - run: meson build -Dselinux=enabled
+      env:
+        CC: clang
+        CFLAGS: >-
+          -O2
+          -Werror=unused-variable
+    - run: meson compile -C build
+    - name: CodeQL analysis
+      uses: github/codeql-action/analyze@v2
