@@ -3,7 +3,6 @@ use crate::auth::add_auth_headers;
 use crate::common::CompactionInput;
 use crate::error::ApiError;
 use crate::provider::Provider;
-use crate::provider::WireApi;
 use crate::telemetry::run_with_request_telemetry;
 use codex_client::HttpTransport;
 use codex_client::RequestTelemetry;
@@ -37,9 +36,7 @@ impl<T: HttpTransport, A: AuthProvider> CompactClient<T, A> {
     }
 
     fn path(&self) -> &'static str {
-        match self.provider.wire {
-            WireApi::Compact | WireApi::Responses => "responses/compact",
-        }
+        "responses/compact"
     }
 
     pub async fn compact(
@@ -118,12 +115,11 @@ mod tests {
         }
     }
 
-    fn provider(wire: WireApi) -> Provider {
+    fn provider() -> Provider {
         Provider {
             name: "test".to_string(),
             base_url: "https://example.com/v1".to_string(),
             query_params: None,
-            wire,
             headers: HeaderMap::new(),
             retry: RetryConfig {
                 max_attempts: 1,
@@ -137,13 +133,8 @@ mod tests {
     }
 
     #[test]
-    fn path_is_responses_compact_for_supported_wire_apis() {
-        let responses_client =
-            CompactClient::new(DummyTransport, provider(WireApi::Responses), DummyAuth);
-        assert_eq!(responses_client.path(), "responses/compact");
-
-        let compact_client =
-            CompactClient::new(DummyTransport, provider(WireApi::Compact), DummyAuth);
-        assert_eq!(compact_client.path(), "responses/compact");
+    fn path_is_responses_compact() {
+        let client = CompactClient::new(DummyTransport, provider(), DummyAuth);
+        assert_eq!(client.path(), "responses/compact");
     }
 }

@@ -9,7 +9,6 @@ use codex_api::AuthProvider;
 use codex_api::Provider;
 use codex_api::ResponsesClient;
 use codex_api::ResponsesOptions;
-use codex_api::WireApi;
 use codex_api::requests::responses::Compression;
 use codex_client::HttpTransport;
 use codex_client::Request;
@@ -118,12 +117,11 @@ impl AuthProvider for StaticAuth {
     }
 }
 
-fn provider(name: &str, wire: WireApi) -> Provider {
+fn provider(name: &str) -> Provider {
     Provider {
         name: name.to_string(),
         base_url: "https://example.com/v1".to_string(),
         query_params: None,
-        wire,
         headers: HeaderMap::new(),
         retry: codex_api::provider::RetryConfig {
             max_attempts: 1,
@@ -195,26 +193,10 @@ data: {"id":"resp-1","output":[{"type":"message","role":"assistant","content":[{
 }
 
 #[tokio::test]
-async fn responses_client_uses_responses_path_for_responses_wire() -> Result<()> {
+async fn responses_client_uses_responses_path() -> Result<()> {
     let state = RecordingState::default();
     let transport = RecordingTransport::new(state.clone());
-    let client = ResponsesClient::new(transport, provider("openai", WireApi::Responses), NoAuth);
-
-    let body = serde_json::json!({ "echo": true });
-    let _stream = client
-        .stream(body, HeaderMap::new(), Compression::None, None)
-        .await?;
-
-    let requests = state.take_stream_requests();
-    assert_path_ends_with(&requests, "/responses");
-    Ok(())
-}
-
-#[tokio::test]
-async fn responses_client_uses_responses_path_for_compact_wire() -> Result<()> {
-    let state = RecordingState::default();
-    let transport = RecordingTransport::new(state.clone());
-    let client = ResponsesClient::new(transport, provider("openai", WireApi::Compact), NoAuth);
+    let client = ResponsesClient::new(transport, provider("openai"), NoAuth);
 
     let body = serde_json::json!({ "echo": true });
     let _stream = client
@@ -231,7 +213,7 @@ async fn streaming_client_adds_auth_headers() -> Result<()> {
     let state = RecordingState::default();
     let transport = RecordingTransport::new(state.clone());
     let auth = StaticAuth::new("secret-token", "acct-1");
-    let client = ResponsesClient::new(transport, provider("openai", WireApi::Responses), auth);
+    let client = ResponsesClient::new(transport, provider("openai"), auth);
 
     let body = serde_json::json!({ "model": "gpt-test" });
     let _stream = client
@@ -266,7 +248,7 @@ async fn streaming_client_adds_auth_headers() -> Result<()> {
 async fn streaming_client_retries_on_transport_error() -> Result<()> {
     let transport = FlakyTransport::new();
 
-    let mut provider = provider("openai", WireApi::Responses);
+    let mut provider = provider("openai");
     provider.retry.max_attempts = 2;
 
     let client = ResponsesClient::new(transport.clone(), provider, NoAuth);

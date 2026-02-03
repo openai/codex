@@ -83,7 +83,6 @@ impl<T: HttpTransport, A: AuthProvider> ModelsClient<T, A> {
 mod tests {
     use super::*;
     use crate::provider::RetryConfig;
-    use crate::provider::WireApi;
     use async_trait::async_trait;
     use codex_client::Request;
     use codex_client::Response;
@@ -149,7 +148,6 @@ mod tests {
             name: "test".to_string(),
             base_url: base_url.to_string(),
             query_params: None,
-            wire: WireApi::Responses,
             headers: HeaderMap::new(),
             retry: RetryConfig {
                 max_attempts: 1,

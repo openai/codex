@@ -31,7 +31,6 @@ pub use crate::endpoint::responses_websocket::ResponsesWebsocketClient;
 pub use crate::endpoint::responses_websocket::ResponsesWebsocketConnection;
 pub use crate::error::ApiError;
 pub use crate::provider::Provider;
-pub use crate::provider::WireApi;
 pub use crate::provider::is_azure_responses_wire_base_url;
 pub use crate::requests::ResponsesRequest;
 pub use crate::requests::ResponsesRequestBuilder;
