@@ -2316,6 +2316,18 @@ function main(): void {
       kind: "slash",
     },
     {
+      insert: "/apps ",
+      label: "/apps",
+      detail: "Browse apps",
+      kind: "slash",
+    },
+    {
+      insert: "/personality ",
+      label: "/personality",
+      detail: "Set personality",
+      kind: "slash",
+    },
+    {
       insert: "/diff ",
       label: "/diff",
       detail: "Open Latest Diff",

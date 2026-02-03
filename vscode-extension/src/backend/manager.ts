@@ -34,6 +34,7 @@ import type { ThreadRollbackResponse } from "../generated/v2/ThreadRollbackRespo
 import type { ModelListResponse } from "../generated/v2/ModelListResponse";
 import type { Model } from "../generated/v2/Model";
 import type { ReasoningEffort } from "../generated/ReasoningEffort";
+import type { Personality } from "../generated/Personality";
 import type { GetAccountResponse } from "../generated/v2/GetAccountResponse";
 import type { GetAccountRateLimitsResponse } from "../generated/v2/GetAccountRateLimitsResponse";
 import type { LoginAccountParams } from "../generated/v2/LoginAccountParams";
@@ -44,7 +45,10 @@ import type { SwitchAccountParams } from "../generated/v2/SwitchAccountParams";
 import type { SwitchAccountResponse } from "../generated/v2/SwitchAccountResponse";
 import type { SkillsListEntry } from "../generated/v2/SkillsListEntry";
 import type { Thread } from "../generated/v2/Thread";
+import type { ThreadSourceKind } from "../generated/v2/ThreadSourceKind";
 import type { Turn } from "../generated/v2/Turn";
+import type { AppInfo } from "../generated/v2/AppInfo";
+import type { AppsListResponse } from "../generated/v2/AppsListResponse";
 import type { AnyServerNotification } from "./types";
 import type { FuzzyFileSearchResponse } from "../generated/FuzzyFileSearchResponse";
 import type { ListMcpServerStatusResponse } from "../generated/v2/ListMcpServerStatusResponse";
@@ -57,6 +61,7 @@ type ModelSettings = {
   provider: string | null;
   reasoning: string | null;
   agent?: string | null;
+  personality?: Personality | null;
 };
 
 function imageMimeFromPath(filePath: string): string | null {
@@ -593,7 +598,7 @@ export class BackendManager implements vscode.Disposable {
         : null,
       baseInstructions: null,
       developerInstructions: null,
-      personality: null,
+      personality: modelSettings?.personality ?? null,
       ephemeral: null,
       dynamicTools: null,
       experimentalRawEvents: false,
@@ -805,6 +810,9 @@ export class BackendManager implements vscode.Disposable {
       cursor?: string | null;
       limit?: number | null;
       modelProviders?: string[] | null;
+      sortKey?: "created_at" | "updated_at" | null;
+      sourceKinds?: ThreadSourceKind[] | null;
+      archived?: boolean | null;
     },
   ): Promise<{ data: Thread[]; nextCursor: string | null }> {
     const backendKey = makeBackendInstanceKey(folder.uri.toString(), backendId);
@@ -829,7 +837,10 @@ export class BackendManager implements vscode.Disposable {
     const res = await proc.threadList({
       cursor: opts?.cursor ?? null,
       limit: opts?.limit ?? null,
+      sortKey: opts?.sortKey ?? null,
       modelProviders: opts?.modelProviders ?? null,
+      sourceKinds: opts?.sourceKinds ?? null,
+      archived: opts?.archived ?? null,
     });
     return { data: res.data ?? [], nextCursor: res.nextCursor ?? null };
   }
@@ -847,6 +858,41 @@ export class BackendManager implements vscode.Disposable {
       if (!cursor) break;
     }
     return out;
+  }
+
+  private async fetchAllApps(proc: BackendProcess): Promise<AppInfo[]> {
+    const out: AppInfo[] = [];
+    let cursor: string | null = null;
+    for (let i = 0; i < 10; i += 1) {
+      const res: AppsListResponse = await proc.appsList({
+        cursor,
+        limit: 200,
+      });
+      out.push(...(res.data ?? []));
+      cursor = res.nextCursor ?? null;
+      if (!cursor) break;
+    }
+    return out;
+  }
+
+  public async listAppsForSession(session: Session): Promise<AppInfo[]> {
+    if (session.backendId === "opencode") {
+      return [];
+    }
+
+    const folder = this.resolveWorkspaceFolder(session.workspaceFolderUri);
+    if (!folder) {
+      throw new Error(
+        `WorkspaceFolder not found for session: ${session.workspaceFolderUri}`,
+      );
+    }
+
+    await this.startForBackendId(folder, session.backendId);
+    const proc = this.processes.get(session.backendKey);
+    if (!proc)
+      throw new Error("Backend is not running for this workspace folder");
+
+    return await this.fetchAllApps(proc);
   }
 
   public async pickSession(
@@ -990,6 +1036,26 @@ export class BackendManager implements vscode.Disposable {
       throw new Error("Backend is not running for this workspace folder");
 
     await proc.threadArchive({ threadId: session.threadId });
+  }
+
+  public async unarchiveThreadForWorkspaceFolderAndBackendId(
+    folder: vscode.WorkspaceFolder,
+    backendId: BackendId,
+    threadId: string,
+  ): Promise<void> {
+    if (backendId === "opencode") {
+      throw new Error(
+        "thread/unarchive is not supported for opencode backend.",
+      );
+    }
+
+    const backendKey = makeBackendInstanceKey(folder.uri.toString(), backendId);
+    await this.startForBackendId(folder, backendId);
+    const proc = this.processes.get(backendKey);
+    if (!proc)
+      throw new Error("Backend is not running for this workspace folder");
+
+    await proc.threadUnarchive({ threadId });
   }
 
   public async readAccount(session: Session): Promise<GetAccountResponse> {

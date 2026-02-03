@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import type { Personality } from "./generated/Personality";
 
 export type BackendId = "codex" | "codez" | "opencode";
 
@@ -10,6 +11,7 @@ export type Session = {
   title: string;
   customTitle?: boolean;
   threadId: string;
+  personality?: Personality | null;
 };
 
 export class SessionStore {

@@ -22,10 +22,14 @@ import type { ModelListParams } from "../generated/v2/ModelListParams";
 import type { ModelListResponse } from "../generated/v2/ModelListResponse";
 import type { ThreadArchiveParams } from "../generated/v2/ThreadArchiveParams";
 import type { ThreadArchiveResponse } from "../generated/v2/ThreadArchiveResponse";
+import type { ThreadUnarchiveParams } from "../generated/v2/ThreadUnarchiveParams";
+import type { ThreadUnarchiveResponse } from "../generated/v2/ThreadUnarchiveResponse";
 import type { ThreadRollbackParams } from "../generated/v2/ThreadRollbackParams";
 import type { ThreadRollbackResponse } from "../generated/v2/ThreadRollbackResponse";
 import type { ThreadListParams } from "../generated/v2/ThreadListParams";
 import type { ThreadListResponse } from "../generated/v2/ThreadListResponse";
+import type { AppsListParams } from "../generated/v2/AppsListParams";
+import type { AppsListResponse } from "../generated/v2/AppsListResponse";
 import type { ListMcpServerStatusParams } from "../generated/v2/ListMcpServerStatusParams";
 import type { ListMcpServerStatusResponse } from "../generated/v2/ListMcpServerStatusResponse";
 import type { GetAccountParams } from "../generated/v2/GetAccountParams";
@@ -180,6 +184,15 @@ export class BackendProcess implements vscode.Disposable {
     });
   }
 
+  public async threadUnarchive(
+    params: ThreadUnarchiveParams,
+  ): Promise<ThreadUnarchiveResponse> {
+    return this.rpc.request<ThreadUnarchiveResponse>({
+      method: "thread/unarchive",
+      params,
+    });
+  }
+
   public async threadCompact(
     params: ThreadCompactParams,
   ): Promise<ThreadCompactResponse> {
@@ -213,6 +226,19 @@ export class BackendProcess implements vscode.Disposable {
       },
     };
     return this.rpc.request<ThreadListResponse>(request);
+  }
+
+  public async appsList(
+    params: Partial<AppsListParams> | undefined = undefined,
+  ): Promise<AppsListResponse> {
+    const request: { method: "app/list"; params: AppsListParams } = {
+      method: "app/list",
+      params: {
+        cursor: params?.cursor ?? null,
+        limit: params?.limit ?? null,
+      },
+    };
+    return this.rpc.request<AppsListResponse>(request);
   }
 
   public async mcpServerStatusList(

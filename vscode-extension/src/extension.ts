@@ -13,12 +13,14 @@ import { listAgentsFromDisk } from "./agents_disk";
 import type { AnyServerNotification } from "./backend/types";
 import type { ContentBlock } from "./generated/ContentBlock";
 import type { ImageContent } from "./generated/ImageContent";
+import type { Personality } from "./generated/Personality";
 import type { CommandAction } from "./generated/v2/CommandAction";
 import type { Model } from "./generated/v2/Model";
 import type { RateLimitSnapshot } from "./generated/v2/RateLimitSnapshot";
 import type { RateLimitWindow } from "./generated/v2/RateLimitWindow";
 import type { Thread } from "./generated/v2/Thread";
 import type { ThreadItem } from "./generated/v2/ThreadItem";
+import type { ThreadSourceKind } from "./generated/v2/ThreadSourceKind";
 import type { ThreadTokenUsage } from "./generated/v2/ThreadTokenUsage";
 import type { Turn } from "./generated/v2/Turn";
 import type { BackendId, Session } from "./sessions";
@@ -1204,6 +1206,7 @@ export function activate(context: vscode.ExtensionContext): void {
             title: s.title,
             threadId: s.threadId,
             customTitle: s.customTitle ?? false,
+            personality: null,
           });
         }
       }
@@ -1271,6 +1274,78 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!backendId) return;
       const wantedCwd = normalizeFsPathForCompare(folder.uri.fsPath);
 
+      let archived: boolean | null = null;
+      let sortKey: "created_at" | "updated_at" | null = null;
+      let sourceKinds: ThreadSourceKind[] | null = null;
+
+      if (backendId !== "opencode") {
+        const archivedPicked = await vscode.window.showQuickPick(
+          [
+            {
+              label: "Active",
+              description: "Not archived",
+              archived: null as boolean | null,
+            },
+            {
+              label: "Archived",
+              description: "Archived only",
+              archived: true as const,
+            },
+          ],
+          { title: "History: Archived filter" },
+        );
+        if (!archivedPicked) return;
+        archived = archivedPicked.archived;
+
+        const sortPicked = await vscode.window.showQuickPick(
+          [
+            {
+              label: "Updated",
+              description: "Sort by updated_at",
+              sortKey: "updated_at" as const,
+            },
+            {
+              label: "Created",
+              description: "Sort by created_at",
+              sortKey: "created_at" as const,
+            },
+          ],
+          { title: "History: Sort" },
+        );
+        if (!sortPicked) return;
+        sortKey = sortPicked.sortKey;
+
+        const allSourceKinds: ThreadSourceKind[] = [
+          "cli",
+          "vscode",
+          "exec",
+          "appServer",
+          "subAgent",
+          "subAgentReview",
+          "subAgentCompact",
+          "subAgentThreadSpawn",
+          "subAgentOther",
+          "unknown",
+        ];
+        const sourcePicked = await vscode.window.showQuickPick(
+          [
+            {
+              label: "Interactive only",
+              description: "CLI / VSCode threads (default server behavior)",
+              sourceKinds: null as ThreadSourceKind[] | null,
+            },
+            {
+              label: "All sources",
+              description: "Include exec / app-server / sub-agents, etc.",
+              sourceKinds: allSourceKinds,
+            },
+          ],
+          { title: "History: Source filter" },
+        );
+        if (!sourcePicked) return;
+        sourceKinds = sourcePicked.sourceKinds;
+      }
+
       let cursor: string | null = null;
       const collected: Thread[] = [];
 
@@ -1284,6 +1359,9 @@ export function activate(context: vscode.ExtensionContext): void {
               cursor,
               limit: 50,
               modelProviders: null,
+              sortKey,
+              sourceKinds,
+              archived,
             },
           );
         } catch (err) {
@@ -1298,7 +1376,7 @@ export function activate(context: vscode.ExtensionContext): void {
         collected.push(...filtered);
 
         const items = collected.map((t) => ({
-          label: `${formatThreadWhen(t.createdAt)}  ${formatThreadLabel(t.preview)}`,
+          label: `${formatThreadWhen(sortKey === "created_at" ? t.createdAt : t.updatedAt)}  ${formatThreadLabel(t.preview)}`,
           thread: t,
           kind: "thread" as const,
         }));
@@ -1334,6 +1412,23 @@ export function activate(context: vscode.ExtensionContext): void {
         }
 
         const thread = (picked as any).thread as Thread;
+        if (backendId !== "opencode" && archived === true) {
+          try {
+            await backendManager.unarchiveThreadForWorkspaceFolderAndBackendId(
+              folder,
+              backendId,
+              thread.id,
+            );
+          } catch (err) {
+            output.appendLine(
+              `[resume] Failed to unarchive threadId=${thread.id}: ${String(err)}`,
+            );
+            void vscode.window.showErrorMessage(
+              "Failed to unarchive the selected thread.",
+            );
+            return;
+          }
+        }
         const session: Session = {
           id: crypto.randomUUID(),
           backendId,
@@ -1341,6 +1436,7 @@ export function activate(context: vscode.ExtensionContext): void {
           workspaceFolderUri: folder.uri.toString(),
           title: normalizeSessionTitle(thread.preview || "Resumed"),
           threadId: thread.id,
+          personality: null,
         };
 
         sessions.add(session.backendKey, session);
@@ -1419,6 +1515,7 @@ export function activate(context: vscode.ExtensionContext): void {
           title,
           customTitle: true,
           threadId: src.threadId,
+          personality: src.personality ?? null,
         };
 
         sessions.add(session.backendKey, session);
@@ -2875,12 +2972,24 @@ async function sendUserInput(
   chatView?.refresh();
   schedulePersistRuntime(session.id);
 
+  const personality = session.personality ?? null;
+  const modelSettings =
+    modelState || personality
+      ? {
+          model: modelState?.model ?? null,
+          provider: modelState?.provider ?? null,
+          reasoning: modelState?.reasoning ?? null,
+          agent: modelState?.agent ?? null,
+          personality,
+        }
+      : null;
+
   try {
     await backendManager.sendMessageWithModelAndImages(
       session,
       text,
       backendImages,
-      modelState,
+      modelSettings,
     );
   } catch (err) {
     const errText = formatUnknownError(err);
@@ -3037,6 +3146,134 @@ async function handleSlashCommand(
       schedulePersistRuntime(session.id);
       return true;
     }
+  }
+  if (cmd === "apps") {
+    if (arg) {
+      upsertBlock(session.id, {
+        id: newLocalId("appsError"),
+        type: "error",
+        title: "Slash command error",
+        text: "/apps does not take arguments.",
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+      return true;
+    }
+
+    if (session.backendId === "opencode") {
+      upsertBlock(session.id, {
+        id: newLocalId("appsUnsupported"),
+        type: "info",
+        title: "Apps",
+        text: "opencode backend では /apps は未対応です。",
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+      return true;
+    }
+
+    if (!backendManager) throw new Error("backendManager is not initialized");
+    try {
+      const apps = await backendManager.listAppsForSession(session);
+      if (apps.length === 0) {
+        upsertBlock(session.id, {
+          id: newLocalId("appsEmpty"),
+          type: "info",
+          title: "Apps",
+          text: "利用可能な app が見つかりませんでした。",
+        });
+        chatView?.refresh();
+        schedulePersistRuntime(session.id);
+        return true;
+      }
+
+      const picked = await vscode.window.showQuickPick(
+        apps.map((a) => ({
+          label: `$${a.name}`,
+          description: a.isAccessible ? "" : "(not accessible)",
+          detail: a.description ?? a.installUrl ?? "",
+          app: a,
+        })),
+        { title: "Apps: Insert into prompt" },
+      );
+      if (!picked) return true;
+      chatView?.insertIntoInput(`$${picked.app.name} `);
+      return true;
+    } catch (err) {
+      const msg = formatUnknownError(err);
+      upsertBlock(session.id, {
+        id: newLocalId("appsListError"),
+        type: "error",
+        title: "Apps",
+        text: msg,
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+      return true;
+    }
+  }
+  if (cmd === "personality") {
+    if (arg) {
+      upsertBlock(session.id, {
+        id: newLocalId("personalityError"),
+        type: "error",
+        title: "Slash command error",
+        text: "/personality does not take arguments.",
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+      return true;
+    }
+
+    if (session.backendId === "opencode") {
+      upsertBlock(session.id, {
+        id: newLocalId("personalityUnsupported"),
+        type: "info",
+        title: "Personality",
+        text: "opencode backend では /personality は未対応です。",
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+      return true;
+    }
+
+    if (!sessions) throw new Error("sessions is not initialized");
+    if (!extensionContext) throw new Error("extensionContext is not set");
+
+    const picked = await vscode.window.showQuickPick(
+      [
+        {
+          label: "default",
+          description: "Backend default personality",
+          personality: null as Personality | null,
+        },
+        {
+          label: "friendly",
+          description: "Friendly tone",
+          personality: "friendly" as const,
+        },
+        {
+          label: "pragmatic",
+          description: "Pragmatic tone",
+          personality: "pragmatic" as const,
+        },
+      ],
+      { title: "Personality: Select" },
+    );
+    if (!picked) return true;
+
+    session.personality = picked.personality;
+    saveSessions(extensionContext, sessions);
+
+    upsertBlock(session.id, {
+      id: newLocalId("personalitySet"),
+      type: "info",
+      title: "Personality",
+      text: `Set to ${picked.label}.`,
+    });
+    chatView?.refresh();
+    schedulePersistRuntime(session.id);
+    return true;
   }
   if (cmd === "init") {
     if (arg) {
@@ -3410,6 +3647,8 @@ async function handleSlashCommand(
         "- /resume: Resume from history",
         "- /status: Show status",
         "- /mcp: List MCP servers",
+        "- /apps: Browse apps",
+        "- /personality: Set personality",
         "- /diff: Open Latest Diff",
         "- /rename <title>: Rename session",
         "- /skills: Browse skills",
@@ -6800,6 +7039,7 @@ type PersistedSessionV2 = Pick<
   | "title"
   | "threadId"
   | "customTitle"
+  | "personality"
 >;
 
 function readPersistedSessionsV1(
@@ -6855,6 +7095,7 @@ function loadSessions(
     const title = o["title"];
     const customTitle = o["customTitle"];
     const threadId = o["threadId"];
+    const personality = o["personality"];
 
     if (
       typeof id !== "string" ||
@@ -6869,6 +7110,11 @@ function loadSessions(
       continue;
     }
 
+    const personalityVal: Personality | null =
+      personality === "friendly" || personality === "pragmatic"
+        ? personality
+        : null;
+
     store.add(backendKey, {
       id,
       backendKey,
@@ -6877,6 +7123,7 @@ function loadSessions(
       title,
       customTitle: typeof customTitle === "boolean" ? customTitle : false,
       threadId,
+      personality: personalityVal,
     });
   }
 }
@@ -6900,6 +7147,7 @@ function toPersistedSessionV2(session: Session): PersistedSessionV2 {
     title,
     customTitle,
     threadId,
+    personality,
   } = session;
   return {
     id,
@@ -6909,6 +7157,7 @@ function toPersistedSessionV2(session: Session): PersistedSessionV2 {
     title,
     customTitle,
     threadId,
+    personality: personality ?? null,
   };
 }
 
