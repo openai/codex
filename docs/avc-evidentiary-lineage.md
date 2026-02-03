@@ -12,6 +12,18 @@
 
 ---
 
+## 21 Irmgard Lane Asset Stripping & Labor Extraction (2020–2022)
+
+**Key Actors/Entities:** Kristin Leggio (Savatara Corp / Dance Factory Ridgefield, LLC); Allison Van Cura; StagePort/Sojourner Closed Loop Score; Sovereign Data Fetching architecture
+
+**Description:** This node reframes the Irmgard Lane period as an interpersonal asset-stripping operation rather than a narrative of “poor financial management.” A documented asset base (approx. $55,000) was converted into targeted transfers supporting the subject’s real estate and business interests, paced through coercive dependency, mail and account monitoring, and “groomed” requests. The StagePort/Sojourner Closed Loop Score functions as a blueprint for labor extraction, explicitly defining “structural authority,” rotational roles, and a motion→structure→ledger→proof pipeline that converts live labor into fixed ledger value while prohibiting the worker from explaining or owning the system. The architecture embeds a “stop condition” triggered when authorship is asserted—mirrored by the January 2026 board-removal action—indicating intentional design to terminate accountability when reconciliation is attempted. The Sovereign Data Fetching and Firestore coordination layers further establish technical authorship and property claims: continued institutional use without licensing constitutes persistent IP misuse. The evidentiary package also ties Zelle/PayPal geolocation records to residency-fraud exposure (NYC Charter § 1127), and positions Connecticut non-stock statutory violations (C.G.S. §§ 33-1088(d), 33-1238) as enforcement “traps” for compelled records access and fee shifting.
+
+**Claim_Level:** 2 (Cross-document synthesis with technical artifacts and statutory anchors)
+
+**Evidence:** StagePort/Sojourner Closed Loop Score (structural labor extraction blueprint); Sovereign Data Fetching code + Record of Tangible Contribution (authorship proof); Zelle/PayPal payment logs + Firestore audit trail (residency/tax mismatch indicators); CT non-stock corp statutes (board removal notice and inspection rights).
+
+---
+
 ## Dutchess County DSS & DV Shelter Oversight (2023–2024)
 
 **Key Actors/Entities:** Dutchess County Department of Social Services (Child Protective Services); Grace Smith House (Domestic Violence shelter); Allison Van Cura; Former partner (father of child)
