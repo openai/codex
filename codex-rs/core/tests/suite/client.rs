@@ -1190,7 +1190,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         SessionSource::Exec,
         TransportManager::new(),
     )
-    .new_session();
+    .new_session(None);
 
     let mut prompt = Prompt::default();
     prompt.input.push(ResponseItem::Reasoning {

@@ -119,6 +119,7 @@ use crate::error::Result as CodexResult;
 use crate::exec::StreamOutput;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::feedback_tags;
+use crate::git_info::get_git_repo_root;
 use crate::instructions::UserInstructions;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::auth::compute_auth_statuses;
@@ -333,9 +334,36 @@ impl Codex {
             .clone()
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
-        // Respect explicit thread-start tools; fall back to persisted tools when resuming a thread.
+
+        // Respect thread-start tools. When missing (resumed/forked threads), read from the db
+        // first, then fall back to rollout-file tools.
+        let persisted_tools = if dynamic_tools.is_empty()
+            && config.features.enabled(Feature::Sqlite)
+        {
+            let thread_id = match &conversation_history {
+                InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
+                InitialHistory::Forked(_) => conversation_history.forked_from_id(),
+                InitialHistory::New => None,
+            };
+            match thread_id {
+                Some(thread_id) => {
+                    let state_db_ctx = state_db::open_if_present(
+                        config.codex_home.as_path(),
+                        config.model_provider_id.as_str(),
+                    )
+                    .await;
+                    state_db::get_dynamic_tools(state_db_ctx.as_deref(), thread_id, "codex_spawn")
+                        .await
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
         let dynamic_tools = if dynamic_tools.is_empty() {
-            conversation_history.get_dynamic_tools().unwrap_or_default()
+            persisted_tools
+                .or_else(|| conversation_history.get_dynamic_tools())
+                .unwrap_or_default()
         } else {
             dynamic_tools
         };
@@ -504,7 +532,6 @@ pub(crate) struct TurnContext {
     pub(crate) truncation_policy: TruncationPolicy,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
 }
-
 impl TurnContext {
     pub(crate) fn resolve_path(&self, path: Option<String>) -> PathBuf {
         path.as_ref()
@@ -3379,7 +3406,9 @@ pub(crate) async fn run_turn(
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
 
-    let mut client_session = turn_context.client.new_session();
+    let mut client_session = turn_context
+        .client
+        .new_session(Some(turn_context.cwd.clone()));
 
     loop {
         // Note that pending_input would be something like a message the user
@@ -4442,8 +4471,6 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
 
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
-
-use crate::git_info::get_git_repo_root;
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context_with_rx;
 
