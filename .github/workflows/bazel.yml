@@ -65,14 +65,6 @@ jobs:
       - name: Set up Bazel
         uses: bazelbuild/setup-bazelisk@v3
 
-      - name: Install Linux bwrap build dependencies
-        if: ${{ runner.os == 'Linux' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update -y
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
-
       # TODO(mbolin): Bring this back once we have caching working. Currently,
       # we never seem to get a cache hit but we still end up paying the cost of
       # uploading at the end of the build, which takes over a minute!
