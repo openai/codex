@@ -13,7 +13,7 @@
 //! - Directory paths (current dir, project root)
 //! - Git information (branch name)
 //! - Context usage (remaining %, used %, window size)
-//! - Usage limits (5-day, weekly)
+//! - Usage limits (5-hour, weekly)
 //! - Session info (ID, tokens used)
 //! - Application version
 
@@ -68,8 +68,8 @@ pub(crate) enum StatusLineItem {
     /// Percentage of context window used.
     ContextUsed,
 
-    /// Remaining usage on the 5-day rate limit.
-    FiveDayLimit,
+    /// Remaining usage on the 5-hour rate limit.
+    FiveHourLimit,
 
     /// Remaining usage on the weekly rate limit.
     WeeklyLimit,
@@ -111,8 +111,8 @@ impl StatusLineItem {
             StatusLineItem::ContextUsed => {
                 "Percentage of context window used (omitted when unknown)"
             }
-            StatusLineItem::FiveDayLimit => {
-                "Remaining usage on 5-day usage limit (omitted when unavailable)"
+            StatusLineItem::FiveHourLimit => {
+                "Remaining usage on 5-hour usage limit (omitted when unavailable)"
             }
             StatusLineItem::WeeklyLimit => {
                 "Remaining usage on weekly usage limit (omitted when unavailable)"
@@ -146,7 +146,7 @@ impl StatusLineItem {
             StatusLineItem::GitBranch => "feat/awesome-feature",
             StatusLineItem::ContextRemaining => "18% left",
             StatusLineItem::ContextUsed => "82% used",
-            StatusLineItem::FiveDayLimit => "5h 100%",
+            StatusLineItem::FiveHourLimit => "5h 100%",
             StatusLineItem::WeeklyLimit => "7d 98%",
             StatusLineItem::CodexVersion => "v0.93.0",
             StatusLineItem::ContextWindowSize => "258K",

@@ -4050,7 +4050,7 @@ impl ChatWidget {
             StatusLineItem::ContextUsed => self
                 .status_line_context_used_percent()
                 .map(|used| format!("{used}% used")),
-            StatusLineItem::FiveDayLimit => {
+            StatusLineItem::FiveHourLimit => {
                 let window = self
                     .rate_limit_snapshot
                     .as_ref()
