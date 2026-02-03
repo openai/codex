@@ -25,33 +25,28 @@ pub struct DynamicToolCallRequest {
 #[serde(rename_all = "camelCase")]
 pub struct DynamicToolResponse {
     pub call_id: String,
-    #[serde(flatten)]
     pub result: DynamicToolResult,
     pub success: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
-#[serde(untagged, rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
 pub enum DynamicToolResult {
+    #[serde(rename_all = "camelCase")]
     ContentItems {
-        #[serde(rename = "contentItems")]
         content_items: Vec<DynamicToolCallOutputContentItem>,
     },
-    Output {
-        output: String,
-    },
+    #[serde(rename_all = "camelCase")]
+    Output { output: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type")]
 pub enum DynamicToolCallOutputContentItem {
-    #[serde(alias = "input_text")]
+    #[serde(rename_all = "camelCase")]
     InputText { text: String },
-    #[serde(alias = "input_image", rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
-    InputImage {
-        #[serde(alias = "image_url")]
-        image_url: String,
-    },
+    #[serde(rename_all = "camelCase")]
+    InputImage { image_url: String },
 }
