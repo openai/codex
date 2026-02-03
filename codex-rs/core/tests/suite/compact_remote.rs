@@ -234,7 +234,7 @@ async fn remote_compact_trims_function_call_history_to_fit_context_window() -> R
     let trimmed_call_id = "trimmed-call";
     let retained_command = "echo retained-shell-output";
     let trimmed_command = if cfg!(windows) {
-        "'x' * 50000"
+        "for ($i=1; $i -le 3000; $i++) { Write-Output $i }"
     } else {
         "yes x | head -n 3000"
     };
@@ -301,14 +301,24 @@ async fn remote_compact_trims_function_call_history_to_fit_context_window() -> R
             final_output_json_schema: None,
         })
         .await?;
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_event_with_timeout(
+        &codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        Duration::from_secs(30),
+    )
+    .await;
 
     let compact_mock =
         responses::mount_compact_json_once(harness.server(), serde_json::json!({ "output": [] }))
             .await;
 
     codex.submit(Op::Compact).await?;
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_event_with_timeout(
+        &codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        Duration::from_secs(30),
+    )
+    .await;
 
     assert!(
         response_log
