@@ -116,6 +116,7 @@ If you don’t have the tool:
 ## App-server API Development Best Practices
 
 These guidelines apply to app-server protocol work in `codex-rs`, especially:
+
 - `app-server-protocol/src/protocol/common.rs`
 - `app-server-protocol/src/protocol/v2.rs`
 - `app-server/README.md`
