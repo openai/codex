@@ -6,7 +6,8 @@ changing the underlying policy shape.
 ## Scope
 
 Use this guide when adjusting queue-pressure thresholds and hysteresis windows in
-`codex-rs/tui/src/streaming/chunking.rs`.
+`codex-rs/tui/src/streaming/chunking.rs`, and baseline commit cadence in
+`codex-rs/tui/src/app.rs`.
 
 This guide is about tuning behavior, not redesigning the policy.
 
@@ -31,6 +32,13 @@ Tune for all three goals together:
 
 ## Constants and what they control
 
+### Baseline commit cadence
+
+- `COMMIT_ANIMATION_TICK` (`tui/src/app.rs`)
+  - Lower values increase smooth-mode update cadence and reduce steady-state lag.
+  - Higher values increase smoothing and can increase perceived lag.
+  - This should usually move after chunking thresholds/holds are in a good range.
+
 ### Enter/exit thresholds
 
 - `ENTER_QUEUE_DEPTH_LINES`, `ENTER_OLDEST_AGE`
@@ -53,8 +61,8 @@ Tune for all three goals together:
 ### Severe-backlog gates
 
 - `SEVERE_QUEUE_DEPTH_LINES`, `SEVERE_OLDEST_AGE`
-  - Lower values engage severe pacing earlier.
-  - Higher values reserve severe mode for only extreme pressure.
+  - Lower values bypass re-entry hold earlier.
+  - Higher values reserve hold bypass for only extreme pressure.
 
 ## Recommended tuning order
 
@@ -63,6 +71,7 @@ Tune in this order to keep cause/effect clear:
 1. Entry/exit thresholds (`ENTER_*`, `EXIT_*`)
 2. Hold windows (`EXIT_HOLD`, `REENTER_CATCH_UP_HOLD`)
 3. Severe gates (`SEVERE_*`)
+4. Baseline cadence (`COMMIT_ANIMATION_TICK`)
 
 Change one logical group at a time and re-measure before the next group.
 

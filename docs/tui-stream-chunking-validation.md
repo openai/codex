@@ -65,6 +65,34 @@ For each measured window:
   - persistent queue-age growth while in smooth mode
   - long catch-up runs without backlog reduction
 
+## Experiment history
+
+This section captures the major tuning passes so future work can build on
+what has already been tried.
+
+- Baseline
+  - One-line smooth draining with a 50ms commit tick.
+  - This preserved familiar pacing but could feel laggy under sustained
+    backlog.
+- Pass 1: instant catch-up, baseline tick unchanged
+  - Kept smooth-mode semantics but made catch-up drain the full queued
+    backlog each catch-up tick.
+  - Result: queue lag dropped faster, but perceived motion could still feel
+    stepped because smooth-mode cadence remained coarse.
+- Pass 2: faster baseline tick (25ms)
+  - Improved smooth-mode cadence and reduced visible stepping.
+  - Result: better, but still not aligned with draw cadence.
+- Pass 3: frame-aligned baseline tick (~16.7ms)
+  - Set baseline commit cadence to approximately 60fps.
+  - Result: smoother perceived progression while retaining hysteresis and
+    fast backlog convergence.
+
+Current state combines:
+
+- instant catch-up draining in `CatchUp`
+- hysteresis for mode-entry/exit stability
+- frame-aligned smooth-mode commit cadence
+
 ## Notes
 
 - Validation is source-agnostic and does not rely on naming any specific

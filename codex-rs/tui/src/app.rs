@@ -103,6 +103,11 @@ use toml::Value as TomlValue;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
+/// Baseline cadence for periodic stream commit animation ticks.
+///
+/// Smooth-mode streaming drains one line per tick, so this interval controls
+/// perceived typing speed for non-backlogged output.
+const COMMIT_ANIMATION_TICK: Duration = Duration::from_nanos(16_666_667);
 
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
@@ -1497,7 +1502,7 @@ impl App {
                     let running = self.commit_anim_running.clone();
                     thread::spawn(move || {
                         while running.load(Ordering::Relaxed) {
-                            thread::sleep(Duration::from_millis(50));
+                            thread::sleep(COMMIT_ANIMATION_TICK);
                             tx.send(AppEvent::CommitTick);
                         }
                     });
