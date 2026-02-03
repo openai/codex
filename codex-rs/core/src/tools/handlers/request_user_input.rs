@@ -37,12 +37,10 @@ impl ToolHandler for RequestUserInputHandler {
         };
 
         let mode = session.collaboration_mode().await.mode;
-        if !matches!(mode, ModeKind::Plan | ModeKind::PairProgramming) {
+        if !matches!(mode, ModeKind::Plan) {
             let mode_name = match mode {
-                ModeKind::Code => "Code",
-                ModeKind::Execute => "Execute",
-                ModeKind::Custom => "Custom",
-                ModeKind::Plan | ModeKind::PairProgramming => unreachable!(),
+                ModeKind::Default | ModeKind::PairProgramming | ModeKind::Execute => "Default",
+                ModeKind::Plan => unreachable!(),
             };
             return Err(FunctionCallError::RespondToModel(format!(
                 "request_user_input is unavailable in {mode_name} mode"
