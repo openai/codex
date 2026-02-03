@@ -148,6 +148,7 @@ Additional collision example:
 ## Implementation Steps (Detailed)
 
 1. **Add expansion utility**
+
    - New helper module in `core/src/config_loader/` (e.g., `expand.rs`) with:
      - `expand_toml(value: TomlValue) -> (TomlValue, Vec<ExpansionWarning>)`
      - Walk table keys and values recursively.
@@ -163,11 +164,13 @@ Additional collision example:
      - Caveat: because TOML maps are typically iterated in sorted-key order, “first-wins” is deterministic but may not match file order.
 
 2. **Integrate into loader**
+
    - In `load_config_layers_state` (or immediately after loading each layer):
      - Expand the layer’s `TomlValue`.
      - Store any warnings on the `ConfigLayerEntry` (or collect into stack).
 
 3. **Surface warnings**
+
    - App server: add expansion warnings into `config_warnings` list in `codex-rs/app-server/src/lib.rs`.
    - TUI: add a new `emit_*` function to append history warnings.
    - CLI/exec: print to stderr after config load.
@@ -177,6 +180,7 @@ Additional collision example:
      - Use `format_expansion_warnings(...)` and print the full multi-line message to stderr.
 
 4. **Tests**
+
    - Add unit tests for expansion logic and warning emission.
    - Add collision tests that verify:
      - no silent overwrites,
