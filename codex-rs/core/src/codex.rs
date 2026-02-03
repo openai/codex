@@ -1513,6 +1513,17 @@ impl Session {
             .map(|task| Arc::clone(&task.turn_context))
     }
 
+    async fn active_turn_context_and_cancellation_token(
+        &self,
+    ) -> Option<(Arc<TurnContext>, CancellationToken)> {
+        let active = self.active_turn.lock().await;
+        let (_, task) = active.as_ref()?.tasks.first()?;
+        Some((
+            Arc::clone(&task.turn_context),
+            task.cancellation_token.child_token(),
+        ))
+    }
+
     pub(crate) async fn record_execpolicy_amendment_message(
         &self,
         sub_id: &str,
@@ -2528,7 +2539,9 @@ mod handlers {
     use crate::tasks::CompactTask;
     use crate::tasks::RegularTask;
     use crate::tasks::UndoTask;
+    use crate::tasks::UserShellCommandMode;
     use crate::tasks::UserShellCommandTask;
+    use crate::tasks::execute_user_shell_command;
     use codex_protocol::custom_prompts::CustomPrompt;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::ErrorEvent;
@@ -2671,6 +2684,23 @@ mod handlers {
         command: String,
         previous_context: &mut Option<Arc<TurnContext>>,
     ) {
+        if let Some((turn_context, cancellation_token)) =
+            sess.active_turn_context_and_cancellation_token().await
+        {
+            let session = Arc::clone(sess);
+            tokio::spawn(async move {
+                execute_user_shell_command(
+                    session,
+                    turn_context,
+                    command,
+                    cancellation_token,
+                    UserShellCommandMode::ActiveTurnAuxiliary,
+                )
+                .await;
+            });
+            return;
+        }
+
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
         sess.spawn_task(
             Arc::clone(&turn_context),
