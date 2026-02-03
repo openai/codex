@@ -1700,7 +1700,9 @@ impl App {
                                     tags.push(("message", message));
                                 }
                                 otel_manager.counter(
-                                    "codex.windows_sandbox.elevated_setup_failure",
+                                    codex_core::windows_sandbox::elevated_setup_failure_metric_name(
+                                        &err,
+                                    ),
                                     1,
                                     &tags,
                                 );

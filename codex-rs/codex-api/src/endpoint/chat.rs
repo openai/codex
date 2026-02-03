@@ -194,6 +194,7 @@ impl Stream for AggregatedStream {
                                 text: std::mem::take(&mut this.cumulative),
                             }],
                             end_turn: None,
+                            phase: None,
                         };
                         this.pending
                             .push_back(ResponseEvent::OutputItemDone(aggregated_message));

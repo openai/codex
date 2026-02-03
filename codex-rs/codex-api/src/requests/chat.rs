@@ -387,6 +387,7 @@ mod tests {
                 text: "hi".to_string(),
             }],
             end_turn: None,
+            phase: None,
         }];
         let req = ChatRequestBuilder::new("gpt-test", "inst", &prompt_input, &[])
             .conversation_id(Some("conv-1".into()))
@@ -414,6 +415,7 @@ mod tests {
                     text: "read these".to_string(),
                 }],
                 end_turn: None,
+                phase: None,
             },
             ResponseItem::FunctionCall {
                 id: None,
