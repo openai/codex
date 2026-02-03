@@ -355,18 +355,32 @@ async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<(
     .await??;
 
     let bodies = responses_bodies(&server).await?;
+    let output_value = bodies
+        .iter()
+        .find_map(|body| function_call_output_raw_output(body, call_id))
+        .context("expected function_call_output output in follow-up request")?;
+    assert_eq!(
+        output_value,
+        json!([
+            {
+                "type": "input_text",
+                "text": "dynamic-ok"
+            },
+            {
+                "type": "input_image",
+                "image_url": "data:image/png;base64,AAA"
+            }
+        ])
+    );
+
     let payload = bodies
         .iter()
         .find_map(|body| function_call_output_payload(body, call_id))
         .context("expected function_call_output in follow-up request")?;
-    let expected_payload = FunctionCallOutputPayload {
-        // `FunctionCallOutputPayload` deserializes item arrays by also storing
-        // a JSON string representation in `content`.
-        content: serde_json::to_string(&content_items)?,
-        content_items: Some(content_items),
-        success: None,
-    };
-    assert_eq!(payload, expected_payload);
+    assert_eq!(payload.content_items, Some(content_items.clone()));
+    assert_eq!(payload.success, None);
+    // The deserializer keeps a compatibility text mirror in `content`.
+    assert_eq!(payload.content, serde_json::to_string(&content_items)?);
 
     Ok(())
 }
@@ -398,6 +412,11 @@ fn find_tool<'a>(body: &'a Value, name: &str) -> Option<&'a Value> {
 }
 
 fn function_call_output_payload(body: &Value, call_id: &str) -> Option<FunctionCallOutputPayload> {
+    function_call_output_raw_output(body, call_id)
+        .and_then(|output| serde_json::from_value(output).ok())
+}
+
+fn function_call_output_raw_output(body: &Value, call_id: &str) -> Option<Value> {
     body.get("input")
         .and_then(Value::as_array)
         .and_then(|items| {
@@ -408,7 +427,6 @@ fn function_call_output_payload(body: &Value, call_id: &str) -> Option<FunctionC
         })
         .and_then(|item| item.get("output"))
         .cloned()
-        .and_then(|output| serde_json::from_value(output).ok())
 }
 
 fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {

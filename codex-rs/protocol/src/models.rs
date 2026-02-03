@@ -118,11 +118,11 @@ pub enum ResponseItem {
         arguments: String,
         call_id: String,
     },
-    // NOTE: The input schema for `function_call_output` objects that clients send to the
-    // OpenAI /v1/responses endpoint is NOT the same shape as the objects the server returns on the
-    // SSE stream. When *sending* we must wrap the string output inside an object that includes a
-    // required `success` boolean. To ensure we serialize exactly the expected shape we introduce
-    // a dedicated payload struct and flatten it here.
+    // NOTE: The `output` field for `function_call_output` uses a dedicated payload type with
+    // custom serialization. On the wire it is either:
+    //   • a plain string (`content`)
+    //   • an array of structured content items (`content_items`)
+    // We keep this behavior centralized in `FunctionCallOutputPayload`.
     FunctionCallOutput {
         call_id: String,
         output: FunctionCallOutputPayload,
@@ -741,11 +741,12 @@ pub enum FunctionCallOutputContentItem {
 
 /// The payload we send back to OpenAI when reporting a tool call result.
 ///
-/// `content` preserves the historical plain-string payload so downstream
-/// integrations (tests, logging, etc.) can keep treating tool output as
-/// `String`. When an MCP server returns richer data we additionally populate
-/// `content_items` with the structured form that the Responses/Chat
-/// Completions APIs understand.
+/// `content` preserves a historical plain-text representation that downstream
+/// code still uses for logs/history/tests.
+///
+/// `content_items` holds structured tool output. When present, custom
+/// serialization sends these items directly on the wire as the `output` value
+/// (an array), rather than serializing `content`.
 #[derive(Debug, Default, Clone, PartialEq, JsonSchema, TS)]
 pub struct FunctionCallOutputPayload {
     pub content: String,
@@ -761,9 +762,9 @@ enum FunctionCallOutputPayloadSerde {
     Items(Vec<FunctionCallOutputContentItem>),
 }
 
-// The Responses API expects two *different* shapes depending on success vs failure:
-//   • success → output is a plain string (no nested object)
-//   • failure → output is an object { content, success:false }
+// `function_call_output.output` is encoded as either:
+//   • an array of structured content items, when `content_items` is present
+//   • a plain string, otherwise
 impl Serialize for FunctionCallOutputPayload {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -788,6 +789,8 @@ impl<'de> Deserialize<'de> for FunctionCallOutputPayload {
                 ..Default::default()
             }),
             FunctionCallOutputPayloadSerde::Items(items) => {
+                // Preserve a text mirror for compatibility with legacy callers
+                // that still inspect `content`.
                 let content = serde_json::to_string(&items).map_err(serde::de::Error::custom)?;
                 Ok(FunctionCallOutputPayload {
                     content,
