@@ -11818,6 +11818,12 @@
           "supportsPersonality": {
             "default": false,
             "type": "boolean"
+          },
+          "upgrade": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
