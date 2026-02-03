@@ -25,7 +25,6 @@ use crate::key_hint::KeyBinding;
 use crate::render::renderable::FlexRenderable;
 use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableItem;
-use crate::status_line::StatusLineValue;
 use crate::tui::FrameRequester;
 use bottom_pane_view::BottomPaneView;
 use codex_core::features::Features;
@@ -37,6 +36,7 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::text::Line;
 use std::time::Duration;
 
 mod app_link_view;
@@ -868,7 +868,7 @@ impl BottomPane {
         }
     }
 
-    pub(crate) fn set_status_line(&mut self, status_line: Option<StatusLineValue>) {
+    pub(crate) fn set_status_line(&mut self, status_line: Option<Line<'static>>) {
         self.composer.set_status_line(status_line);
         self.request_redraw();
     }

@@ -87,7 +87,6 @@ use crate::bottom_pane::selection_popup_common::truncate_line_with_ellipsis_if_o
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::has_ctrl_or_alt;
-use crate::status_line::StatusLineValue;
 use crate::ui_consts::FOOTER_INDENT_COLS;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -300,7 +299,7 @@ pub(crate) struct ChatComposer {
     connectors_enabled: bool,
     personality_command_enabled: bool,
     windows_degraded_sandbox_active: bool,
-    status_line_value: Option<StatusLineValue>,
+    status_line_value: Option<Line<'static>>,
     status_line_enabled: bool,
 }
 
@@ -3018,7 +3017,7 @@ impl ChatComposer {
         }
     }
 
-    pub(crate) fn set_status_line(&mut self, status_line: Option<StatusLineValue>) {
+    pub(crate) fn set_status_line(&mut self, status_line: Option<Line<'static>>) {
         self.status_line_value = status_line;
     }
 
@@ -3142,7 +3141,7 @@ impl ChatComposer {
                 let status_line = footer_props
                     .status_line_value
                     .as_ref()
-                    .map(StatusLineValue::as_line);
+                    .map(|line| line.clone().dim());
                 let mut truncated_status_line = if footer_props.status_line_enabled
                     && matches!(
                         footer_props.mode,

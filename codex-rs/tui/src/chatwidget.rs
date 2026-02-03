@@ -35,7 +35,6 @@ use crate::diff_render::calculate_add_remove_from_diff;
 use crate::status::RateLimitWindowDisplay;
 use crate::status::format_directory_display;
 use crate::status::format_tokens_compact;
-use crate::status_line::StatusLineValue;
 use crate::version::CODEX_CLI_VERSION;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_backend_client::Client as BackendClient;
@@ -808,7 +807,7 @@ impl ChatWidget {
         self.set_status(header, None);
     }
 
-    pub(crate) fn set_status_line(&mut self, status_line: Option<StatusLineValue>) {
+    pub(crate) fn set_status_line(&mut self, status_line: Option<Line<'static>>) {
         self.bottom_pane.set_status_line(status_line);
         self.request_redraw();
     }
@@ -839,7 +838,7 @@ impl ChatWidget {
         let line = if parts.is_empty() {
             None
         } else {
-            Some(StatusLineValue::from_text(parts.join(" · ")))
+            Some(Line::from(parts.join(" · ")))
         };
         self.set_status_line(line);
     }

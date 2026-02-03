@@ -46,7 +46,6 @@ pub(crate) struct MultiSelectItem {
     pub name: String,
     pub description: Option<String>,
     pub enabled: bool,
-    pub search_value: Option<String>,
 }
 
 pub(crate) struct MultiSelectPicker {

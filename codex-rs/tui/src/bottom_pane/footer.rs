@@ -36,7 +36,6 @@ use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::render::line_utils::prefix_lines;
 use crate::status::format_tokens_compact;
-use crate::status_line::StatusLineValue;
 use crate::ui_consts::FOOTER_INDENT_COLS;
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
@@ -69,7 +68,7 @@ pub(crate) struct FooterProps {
     pub(crate) quit_shortcut_key: KeyBinding,
     pub(crate) context_window_percent: Option<i64>,
     pub(crate) context_window_used_tokens: Option<i64>,
-    pub(crate) status_line_value: Option<StatusLineValue>,
+    pub(crate) status_line_value: Option<Line<'static>>,
     pub(crate) status_line_enabled: bool,
 }
 
@@ -571,7 +570,7 @@ fn footer_from_props_lines(
             FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
         )
     {
-        return vec![status_line.as_line()];
+        return vec![status_line.clone().dim()];
     }
     match props.mode {
         FooterMode::QuitShortcutReminder => {
@@ -1041,7 +1040,7 @@ mod tests {
                     props
                         .status_line_value
                         .as_ref()
-                        .map(StatusLineValue::as_line)
+                        .map(|line| line.clone().dim())
                         .map(|line| truncate_line_with_ellipsis_if_overflow(line, available_width))
                 } else {
                     None
@@ -1085,7 +1084,7 @@ mod tests {
                     && let Some(line) = props
                         .status_line_value
                         .as_ref()
-                        .map(StatusLineValue::as_line)
+                        .map(|line| line.clone().dim())
                         .map(|line| {
                             truncate_line_with_ellipsis_if_overflow(line, max_left as usize)
                         })
@@ -1198,7 +1197,7 @@ mod tests {
                     props
                         .status_line_value
                         .as_ref()
-                        .map(StatusLineValue::as_line)
+                        .map(|line| line.clone().dim())
                         .map(|line| truncate_line_with_ellipsis_if_overflow(line, available_width))
                 } else {
                     None
@@ -1564,9 +1563,7 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: None,
             context_window_used_tokens: None,
-            status_line_value: Some(StatusLineValue::from_text(
-                "Status line content".to_string(),
-            )),
+            status_line_value: Some(Line::from("Status line content".to_string())),
             status_line_enabled: true,
         };
 
@@ -1650,7 +1647,7 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: Some(50),
             context_window_used_tokens: None,
-            status_line_value: Some(StatusLineValue::from_text(
+            status_line_value: Some(Line::from(
                 "Status line content that should truncate before the mode indicator".to_string(),
             )),
             status_line_enabled: true,
@@ -1677,7 +1674,7 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: Some(50),
             context_window_used_tokens: None,
-            status_line_value: Some(StatusLineValue::from_text(
+            status_line_value: Some(Line::from(
                 "Status line content that is definitely too long to fit alongside the mode label"
                     .to_string(),
             )),
