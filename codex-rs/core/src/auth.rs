@@ -1299,10 +1299,7 @@ mod tests {
         )
         .expect("failed to write auth file");
 
-        let storage = create_auth_storage(
-            codex_home.path().to_path_buf(),
-            AuthCredentialsStoreMode::File,
-        );
+        let storage = create_auth_storage(AuthCredentialsStoreMode::File);
         let updated = super::update_tokens(
             &storage,
             None,

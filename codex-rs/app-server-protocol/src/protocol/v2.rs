@@ -1476,10 +1476,21 @@ pub struct ThreadReadResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct SkillRoot {
+    pub path: PathBuf,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct SkillsListParams {
     /// When empty, defaults to the current session working directory.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cwds: Vec<PathBuf>,
+
+    /// Additional skill roots to scan alongside the defaults.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_roots: Vec<SkillRoot>,
 
     /// When true, bypass the skills cache and re-scan skills from disk.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -3023,6 +3034,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(SkillsListParams {
                 cwds: Vec::new(),
+                additional_roots: Vec::new(),
                 force_reload: false,
             })
             .unwrap(),
@@ -3032,11 +3044,15 @@ mod tests {
         assert_eq!(
             serde_json::to_value(SkillsListParams {
                 cwds: vec![PathBuf::from("/repo")],
+                additional_roots: vec![SkillRoot {
+                    path: PathBuf::from("/opt/skills"),
+                }],
                 force_reload: true,
             })
             .unwrap(),
             json!({
                 "cwds": ["/repo"],
+                "additionalRoots": [{ "path": "/opt/skills" }],
                 "forceReload": true,
             }),
         );

@@ -14,9 +14,11 @@ use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::LoaderOverrides;
 use crate::config_loader::load_config_layers_state;
 use crate::skills::SkillLoadOutcome;
+use crate::skills::loader::SkillRoot;
 use crate::skills::loader::load_skills_from_roots;
 use crate::skills::loader::skill_roots_from_layer_stack_with_agents;
 use crate::skills::system::install_system_skills;
+use codex_protocol::protocol::SkillScope;
 
 pub struct SkillsManager {
     codex_home: PathBuf,
@@ -120,6 +122,66 @@ impl SkillsManager {
         outcome
     }
 
+    /// Load skills for a cwd while scanning additional roots alongside defaults.
+    ///
+    /// Additional roots are treated as user-scoped skills and are not cached, since the
+    /// current cache key is only the cwd path.
+    pub async fn skills_for_cwd_with_additional_roots(
+        &self,
+        cwd: &Path,
+        force_reload: bool,
+        additional_roots: &[PathBuf],
+    ) -> SkillLoadOutcome {
+        if additional_roots.is_empty() {
+            return self.skills_for_cwd(cwd, force_reload).await;
+        }
+
+        let cwd_abs = match AbsolutePathBuf::try_from(cwd) {
+            Ok(cwd_abs) => cwd_abs,
+            Err(err) => {
+                return SkillLoadOutcome {
+                    errors: vec![crate::skills::model::SkillError {
+                        path: cwd.to_path_buf(),
+                        message: err.to_string(),
+                    }],
+                    ..Default::default()
+                };
+            }
+        };
+
+        let cli_overrides: Vec<(String, TomlValue)> = Vec::new();
+        let config_layer_stack = match load_config_layers_state(
+            &self.codex_home,
+            Some(cwd_abs),
+            &cli_overrides,
+            LoaderOverrides::default(),
+            CloudRequirementsLoader::default(),
+        )
+        .await
+        {
+            Ok(config_layer_stack) => config_layer_stack,
+            Err(err) => {
+                return SkillLoadOutcome {
+                    errors: vec![crate::skills::model::SkillError {
+                        path: cwd.to_path_buf(),
+                        message: err.to_string(),
+                    }],
+                    ..Default::default()
+                };
+            }
+        };
+
+        let mut roots = skill_roots_from_layer_stack_with_agents(&config_layer_stack, cwd);
+        roots.extend(additional_roots.iter().cloned().map(|path| SkillRoot {
+            path,
+            scope: SkillScope::User,
+        }));
+
+        let mut outcome = load_skills_from_roots(roots);
+        outcome.disabled_paths = disabled_paths_from_stack(&config_layer_stack);
+        outcome
+    }
+
     pub fn clear_cache(&self) {
         match self.cache_by_cwd.write() {
             Ok(mut cache) => cache.clear(),
@@ -177,6 +239,10 @@ mod tests {
 
     fn write_user_skill(codex_home: &TempDir, dir: &str, name: &str, description: &str) {
         let skill_dir = codex_home.path().join("skills").join(dir);
+        write_skill_at(&skill_dir, name, description);
+    }
+
+    fn write_skill_at(skill_dir: &Path, name: &str, description: &str) {
         fs::create_dir_all(&skill_dir).unwrap();
         let content = format!("---\nname: {name}\ndescription: {description}\n---\n\n# Body\n");
         fs::write(skill_dir.join("SKILL.md"), content).unwrap();
@@ -212,5 +278,62 @@ mod tests {
         let outcome2 = skills_manager.skills_for_config(&cfg);
         assert_eq!(outcome2.errors, outcome1.errors);
         assert_eq!(outcome2.skills, outcome1.skills);
+    }
+
+    #[tokio::test]
+    async fn skills_for_cwd_with_additional_roots_loads_extra_skills_without_polluting_cache() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let cwd = tempfile::tempdir().expect("tempdir");
+        let additional_root = tempfile::tempdir().expect("tempdir");
+
+        write_user_skill(&codex_home, "a", "skill-a", "from a");
+        write_skill_at(
+            &additional_root.path().join("ext"),
+            "skill-extra",
+            "from additional",
+        );
+
+        let skills_manager = SkillsManager::new(codex_home.path().to_path_buf());
+
+        let base = skills_manager.skills_for_cwd(cwd.path(), false).await;
+        assert!(
+            base.skills.iter().any(|skill| skill.name == "skill-a"),
+            "expected default user skill"
+        );
+        assert!(
+            !base.skills.iter().any(|skill| skill.name == "skill-extra"),
+            "did not expect additional skill without roots"
+        );
+
+        let with_additional = skills_manager
+            .skills_for_cwd_with_additional_roots(
+                cwd.path(),
+                false,
+                &[additional_root.path().to_path_buf()],
+            )
+            .await;
+        assert!(
+            with_additional
+                .skills
+                .iter()
+                .any(|skill| skill.name == "skill-a"),
+            "expected default user skill with additional roots"
+        );
+        assert!(
+            with_additional
+                .skills
+                .iter()
+                .any(|skill| skill.name == "skill-extra"),
+            "expected additional root skill"
+        );
+
+        let base_again = skills_manager.skills_for_cwd(cwd.path(), false).await;
+        assert!(
+            !base_again
+                .skills
+                .iter()
+                .any(|skill| skill.name == "skill-extra"),
+            "additional roots should not affect cached default outcome"
+        );
     }
 }

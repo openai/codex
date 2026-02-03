@@ -4029,7 +4029,11 @@ impl CodexMessageProcessor {
     }
 
     async fn skills_list(&self, request_id: RequestId, params: SkillsListParams) {
-        let SkillsListParams { cwds, force_reload } = params;
+        let SkillsListParams {
+            cwds,
+            additional_roots,
+            force_reload,
+        } = params;
         let cwds = if cwds.is_empty() {
             vec![self.config.cwd.clone()]
         } else {
@@ -4037,9 +4041,13 @@ impl CodexMessageProcessor {
         };
 
         let skills_manager = self.thread_manager.skills_manager();
+        let additional_root_paths: Vec<PathBuf> =
+            additional_roots.into_iter().map(|root| root.path).collect();
         let mut data = Vec::new();
         for cwd in cwds {
-            let outcome = skills_manager.skills_for_cwd(&cwd, force_reload).await;
+            let outcome = skills_manager
+                .skills_for_cwd_with_additional_roots(&cwd, force_reload, &additional_root_paths)
+                .await;
             let errors = errors_to_info(&outcome.errors);
             let skills = skills_to_info(&outcome.skills, &outcome.disabled_paths);
             data.push(codex_app_server_protocol::SkillsListEntry {

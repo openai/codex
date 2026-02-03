@@ -13834,6 +13834,17 @@
         ],
         "type": "object"
       },
+      "SkillRoot": {
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
       "SkillScope": {
         "enum": [
           "user",
@@ -13940,6 +13951,13 @@
       "SkillsListParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "additionalRoots": {
+            "description": "Additional skill roots to scan alongside the defaults.",
+            "items": {
+              "$ref": "#/definitions/v2/SkillRoot"
+            },
+            "type": "array"
+          },
           "cwds": {
             "description": "When empty, defaults to the current session working directory.",
             "items": {
