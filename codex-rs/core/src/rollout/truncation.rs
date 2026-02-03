@@ -212,6 +212,7 @@ mod tests {
             RolloutItem::ResponseItem(items[2].clone()),
             RolloutItem::ResponseItem(items[3].clone()),
         ];
+
         assert_eq!(
             serde_json::to_value(&truncated).unwrap(),
             serde_json::to_value(&expected).unwrap()
