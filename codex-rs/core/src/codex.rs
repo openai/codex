@@ -370,7 +370,7 @@ impl Codex {
         // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.collaboration_mode
         // to avoid extracting these fields separately and constructing CollaborationMode here.
         let collaboration_mode = CollaborationMode {
-            mode: ModeKind::Custom,
+            mode: ModeKind::Default,
             settings: Settings {
                 model: model.clone(),
                 reasoning_effort: config.model_reasoning_effort,
@@ -2628,7 +2628,7 @@ mod handlers {
             } => {
                 let collaboration_mode = collaboration_mode.or_else(|| {
                     Some(CollaborationMode {
-                        mode: ModeKind::Custom,
+                        mode: ModeKind::Default,
                         settings: Settings {
                             model: model.clone(),
                             reasoning_effort: effort,
@@ -4942,7 +4942,7 @@ mod tests {
         let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
         let reasoning_effort = config.model_reasoning_effort;
         let collaboration_mode = CollaborationMode {
-            mode: ModeKind::Custom,
+            mode: ModeKind::Default,
             settings: Settings {
                 model,
                 reasoning_effort,
@@ -5025,7 +5025,7 @@ mod tests {
         let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
         let reasoning_effort = config.model_reasoning_effort;
         let collaboration_mode = CollaborationMode {
-            mode: ModeKind::Custom,
+            mode: ModeKind::Default,
             settings: Settings {
                 model,
                 reasoning_effort,
@@ -5292,7 +5292,7 @@ mod tests {
         let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
         let reasoning_effort = config.model_reasoning_effort;
         let collaboration_mode = CollaborationMode {
-            mode: ModeKind::Custom,
+            mode: ModeKind::Default,
             settings: Settings {
                 model,
                 reasoning_effort,
@@ -5412,7 +5412,7 @@ mod tests {
         let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
         let reasoning_effort = config.model_reasoning_effort;
         let collaboration_mode = CollaborationMode {
-            mode: ModeKind::Custom,
+            mode: ModeKind::Default,
             settings: Settings {
                 model,
                 reasoning_effort,
