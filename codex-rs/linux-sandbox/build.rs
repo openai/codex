@@ -58,7 +58,9 @@ fn try_build_vendored_bwrap() -> Result<(), String> {
     let config_h = out_dir.join("config.h");
     std::fs::write(
         &config_h,
-        "#pragma once\n#define PACKAGE_STRING \"bubblewrap built at codex build-time\"\n",
+        r#"#pragma once
+#define PACKAGE_STRING "bubblewrap built at codex build-time"
+"#,
     )
     .map_err(|err| format!("failed to write {}: {err}", config_h.display()))?;
 
