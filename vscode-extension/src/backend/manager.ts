@@ -386,7 +386,7 @@ export class BackendManager implements vscode.Disposable {
           this.withTimeout("opencode /skill", client.listSkills(cwd), 5_000),
         ]);
 
-        const [healthRes, configRes, providerRes, skillsRes] = results;
+        const [healthRes, configSettled, providerRes, skillsRes] = results;
 
         if (healthRes.status === "fulfilled") {
           lines.push(`Version: \`${healthRes.value.version}\``);
@@ -397,7 +397,7 @@ export class BackendManager implements vscode.Disposable {
         }
 
         const cfgObj =
-          configRes.status === "fulfilled" ? configRes.value : null;
+          configSettled.status === "fulfilled" ? configSettled.value : null;
         const providerObj =
           providerRes.status === "fulfilled" ? providerRes.value : null;
 
@@ -445,9 +445,9 @@ export class BackendManager implements vscode.Disposable {
           );
         }
 
-        if (configRes.status === "rejected") {
+        if (configSettled.status === "rejected") {
           lines.push(
-            `Config: error: ${String(configRes.reason instanceof Error ? configRes.reason.message : configRes.reason)}`,
+            `Config: error: ${String(configSettled.reason instanceof Error ? configSettled.reason.message : configSettled.reason)}`,
           );
         }
 
