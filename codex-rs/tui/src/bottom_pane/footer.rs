@@ -73,6 +73,8 @@ pub(crate) struct FooterProps {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CollaborationModeIndicator {
     Plan,
+    PairProgramming,
+    Execute,
 }
 
 const MODE_CYCLE_HINT: &str = "shift+tab to cycle";
@@ -87,6 +89,10 @@ impl CollaborationModeIndicator {
         };
         match self {
             CollaborationModeIndicator::Plan => format!("Plan mode{suffix}"),
+            CollaborationModeIndicator::PairProgramming => {
+                format!("Pair Programming mode{suffix}")
+            }
+            CollaborationModeIndicator::Execute => format!("Execute mode{suffix}"),
         }
     }
 
@@ -94,6 +100,8 @@ impl CollaborationModeIndicator {
         let label = self.label(show_cycle_hint);
         match self {
             CollaborationModeIndicator::Plan => Span::from(label).magenta(),
+            CollaborationModeIndicator::PairProgramming => Span::from(label).cyan(),
+            CollaborationModeIndicator::Execute => Span::from(label).dim(),
         }
     }
 }
