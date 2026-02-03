@@ -1,7 +1,9 @@
 use std::path::Path;
 use std::path::PathBuf;
 
+use chrono::Utc;
 use serde::Deserialize;
+use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 use uuid::Uuid;
@@ -24,6 +26,16 @@ use crate::tools::sandboxing::default_exec_approval_requirement;
 
 const HOOKS_DIRNAME: &str = ".agent";
 const HOOKS_FILENAME: &str = "hook.toml";
+
+#[derive(Debug, Serialize)]
+struct HookStdinPayload {
+    hook: String,
+    timestamp: String,
+    cwd: String,
+    sub_id: String,
+    session_source: String,
+    is_hook_input_turn: bool,
+}
 
 fn default_true() -> bool {
     true
@@ -143,6 +155,7 @@ pub(crate) async fn run_hook(
     session: &Session,
     turn_context: &TurnContext,
     kind: HookKind,
+    is_hook_input_turn: bool,
     cancellation_token: &CancellationToken,
 ) -> Option<HookInput> {
     let config = load_hook_config(&turn_context.cwd).await?;
@@ -171,6 +184,7 @@ pub(crate) async fn run_hook(
         justification: None,
         exec_approval_requirement,
     };
+    let stdin = hook_stdin_payload(turn_context, kind, is_hook_input_turn);
 
     if requires_approval(
         &req,
@@ -206,7 +220,7 @@ pub(crate) async fn run_hook(
     }
 
     let run_result = tokio::select! {
-        out = run_hook_command(session, turn_context, &req, &call_id, cancellation_token) => out,
+        out = run_hook_command(session, turn_context, &req, &call_id, stdin, cancellation_token) => out,
         _ = cancellation_token.cancelled() => {
             return None;
         }
@@ -268,6 +282,7 @@ async fn run_hook_command(
     turn_context: &TurnContext,
     req: &ShellRequest,
     call_id: &str,
+    stdin: Option<Vec<u8>>,
     cancellation_token: &CancellationToken,
 ) -> Result<crate::exec::ExecToolCallOutput, crate::error::CodexErr> {
     let params = crate::exec::ExecParams {
@@ -279,6 +294,7 @@ async fn run_hook_command(
         windows_sandbox_level: turn_context.windows_sandbox_level,
         justification: req.justification.clone(),
         arg0: None,
+        stdin,
     };
 
     process_exec_tool_call(
@@ -293,4 +309,36 @@ async fn run_hook_command(
         }),
     )
     .await
+}
+
+fn hook_kind_label(kind: HookKind) -> &'static str {
+    match kind {
+        HookKind::TurnStart => "turn_start",
+        HookKind::TurnEnd => "turn_end",
+    }
+}
+
+fn hook_stdin_payload(
+    turn_context: &TurnContext,
+    kind: HookKind,
+    is_hook_input_turn: bool,
+) -> Option<Vec<u8>> {
+    let payload = HookStdinPayload {
+        hook: hook_kind_label(kind).to_string(),
+        timestamp: Utc::now().to_rfc3339(),
+        cwd: turn_context.cwd.to_string_lossy().to_string(),
+        sub_id: turn_context.sub_id.clone(),
+        session_source: turn_context.client.get_session_source().to_string(),
+        is_hook_input_turn,
+    };
+    match serde_json::to_vec(&payload) {
+        Ok(mut bytes) => {
+            bytes.push(b'\n');
+            Some(bytes)
+        }
+        Err(err) => {
+            warn!("failed to serialize hook stdin payload: {err}");
+            None
+        }
+    }
 }

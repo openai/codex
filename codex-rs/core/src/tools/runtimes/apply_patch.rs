@@ -64,6 +64,7 @@ impl ApplyPatchRuntime {
             env: HashMap::new(),
             sandbox_permissions: SandboxPermissions::UseDefault,
             justification: None,
+            stdin: None,
         })
     }
 

@@ -25,6 +25,7 @@ pub const CODEX_SANDBOX_ENV_VAR: &str = "CODEX_SANDBOX";
 #[derive(Debug, Clone, Copy)]
 pub enum StdioPolicy {
     RedirectForShellTool,
+    RedirectForShellToolWithStdin,
     Inherit,
 }
 
@@ -66,7 +67,10 @@ pub(crate) async fn spawn_child_async(
 
     #[cfg(unix)]
     unsafe {
-        let detach_from_tty = matches!(stdio_policy, StdioPolicy::RedirectForShellTool);
+        let detach_from_tty = matches!(
+            stdio_policy,
+            StdioPolicy::RedirectForShellTool | StdioPolicy::RedirectForShellToolWithStdin
+        );
         #[cfg(target_os = "linux")]
         let parent_pid = libc::getpid();
         cmd.pre_exec(move || {
@@ -86,12 +90,16 @@ pub(crate) async fn spawn_child_async(
     }
 
     match stdio_policy {
-        StdioPolicy::RedirectForShellTool => {
+        StdioPolicy::RedirectForShellTool | StdioPolicy::RedirectForShellToolWithStdin => {
             // Do not create a file descriptor for stdin because otherwise some
             // commands may hang forever waiting for input. For example, ripgrep has
             // a heuristic where it may try to read from stdin as explained here:
             // https://github.com/BurntSushi/ripgrep/blob/e2362d4d5185d02fa857bf381e7bd52e66fafc73/crates/core/flags/hiargs.rs#L1101-L1103
-            cmd.stdin(Stdio::null());
+            if matches!(stdio_policy, StdioPolicy::RedirectForShellTool) {
+                cmd.stdin(Stdio::null());
+            } else {
+                cmd.stdin(Stdio::piped());
+            }
 
             cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
         }

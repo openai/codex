@@ -2129,22 +2129,28 @@ pub(crate) fn new_reasoning_summary_block(full_reasoning_buffer: String) -> Box<
 pub struct FinalMessageSeparator {
     elapsed_seconds: Option<u64>,
     runtime_metrics: Option<RuntimeMetricsSummary>,
+    hook_triggered: bool,
 }
 impl FinalMessageSeparator {
     /// Creates a separator; `elapsed_seconds` typically comes from the status indicator timer.
     pub(crate) fn new(
         elapsed_seconds: Option<u64>,
         runtime_metrics: Option<RuntimeMetricsSummary>,
+        hook_triggered: bool,
     ) -> Self {
         Self {
             elapsed_seconds,
             runtime_metrics,
+            hook_triggered,
         }
     }
 }
 impl HistoryCell for FinalMessageSeparator {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut label_parts = Vec::new();
+        if self.hook_triggered {
+            label_parts.push("Hook Triggered".to_string());
+        }
         if let Some(elapsed_seconds) = self
             .elapsed_seconds
             .filter(|seconds| *seconds > 60)
@@ -2157,7 +2163,7 @@ impl HistoryCell for FinalMessageSeparator {
         }
 
         if label_parts.is_empty() {
-            return vec![Line::from_iter(["─".repeat(width as usize).dim()])];
+            label_parts.push("Worked on".to_string());
         }
 
         let label = format!("─ {} ─", label_parts.join(" • "));
@@ -2382,7 +2388,7 @@ mod tests {
                 duration_ms: 1_200,
             },
         };
-        let cell = FinalMessageSeparator::new(Some(12), Some(summary));
+        let cell = FinalMessageSeparator::new(Some(12), Some(summary), false);
         let rendered = render_lines(&cell.display_lines(200));
 
         assert_eq!(rendered.len(), 1);
@@ -2396,7 +2402,7 @@ mod tests {
 
     #[test]
     fn final_message_separator_includes_worked_label_after_one_minute() {
-        let cell = FinalMessageSeparator::new(Some(61), None);
+        let cell = FinalMessageSeparator::new(Some(61), None, false);
         let rendered = render_lines(&cell.display_lines(200));
 
         assert_eq!(rendered.len(), 1);

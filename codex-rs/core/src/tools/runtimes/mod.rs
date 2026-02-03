@@ -37,6 +37,7 @@ pub(crate) fn build_command_spec(
         expiration,
         sandbox_permissions,
         justification,
+        stdin: None,
     })
 }
 

@@ -6094,6 +6094,7 @@ mod tests {
             windows_sandbox_level: turn_context.windows_sandbox_level,
             justification: Some("test".to_string()),
             arg0: None,
+            stdin: None,
         };
 
         let params2 = ExecParams {
@@ -6105,6 +6106,7 @@ mod tests {
             windows_sandbox_level: turn_context.windows_sandbox_level,
             justification: params.justification.clone(),
             arg0: None,
+            stdin: None,
         };
 
         let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));

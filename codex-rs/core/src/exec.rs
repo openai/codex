@@ -12,6 +12,7 @@ use std::time::Instant;
 use async_channel::Sender;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::process::Child;
 use tokio_util::sync::CancellationToken;
@@ -67,6 +68,7 @@ pub struct ExecParams {
     pub windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
     pub justification: Option<String>,
     pub arg0: Option<String>,
+    pub stdin: Option<Vec<u8>>,
 }
 
 /// Mechanism to terminate an exec invocation before it finishes naturally.
@@ -162,6 +164,7 @@ pub async fn process_exec_tool_call(
         sandbox_permissions,
         windows_sandbox_level,
         justification,
+        stdin,
         arg0: _,
     } = params;
 
@@ -180,6 +183,7 @@ pub async fn process_exec_tool_call(
         expiration,
         sandbox_permissions,
         justification,
+        stdin,
     };
 
     let manager = SandboxManager::new();
@@ -213,6 +217,7 @@ pub(crate) async fn execute_exec_env(
         sandbox_permissions,
         justification,
         arg0,
+        stdin,
     } = env;
 
     let params = ExecParams {
@@ -224,6 +229,7 @@ pub(crate) async fn execute_exec_env(
         windows_sandbox_level,
         justification,
         arg0,
+        stdin,
     };
 
     let start = Instant::now();
@@ -314,6 +320,7 @@ async fn exec_windows_sandbox(
         env,
         expiration,
         windows_sandbox_level,
+        stdin: _,
         ..
     } = params;
     // TODO(iceweasel-oai): run_windows_sandbox_capture should support all
@@ -668,6 +675,7 @@ async fn exec(
         arg0,
         expiration,
         windows_sandbox_level: _,
+        stdin,
         ..
     } = params;
 
@@ -678,16 +686,32 @@ async fn exec(
         ))
     })?;
     let arg0_ref = arg0.as_deref();
-    let child = spawn_child_async(
+    let stdio_policy = if stdin.is_some() {
+        StdioPolicy::RedirectForShellToolWithStdin
+    } else {
+        StdioPolicy::RedirectForShellTool
+    };
+    let mut child = spawn_child_async(
         PathBuf::from(program),
         args.into(),
         arg0_ref,
         cwd,
         sandbox_policy,
-        StdioPolicy::RedirectForShellTool,
+        stdio_policy,
         env,
     )
     .await?;
+    if let Some(stdin_bytes) = stdin {
+        let mut child_stdin = child.stdin.take().ok_or_else(|| {
+            CodexErr::Io(io::Error::other(
+                "stdin pipe was unexpectedly not available",
+            ))
+        })?;
+        child_stdin
+            .write_all(&stdin_bytes)
+            .await
+            .map_err(CodexErr::Io)?;
+    }
     consume_truncated_output(child, expiration, stdout_stream).await
 }
 
@@ -1052,6 +1076,7 @@ mod tests {
             windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
             justification: None,
             arg0: None,
+            stdin: None,
         };
 
         let output = exec(params, SandboxType::None, &SandboxPolicy::ReadOnly, None).await?;
@@ -1098,6 +1123,7 @@ mod tests {
             windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
             justification: None,
             arg0: None,
+            stdin: None,
         };
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(1_000)).await;

@@ -884,6 +884,8 @@ async fn make_chatwidget_manual(
         pre_review_token_info: None,
         needs_final_message_separator: false,
         had_work_activity: false,
+        hook_triggered_this_turn: false,
+        hook_triggered_next_turn: false,
         saw_plan_update_this_turn: false,
         saw_plan_item_this_turn: false,
         plan_delta_buffer: String::new(),

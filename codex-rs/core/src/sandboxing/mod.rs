@@ -36,6 +36,7 @@ pub struct CommandSpec {
     pub expiration: ExecExpiration,
     pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
+    pub stdin: Option<Vec<u8>>,
 }
 
 #[derive(Debug)]
@@ -49,6 +50,7 @@ pub struct ExecEnv {
     pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
     pub arg0: Option<String>,
+    pub stdin: Option<Vec<u8>>,
 }
 
 pub enum SandboxPreference {
@@ -174,6 +176,7 @@ impl SandboxManager {
             sandbox_permissions: spec.sandbox_permissions,
             justification: spec.justification,
             arg0: arg0_override,
+            stdin: spec.stdin,
         })
     }
 

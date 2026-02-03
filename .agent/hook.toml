@@ -1,0 +1,15 @@
+﻿[turn_start]
+command = "cmd"
+args = [
+    "/c",
+    "echo TurnStartHook: hooks start test >> .codex\\hook.log & echo TurnStartHook: hooks start test 1>&2",
+]
+cwd = "C:\\Users\\gummy\\RustroverProjects\\codex"
+
+[turn_end]
+command = "cmd"
+args = [
+    "/c",
+    "echo TurnEndHook: hooks end test >> .codex\\hook.log & for /L %i in (1,1,4) do (echo TurnEndHook: step %i 1>&2 & ping -n 2 127.0.0.1 >nul) & echo TurnEndHook: done 1>&2",
+]
+cwd = "C:\\Users\\gummy\\RustroverProjects\\codex"

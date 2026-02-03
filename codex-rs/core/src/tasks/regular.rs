@@ -50,15 +50,22 @@ impl SessionTask for RegularTask {
             hook_inputs.push(hook_input);
         }
 
-        let should_run_turn_start = if self.hook_input.is_some() {
+        let is_hook_input_turn = self.hook_input.is_some();
+        let should_run_turn_start = if is_hook_input_turn {
             hooks::should_run_turn_start_on_hook_input(&ctx.cwd).await
         } else {
             true
         };
         if !cancellation_token.is_cancelled()
             && should_run_turn_start
-            && let Some(hook_input) =
-                hooks::run_hook(&sess, &ctx, HookKind::TurnStart, &cancellation_token).await
+            && let Some(hook_input) = hooks::run_hook(
+                &sess,
+                &ctx,
+                HookKind::TurnStart,
+                is_hook_input_turn,
+                &cancellation_token,
+            )
+            .await
         {
             hook_inputs.push(hook_input);
         }
@@ -78,8 +85,14 @@ impl SessionTask for RegularTask {
             return None;
         }
 
-        if let Some(hook_input) =
-            hooks::run_hook(&sess, &ctx, HookKind::TurnEnd, &cancellation_token).await
+        if let Some(hook_input) = hooks::run_hook(
+            &sess,
+            &ctx,
+            HookKind::TurnEnd,
+            is_hook_input_turn,
+            &cancellation_token,
+        )
+        .await
         {
             sess.enqueue_hook_input(hook_input).await;
             sess.maybe_start_next_hook_turn();

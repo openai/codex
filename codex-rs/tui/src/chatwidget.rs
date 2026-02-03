@@ -61,6 +61,7 @@ use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::ExecCommandOutputDeltaEvent;
 use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::ExitedReviewModeEvent;
+use codex_core::protocol::HookKind;
 use codex_core::protocol::ListCustomPromptsResponseEvent;
 use codex_core::protocol::ListSkillsResponseEvent;
 use codex_core::protocol::McpListToolsResponseEvent;
@@ -555,6 +556,10 @@ pub(crate) struct ChatWidget {
     // This gates rendering of the "Worked for …" separator so purely conversational turns don't
     // show an empty divider. It is reset when the separator is emitted.
     had_work_activity: bool,
+    // Whether the current turn executed a hook command.
+    hook_triggered_this_turn: bool,
+    // Whether the next turn was started by a hook (TurnEnd HookInput follow-up).
+    hook_triggered_next_turn: bool,
     // Whether the current turn emitted a plan update.
     saw_plan_update_this_turn: bool,
     // Whether the current turn emitted a proposed plan item.
@@ -1021,6 +1026,8 @@ impl ChatWidget {
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
         self.plan_stream_controller = None;
+        self.hook_triggered_this_turn = self.hook_triggered_next_turn;
+        self.hook_triggered_next_turn = false;
         self.otel_manager.reset_runtime_metrics();
         self.bottom_pane.clear_quit_shortcut_hint();
         self.quit_shortcut_expires_at = None;
@@ -1053,10 +1060,12 @@ impl ChatWidget {
                 self.add_to_history(history_cell::FinalMessageSeparator::new(
                     elapsed_seconds,
                     runtime_metrics,
+                    self.hook_triggered_this_turn,
                 ));
             }
             self.needs_final_message_separator = false;
             self.had_work_activity = false;
+            self.hook_triggered_this_turn = false;
         }
         // Mark task stopped and request redraw now that all content is in history.
         self.agent_turn_running = false;
@@ -1915,9 +1924,11 @@ impl ChatWidget {
                 self.add_to_history(history_cell::FinalMessageSeparator::new(
                     elapsed_seconds,
                     None,
+                    self.hook_triggered_this_turn,
                 ));
                 self.needs_final_message_separator = false;
                 self.had_work_activity = false;
+                self.hook_triggered_this_turn = false;
             } else if self.needs_final_message_separator {
                 // Reset the flag even if we don't show separator (no work was done)
                 self.needs_final_message_separator = false;
@@ -2297,6 +2308,8 @@ impl ChatWidget {
             pre_review_token_info: None,
             needs_final_message_separator: false,
             had_work_activity: false,
+            hook_triggered_this_turn: false,
+            hook_triggered_next_turn: false,
             saw_plan_update_this_turn: false,
             saw_plan_item_this_turn: false,
             plan_delta_buffer: String::new(),
@@ -2446,6 +2459,8 @@ impl ChatWidget {
             pre_review_token_info: None,
             needs_final_message_separator: false,
             had_work_activity: false,
+            hook_triggered_this_turn: false,
+            hook_triggered_next_turn: false,
             last_separator_elapsed_secs: None,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
@@ -2576,6 +2591,8 @@ impl ChatWidget {
             pre_review_token_info: None,
             needs_final_message_separator: false,
             had_work_activity: false,
+            hook_triggered_this_turn: false,
+            hook_triggered_next_turn: false,
             saw_plan_update_this_turn: false,
             saw_plan_item_this_turn: false,
             plan_delta_buffer: String::new(),
@@ -3538,7 +3555,11 @@ impl ChatWidget {
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
                 self.on_background_event(message)
             }
-            EventMsg::HookInput(_) => {}
+            EventMsg::HookInput(ev) => {
+                if ev.hook == HookKind::TurnEnd {
+                    self.hook_triggered_next_turn = true;
+                }
+            }
             EventMsg::UndoStarted(ev) => self.on_undo_started(ev),
             EventMsg::UndoCompleted(ev) => self.on_undo_completed(ev),
             EventMsg::StreamError(StreamErrorEvent {

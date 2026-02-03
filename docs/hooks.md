@@ -103,3 +103,27 @@ args = ["--baz"]
 - Hook 螳溯｡後・繧ｿ繧､繝繧｢繧ｦ繝・
 - Hook 謌仙凄縺ｫ蠢懊§縺溯・蜍墓嫌蜍包ｼ井ｾ・ TurnEnd縺ｧ閾ｪ蜍募●豁｢・・
 
+## Hook stdin JSON
+
+Hook 実行時に JSON を stdin へ渡す。turn_start / turn_end 共通。
+
+### Fields
+- hook: "turn_start" | "turn_end"
+- timestamp: RFC3339
+- cwd: ワークスペースの絶対パス
+- sub_id: Turn の識別子
+- session_source: "cli" | "vscode" | "exec" | "mcp" | "subagent_*" | "unknown"
+- is_hook_input_turn: HookInput 由来の Turn かどうか
+
+### Example
+```json
+{
+  "hook": "turn_start",
+  "timestamp": "2026-02-03T12:34:56Z",
+  "cwd": "C:\\Users\\gummy\\RustroverProjects\\codex",
+  "sub_id": "hook-1",
+  "session_source": "cli",
+  "is_hook_input_turn": false
+}
+```
+

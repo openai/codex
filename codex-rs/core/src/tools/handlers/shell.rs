@@ -51,6 +51,7 @@ impl ShellHandler {
             windows_sandbox_level: turn_context.windows_sandbox_level,
             justification: params.justification.clone(),
             arg0: None,
+            stdin: None,
         }
     }
 }
@@ -78,6 +79,7 @@ impl ShellCommandHandler {
             windows_sandbox_level: turn_context.windows_sandbox_level,
             justification: params.justification.clone(),
             arg0: None,
+            stdin: None,
         }
     }
 }

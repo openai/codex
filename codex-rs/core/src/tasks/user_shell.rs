@@ -114,6 +114,7 @@ impl SessionTask for UserShellCommandTask {
             sandbox_permissions: SandboxPermissions::UseDefault,
             justification: None,
             arg0: None,
+            stdin: None,
         };
 
         let stdout_stream = Some(StdoutStream {

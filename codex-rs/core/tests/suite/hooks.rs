@@ -95,6 +95,25 @@ fn turn_start_hook_multiline_config() -> String {
     }
 }
 
+fn turn_start_hook_stdin_config() -> String {
+    if cfg!(windows) {
+        format_hook_section(
+            "turn_start",
+            "cmd.exe",
+            &[
+                "/C",
+                "more > .agent\\hook-stdin.json & echo hook-start 1>&2",
+            ],
+        )
+    } else {
+        format_hook_section(
+            "turn_start",
+            "sh",
+            &["-c", "cat - > .agent/hook-stdin.json; echo hook-start 1>&2"],
+        )
+    }
+}
+
 fn turn_end_hook_config() -> String {
     if cfg!(windows) {
         format_hook_section(
@@ -326,6 +345,49 @@ async fn turn_start_hook_multiline_stderr_is_trimmed() -> anyhow::Result<()> {
     assert_eq!(hook_event.exit_code, 0);
 
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_start_hook_receives_stdin_json() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_model("test-gpt-5.1-codex");
+    let test = builder.build(&server).await?;
+
+    write_hook_toml(test.cwd_path(), &turn_start_hook_stdin_config());
+
+    let response_body = sse(vec![
+        ev_response_created("resp-1"),
+        ev_assistant_message("msg-1", "ok"),
+        ev_completed("resp-1"),
+    ]);
+    let _response_mock = mount_sse_once(&server, response_body).await;
+
+    submit_user_turn(&test, "user input").await?;
+
+    let hook_event = wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::HookInput(_))).await;
+    let hook_event = match hook_event {
+        EventMsg::HookInput(hook_event) => hook_event,
+        _ => unreachable!("HookInput event expected"),
+    };
+    assert_eq!(hook_event.hook, HookKind::TurnStart);
+
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let stdin_path = test.cwd_path().join(".agent").join("hook-stdin.json");
+    let payload = fs::read_to_string(stdin_path)?;
+    let payload: serde_json::Value = serde_json::from_str(&payload)?;
+
+    assert_eq!(payload["hook"], "turn_start");
+    assert_eq!(
+        payload["cwd"],
+        test.cwd_path().to_string_lossy().to_string()
+    );
+    assert_eq!(payload["is_hook_input_turn"], false);
+    assert!(payload["sub_id"].as_str().is_some());
+    assert!(payload["session_source"].as_str().is_some());
+    assert!(payload["timestamp"].as_str().is_some());
 
     Ok(())
 }

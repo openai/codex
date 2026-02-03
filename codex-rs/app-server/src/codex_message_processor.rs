@@ -1444,6 +1444,7 @@ impl CodexMessageProcessor {
             windows_sandbox_level,
             justification: None,
             arg0: None,
+            stdin: None,
         };
 
         let requested_policy = params.sandbox_policy.map(|policy| policy.to_core());
