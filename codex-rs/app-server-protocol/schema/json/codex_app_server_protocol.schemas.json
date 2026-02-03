@@ -11756,6 +11756,16 @@
           "id": {
             "type": "string"
           },
+          "inputModalities": {
+            "default": [
+              "text",
+              "image"
+            ],
+            "items": {
+              "$ref": "#/definitions/v2/InputModality"
+            },
+            "type": "array"
+          },
           "isDefault": {
             "type": "boolean"
           },

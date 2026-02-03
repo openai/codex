@@ -90,6 +90,7 @@ export type { InitializeCapabilities } from "./InitializeCapabilities";
 export type { InitializeParams } from "./InitializeParams";
 export type { InitializeResponse } from "./InitializeResponse";
 export type { InputItem } from "./InputItem";
+export type { InputModality } from "./InputModality";
 export type { InterruptConversationParams } from "./InterruptConversationParams";
 export type { InterruptConversationResponse } from "./InterruptConversationResponse";
 export type { ItemCompletedEvent } from "./ItemCompletedEvent";
