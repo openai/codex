@@ -17,6 +17,7 @@ members = [
     "cli",
     "common",
     "core",
+    "secrets",
     "exec",
     "exec-server",
     "execpolicy",
@@ -79,6 +80,7 @@ codex-cli = { path = "cli"}
 codex-client = { path = "codex-client" }
 codex-common = { path = "common" }
 codex-core = { path = "core" }
+codex-secrets = { path = "secrets" }
 codex-exec = { path = "exec" }
 codex-execpolicy = { path = "execpolicy" }
 codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
@@ -114,6 +116,7 @@ exec_server_test_support = { path = "exec-server/tests/common" }
 mcp_test_support = { path = "mcp-server/tests/common" }
 
 # External
+age = "0.11.1"
 allocative = "0.3.3"
 ansi-to-tui = "7.0.0"
 anyhow = "1"
@@ -291,7 +294,7 @@ unwrap_used = "deny"
 # cargo-shear cannot see the platform-specific openssl-sys usage, so we
 # silence the false positive here instead of deleting a real dependency.
 [workspace.metadata.cargo-shear]
-ignored = ["icu_provider", "openssl-sys", "codex-utils-readiness"]
+ignored = ["icu_provider", "openssl-sys", "codex-utils-readiness", "codex-secrets"]
 
 [profile.release]
 lto = "fat"
