@@ -973,6 +973,24 @@
       },
       "type": "object"
     },
+    "StreamRenderingMode": {
+      "oneOf": [
+        {
+          "description": "Newline-gated markdown buffering with commit-tick pacing.",
+          "enum": [
+            "line-buffered"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Render every incoming assistant delta immediately to reduce display latency.",
+          "enum": [
+            "delta"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "ToolsToml": {
       "additionalProperties": false,
       "properties": {
@@ -1045,6 +1063,15 @@
           "default": true,
           "description": "Show startup tooltips in the TUI welcome screen. Defaults to `true`.",
           "type": "boolean"
+        },
+        "stream_rendering_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/StreamRenderingMode"
+            }
+          ],
+          "default": "line-buffered",
+          "description": "Controls how streamed assistant text is rendered in the TUI.\n\n- `line-buffered` (default): commit complete lines on animation ticks. - `delta`: update the active assistant cell on every incoming delta."
         }
       },
       "type": "object"

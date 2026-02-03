@@ -447,6 +447,16 @@ impl fmt::Display for NotificationMethod {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum StreamRenderingMode {
+    /// Newline-gated markdown buffering with commit-tick pacing.
+    #[default]
+    LineBuffered,
+    /// Render every incoming assistant delta immediately to reduce display latency.
+    Delta,
+}
+
 /// Collection of settings that are specific to the TUI.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -470,6 +480,13 @@ pub struct Tui {
     /// Defaults to `true`.
     #[serde(default = "default_true")]
     pub show_tooltips: bool,
+
+    /// Controls how streamed assistant text is rendered in the TUI.
+    ///
+    /// - `line-buffered` (default): commit complete lines on animation ticks.
+    /// - `delta`: update the active assistant cell on every incoming delta.
+    #[serde(default)]
+    pub stream_rendering_mode: StreamRenderingMode,
 
     /// Start the TUI in the specified collaboration mode (plan/execute/etc.).
     /// Defaults to unset.

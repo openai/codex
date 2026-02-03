@@ -21,6 +21,7 @@ use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::Constrained;
 use codex_core::config::ConstraintError;
+use codex_core::config::types::StreamRenderingMode;
 use codex_core::config_loader::RequirementSource;
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
@@ -854,6 +855,8 @@ async fn make_chatwidget_manual(
         rate_limit_poller: None,
         stream_controller: None,
         plan_stream_controller: None,
+        delta_streaming_active: false,
+        delta_stream_buffer: String::new(),
         running_commands: HashMap::new(),
         suppressed_exec_calls: HashSet::new(),
         skills_all: Vec::new(),
@@ -1828,6 +1831,49 @@ async fn streaming_final_answer_keeps_task_running_state() {
         other => panic!("expected Op::Interrupt, got {other:?}"),
     }
     assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
+}
+
+#[tokio::test]
+async fn delta_stream_rendering_updates_without_newline_and_skips_commit_animation() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.config.tui_stream_rendering_mode = StreamRenderingMode::Delta;
+    chat.on_task_started();
+    while rx.try_recv().is_ok() {}
+
+    chat.on_agent_message_delta("Hello".to_string());
+
+    assert!(chat.stream_controller.is_none());
+    assert!(chat.delta_streaming_active);
+    let active = chat
+        .active_cell
+        .as_ref()
+        .expect("expected active stream cell");
+    let active_text = lines_to_single_string(&active.display_lines(80));
+    assert!(
+        active_text.contains("Hello"),
+        "expected active cell to include streamed delta, got: {active_text:?}"
+    );
+    while let Ok(event) = rx.try_recv() {
+        assert!(
+            !matches!(event, AppEvent::StartCommitAnimation),
+            "delta mode should not start commit animation"
+        );
+    }
+
+    chat.on_agent_message("".to_string());
+    assert!(!chat.delta_streaming_active);
+    assert!(chat.active_cell.is_none());
+
+    let cells = drain_insert_history(&mut rx);
+    let history_text = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(
+        history_text.contains("Hello"),
+        "expected finalized history to include streamed text, got: {history_text:?}"
+    );
 }
 
 #[tokio::test]
