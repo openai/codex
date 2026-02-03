@@ -208,6 +208,7 @@ use codex_core::ThreadManager;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_file_search::FileMatch;
+use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::UpdatePlanArgs;
@@ -467,7 +468,7 @@ pub(crate) struct ChatWidget {
     /// where the overlay may briefly treat new tail content as already cached.
     active_cell_revision: u64,
     config: Config,
-    /// The unmasked collaboration mode settings (always Custom mode).
+    /// The unmasked collaboration mode settings (always Default mode).
     ///
     /// Masks are applied on top of this base mode to derive the effective mode.
     current_collaboration_mode: CollaborationMode,
@@ -815,6 +816,9 @@ impl ChatWidget {
             &model_for_header,
             event,
             self.show_welcome_banner,
+            self.auth_manager
+                .auth_cached()
+                .and_then(|auth| auth.account_plan_type()),
         );
         self.apply_session_info_cell(session_info_cell);
 
@@ -1067,6 +1071,11 @@ impl ChatWidget {
         if !from_replay && self.queued_user_messages.is_empty() {
             self.maybe_prompt_plan_implementation();
         }
+        // Keep this flag for replayed completion events so a subsequent live TurnComplete can
+        // still show the prompt once after thread switch replay.
+        if !from_replay {
+            self.saw_plan_item_this_turn = false;
+        }
         // If there is a queued user message, send exactly one now to begin the next turn.
         self.maybe_send_next_queued_input();
         // Emit a notification when the turn completes (suppressed if focused).
@@ -1105,8 +1114,8 @@ impl ChatWidget {
     }
 
     fn open_plan_implementation_prompt(&mut self) {
-        let code_mask = collaboration_modes::code_mask(self.models_manager.as_ref());
-        let (implement_actions, implement_disabled_reason) = match code_mask {
+        let default_mask = collaboration_modes::default_mode_mask(self.models_manager.as_ref());
+        let (implement_actions, implement_disabled_reason) = match default_mask {
             Some(mask) => {
                 let user_text = PLAN_IMPLEMENTATION_CODING_MESSAGE.to_string();
                 let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
@@ -1117,13 +1126,13 @@ impl ChatWidget {
                 })];
                 (actions, None)
             }
-            None => (Vec::new(), Some("Code mode unavailable".to_string())),
+            None => (Vec::new(), Some("Default mode unavailable".to_string())),
         };
 
         let items = vec![
             SelectionItem {
                 name: PLAN_IMPLEMENTATION_YES.to_string(),
-                description: Some("Switch to Code and start coding.".to_string()),
+                description: Some("Switch to Default and start coding.".to_string()),
                 selected_description: None,
                 is_current: false,
                 actions: implement_actions,
@@ -2072,6 +2081,7 @@ impl ChatWidget {
 
     pub(crate) fn handle_exec_begin_now(&mut self, ev: ExecCommandBeginEvent) {
         // Ensure the status indicator is visible while the command runs.
+        self.bottom_pane.ensure_status_indicator();
         self.running_commands.insert(
             ev.call_id.clone(),
             RunningCommand {
@@ -2213,15 +2223,15 @@ impl ChatWidget {
             .as_ref()
             .and_then(|mask| mask.model.clone())
             .unwrap_or_else(|| model_for_header.clone());
-        let fallback_custom = Settings {
+        let fallback_default = Settings {
             model: header_model.clone(),
             reasoning_effort: None,
             developer_instructions: None,
         };
-        // Collaboration modes start in Custom mode (not activated).
+        // Collaboration modes start in Default mode.
         let current_collaboration_mode = CollaborationMode {
-            mode: ModeKind::Custom,
-            settings: fallback_custom,
+            mode: ModeKind::Default,
+            settings: fallback_default,
         };
 
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
@@ -2358,15 +2368,15 @@ impl ChatWidget {
             .as_ref()
             .and_then(|mask| mask.model.clone())
             .unwrap_or_else(|| model_for_header.clone());
-        let fallback_custom = Settings {
+        let fallback_default = Settings {
             model: header_model.clone(),
             reasoning_effort: None,
             developer_instructions: None,
         };
-        // Collaboration modes start in Custom mode (not activated).
+        // Collaboration modes start in Default mode.
         let current_collaboration_mode = CollaborationMode {
-            mode: ModeKind::Custom,
-            settings: fallback_custom,
+            mode: ModeKind::Default,
+            settings: fallback_default,
         };
 
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
@@ -2494,15 +2504,15 @@ impl ChatWidget {
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
 
-        let fallback_custom = Settings {
+        let fallback_default = Settings {
             model: header_model.clone(),
             reasoning_effort: None,
             developer_instructions: None,
         };
-        // Collaboration modes start in Custom mode (not activated).
+        // Collaboration modes start in Default mode.
         let current_collaboration_mode = CollaborationMode {
-            mode: ModeKind::Custom,
-            settings: fallback_custom,
+            mode: ModeKind::Default,
+            settings: fallback_default,
         };
 
         let mut widget = Self {
@@ -2732,15 +2742,26 @@ impl ChatWidget {
                 InputResult::Command(cmd) => {
                     self.dispatch_command(cmd);
                 }
-                InputResult::CommandWithArgs(cmd, args) => {
-                    self.dispatch_command_with_args(cmd, args);
+                InputResult::CommandWithArgs(cmd, args, text_elements) => {
+                    self.dispatch_command_with_args(cmd, args, text_elements);
                 }
                 InputResult::None => {}
             },
         }
     }
 
+    /// Attach a local image to the composer when the active model supports image inputs.
+    ///
+    /// When the model does not advertise image support, we keep the draft unchanged and surface a
+    /// warning event so users can switch models or remove attachments.
     pub(crate) fn attach_image(&mut self, path: PathBuf) {
+        if !self.current_model_supports_images() {
+            self.add_to_history(history_cell::new_warning_event(
+                self.image_inputs_not_supported_message(),
+            ));
+            self.request_redraw();
+            return;
+        }
         tracing::info!("attach_image path={path:?}");
         self.bottom_pane.attach_image(path);
         self.request_redraw();
@@ -2783,6 +2804,7 @@ impl ChatWidget {
                 cmd.command()
             );
             self.add_to_history(history_cell::new_error_event(message));
+            self.bottom_pane.drain_pending_submission_state();
             self.request_redraw();
             return;
         }
@@ -3019,7 +3041,16 @@ impl ChatWidget {
         }
     }
 
-    fn dispatch_command_with_args(&mut self, cmd: SlashCommand, args: String) {
+    fn dispatch_command_with_args(
+        &mut self,
+        cmd: SlashCommand,
+        args: String,
+        _text_elements: Vec<TextElement>,
+    ) {
+        if !cmd.supports_inline_args() {
+            self.dispatch_command(cmd);
+            return;
+        }
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
@@ -3033,7 +3064,12 @@ impl ChatWidget {
         let trimmed = args.trim();
         match cmd {
             SlashCommand::Rename if !trimmed.is_empty() => {
-                let Some(name) = codex_core::util::normalize_thread_name(trimmed) else {
+                let Some((prepared_args, _prepared_elements)) =
+                    self.bottom_pane.prepare_inline_args_submission(false)
+                else {
+                    return;
+                };
+                let Some(name) = codex_core::util::normalize_thread_name(&prepared_args) else {
                     self.add_error_message("Thread name cannot be empty.".to_string());
                     return;
                 };
@@ -3042,20 +3078,50 @@ impl ChatWidget {
                 self.request_redraw();
                 self.app_event_tx
                     .send(AppEvent::CodexOp(Op::SetThreadName { name }));
+                self.bottom_pane.drain_pending_submission_state();
             }
-            SlashCommand::Collab | SlashCommand::Plan => {
-                let _ = trimmed;
+            SlashCommand::Plan if !trimmed.is_empty() => {
                 self.dispatch_command(cmd);
+                if self.active_mode_kind() != ModeKind::Plan {
+                    return;
+                }
+                let Some((prepared_args, prepared_elements)) =
+                    self.bottom_pane.prepare_inline_args_submission(true)
+                else {
+                    return;
+                };
+                let user_message = UserMessage {
+                    text: prepared_args,
+                    local_images: self
+                        .bottom_pane
+                        .take_recent_submission_images_with_placeholders(),
+                    text_elements: prepared_elements,
+                    mention_paths: self.bottom_pane.take_mention_paths(),
+                };
+                if self.is_session_configured() {
+                    self.reasoning_buffer.clear();
+                    self.full_reasoning_buffer.clear();
+                    self.set_status_header(String::from("Working"));
+                    self.submit_user_message(user_message);
+                } else {
+                    self.queue_user_message(user_message);
+                }
             }
             SlashCommand::Review if !trimmed.is_empty() => {
+                let Some((prepared_args, _prepared_elements)) =
+                    self.bottom_pane.prepare_inline_args_submission(false)
+                else {
+                    return;
+                };
                 self.submit_op(Op::Review {
                     review_request: ReviewRequest {
                         target: ReviewTarget::Custom {
-                            instructions: trimmed.to_string(),
+                            instructions: prepared_args,
                         },
                         user_facing_hint: None,
                     },
                 });
+                self.bottom_pane.drain_pending_submission_state();
             }
             _ => self.dispatch_command(cmd),
         }
@@ -3172,6 +3238,10 @@ impl ChatWidget {
         if text.is_empty() && local_images.is_empty() {
             return;
         }
+        if !local_images.is_empty() && !self.current_model_supports_images() {
+            self.restore_blocked_image_submission(text, text_elements, local_images, mention_paths);
+            return;
+        }
 
         let mut items: Vec<UserInput> = Vec::new();
 
@@ -3284,6 +3354,34 @@ impl ChatWidget {
         }
 
         self.needs_final_message_separator = false;
+    }
+
+    /// Restore the blocked submission draft without losing mention resolution state.
+    ///
+    /// The blocked-image path intentionally keeps the draft in the composer so
+    /// users can remove attachments and retry. We must restore
+    /// `mention_paths` alongside visible text; restoring only `$name` tokens
+    /// makes the draft look correct while degrading mention resolution to
+    /// name-only heuristics on retry.
+    fn restore_blocked_image_submission(
+        &mut self,
+        text: String,
+        text_elements: Vec<TextElement>,
+        local_images: Vec<LocalImageAttachment>,
+        mention_paths: HashMap<String, String>,
+    ) {
+        // Preserve the user's composed payload so they can retry after changing models.
+        let local_image_paths = local_images.iter().map(|img| img.path.clone()).collect();
+        self.bottom_pane.set_composer_text_with_mention_paths(
+            text,
+            text_elements,
+            local_image_paths,
+            mention_paths,
+        );
+        self.add_to_history(history_cell::new_warning_event(
+            self.image_inputs_not_supported_message(),
+        ));
+        self.request_redraw();
     }
 
     /// Replay a subset of initial events into the UI to seed the transcript when
@@ -5118,10 +5216,14 @@ impl ChatWidget {
             self.bottom_pane.set_collaboration_modes_enabled(enabled);
             let settings = self.current_collaboration_mode.settings.clone();
             self.current_collaboration_mode = CollaborationMode {
-                mode: ModeKind::Custom,
+                mode: ModeKind::Default,
                 settings,
             };
-            self.active_collaboration_mask = None;
+            self.active_collaboration_mask = if enabled {
+                collaboration_modes::default_mask(self.models_manager.as_ref())
+            } else {
+                None
+            };
             self.update_collaboration_mode_indicator();
             self.refresh_model_display();
             self.request_redraw();
@@ -5226,6 +5328,36 @@ impl ChatWidget {
             .unwrap_or(false)
     }
 
+    /// Return whether the effective model currently advertises image-input support.
+    ///
+    /// We intentionally default to `true` when model metadata cannot be read so transient catalog
+    /// failures do not hard-block user input in the UI.
+    fn current_model_supports_images(&self) -> bool {
+        let model = self.current_model();
+        self.models_manager
+            .try_list_models(&self.config)
+            .ok()
+            .and_then(|models| {
+                models
+                    .into_iter()
+                    .find(|preset| preset.model == model)
+                    .map(|preset| preset.input_modalities.contains(&InputModality::Image))
+            })
+            .unwrap_or(true)
+    }
+
+    fn sync_image_paste_enabled(&mut self) {
+        let enabled = self.current_model_supports_images();
+        self.bottom_pane.set_image_paste_enabled(enabled);
+    }
+
+    fn image_inputs_not_supported_message(&self) -> String {
+        format!(
+            "Model {} does not support image inputs. Remove images or switch models.",
+            self.current_model()
+        )
+    }
+
     #[allow(dead_code)] // Used in tests
     pub(crate) fn current_collaboration_mode(&self) -> &CollaborationMode {
         &self.current_collaboration_mode
@@ -5271,7 +5403,7 @@ impl ChatWidget {
         self.active_collaboration_mask
             .as_ref()
             .and_then(|mask| mask.mode)
-            .unwrap_or(ModeKind::Custom)
+            .unwrap_or(ModeKind::Default)
     }
 
     fn effective_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
@@ -5298,6 +5430,8 @@ impl ChatWidget {
     fn refresh_model_display(&mut self) {
         let effective = self.effective_collaboration_mode();
         self.session_header.set_model(effective.model());
+        // Keep composer paste affordances aligned with the currently effective model.
+        self.sync_image_paste_enabled();
     }
 
     fn model_display_name(&self) -> &str {
@@ -5316,10 +5450,8 @@ impl ChatWidget {
         }
         match self.active_mode_kind() {
             ModeKind::Plan => Some("Plan"),
-            ModeKind::Code => Some("Code"),
-            ModeKind::PairProgramming => Some("Pair Programming"),
-            ModeKind::Execute => Some("Execute"),
-            ModeKind::Custom => None,
+            ModeKind::Default => Some("Default"),
+            ModeKind::PairProgramming | ModeKind::Execute => None,
         }
     }
 
@@ -5329,10 +5461,7 @@ impl ChatWidget {
         }
         match self.active_mode_kind() {
             ModeKind::Plan => Some(CollaborationModeIndicator::Plan),
-            ModeKind::Code => None,
-            ModeKind::PairProgramming => Some(CollaborationModeIndicator::PairProgramming),
-            ModeKind::Execute => Some(CollaborationModeIndicator::Execute),
-            ModeKind::Custom => None,
+            ModeKind::Default | ModeKind::PairProgramming | ModeKind::Execute => None,
         }
     }
 
@@ -5355,7 +5484,7 @@ impl ChatWidget {
         }
     }
 
-    /// Cycle to the next collaboration mode variant (Plan -> Code -> Plan).
+    /// Cycle to the next collaboration mode variant (Plan -> Default -> Plan).
     fn cycle_collaboration_mode(&mut self) {
         if !self.collaboration_modes_enabled() {
             return;
@@ -5371,7 +5500,7 @@ impl ChatWidget {
 
     /// Update the active collaboration mask.
     ///
-    /// When collaboration modes are enabled and a preset is selected (not Custom),
+    /// When collaboration modes are enabled and a preset is selected,
     /// the current mode is attached to submissions as `Op::UserTurn { collaboration_mode: Some(...) }`.
     pub(crate) fn set_collaboration_mask(&mut self, mask: CollaborationModeMask) {
         if !self.collaboration_modes_enabled() {

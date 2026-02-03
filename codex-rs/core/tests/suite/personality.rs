@@ -16,6 +16,7 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationPolicyConfig;
+use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_completed;
@@ -273,6 +274,97 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_turn_personality_same_value_does_not_add_update_message() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let resp_mock = mount_sse_sequence(
+        &server,
+        vec![sse_completed("resp-1"), sse_completed("resp-2")],
+    )
+    .await;
+    let mut builder = test_codex()
+        .with_model("exp-codex-personality")
+        .with_config(|config| {
+            config.features.disable(Feature::RemoteModels);
+            config.features.enable(Feature::Personality);
+            config.personality = Some(Personality::Pragmatic);
+        });
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd_path().to_path_buf(),
+            approval_policy: test.config.approval_policy.value(),
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            model: test.session_configured.model.clone(),
+            effort: test.config.model_reasoning_effort,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    test.codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: Some(Personality::Pragmatic),
+        })
+        .await?;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd_path().to_path_buf(),
+            approval_policy: test.config.approval_policy.value(),
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            model: test.session_configured.model.clone(),
+            effort: test.config.model_reasoning_effort,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = resp_mock.requests();
+    assert_eq!(requests.len(), 2, "expected two requests");
+    let request = requests
+        .last()
+        .expect("expected second request after personality override");
+
+    let developer_texts = request.message_input_texts("developer");
+    let personality_text = developer_texts
+        .iter()
+        .find(|text| text.contains("<personality_spec>"));
+    assert!(
+        personality_text.is_none(),
+        "expected no personality preamble for unchanged personality, got {personality_text:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn instructions_uses_base_if_feature_disabled() -> anyhow::Result<()> {
     let codex_home = TempDir::new().expect("create temp dir");
     let mut config = load_default_config_for_test(&codex_home).await;
@@ -421,6 +513,7 @@ async fn ignores_remote_personality_if_remote_models_disabled() -> anyhow::Resul
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
+        input_modalities: default_input_modalities(),
     };
 
     let _models_mock = mount_models_once(
@@ -536,6 +629,7 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
+        input_modalities: default_input_modalities(),
     };
 
     let _models_mock = mount_models_once(
@@ -646,6 +740,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
+        input_modalities: default_input_modalities(),
     };
 
     let _models_mock = mount_models_once(

@@ -1,12 +1,13 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::RwLock;
 
 use crate::api_bridge::CoreAuthProvider;
 use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::map_api_error;
 use crate::auth::UnauthorizedRecovery;
-use codex_api::AggregateStreamExt;
-use codex_api::ChatClient as ApiChatClient;
+use crate::turn_metadata::build_turn_metadata_header;
 use codex_api::CompactClient as ApiCompactClient;
 use codex_api::CompactionInput as ApiCompactionInput;
 use codex_api::Prompt as ApiPrompt;
@@ -14,7 +15,6 @@ use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
 use codex_api::ResponseAppendWsRequest;
 use codex_api::ResponseCreateWsRequest;
-use codex_api::ResponseStream as ApiResponseStream;
 use codex_api::ResponsesClient as ApiResponsesClient;
 use codex_api::ResponsesOptions as ApiResponsesOptions;
 use codex_api::ResponsesWebsocketClient as ApiWebSocketResponsesClient;
@@ -66,12 +66,18 @@ use crate::features::Feature;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
-use crate::tools::spec::create_tools_json_for_chat_completions_api;
 use crate::tools::spec::create_tools_json_for_responses_api;
 use crate::transport_manager::TransportManager;
 
 pub const WEB_SEARCH_ELIGIBLE_HEADER: &str = "x-oai-web-search-eligible";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
+pub const X_CODEX_TURN_METADATA_HEADER: &str = "x-codex-turn-metadata";
+
+#[derive(Debug, Default)]
+struct TurnMetadataCache {
+    cwd: Option<PathBuf>,
+    header: Option<HeaderValue>,
+}
 
 #[derive(Debug)]
 struct ModelClientState {
@@ -85,6 +91,7 @@ struct ModelClientState {
     summary: ReasoningSummaryConfig,
     session_source: SessionSource,
     transport_manager: TransportManager,
+    turn_metadata_cache: Arc<RwLock<TurnMetadataCache>>,
 }
 
 #[derive(Debug, Clone)]
@@ -136,17 +143,51 @@ impl ModelClient {
                 summary,
                 session_source,
                 transport_manager,
+                turn_metadata_cache: Arc::new(RwLock::new(TurnMetadataCache::default())),
             }),
         }
     }
 
-    pub fn new_session(&self) -> ModelClientSession {
+    pub fn new_session(&self, turn_metadata_cwd: Option<PathBuf>) -> ModelClientSession {
+        self.prewarm_turn_metadata_header(turn_metadata_cwd);
         ModelClientSession {
             state: Arc::clone(&self.state),
             connection: None,
             websocket_last_items: Vec::new(),
             transport_manager: self.state.transport_manager.clone(),
             turn_state: Arc::new(OnceLock::new()),
+        }
+    }
+
+    /// Refresh turn metadata in the background and update a cached header that request
+    /// builders can read without blocking.
+    fn prewarm_turn_metadata_header(&self, turn_metadata_cwd: Option<PathBuf>) {
+        let turn_metadata_cwd =
+            turn_metadata_cwd.map(|cwd| std::fs::canonicalize(&cwd).unwrap_or(cwd));
+
+        if let Ok(mut cache) = self.state.turn_metadata_cache.write()
+            && cache.cwd != turn_metadata_cwd
+        {
+            cache.cwd = turn_metadata_cwd.clone();
+            cache.header = None;
+        }
+
+        let Some(cwd) = turn_metadata_cwd else {
+            return;
+        };
+        let turn_metadata_cache = Arc::clone(&self.state.turn_metadata_cache);
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let _task = handle.spawn(async move {
+                let header = build_turn_metadata_header(cwd.as_path())
+                    .await
+                    .and_then(|value| HeaderValue::from_str(value.as_str()).ok());
+
+                if let Ok(mut cache) = turn_metadata_cache.write()
+                    && cache.cwd.as_ref() == Some(&cwd)
+                {
+                    cache.header = header;
+                }
+            });
         }
     }
 }
@@ -257,11 +298,15 @@ impl ModelClient {
 }
 
 impl ModelClientSession {
-    /// Streams a single model turn using either the Responses or Chat
-    /// Completions wire API, depending on the configured provider.
-    ///
-    /// For Chat providers, the underlying stream is optionally aggregated
-    /// based on the `show_raw_agent_reasoning` flag in the config.
+    fn turn_metadata_header(&self) -> Option<HeaderValue> {
+        self.state
+            .turn_metadata_cache
+            .try_read()
+            .ok()
+            .and_then(|cache| cache.header.clone())
+    }
+
+    /// Streams a single model turn using the configured Responses transport.
     pub async fn stream(&mut self, prompt: &Prompt) -> Result<ResponseStream> {
         let wire_api = self.state.provider.wire_api;
         match wire_api {
@@ -273,21 +318,6 @@ impl ModelClientSession {
                     self.stream_responses_websocket(prompt).await
                 } else {
                     self.stream_responses_api(prompt).await
-                }
-            }
-            WireApi::Chat => {
-                let api_stream = self.stream_chat_completions(prompt).await?;
-
-                if self.state.config.show_raw_agent_reasoning {
-                    Ok(map_response_stream(
-                        api_stream.streaming_mode(),
-                        self.state.otel_manager.clone(),
-                    ))
-                } else {
-                    Ok(map_response_stream(
-                        api_stream.aggregate(),
-                        self.state.otel_manager.clone(),
-                    ))
                 }
             }
         }
@@ -332,6 +362,7 @@ impl ModelClientSession {
         prompt: &Prompt,
         compression: Compression,
     ) -> ApiResponsesOptions {
+        let turn_metadata_header = self.turn_metadata_header();
         let model_info = &self.state.model_info;
 
         let default_reasoning_effort = model_info.default_reasoning_level;
@@ -380,7 +411,11 @@ impl ModelClientSession {
             store_override: None,
             conversation_id: Some(conversation_id),
             session_source: Some(self.state.session_source.clone()),
-            extra_headers: build_responses_headers(&self.state.config, Some(&self.turn_state)),
+            extra_headers: build_responses_headers(
+                &self.state.config,
+                Some(&self.turn_state),
+                turn_metadata_header.as_ref(),
+            ),
             compression,
             turn_state: Some(Arc::clone(&self.turn_state)),
         }
@@ -486,64 +521,6 @@ impl ModelClientSession {
         }
     }
 
-    /// Streams a turn via the OpenAI Chat Completions API.
-    ///
-    /// This path is only used when the provider is configured with
-    /// `WireApi::Chat`; it does not support `output_schema` today.
-    async fn stream_chat_completions(&self, prompt: &Prompt) -> Result<ApiResponseStream> {
-        if prompt.output_schema.is_some() {
-            return Err(CodexErr::UnsupportedOperation(
-                "output_schema is not supported for Chat Completions API".to_string(),
-            ));
-        }
-
-        let auth_manager = self.state.auth_manager.clone();
-        let instructions = prompt.base_instructions.text.clone();
-        let tools_json = create_tools_json_for_chat_completions_api(&prompt.tools)?;
-        let api_prompt = build_api_prompt(prompt, instructions, tools_json);
-        let conversation_id = self.state.conversation_id.to_string();
-        let session_source = self.state.session_source.clone();
-
-        let mut auth_recovery = auth_manager
-            .as_ref()
-            .map(super::auth::AuthManager::unauthorized_recovery);
-        loop {
-            let auth = match auth_manager.as_ref() {
-                Some(manager) => manager.auth().await,
-                None => None,
-            };
-            let api_provider = self
-                .state
-                .provider
-                .to_api_provider(auth.as_ref().map(CodexAuth::internal_auth_mode))?;
-            let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
-            let transport = ReqwestTransport::new(build_reqwest_client());
-            let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
-            let client = ApiChatClient::new(transport, api_provider, api_auth)
-                .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
-
-            let stream_result = client
-                .stream_prompt(
-                    &self.state.model_info.slug,
-                    &api_prompt,
-                    Some(conversation_id.clone()),
-                    Some(session_source.clone()),
-                )
-                .await;
-
-            match stream_result {
-                Ok(stream) => return Ok(stream),
-                Err(ApiError::Transport(TransportError::Http { status, .. }))
-                    if status == StatusCode::UNAUTHORIZED =>
-                {
-                    handle_unauthorized(status, &mut auth_recovery).await?;
-                    continue;
-                }
-                Err(err) => return Err(map_api_error(err)),
-            }
-        }
-    }
-
     /// Streams a turn via the OpenAI Responses API.
     ///
     /// Handles SSE fixtures, reasoning summaries, verbosity, and the
@@ -590,10 +567,10 @@ impl ModelClientSession {
                 Ok(stream) => {
                     return Ok(map_response_stream(stream, self.state.otel_manager.clone()));
                 }
-                Err(ApiError::Transport(TransportError::Http { status, .. }))
-                    if status == StatusCode::UNAUTHORIZED =>
-                {
-                    handle_unauthorized(status, &mut auth_recovery).await?;
+                Err(ApiError::Transport(
+                    unauthorized_transport @ TransportError::Http { status, .. },
+                )) if status == StatusCode::UNAUTHORIZED => {
+                    handle_unauthorized(unauthorized_transport, &mut auth_recovery).await?;
                     continue;
                 }
                 Err(err) => return Err(map_api_error(err)),
@@ -629,10 +606,10 @@ impl ModelClientSession {
                 .await
             {
                 Ok(connection) => connection,
-                Err(ApiError::Transport(TransportError::Http { status, .. }))
-                    if status == StatusCode::UNAUTHORIZED =>
-                {
-                    handle_unauthorized(status, &mut auth_recovery).await?;
+                Err(ApiError::Transport(
+                    unauthorized_transport @ TransportError::Http { status, .. },
+                )) if status == StatusCode::UNAUTHORIZED => {
+                    handle_unauthorized(unauthorized_transport, &mut auth_recovery).await?;
                     continue;
                 }
                 Err(err) => return Err(map_api_error(err)),
@@ -651,7 +628,7 @@ impl ModelClientSession {
         }
     }
 
-    /// Builds request and SSE telemetry for streaming API calls (Chat/Responses).
+    /// Builds request and SSE telemetry for streaming API calls.
     fn build_streaming_telemetry(&self) -> (Arc<dyn RequestTelemetry>, Arc<dyn SseTelemetry>) {
         let telemetry = Arc::new(ApiTelemetry::new(self.state.otel_manager.clone()));
         let request_telemetry: Arc<dyn RequestTelemetry> = telemetry.clone();
@@ -713,6 +690,7 @@ fn experimental_feature_headers(config: &Config) -> ApiHeaderMap {
 fn build_responses_headers(
     config: &Config,
     turn_state: Option<&Arc<OnceLock<String>>>,
+    turn_metadata_header: Option<&HeaderValue>,
 ) -> ApiHeaderMap {
     let mut headers = experimental_feature_headers(config);
     headers.insert(
@@ -730,6 +708,9 @@ fn build_responses_headers(
         && let Ok(header_value) = HeaderValue::from_str(state)
     {
         headers.insert(X_CODEX_TURN_STATE_HEADER, header_value);
+    }
+    if let Some(header_value) = turn_metadata_header {
+        headers.insert(X_CODEX_TURN_METADATA_HEADER, header_value.clone());
     }
     headers
 }
@@ -799,7 +780,7 @@ where
 /// When refresh succeeds, the caller should retry the API call; otherwise
 /// the mapped `CodexErr` is returned to the caller.
 async fn handle_unauthorized(
-    status: StatusCode,
+    transport: TransportError,
     auth_recovery: &mut Option<UnauthorizedRecovery>,
 ) -> Result<()> {
     if let Some(recovery) = auth_recovery
@@ -812,16 +793,7 @@ async fn handle_unauthorized(
         };
     }
 
-    Err(map_unauthorized_status(status))
-}
-
-fn map_unauthorized_status(status: StatusCode) -> CodexErr {
-    map_api_error(ApiError::Transport(TransportError::Http {
-        status,
-        url: None,
-        headers: None,
-        body: None,
-    }))
+    Err(map_api_error(ApiError::Transport(transport)))
 }
 
 struct ApiTelemetry {

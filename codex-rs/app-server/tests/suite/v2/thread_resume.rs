@@ -338,6 +338,7 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
             text: history_text.to_string(),
         }],
         end_turn: None,
+        phase: None,
     }];
 
     // Resume with explicit history and override the model.

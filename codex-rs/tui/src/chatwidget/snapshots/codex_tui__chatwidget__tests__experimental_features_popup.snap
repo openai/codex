@@ -8,4 +8,4 @@ expression: popup
 › [ ] Ghost snapshots  Capture undo snapshots each turn.
   [x] Shell tool       Allow the model to run shell commands.
 
-  Press enter to toggle or esc to save for next conversation
+  Press space to select or enter to save for next conversation

@@ -1,4 +1,5 @@
 use crate::auth::AuthProvider;
+use crate::auth::add_auth_headers_to_header_map;
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::common::ResponsesWsRequest;
@@ -11,7 +12,6 @@ use codex_client::TransportError;
 use futures::SinkExt;
 use futures::StreamExt;
 use http::HeaderMap;
-use http::HeaderValue;
 use serde_json::Value;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -134,7 +134,7 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
 
         let mut headers = self.provider.headers.clone();
         headers.extend(extra_headers);
-        apply_auth_headers(&mut headers, &self.auth);
+        add_auth_headers_to_header_map(&self.auth, &mut headers);
 
         let (stream, server_reasoning_included) =
             connect_websocket(ws_url, headers, turn_state).await?;
@@ -144,20 +144,6 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
             server_reasoning_included,
             telemetry,
         ))
-    }
-}
-
-// TODO (pakrym): share with /auth
-fn apply_auth_headers(headers: &mut HeaderMap, auth: &impl AuthProvider) {
-    if let Some(token) = auth.bearer_token()
-        && let Ok(header) = HeaderValue::from_str(&format!("Bearer {token}"))
-    {
-        let _ = headers.insert(http::header::AUTHORIZATION, header);
-    }
-    if let Some(account_id) = auth.account_id()
-        && let Ok(header) = HeaderValue::from_str(&account_id)
-    {
-        let _ = headers.insert("ChatGPT-Account-ID", header);
     }
 }
 
