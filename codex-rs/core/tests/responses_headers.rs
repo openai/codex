@@ -476,6 +476,7 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
             text: "hello".into(),
         }],
         end_turn: None,
+        phase: None,
     }];
 
     let first_request = responses::mount_sse_once(&server, response_body.clone()).await;
