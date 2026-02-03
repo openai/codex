@@ -1,3 +1,30 @@
+//! Multi-select picker widget for selecting multiple items from a list.
+//!
+//! This module provides a fuzzy-searchable, scrollable picker that allows users
+//! to toggle multiple items on/off. It supports:
+//!
+//! - **Fuzzy search**: Type to filter items by name
+//! - **Toggle selection**: Space to toggle items on/off
+//! - **Reordering**: Optional left/right arrow support to reorder items
+//! - **Live preview**: Optional callback to show a preview of current selections
+//! - **Callbacks**: Hooks for change, confirm, and cancel events
+//!
+//! # Example
+//!
+//! ```ignore
+//! let picker = MultiSelectPicker::new(
+//!     "Select Items".to_string(),
+//!     Some("Choose which items to enable".to_string()),
+//!     app_event_tx,
+//! )
+//! .items(vec![
+//!     MultiSelectItem { id: "a".into(), name: "Item A".into(), description: None, enabled: true },
+//!     MultiSelectItem { id: "b".into(), name: "Item B".into(), description: None, enabled: false },
+//! ])
+//! .on_confirm(|selected_ids, tx| { /* handle confirmation */ })
+//! .build();
+//! ```
+
 use codex_common::fuzzy_match::fuzzy_match;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -27,46 +54,118 @@ use crate::render::renderable::Renderable;
 use crate::style::user_message_style;
 use crate::text_formatting::truncate_text;
 
+/// Maximum display length for item names before truncation.
 const ITEM_NAME_TRUNCATE_LEN: usize = 21;
+
+/// Placeholder text shown in the search input when empty.
 const SEARCH_PLACEHOLDER: &str = "Type to search";
+
+/// Prefix displayed before the search query (mimics a command prompt).
 const SEARCH_PROMPT_PREFIX: &str = "> ";
 
+/// Direction for reordering items in the list.
 enum Direction {
     Up,
     Down,
 }
 
+/// Callback invoked when any item's state changes (toggled or reordered).
+/// Receives the full list of items and the event sender.
 pub type ChangeCallBack = Box<dyn Fn(&[MultiSelectItem], &AppEventSender) + Send + Sync>;
+
+/// Callback invoked when the user confirms their selection (presses Enter).
+/// Receives a list of IDs for all enabled items.
 pub type ConfirmCallback = Box<dyn Fn(&[String], &AppEventSender) + Send + Sync>;
+
+/// Callback invoked when the user cancels the picker (presses Escape).
 pub type CancelCallback = Box<dyn Fn(&AppEventSender) + Send + Sync>;
+
+/// Callback to generate an optional preview line based on current item states.
+/// Returns `None` to hide the preview area.
 pub type PreviewCallback = Box<dyn Fn(&[MultiSelectItem]) -> Option<Line<'static>> + Send + Sync>;
 
+/// A single selectable item in the multi-select picker.
+///
+/// Each item has a unique identifier, display name, optional description,
+/// and an enabled/disabled state that can be toggled by the user.
 #[derive(Default)]
 pub(crate) struct MultiSelectItem {
+    /// Unique identifier returned in the confirm callback when this item is enabled.
     pub id: String,
+
+    /// Display name shown in the picker list. Will be truncated if too long.
     pub name: String,
+
+    /// Optional description shown alongside the name (dimmed).
     pub description: Option<String>,
+
+    /// Whether this item is currently selected/enabled.
     pub enabled: bool,
 }
 
+/// A multi-select picker widget with fuzzy search and optional reordering.
+///
+/// The picker displays a scrollable list of items with checkboxes. Users can:
+/// - Type to fuzzy-search and filter the list
+/// - Use Up/Down (or Ctrl+P/Ctrl+N) to navigate
+/// - Press Space to toggle the selected item
+/// - Press Enter to confirm and close
+/// - Press Escape to cancel and close
+/// - Use Left/Right arrows to reorder items (if ordering is enabled)
+///
+/// Create instances using the builder pattern via [`MultiSelectPicker::new`].
 pub(crate) struct MultiSelectPicker {
+    /// All items in the picker (unfiltered).
     items: Vec<MultiSelectItem>,
+
+    /// Scroll and selection state for the visible list.
     state: ScrollState,
+
+    /// Whether the picker has been closed (confirmed or cancelled).
     pub(crate) complete: bool,
+
+    /// Channel for sending application events.
     app_event_tx: AppEventSender,
+
+    /// Header widget displaying title and subtitle.
     header: Box<dyn Renderable>,
+
+    /// Footer line showing keyboard hints.
     footer_hint: Line<'static>,
+
+    /// Current search/filter query entered by the user.
     search_query: String,
+
+    /// Indices into `items` that match the current filter, in display order.
     filtered_indices: Vec<usize>,
+
+    /// Whether left/right arrow reordering is enabled.
     ordering_enabled: bool,
+
+    /// Optional callback to generate a preview line from current item states.
     preview_builder: Option<PreviewCallback>,
+
+    /// Cached preview line (updated on item changes).
     preview_line: Option<Line<'static>>,
+
+    /// Callback invoked when items change (toggle or reorder).
     on_change: Option<ChangeCallBack>,
+
+    /// Callback invoked when the user confirms their selection.
     on_confirm: Option<ConfirmCallback>,
+
+    /// Callback invoked when the user cancels the picker.
     on_cancel: Option<CancelCallback>,
 }
 
 impl MultiSelectPicker {
+    /// Creates a new builder for constructing a `MultiSelectPicker`.
+    ///
+    /// # Arguments
+    ///
+    /// * `title` - The main title displayed at the top of the picker
+    /// * `subtitle` - Optional subtitle displayed below the title (dimmed)
+    /// * `app_event_tx` - Event sender for dispatching application events
     pub fn new(
         title: String,
         subtitle: Option<String>,
@@ -75,6 +174,11 @@ impl MultiSelectPicker {
         MultiSelectPickerBuilder::new(title, subtitle, app_event_tx)
     }
 
+    /// Applies the current search query to filter and sort items.
+    ///
+    /// Updates `filtered_indices` to contain only matching items, sorted by
+    /// fuzzy match score. Attempts to preserve the current selection if it
+    /// still matches the filter.
     fn apply_filter(&mut self) {
         // Filter + sort while preserving the current selection when possible.
         let previously_selected = self
@@ -119,22 +223,30 @@ impl MultiSelectPicker {
         self.state.ensure_visible(len, visible);
     }
 
+    /// Returns the number of items visible after filtering.
     fn visible_len(&self) -> usize {
         self.filtered_indices.len()
     }
 
+    /// Returns the maximum number of rows that can be displayed at once.
     fn max_visible_rows(len: usize) -> usize {
         MAX_POPUP_ROWS.min(len.max(1))
     }
 
+    /// Calculates the width available for row content (accounts for borders).
     fn rows_width(total_width: u16) -> u16 {
         total_width.saturating_sub(2)
     }
 
+    /// Calculates the height needed for the row list area.
     fn rows_height(&self, rows: &[GenericDisplayRow]) -> u16 {
         rows.len().clamp(1, MAX_POPUP_ROWS).try_into().unwrap_or(1)
     }
 
+    /// Builds the display rows for all currently visible (filtered) items.
+    ///
+    /// Each row shows: `› [x] Item Name` where `›` indicates cursor position
+    /// and `[x]` or `[ ]` indicates enabled/disabled state.
     fn build_rows(&self) -> Vec<GenericDisplayRow> {
         self.filtered_indices
             .iter()
@@ -156,6 +268,7 @@ impl MultiSelectPicker {
             .collect()
     }
 
+    /// Moves the selection cursor up, wrapping to the bottom if at the top.
     fn move_up(&mut self) {
         let len = self.visible_len();
         self.state.move_up_wrap(len);
@@ -163,6 +276,7 @@ impl MultiSelectPicker {
         self.state.ensure_visible(len, visible);
     }
 
+    /// Moves the selection cursor down, wrapping to the top if at the bottom.
     fn move_down(&mut self) {
         let len = self.visible_len();
         self.state.move_down_wrap(len);
@@ -170,6 +284,9 @@ impl MultiSelectPicker {
         self.state.ensure_visible(len, visible);
     }
 
+    /// Toggles the enabled state of the currently selected item.
+    ///
+    /// Updates the preview line and invokes the `on_change` callback if set.
     fn toggle_selected(&mut self) {
         let Some(idx) = self.state.selected_idx else {
             return;
@@ -188,6 +305,10 @@ impl MultiSelectPicker {
         }
     }
 
+    /// Confirms the current selection and closes the picker.
+    ///
+    /// Collects the IDs of all enabled items and passes them to the
+    /// `on_confirm` callback. Does nothing if already complete.
     fn confirm_selection(&mut self) {
         if self.complete {
             return;
@@ -205,6 +326,13 @@ impl MultiSelectPicker {
         }
     }
 
+    /// Moves the currently selected item up or down in the list.
+    ///
+    /// Only works when:
+    /// - The search query is empty (reordering is disabled during filtering)
+    /// - Ordering is enabled via [`MultiSelectPickerBuilder::enable_ordering`]
+    ///
+    /// Updates the preview line and invokes the `on_change` callback.
     fn move_selected_item(&mut self, direction: Direction) {
         if !self.search_query.is_empty() {
             return;
@@ -250,6 +378,9 @@ impl MultiSelectPicker {
         }
     }
 
+    /// Regenerates the preview line using the preview callback.
+    ///
+    /// Called after any item state change (toggle or reorder).
     fn update_preview_line(&mut self) {
         self.preview_line = self
             .preview_builder
@@ -257,6 +388,9 @@ impl MultiSelectPicker {
             .and_then(|builder| builder(&self.items));
     }
 
+    /// Closes the picker without confirming, invoking the `on_cancel` callback.
+    ///
+    /// Does nothing if already complete.
     pub fn close(&mut self) {
         if self.complete {
             return;
@@ -460,6 +594,19 @@ impl Renderable for MultiSelectPicker {
     }
 }
 
+/// Builder for constructing a [`MultiSelectPicker`] with a fluent API.
+///
+/// # Example
+///
+/// ```ignore
+/// let picker = MultiSelectPicker::new("Title".into(), None, tx)
+///     .items(items)
+///     .enable_ordering()
+///     .on_preview(|items| Some(Line::from("Preview")))
+///     .on_confirm(|ids, tx| { /* handle */ })
+///     .on_cancel(|tx| { /* handle */ })
+///     .build();
+/// ```
 pub(crate) struct MultiSelectPickerBuilder {
     title: String,
     subtitle: Option<String>,
@@ -474,6 +621,7 @@ pub(crate) struct MultiSelectPickerBuilder {
 }
 
 impl MultiSelectPickerBuilder {
+    /// Creates a new builder with the given title, optional subtitle, and event sender.
     pub fn new(title: String, subtitle: Option<String>, app_event_tx: AppEventSender) -> Self {
         Self {
             title,
@@ -489,21 +637,33 @@ impl MultiSelectPickerBuilder {
         }
     }
 
+    /// Sets the list of selectable items.
     pub fn items(mut self, items: Vec<MultiSelectItem>) -> Self {
         self.items = items;
         self
     }
 
+    /// Sets custom instruction spans for the footer hint line.
+    ///
+    /// If not set, default instructions are shown (Space to toggle, Enter to
+    /// confirm, Escape to close).
     pub fn instructions(mut self, instructions: Vec<Span<'static>>) -> Self {
         self.instructions = instructions;
         self
     }
 
+    /// Enables left/right arrow keys for reordering items.
+    ///
+    /// Reordering is only active when the search query is empty.
     pub fn enable_ordering(mut self) -> Self {
         self.ordering_enabled = true;
         self
     }
 
+    /// Sets a callback to generate a preview line from the current item states.
+    ///
+    /// The callback receives all items and should return a [`Line`] to display,
+    /// or `None` to hide the preview area.
     pub fn on_preview<F>(mut self, callback: F) -> Self
     where
         F: Fn(&[MultiSelectItem]) -> Option<Line<'static>> + Send + Sync + 'static,
@@ -512,6 +672,9 @@ impl MultiSelectPickerBuilder {
         self
     }
 
+    /// Sets a callback invoked whenever an item's state changes.
+    ///
+    /// This includes both toggles and reordering operations.
     #[allow(dead_code)]
     pub fn on_change<F>(mut self, callback: F) -> Self
     where
@@ -521,6 +684,9 @@ impl MultiSelectPickerBuilder {
         self
     }
 
+    /// Sets a callback invoked when the user confirms their selection (Enter).
+    ///
+    /// The callback receives a list of IDs for all enabled items.
     pub fn on_confirm<F>(mut self, callback: F) -> Self
     where
         F: Fn(&[String], &AppEventSender) + Send + Sync + 'static,
@@ -529,6 +695,7 @@ impl MultiSelectPickerBuilder {
         self
     }
 
+    /// Sets a callback invoked when the user cancels the picker (Escape).
     pub fn on_cancel<F>(mut self, callback: F) -> Self
     where
         F: Fn(&AppEventSender) + Send + Sync + 'static,
@@ -537,6 +704,10 @@ impl MultiSelectPickerBuilder {
         self
     }
 
+    /// Builds the [`MultiSelectPicker`] with all configured options.
+    ///
+    /// Initializes the filter to show all items and generates the initial
+    /// preview line if a preview callback was set.
     pub fn build(self) -> MultiSelectPicker {
         let mut header = ColumnRenderable::new();
         header.push(Line::from(self.title.bold()));
@@ -581,6 +752,23 @@ impl MultiSelectPickerBuilder {
     }
 }
 
+/// Performs fuzzy matching on an item against a filter string.
+///
+/// Tries to match against the display name first, then falls back to the
+/// skill name if different. Returns the matching character indices (if
+/// matched on display name) and a score for sorting.
+///
+/// # Arguments
+///
+/// * `filter` - The search query to match against
+/// * `display_name` - The primary name to match (shown to user)
+/// * `skill_name` - A secondary/canonical name to try if display name doesn't match
+///
+/// # Returns
+///
+/// * `Some((Some(indices), score))` - Matched on display name with highlight indices
+/// * `Some((None, score))` - Matched on skill name only (no highlights for display)
+/// * `None` - No match
 pub(crate) fn match_item(
     filter: &str,
     display_name: &str,

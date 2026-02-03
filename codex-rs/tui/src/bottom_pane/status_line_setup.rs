@@ -1,3 +1,22 @@
+//! Status line configuration view for customizing the TUI status bar.
+//!
+//! This module provides an interactive picker for selecting which items appear
+//! in the status line at the bottom of the terminal. Users can:
+//!
+//! - **Select items**: Toggle which information is displayed
+//! - **Reorder items**: Use left/right arrows to change display order
+//! - **Preview changes**: See a live preview of the configured status line
+//!
+//! # Available Status Line Items
+//!
+//! - Model information (name, reasoning level)
+//! - Directory paths (current dir, project root)
+//! - Git information (branch name)
+//! - Context usage (remaining %, used %, window size)
+//! - Usage limits (5-day, weekly)
+//! - Session info (ID, tokens used)
+//! - Application version
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
@@ -15,24 +34,65 @@ use crate::bottom_pane::multi_select_picker::MultiSelectItem;
 use crate::bottom_pane::multi_select_picker::MultiSelectPicker;
 use crate::render::renderable::Renderable;
 
+/// Available items that can be displayed in the status line.
+///
+/// Each variant represents a piece of information that can be shown at the
+/// bottom of the TUI. Items are serialized to kebab-case for configuration
+/// storage (e.g., `ModelWithReasoning` becomes `model-with-reasoning`).
+///
+/// Some items are conditionally displayed based on availability:
+/// - Git-related items only show when in a git repository
+/// - Context/limit items only show when data is available from the API
+/// - Session ID only shows after a session has started
 #[derive(EnumIter, EnumString, Display, Debug, Clone, Eq, PartialEq)]
 #[strum(serialize_all = "kebab_case")]
 pub(crate) enum StatusLineItem {
+    /// The current model name.
     ModelName,
+
+    /// Model name with reasoning level suffix.
     ModelWithReasoning,
+
+    /// Current working directory path.
     CurrentDir,
+
+    /// Project root directory (if detected).
     ProjectRoot,
+
+    /// Current git branch name (if in a repository).
     GitBranch,
+
+    /// Percentage of context window remaining.
     ContextRemaining,
+
+    /// Percentage of context window used.
     ContextUsed,
+
+    /// Remaining usage on the 5-day rate limit.
     FiveDayLimit,
+
+    /// Remaining usage on the weekly rate limit.
     WeeklyLimit,
+
+    /// Codex application version.
     CodexVersion,
+
+    /// Total context window size in tokens.
     ContextWindowSize,
+
+    /// Total tokens used in the current session.
     UsedTokens,
+
+    /// Total input tokens consumed.
     TotalInputTokens,
+
+    /// Total output tokens generated.
     TotalOutputTokens,
+
+    /// Full session UUID.
     SessionId,
+
+    /// Shortened session ID prefix (first 8 characters).
     SessionIdPrefix,
 }
 
@@ -73,6 +133,10 @@ impl StatusLineItem {
         }
     }
 
+    /// Returns an example rendering of this item for the preview.
+    ///
+    /// These are placeholder values used to show users what each item looks
+    /// like in the status line before they confirm their selection.
     pub(crate) fn render(&self) -> &'static str {
         match self {
             StatusLineItem::ModelName => "gpt-5.2-codex",
@@ -95,11 +159,29 @@ impl StatusLineItem {
     }
 }
 
+/// Interactive view for configuring which items appear in the status line.
+///
+/// Wraps a [`MultiSelectPicker`] with status-line-specific behavior:
+/// - Pre-populates items from current configuration
+/// - Shows a live preview of the configured status line
+/// - Emits [`AppEvent::StatusLineSetup`] on confirmation
+/// - Emits [`AppEvent::StatusLineSetupCancelled`] on cancellation
 pub(crate) struct StatusLineSetupView {
+    /// The underlying multi-select picker widget.
     picker: MultiSelectPicker,
 }
 
 impl StatusLineSetupView {
+    /// Creates a new status line setup view.
+    ///
+    /// # Arguments
+    ///
+    /// * `status_line_items` - Currently configured item IDs (in display order),
+    ///   or `None` to start with all items disabled
+    /// * `app_event_tx` - Event sender for dispatching configuration changes
+    ///
+    /// Items from `status_line_items` are shown first (in order) and marked as
+    /// enabled. Remaining items are appended and marked as disabled.
     pub(crate) fn new(status_line_items: Option<&[String]>, app_event_tx: AppEventSender) -> Self {
         let mut used_ids = HashSet::new();
         let mut items = Vec::new();
@@ -166,6 +248,7 @@ impl StatusLineSetupView {
         }
     }
 
+    /// Converts a [`StatusLineItem`] into a [`MultiSelectItem`] for the picker.
     fn status_line_select_item(item: StatusLineItem, enabled: bool) -> MultiSelectItem {
         MultiSelectItem {
             id: item.to_string(),
