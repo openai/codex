@@ -105,7 +105,10 @@ impl SessionTask for UserShellCommandTask {
         let exec_env = ExecEnv {
             command: exec_command.clone(),
             cwd: cwd.clone(),
-            env: create_env(&turn_context.shell_environment_policy),
+            env: create_env(
+                &turn_context.shell_environment_policy,
+                Some(session.conversation_id),
+            ),
             // TODO(zhao-oai): Now that we have ExecExpiration::Cancellation, we
             // should use that instead of an "arbitrarily large" timeout here.
             expiration: USER_SHELL_TIMEOUT_MS.into(),

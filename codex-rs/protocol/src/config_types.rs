@@ -173,10 +173,23 @@ pub enum AltScreenMode {
 pub enum ModeKind {
     Plan,
     #[default]
-    Code,
+    #[serde(
+        alias = "code",
+        alias = "pair_programming",
+        alias = "execute",
+        alias = "custom"
+    )]
+    Default,
+    #[doc(hidden)]
+    #[serde(skip_serializing, skip_deserializing)]
+    #[schemars(skip)]
+    #[ts(skip)]
     PairProgramming,
+    #[doc(hidden)]
+    #[serde(skip_serializing, skip_deserializing)]
+    #[schemars(skip)]
+    #[ts(skip)]
     Execute,
-    Custom,
 }
 
 /// Collaboration mode for a Codex session.
@@ -276,7 +289,7 @@ mod tests {
     #[test]
     fn apply_mask_can_clear_optional_fields() {
         let mode = CollaborationMode {
-            mode: ModeKind::Code,
+            mode: ModeKind::Default,
             settings: Settings {
                 model: "gpt-5.2-codex".to_string(),
                 reasoning_effort: Some(ReasoningEffort::High),
@@ -292,7 +305,7 @@ mod tests {
         };
 
         let expected = CollaborationMode {
-            mode: ModeKind::Code,
+            mode: ModeKind::Default,
             settings: Settings {
                 model: "gpt-5.2-codex".to_string(),
                 reasoning_effort: None,
@@ -300,5 +313,14 @@ mod tests {
             },
         };
         assert_eq!(expected, mode.apply_mask(&mask));
+    }
+
+    #[test]
+    fn mode_kind_deserializes_alias_values_to_default() {
+        for alias in ["code", "pair_programming", "execute", "custom"] {
+            let json = format!("\"{alias}\"");
+            let mode: ModeKind = serde_json::from_str(&json).expect("deserialize mode");
+            assert_eq!(ModeKind::Default, mode);
+        }
     }
 }

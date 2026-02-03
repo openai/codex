@@ -1402,8 +1402,8 @@ mod tests {
     use uuid::Uuid;
 
     #[test]
-    fn generated_ts_has_no_optional_nullable_fields() -> Result<()> {
-        // Assert that there are no types of the form "?: T | null" in the generated TS files.
+    fn generated_ts_optional_nullable_fields_only_in_params() -> Result<()> {
+        // Assert that "?: T | null" only appears in generated *Params types.
         let output_dir = std::env::temp_dir().join(format!("codex_ts_types_{}", Uuid::now_v7()));
         fs::create_dir(&output_dir)?;
 
@@ -1463,6 +1463,13 @@ mod tests {
                 }
 
                 if matches!(path.extension().and_then(|ext| ext.to_str()), Some("ts")) {
+                    // Only allow "?: T | null" in objects representing JSON-RPC requests,
+                    // which we assume are called "*Params".
+                    let allow_optional_nullable = path
+                        .file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .is_some_and(|stem| stem.ends_with("Params"));
+
                     let contents = fs::read_to_string(&path)?;
                     if contents.contains("| undefined") {
                         undefined_offenders.push(path.clone());
@@ -1583,9 +1590,11 @@ mod tests {
                         }
 
                         // If the last non-whitespace before ':' is '?', then this is an
-                        // optional field with a nullable type (i.e., "?: T | null"),
-                        // which we explicitly disallow.
-                        if field_prefix.chars().rev().find(|c| !c.is_whitespace()) == Some('?') {
+                        // optional field with a nullable type (i.e., "?: T | null").
+                        // These are only allowed in *Params types.
+                        if field_prefix.chars().rev().find(|c| !c.is_whitespace()) == Some('?')
+                            && !allow_optional_nullable
+                        {
                             let line_number =
                                 contents[..abs_idx].chars().filter(|c| *c == '\n').count() + 1;
                             let offending_line_end = contents[line_start_idx..]
@@ -1613,12 +1622,12 @@ mod tests {
             "Generated TypeScript still includes unions with `undefined` in {undefined_offenders:?}"
         );
 
-        // If this assertion fails, it means a field was generated as
-        // "?: T | null" — i.e., both optional (undefined) and nullable (null).
-        // We only want either "?: T" or ": T | null".
+        // If this assertion fails, it means a field was generated as "?: T | null",
+        // which is both optional (undefined) and nullable (null), for a type not ending
+        // in "Params" (which represent JSON-RPC requests).
         assert!(
             optional_nullable_offenders.is_empty(),
-            "Generated TypeScript has optional fields with nullable types (disallowed '?: T | null'), add #[ts(optional)] to fix:\n{optional_nullable_offenders:?}"
+            "Generated TypeScript has optional nullable fields outside *Params types (disallowed '?: T | null'):\n{optional_nullable_offenders:?}"
         );
 
         Ok(())

@@ -37,7 +37,7 @@ const BWRAP_UNAVAILABLE_ERR: &str = "build-time bubblewrap is not available in t
 
 fn create_env_from_core_vars() -> HashMap<String, String> {
     let policy = ShellEnvironmentPolicy::default();
-    create_env(&policy)
+    create_env(&policy, None)
 }
 
 #[expect(clippy::print_stdout)]
