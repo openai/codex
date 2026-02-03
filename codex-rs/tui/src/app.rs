@@ -107,7 +107,7 @@ const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
 ///
 /// Smooth-mode streaming drains one line per tick, so this interval controls
 /// perceived typing speed for non-backlogged output.
-const COMMIT_ANIMATION_TICK: Duration = Duration::from_nanos(16_666_667);
+const COMMIT_ANIMATION_TICK: Duration = tui::TARGET_FRAME_INTERVAL;
 
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {

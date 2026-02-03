@@ -58,7 +58,7 @@ Two modes are used:
 - `Smooth`
   - Baseline behavior: one line drained per baseline commit tick.
   - Baseline tick interval currently comes from
-    `tui/src/app.rs:COMMIT_ANIMATION_TICK` (~16.7ms, ~60fps).
+    `tui/src/app.rs:COMMIT_ANIMATION_TICK` (~8.3ms, ~120fps).
 - `CatchUp`
   - Drain current queued backlog per tick via `Batch(queued_lines)`.
 
@@ -76,7 +76,7 @@ These are the current values in `streaming/chunking.rs` plus the baseline
 commit tick in `tui/src/app.rs`. They are
 experimental and may change as we gather more trace data.
 
-- Baseline commit tick: `~16.7ms` (`COMMIT_ANIMATION_TICK` in `app.rs`)
+- Baseline commit tick: `~8.3ms` (`COMMIT_ANIMATION_TICK` in `app.rs`)
 - Enter catch-up:
   - `queued_lines >= 8` OR `oldest_age >= 120ms`
 - Exit catch-up eligibility:

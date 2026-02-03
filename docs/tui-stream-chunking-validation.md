@@ -86,12 +86,16 @@ what has already been tried.
   - Set baseline commit cadence to approximately 60fps.
   - Result: smoother perceived progression while retaining hysteresis and
     fast backlog convergence.
+- Pass 4: higher frame-aligned baseline tick (~8.3ms)
+  - Set baseline commit cadence to approximately 120fps.
+  - Result: further reduced smooth-mode stepping while preserving the same
+    adaptive catch-up policy shape.
 
 Current state combines:
 
 - instant catch-up draining in `CatchUp`
 - hysteresis for mode-entry/exit stability
-- frame-aligned smooth-mode commit cadence
+- frame-aligned smooth-mode commit cadence (~8.3ms)
 
 ## Notes
 
