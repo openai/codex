@@ -12,6 +12,7 @@ use std::process::Stdio;
 use crate::allow::compute_allow_paths;
 use crate::allow::AllowDenyPaths;
 use crate::logging::log_note;
+use crate::path_normalization::canonical_path_key;
 use crate::policy::SandboxPolicy;
 use crate::setup_error::clear_setup_error_report;
 use crate::setup_error::failure;
@@ -514,14 +515,14 @@ fn build_payload_roots(
 fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> Vec<PathBuf> {
     // Never grant capability write access to CODEX_HOME or anything under CODEX_HOME/.sandbox.
     // These locations contain sandbox control/state and must remain tamper-resistant.
-    let codex_home_key = crate::audit::normalize_path_key(codex_home);
-    let sbx_dir_key = crate::audit::normalize_path_key(&sandbox_dir(codex_home));
+    let codex_home_key = canonical_path_key(codex_home);
+    let sbx_dir_key = canonical_path_key(&sandbox_dir(codex_home));
     let sbx_dir_prefix = format!("{}/", sbx_dir_key.trim_end_matches('/'));
-    let secrets_dir_key = crate::audit::normalize_path_key(&sandbox_secrets_dir(codex_home));
+    let secrets_dir_key = canonical_path_key(&sandbox_secrets_dir(codex_home));
     let secrets_dir_prefix = format!("{}/", secrets_dir_key.trim_end_matches('/'));
 
     roots.retain(|root| {
-        let key = crate::audit::normalize_path_key(root);
+        let key = canonical_path_key(root);
         key != codex_home_key
             && key != sbx_dir_key
             && !key.starts_with(&sbx_dir_prefix)

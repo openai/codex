@@ -1,12 +1,8 @@
 use crate::acl::add_deny_write_ace;
+use crate::path_normalization::canonicalize_path;
 use anyhow::Result;
 use std::ffi::c_void;
 use std::path::Path;
-use std::path::PathBuf;
-
-pub fn canonicalize_path(path: &Path) -> PathBuf {
-    dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
-}
 
 pub fn is_command_cwd_root(root: &Path, canonical_command_cwd: &Path) -> bool {
     canonicalize_path(root) == canonical_command_cwd

@@ -14,6 +14,7 @@ windows_modules!(
     hide_users,
     identity,
     logging,
+    path_normalization,
     policy,
     process,
     token,
@@ -70,6 +71,8 @@ pub use logging::log_note;
 #[cfg(target_os = "windows")]
 pub use logging::LOG_FILE_NAME;
 #[cfg(target_os = "windows")]
+pub use path_normalization::canonicalize_path;
+#[cfg(target_os = "windows")]
 pub use policy::parse_policy;
 #[cfg(target_os = "windows")]
 pub use policy::SandboxPolicy;
@@ -118,8 +121,6 @@ pub use winutil::string_from_sid_bytes;
 #[cfg(target_os = "windows")]
 pub use winutil::to_wide;
 #[cfg(target_os = "windows")]
-pub use workspace_acl::canonicalize_path;
-#[cfg(target_os = "windows")]
 pub use workspace_acl::is_command_cwd_root;
 #[cfg(target_os = "windows")]
 pub use workspace_acl::protect_workspace_codex_dir;
@@ -148,6 +149,7 @@ mod windows_impl {
     use super::logging::log_failure;
     use super::logging::log_start;
     use super::logging::log_success;
+    use super::path_normalization::canonicalize_path;
     use super::policy::parse_policy;
     use super::policy::SandboxPolicy;
     use super::process::make_env_block;
@@ -156,7 +158,6 @@ mod windows_impl {
     use super::winutil::format_last_error;
     use super::winutil::quote_windows_arg;
     use super::winutil::to_wide;
-    use super::workspace_acl::canonicalize_path;
     use super::workspace_acl::is_command_cwd_root;
     use super::workspace_acl::protect_workspace_codex_dir;
     use anyhow::Result;
