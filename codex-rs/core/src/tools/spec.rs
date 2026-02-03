@@ -1258,13 +1258,19 @@ pub(crate) fn build_specs(
 
     match &config.shell_type {
         ConfigShellToolType::Default => {
-            builder.push_spec(create_shell_tool(config.request_rule_enabled));
+            builder.push_spec_with_parallel_support(
+                create_shell_tool(config.request_rule_enabled),
+                true,
+            );
         }
         ConfigShellToolType::Local => {
-            builder.push_spec(ToolSpec::LocalShell {});
+            builder.push_spec_with_parallel_support(ToolSpec::LocalShell {}, true);
         }
         ConfigShellToolType::UnifiedExec => {
-            builder.push_spec(create_exec_command_tool(config.request_rule_enabled));
+            builder.push_spec_with_parallel_support(
+                create_exec_command_tool(config.request_rule_enabled),
+                true,
+            );
             builder.push_spec(create_write_stdin_tool());
             builder.register_handler("exec_command", unified_exec_handler.clone());
             builder.register_handler("write_stdin", unified_exec_handler);
@@ -1273,7 +1279,10 @@ pub(crate) fn build_specs(
             // Do nothing.
         }
         ConfigShellToolType::ShellCommand => {
-            builder.push_spec(create_shell_command_tool(config.request_rule_enabled));
+            builder.push_spec_with_parallel_support(
+                create_shell_command_tool(config.request_rule_enabled),
+                true,
+            );
         }
     }
 
@@ -1982,7 +1991,7 @@ mod tests {
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
 
-        assert!(!find_tool(&tools, "exec_command").supports_parallel_tool_calls);
+        assert!(find_tool(&tools, "exec_command").supports_parallel_tool_calls);
         assert!(!find_tool(&tools, "write_stdin").supports_parallel_tool_calls);
         assert!(find_tool(&tools, "grep_files").supports_parallel_tool_calls);
         assert!(find_tool(&tools, "list_dir").supports_parallel_tool_calls);
