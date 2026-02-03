@@ -1688,7 +1688,6 @@ impl Session {
     pub async fn notify_user_input_response(
         &self,
         sub_id: &str,
-        _call_id: Option<String>,
         response: RequestUserInputResponse,
     ) {
         let entry = {
@@ -2513,7 +2512,8 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 call_id,
                 response,
             } => {
-                handlers::request_user_input_response(&sess, id, call_id, response).await;
+                drop(call_id);
+                handlers::request_user_input_response(&sess, id, response).await;
             }
             Op::DynamicToolResponse { id, response } => {
                 handlers::dynamic_tool_response(&sess, id, response).await;
@@ -2825,11 +2825,9 @@ mod handlers {
     pub async fn request_user_input_response(
         sess: &Arc<Session>,
         id: String,
-        call_id: Option<String>,
         response: RequestUserInputResponse,
     ) {
-        sess.notify_user_input_response(&id, call_id, response)
-            .await;
+        sess.notify_user_input_response(&id, response).await;
     }
 
     pub async fn dynamic_tool_response(

@@ -107,7 +107,7 @@ async fn should_install_mcp_dependencies(
                 answers: HashMap::new(),
                 interrupted: false,
             };
-            sess.notify_user_input_response(sub_id, None, empty.clone())
+            sess.notify_user_input_response(sub_id, empty.clone())
                 .await;
             empty
         }
