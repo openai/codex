@@ -153,7 +153,7 @@ async fn uses_cache_when_version_matches() -> Result<()> {
                 fetched_at: Utc::now(),
                 etag: None,
                 client_version: Some(codex_core::models_manager::client_version_to_whole()),
-                models: vec![cached_model.clone()],
+                models: vec![cached_model],
             };
             let cache_path = home.join(CACHE_FILE);
             write_cache_sync(&cache_path, &cache).expect("write cache");
