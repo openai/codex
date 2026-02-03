@@ -201,7 +201,7 @@ async fn refreshes_when_cache_version_missing() -> Result<()> {
                 fetched_at: Utc::now(),
                 etag: None,
                 client_version: None,
-                models: vec![cached_model.clone()],
+                models: vec![cached_model],
             };
             let cache_path = home.join(CACHE_FILE);
             write_cache_sync(&cache_path, &cache).expect("write cache");
@@ -250,7 +250,7 @@ async fn refreshes_when_cache_version_differs() -> Result<()> {
                 fetched_at: Utc::now(),
                 etag: None,
                 client_version: Some(format!("{client_version}-diff")),
-                models: vec![cached_model.clone()],
+                models: vec![cached_model],
             };
             let cache_path = home.join(CACHE_FILE);
             write_cache_sync(&cache_path, &cache).expect("write cache");
