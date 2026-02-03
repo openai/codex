@@ -1048,42 +1048,6 @@ pub fn create_tools_json_for_responses_api(
 
     Ok(tools_json)
 }
-/// Returns JSON values that are compatible with Function Calling in the
-/// Chat Completions API:
-/// https://platform.openai.com/docs/guides/function-calling?api-mode=chat
-pub(crate) fn create_tools_json_for_chat_completions_api(
-    tools: &[ToolSpec],
-) -> crate::error::Result<Vec<serde_json::Value>> {
-    // We start with the JSON for the Responses API and than rewrite it to match
-    // the chat completions tool call format.
-    let responses_api_tools_json = create_tools_json_for_responses_api(tools)?;
-    let tools_json = responses_api_tools_json
-        .into_iter()
-        .filter_map(|mut tool| {
-            if tool.get("type") != Some(&serde_json::Value::String("function".to_string())) {
-                return None;
-            }
-
-            if let Some(map) = tool.as_object_mut() {
-                let name = map
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string();
-                // Remove "type" field as it is not needed in chat completions.
-                map.remove("type");
-                Some(json!({
-                    "type": "function",
-                    "name": name,
-                    "function": map,
-                }))
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<serde_json::Value>>();
-    Ok(tools_json)
-}
 
 pub(crate) fn mcp_tool_to_openai_tool(
     fully_qualified_name: String,
@@ -2576,27 +2540,6 @@ Examples of valid command strings:
                         "foo": { "type": "string" }
                     },
                 },
-            })]
-        );
-
-        let tools_json = create_tools_json_for_chat_completions_api(&tools).unwrap();
-
-        assert_eq!(
-            tools_json,
-            vec![json!({
-                "type": "function",
-                "name": "demo",
-                "function": {
-                    "name": "demo",
-                    "description": "A demo tool",
-                    "strict": false,
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "foo": { "type": "string" }
-                        },
-                    },
-                }
             })]
         );
     }

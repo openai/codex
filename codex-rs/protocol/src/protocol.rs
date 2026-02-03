@@ -589,13 +589,18 @@ impl SandboxPolicy {
                             }
                             subpaths.push(top_level_git);
                         }
-                        #[allow(clippy::expect_used)]
-                        let top_level_codex = writable_root
-                            .join(".codex")
-                            .expect(".codex is a valid relative path");
-                        if top_level_codex.as_path().is_dir() {
-                            subpaths.push(top_level_codex);
+
+                        // Make .agents/skills and .codex/config.toml and
+                        // related files read-only to the agent, by default.
+                        for subdir in &[".agents", ".codex"] {
+                            #[allow(clippy::expect_used)]
+                            let top_level_codex =
+                                writable_root.join(subdir).expect("valid relative path");
+                            if top_level_codex.as_path().is_dir() {
+                                subpaths.push(top_level_codex);
+                            }
                         }
+
                         WritableRoot {
                             root: writable_root,
                             read_only_subpaths: subpaths,

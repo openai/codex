@@ -48,7 +48,6 @@ use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_core::protocol::AskForApproval;
-use codex_core::protocol::DeprecationNoticeEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::FinalOutput;
@@ -182,15 +181,6 @@ fn emit_skill_load_warnings(app_event_tx: &AppEventSender, errors: &[SkillErrorI
             crate::history_cell::new_warning_event(format!("{path}: {message}")),
         )));
     }
-}
-
-fn emit_deprecation_notice(app_event_tx: &AppEventSender, notice: Option<DeprecationNoticeEvent>) {
-    let Some(DeprecationNoticeEvent { summary, details }) = notice else {
-        return;
-    };
-    app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-        crate::history_cell::new_deprecation_notice(summary, details),
-    )));
 }
 
 fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) {
@@ -926,12 +916,10 @@ impl App {
         session_selection: SessionSelection,
         feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
-        ollama_chat_support_notice: Option<DeprecationNoticeEvent>,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
-        emit_deprecation_notice(&app_event_tx, ollama_chat_support_notice);
         emit_project_config_warnings(&app_event_tx, &config);
         tui.set_notification_method(config.tui_notification_method);
 
