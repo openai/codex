@@ -18,7 +18,6 @@ mod compact_remote;
 pub use codex_thread::CodexThread;
 pub use codex_thread::ThreadConfigSnapshot;
 mod agent;
-mod codex_delegate;
 mod command_safety;
 pub mod config;
 pub mod config_loader;

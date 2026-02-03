@@ -4496,8 +4496,6 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
 
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
-#[cfg(test)]
-pub(crate) use tests::make_session_and_context_with_rx;
 
 #[cfg(test)]
 mod tests {

@@ -2,9 +2,11 @@ use crate::agent::AgentStatus;
 use crate::agent::guards::Guards;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
+use crate::protocol::Event;
 use crate::thread_manager::ThreadManagerState;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 use std::sync::Arc;
 use std::sync::Weak;
@@ -34,18 +36,30 @@ impl AgentControl {
         }
     }
 
-    /// Spawn a new agent thread and submit the initial prompt.
+    /// Spawn a new agent thread and optionally submit initial input.
     pub(crate) async fn spawn_agent(
         &self,
         config: crate::config::Config,
-        prompt: String,
-        session_source: Option<codex_protocol::protocol::SessionSource>,
+        prompt: Option<String>,
+        session_source_override: Option<SessionSource>,
+    ) -> CodexResult<ThreadId> {
+        self.spawn_agent_with_options(config, prompt, session_source_override, true)
+            .await
+    }
+
+    /// Spawn a new agent thread with explicit spawn options.
+    pub(crate) async fn spawn_agent_with_options(
+        &self,
+        config: crate::config::Config,
+        prompt: Option<String>,
+        session_source_override: Option<SessionSource>,
+        announce_thread_created: bool,
     ) -> CodexResult<ThreadId> {
         let state = self.upgrade()?;
         let reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
 
         // The same `AgentControl` is sent to spawn the thread.
-        let new_thread = match session_source {
+        let new_thread = match session_source_override {
             Some(session_source) => {
                 state
                     .spawn_new_thread_with_source(config, self.clone(), session_source)
@@ -55,12 +69,16 @@ impl AgentControl {
         };
         reservation.commit(new_thread.thread_id);
 
-        // Notify a new thread has been created. This notification will be processed by clients
-        // to subscribe or drain this newly created thread.
-        // TODO(jif) add helper for drain
-        state.notify_thread_created(new_thread.thread_id);
+        if announce_thread_created {
+            // Notify a new thread has been created. This notification will be processed by clients
+            // to subscribe or drain this newly created thread.
+            // TODO(jif) add helper for drain
+            state.notify_thread_created(new_thread.thread_id);
+        }
 
-        self.send_prompt(new_thread.thread_id, prompt).await?;
+        if let Some(prompt) = prompt {
+            self.send_prompt(new_thread.thread_id, prompt).await?;
+        }
 
         Ok(new_thread.thread_id)
     }
@@ -71,25 +89,49 @@ impl AgentControl {
         agent_id: ThreadId,
         prompt: String,
     ) -> CodexResult<String> {
+        self.send_input(
+            agent_id,
+            vec![UserInput::Text {
+                text: prompt,
+                // Agent control prompts are plain text with no UI text elements.
+                text_elements: Vec::new(),
+            }],
+        )
+        .await
+    }
+
+    /// Send full `user` input items to an existing agent thread.
+    pub(crate) async fn send_input(
+        &self,
+        agent_id: ThreadId,
+        input: Vec<UserInput>,
+    ) -> CodexResult<String> {
+        self.send_op(
+            agent_id,
+            Op::UserInput {
+                items: input,
+                final_output_json_schema: None,
+            },
+        )
+        .await
+    }
+
+    /// Send an operation to an existing agent thread.
+    pub(crate) async fn send_op(&self, agent_id: ThreadId, op: Op) -> CodexResult<String> {
         let state = self.upgrade()?;
-        let result = state
-            .send_op(
-                agent_id,
-                Op::UserInput {
-                    items: vec![UserInput::Text {
-                        text: prompt,
-                        // Agent control prompts are plain text with no UI text elements.
-                        text_elements: Vec::new(),
-                    }],
-                    final_output_json_schema: None,
-                },
-            )
-            .await;
+        let result = state.send_op(agent_id, op).await;
         if matches!(result, Err(CodexErr::InternalAgentDied)) {
             let _ = state.remove_thread(&agent_id).await;
             self.state.release_spawned_thread(agent_id);
         }
         result
+    }
+
+    /// Read the next event from an existing agent thread.
+    pub(crate) async fn next_event(&self, agent_id: ThreadId) -> CodexResult<Event> {
+        let state = self.upgrade()?;
+        let thread = state.get_thread(agent_id).await?;
+        thread.next_event().await
     }
 
     /// Interrupt the current task for an existing agent thread.
@@ -278,7 +320,7 @@ mod tests {
         let control = AgentControl::default();
         let (_home, config) = test_config().await;
         let err = control
-            .spawn_agent(config, "hello".to_string(), None)
+            .spawn_agent(config, Some("hello".to_string()), None)
             .await
             .expect_err("spawn_agent should fail without a manager");
         assert_eq!(
@@ -376,11 +418,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn send_input_submits_user_items() {
+        let harness = AgentControlHarness::new().await;
+        let (thread_id, _thread) = harness.start_thread().await;
+        let input = vec![
+            UserInput::Text {
+                text: "hello".to_string(),
+                text_elements: Vec::new(),
+            },
+            UserInput::Text {
+                text: "world".to_string(),
+                text_elements: Vec::new(),
+            },
+        ];
+
+        let submission_id = harness
+            .control
+            .send_input(thread_id, input.clone())
+            .await
+            .expect("send_input should succeed");
+        assert!(!submission_id.is_empty());
+
+        let expected = (
+            thread_id,
+            Op::UserInput {
+                items: input,
+                final_output_json_schema: None,
+            },
+        );
+        let captured = harness
+            .manager
+            .captured_ops()
+            .into_iter()
+            .find(|entry| *entry == expected);
+        assert_eq!(captured, Some(expected));
+    }
+
+    #[tokio::test]
     async fn spawn_agent_creates_thread_and_sends_prompt() {
         let harness = AgentControlHarness::new().await;
         let thread_id = harness
             .control
-            .spawn_agent(harness.config.clone(), "spawned".to_string(), None)
+            .spawn_agent(harness.config.clone(), Some("spawned".to_string()), None)
             .await
             .expect("spawn_agent should succeed");
         let _thread = harness
@@ -407,6 +486,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn spawn_agent_without_prompt_does_not_submit_input() {
+        let harness = AgentControlHarness::new().await;
+        let thread_id = harness
+            .control
+            .spawn_agent(harness.config.clone(), None, None)
+            .await
+            .expect("spawn_agent should succeed");
+        let _thread = harness
+            .manager
+            .get_thread(thread_id)
+            .await
+            .expect("thread should be registered");
+        let captured = harness.manager.captured_ops().into_iter().find(|(id, op)| {
+            *id == thread_id
+                && matches!(
+                    op,
+                    Op::UserInput {
+                        final_output_json_schema: None,
+                        ..
+                    }
+                )
+        });
+        assert_eq!(captured, None);
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_with_options_can_skip_created_notification() {
+        let harness = AgentControlHarness::new().await;
+        let mut created_rx = harness.manager.subscribe_thread_created();
+
+        let thread_id = harness
+            .control
+            .spawn_agent_with_options(
+                harness.config.clone(),
+                None,
+                Some(SessionSource::SubAgent(
+                    codex_protocol::protocol::SubAgentSource::Review,
+                )),
+                false,
+            )
+            .await
+            .expect("spawn_agent_with_options should succeed");
+
+        let result =
+            tokio::time::timeout(std::time::Duration::from_millis(100), created_rx.recv()).await;
+        assert!(result.is_err(), "did not expect thread_created event");
+
+        let _ = harness
+            .control
+            .shutdown_agent(thread_id)
+            .await
+            .expect("shutdown should succeed");
+    }
+
+    #[tokio::test]
     async fn spawn_agent_respects_max_threads_limit() {
         let max_threads = 1usize;
         let (_home, config) = test_config_with_cli_overrides(vec![(
@@ -427,12 +561,12 @@ mod tests {
             .expect("start thread");
 
         let first_agent_id = control
-            .spawn_agent(config.clone(), "hello".to_string(), None)
+            .spawn_agent(config.clone(), Some("hello".to_string()), None)
             .await
             .expect("spawn_agent should succeed");
 
         let err = control
-            .spawn_agent(config, "hello again".to_string(), None)
+            .spawn_agent(config, Some("hello again".to_string()), None)
             .await
             .expect_err("spawn_agent should respect max threads");
         let CodexErr::AgentLimitReached {
@@ -465,7 +599,7 @@ mod tests {
         let control = manager.agent_control();
 
         let first_agent_id = control
-            .spawn_agent(config.clone(), "hello".to_string(), None)
+            .spawn_agent(config.clone(), Some("hello".to_string()), None)
             .await
             .expect("spawn_agent should succeed");
         let _ = control
@@ -474,7 +608,7 @@ mod tests {
             .expect("shutdown agent");
 
         let second_agent_id = control
-            .spawn_agent(config.clone(), "hello again".to_string(), None)
+            .spawn_agent(config.clone(), Some("hello again".to_string()), None)
             .await
             .expect("spawn_agent should succeed after shutdown");
         let _ = control
@@ -500,12 +634,12 @@ mod tests {
         let cloned = control.clone();
 
         let first_agent_id = cloned
-            .spawn_agent(config.clone(), "hello".to_string(), None)
+            .spawn_agent(config.clone(), Some("hello".to_string()), None)
             .await
             .expect("spawn_agent should succeed");
 
         let err = control
-            .spawn_agent(config, "hello again".to_string(), None)
+            .spawn_agent(config, Some("hello again".to_string()), None)
             .await
             .expect_err("spawn_agent should respect shared guard");
         let CodexErr::AgentLimitReached { max_threads } = err else {
