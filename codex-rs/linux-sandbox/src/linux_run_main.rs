@@ -246,47 +246,6 @@ fn is_proc_mount_failure(stderr: &str) -> bool {
         && stderr.contains("Invalid argument")
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use codex_core::protocol::SandboxPolicy;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn detects_proc_mount_invalid_argument_failure() {
-        let stderr = "bwrap: Can't mount proc on /newroot/proc: Invalid argument";
-        assert_eq!(is_proc_mount_failure(stderr), true);
-    }
-
-    #[test]
-    fn ignores_non_proc_mount_errors() {
-        let stderr = "bwrap: Can't bind mount /dev/null: Operation not permitted";
-        assert_eq!(is_proc_mount_failure(stderr), false);
-    }
-
-    #[test]
-    fn inserts_bwrap_argv0_before_command_separator() {
-        let argv = build_bwrap_argv(
-            vec!["/bin/true".to_string()],
-            &SandboxPolicy::ReadOnly,
-            Path::new("/"),
-            BwrapOptions { mount_proc: true },
-        );
-        let command_separator_index = argv
-            .iter()
-            .position(|arg| arg == "--")
-            .expect("expected command separator in bubblewrap argv");
-        let argv0_flag_index = argv
-            .iter()
-            .position(|arg| arg == "--argv0")
-            .expect("expected --argv0 in bubblewrap argv");
-
-        assert_eq!(argv[0], "bwrap");
-        assert_eq!(argv[argv0_flag_index + 1], "codex-linux-sandbox");
-        assert_eq!(argv0_flag_index < command_separator_index, true);
-    }
-}
-
 /// Build the inner command that applies seccomp after bubblewrap.
 fn build_inner_seccomp_command(
     sandbox_policy_cwd: &Path,
@@ -340,4 +299,45 @@ fn exec_or_panic(command: Vec<String>) -> ! {
     // If execvp returns, there was an error.
     let err = std::io::Error::last_os_error();
     panic!("Failed to execvp {}: {err}", command[0].as_str());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_core::protocol::SandboxPolicy;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn detects_proc_mount_invalid_argument_failure() {
+        let stderr = "bwrap: Can't mount proc on /newroot/proc: Invalid argument";
+        assert_eq!(is_proc_mount_failure(stderr), true);
+    }
+
+    #[test]
+    fn ignores_non_proc_mount_errors() {
+        let stderr = "bwrap: Can't bind mount /dev/null: Operation not permitted";
+        assert_eq!(is_proc_mount_failure(stderr), false);
+    }
+
+    #[test]
+    fn inserts_bwrap_argv0_before_command_separator() {
+        let argv = build_bwrap_argv(
+            vec!["/bin/true".to_string()],
+            &SandboxPolicy::ReadOnly,
+            Path::new("/"),
+            BwrapOptions { mount_proc: true },
+        );
+        let command_separator_index = argv
+            .iter()
+            .position(|arg| arg == "--")
+            .expect("expected command separator in bubblewrap argv");
+        let argv0_flag_index = argv
+            .iter()
+            .position(|arg| arg == "--argv0")
+            .expect("expected --argv0 in bubblewrap argv");
+
+        assert_eq!(argv[0], "bwrap");
+        assert_eq!(argv[argv0_flag_index + 1], "codex-linux-sandbox");
+        assert_eq!(argv0_flag_index < command_separator_index, true);
+    }
 }
