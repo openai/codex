@@ -32,8 +32,10 @@ use crate::features::FeatureOverrides;
 use crate::features::Features;
 use crate::features::FeaturesToml;
 use crate::git_info::resolve_root_git_project_for_trust;
+use crate::model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use crate::model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use crate::model_provider_info::ModelProviderInfo;
+use crate::model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
 use crate::model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use crate::model_provider_info::built_in_model_providers;
 use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
@@ -759,6 +761,12 @@ pub fn set_default_oss_provider(codex_home: &Path, provider: &str) -> std::io::R
         LMSTUDIO_OSS_PROVIDER_ID | OLLAMA_OSS_PROVIDER_ID => {
             // Valid provider, continue
         }
+        LEGACY_OLLAMA_CHAT_PROVIDER_ID => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                OLLAMA_CHAT_PROVIDER_REMOVED_ERROR,
+            ));
+        }
         _ => {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -1410,10 +1418,12 @@ impl Config {
         let model_provider = model_providers
             .get(&model_provider_id)
             .ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    format!("Model provider `{model_provider_id}` not found"),
-                )
+                let message = if model_provider_id == LEGACY_OLLAMA_CHAT_PROVIDER_ID {
+                    OLLAMA_CHAT_PROVIDER_REMOVED_ERROR.to_string()
+                } else {
+                    format!("Model provider `{model_provider_id}` not found")
+                };
+                std::io::Error::new(std::io::ErrorKind::NotFound, message)
             })?
             .clone();
 
@@ -4258,6 +4268,50 @@ trust_level = "trusted"
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
         assert!(error.to_string().contains("Invalid OSS provider"));
         assert!(error.to_string().contains("invalid_provider"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_set_default_oss_provider_rejects_legacy_ollama_chat_provider() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let codex_home = temp_dir.path();
+
+        let result = set_default_oss_provider(codex_home, LEGACY_OLLAMA_CHAT_PROVIDER_ID);
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(
+            error
+                .to_string()
+                .contains(OLLAMA_CHAT_PROVIDER_REMOVED_ERROR)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_load_config_rejects_legacy_ollama_chat_provider_with_helpful_error()
+    -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let cfg = ConfigToml {
+            model_provider: Some(LEGACY_OLLAMA_CHAT_PROVIDER_ID.to_string()),
+            ..Default::default()
+        };
+
+        let result = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        );
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        assert!(
+            error
+                .to_string()
+                .contains(OLLAMA_CHAT_PROVIDER_REMOVED_ERROR)
+        );
 
         Ok(())
     }
