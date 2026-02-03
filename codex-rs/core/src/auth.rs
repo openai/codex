@@ -326,8 +326,8 @@ impl CodexAuth {
     }
 }
 
-/// Returns a stable hashed user ID for metrics, derived from the current auth mode.
-pub fn stable_user_id(auth: Option<&CodexAuth>) -> Option<String> {
+/// Returns a hashed user or account ID for metrics, derived from the current auth mode.
+pub fn hashed_user_or_account_id(auth: Option<&CodexAuth>) -> Option<String> {
     let auth = auth?;
     if let Some(account_id) = auth.get_account_id() {
         return Some(hash_user_id(&account_id));

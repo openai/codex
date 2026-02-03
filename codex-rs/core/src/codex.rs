@@ -849,7 +849,7 @@ impl Session {
             session_configuration.collaboration_mode.model(),
             auth.and_then(CodexAuth::get_account_id),
             auth.and_then(CodexAuth::get_account_email),
-            crate::auth::stable_user_id(auth),
+            crate::auth::hashed_user_or_account_id(auth),
             auth.map(CodexAuth::api_auth_mode),
             config.otel.log_user_prompt,
             terminal::user_agent(),
