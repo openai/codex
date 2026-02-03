@@ -231,7 +231,11 @@ async fn remote_compact_trims_function_call_history_to_fit_context_window() -> R
     let retained_call_id = "retained-call";
     let trimmed_call_id = "trimmed-call";
     let retained_command = "echo retained-shell-output";
-    let trimmed_command = "yes x | head -n 3000";
+    let trimmed_command = if cfg!(windows) {
+        "1..3000 | ForEach-Object { 'x' }"
+    } else {
+        "yes x | head -n 3000"
+    };
 
     let harness = TestCodexHarness::with_builder(
         test_codex()
