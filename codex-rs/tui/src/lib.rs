@@ -114,7 +114,6 @@ mod wrapping;
 #[cfg(test)]
 pub mod test_backend;
 
-use crate::onboarding::TrustDirectorySelection;
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::onboarding::onboarding_screen::run_onboarding_app;
 use crate::tui::Tui;
