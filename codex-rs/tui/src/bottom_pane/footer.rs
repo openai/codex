@@ -1189,7 +1189,7 @@ mod tests {
                     collaboration_mode_indicator
                 };
                 let available_width = area.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
-                let truncated_status_line = if props.status_line_enabled
+                let mut truncated_status_line = if props.status_line_enabled
                     && matches!(
                         props.mode,
                         FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
@@ -1202,7 +1202,7 @@ mod tests {
                 } else {
                     None
                 };
-                let left_width = if props.status_line_enabled {
+                let mut left_width = if props.status_line_enabled {
                     truncated_status_line
                         .as_ref()
                         .map(|line| line.width() as u16)
@@ -1235,6 +1235,20 @@ mod tests {
                     .as_ref()
                     .map(|line| line.width() as u16)
                     .unwrap_or(0);
+                if props.status_line_enabled
+                    && let Some(max_left) = max_left_width_for_right(area, right_width)
+                    && left_width > max_left
+                    && let Some(line) = props
+                        .status_line_value
+                        .as_ref()
+                        .map(|line| line.clone().dim())
+                        .map(|line| {
+                            truncate_line_with_ellipsis_if_overflow(line, max_left as usize)
+                        })
+                {
+                    left_width = line.width() as u16;
+                    truncated_status_line = Some(line);
+                }
                 let can_show_left_and_context =
                     can_show_left_with_context(area, left_width, right_width);
                 if matches!(
