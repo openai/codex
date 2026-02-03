@@ -1,6 +1,9 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
+use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_repeating_assistant;
+use app_test_support::create_mock_responses_server_sequence;
+use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
@@ -12,6 +15,7 @@ use codex_app_server_protocol::ReviewDelivery;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::ReviewTarget;
+use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -125,6 +129,91 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
     let review = review_body.expect("did not observe a code review item");
     assert!(review.contains("Prefer Stylize helpers"));
     assert!(review.contains("/tmp/file.rs:10-20"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn review_start_exec_approval_item_id_matches_command_execution_item() -> Result<()> {
+    let responses = vec![
+        create_shell_command_sse_response(
+            vec![
+                "git".to_string(),
+                "rev-parse".to_string(),
+                "HEAD".to_string(),
+            ],
+            None,
+            Some(5000),
+            "review-call-1",
+        )?,
+        create_final_assistant_message_sse_response("done")?,
+    ];
+    let server = create_mock_responses_server_sequence(responses).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml_with_approval_policy(codex_home.path(), &server.uri(), "untrusted")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_id = start_default_thread(&mut mcp).await?;
+
+    let review_req = mcp
+        .send_review_start_request(ReviewStartParams {
+            thread_id,
+            delivery: Some(ReviewDelivery::Inline),
+            target: ReviewTarget::Commit {
+                sha: "1234567deadbeef".to_string(),
+                title: Some("Check review approvals".to_string()),
+            },
+        })
+        .await?;
+    let review_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(review_req)),
+    )
+    .await??;
+    let ReviewStartResponse { turn, .. } = to_response::<ReviewStartResponse>(review_resp)?;
+    let turn_id = turn.id.clone();
+
+    let server_req = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_request_message(),
+    )
+    .await??;
+    let ServerRequest::CommandExecutionRequestApproval { request_id, params } = server_req else {
+        panic!("expected CommandExecutionRequestApproval request");
+    };
+    assert_eq!(params.item_id, "review-call-1");
+    assert_eq!(params.turn_id, turn_id);
+
+    let mut command_item_id = None;
+    for _ in 0..10 {
+        let item_started: JSONRPCNotification = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_notification_message("item/started"),
+        )
+        .await??;
+        let started: ItemStartedNotification =
+            serde_json::from_value(item_started.params.expect("params must be present"))?;
+        if let ThreadItem::CommandExecution { id, .. } = started.item {
+            command_item_id = Some(id);
+            break;
+        }
+    }
+    let command_item_id = command_item_id.expect("did not observe command execution item");
+    assert_eq!(command_item_id, params.item_id);
+
+    mcp.send_response(
+        request_id,
+        serde_json::json!({ "decision": codex_core::protocol::ReviewDecision::Approved }),
+    )
+    .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
 
     Ok(())
 }
@@ -299,13 +388,21 @@ async fn start_default_thread(mcp: &mut McpProcess) -> Result<String> {
 }
 
 fn create_config_toml(codex_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
+    create_config_toml_with_approval_policy(codex_home, server_uri, "never")
+}
+
+fn create_config_toml_with_approval_policy(
+    codex_home: &std::path::Path,
+    server_uri: &str,
+    approval_policy: &str,
+) -> std::io::Result<()> {
     let config_toml = codex_home.join("config.toml");
     std::fs::write(
         config_toml,
         format!(
             r#"
 model = "mock-model"
-approval_policy = "never"
+approval_policy = "{approval_policy}"
 sandbox_mode = "read-only"
 
 model_provider = "mock_provider"
