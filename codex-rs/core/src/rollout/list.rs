@@ -1082,7 +1082,6 @@ async fn find_thread_path_by_id_str_in_subdir(
         _ => None,
     };
     let state_db_ctx = state_db::open_if_present(codex_home, "").await;
-    let mut db_missing_path = false;
     if let Some(state_db_ctx) = state_db_ctx.as_deref()
         && let Ok(thread_id) = ThreadId::from_string(id_str)
     {
@@ -1096,7 +1095,6 @@ async fn find_thread_path_by_id_str_in_subdir(
         if db_path.is_some() {
             return Ok(db_path);
         }
-        db_missing_path = true;
     }
 
     let mut root = codex_home.to_path_buf();
@@ -1118,8 +1116,8 @@ async fn find_thread_path_by_id_str_in_subdir(
         .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
 
     let found = results.matches.into_iter().next().map(|m| m.full_path());
-    if db_missing_path && found.is_some() {
-        tracing::warn!("state db missing rollout path for thread {id_str}");
+    if found.is_some() {
+        tracing::error!("state db missing rollout path for thread {id_str}");
         state_db::record_discrepancy("find_thread_path_by_id_str_in_subdir", "path_mismatch");
     }
 
