@@ -6,7 +6,6 @@ pub use core_test_support::format_with_current_shell;
 pub use core_test_support::format_with_current_shell_display_non_login;
 pub use core_test_support::format_with_current_shell_non_login;
 pub use mcp_process::McpProcess;
-use mcp_types::JSONRPCResponse;
 pub use mock_model_server::create_mock_responses_server;
 pub use responses::create_apply_patch_sse_response;
 pub use responses::create_final_assistant_message_sse_response;
