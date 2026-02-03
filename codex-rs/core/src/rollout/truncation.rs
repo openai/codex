@@ -3,7 +3,12 @@
 //! In core, "user turns" are detected by scanning `ResponseItem::Message` items and
 //! interpreting them via `event_mapping::parse_turn_item(...)`.
 
+use crate::compact::COMPACT_USER_MESSAGE_MAX_TOKENS;
+use crate::compact::is_summary_message;
 use crate::event_mapping;
+use crate::truncate::TruncationPolicy;
+use crate::truncate::approx_token_count;
+use crate::truncate::truncate_text;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
@@ -68,10 +73,187 @@ pub(crate) fn truncate_rollout_before_nth_user_message_from_start(
     items[..cut_idx].to_vec()
 }
 
+#[derive(Debug, Clone)]
+struct UserTurnRef {
+    source_index: usize,
+    replacement_item_index: Option<usize>,
+    text: String,
+}
+
+fn user_turn_from_item_with_replacement(
+    item: &ResponseItem,
+    source_index: usize,
+    replacement_item_index: Option<usize>,
+) -> Option<UserTurnRef> {
+    let turn_item = event_mapping::parse_turn_item(item)?;
+    match turn_item {
+        TurnItem::UserMessage(user) => Some(UserTurnRef {
+            source_index,
+            replacement_item_index,
+            text: user.message(),
+        }),
+        _ => None,
+    }
+}
+
+fn user_turn_from_item(item: &ResponseItem, source_index: usize) -> Option<UserTurnRef> {
+    user_turn_from_item_with_replacement(item, source_index, None)
+}
+
+fn user_turn_from_replacement_item(
+    item: &ResponseItem,
+    source_index: usize,
+    replacement_item_index: usize,
+) -> Option<UserTurnRef> {
+    user_turn_from_item_with_replacement(item, source_index, Some(replacement_item_index))
+}
+
+fn select_user_turns_for_compaction(turns: &[UserTurnRef]) -> Vec<UserTurnRef> {
+    let mut selected = Vec::new();
+    if COMPACT_USER_MESSAGE_MAX_TOKENS > 0 {
+        let mut remaining = COMPACT_USER_MESSAGE_MAX_TOKENS;
+        for turn in turns.iter().rev() {
+            if remaining == 0 {
+                break;
+            }
+            let tokens = approx_token_count(&turn.text);
+            if tokens <= remaining {
+                selected.push(turn.clone());
+                remaining = remaining.saturating_sub(tokens);
+            } else {
+                let truncated = truncate_text(&turn.text, TruncationPolicy::Tokens(remaining));
+                selected.push(UserTurnRef {
+                    source_index: turn.source_index,
+                    replacement_item_index: turn.replacement_item_index,
+                    text: truncated,
+                });
+                break;
+            }
+        }
+        selected.reverse();
+    }
+    selected
+}
+
+fn user_turns_from_replacement(
+    replacement: &[ResponseItem],
+    source_index: usize,
+) -> Vec<UserTurnRef> {
+    replacement
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, item)| user_turn_from_replacement_item(item, source_index, idx))
+        .collect()
+}
+
+fn effective_user_turns(items: &[RolloutItem]) -> Vec<UserTurnRef> {
+    let mut user_turns = Vec::new();
+    for (idx, item) in items.iter().enumerate() {
+        match item {
+            RolloutItem::ResponseItem(item @ ResponseItem::Message { .. }) => {
+                if let Some(turn) = user_turn_from_item(item, idx) {
+                    user_turns.push(turn);
+                }
+            }
+            RolloutItem::Compacted(compacted) => {
+                user_turns = match &compacted.replacement_history {
+                    Some(replacement) => user_turns_from_replacement(replacement, idx),
+                    None => {
+                        let eligible: Vec<UserTurnRef> = user_turns
+                            .iter()
+                            .filter(|turn| !is_summary_message(&turn.text))
+                            .cloned()
+                            .collect();
+                        let mut selected = select_user_turns_for_compaction(&eligible);
+                        let summary = if compacted.message.is_empty() {
+                            "(no summary available)".to_string()
+                        } else {
+                            compacted.message.clone()
+                        };
+                        selected.push(UserTurnRef {
+                            source_index: idx,
+                            replacement_item_index: None,
+                            text: summary,
+                        });
+                        selected
+                    }
+                };
+            }
+            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+                let num_turns = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
+                if num_turns >= user_turns.len() {
+                    user_turns.clear();
+                } else {
+                    user_turns.truncate(user_turns.len().saturating_sub(num_turns));
+                }
+            }
+            _ => {}
+        }
+    }
+    user_turns
+}
+
+/// Drop the last `num_turns` user turns from a rollout stream.
+///
+/// This uses the "effective" user-turn list, which includes compaction summaries
+/// and applies any rollback markers already present in the stream.
+pub(crate) fn truncate_rollout_drop_last_n_user_turns(
+    items: &[RolloutItem],
+    num_turns: u32,
+) -> Vec<RolloutItem> {
+    if num_turns == 0 {
+        return items.to_vec();
+    }
+
+    let user_turns = effective_user_turns(items);
+    let Some(_) = user_turns.first() else {
+        return items.to_vec();
+    };
+
+    let n_from_end = usize::try_from(num_turns).unwrap_or(usize::MAX);
+    if n_from_end >= user_turns.len() {
+        let Some(first_user_idx) = user_turns.first().map(|turn| turn.source_index) else {
+            return items.to_vec();
+        };
+        return items[..first_user_idx].to_vec();
+    }
+
+    let boundary = &user_turns[user_turns.len().saturating_sub(n_from_end)];
+    if let Some(replacement_item_index) = boundary.replacement_item_index {
+        let compaction_index = boundary.source_index;
+        let mut truncated = items[..=compaction_index].to_vec();
+        if let Some(RolloutItem::Compacted(compacted)) = truncated.last_mut()
+            && let Some(replacement) = &mut compacted.replacement_history
+        {
+            replacement.truncate(replacement_item_index);
+        }
+        return truncated;
+    }
+
+    let cut_idx = boundary.source_index;
+
+    items[..cut_idx].to_vec()
+}
+
+/// Apply any `ThreadRolledBack` markers in a rollout stream and drop them.
+pub(crate) fn apply_rollbacks_to_rollout(items: &[RolloutItem]) -> Vec<RolloutItem> {
+    let mut effective = Vec::new();
+    for item in items {
+        if let RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) = item {
+            effective = truncate_rollout_drop_last_n_user_turns(&effective, rollback.num_turns);
+            continue;
+        }
+        effective.push(item.clone());
+    }
+    effective
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::codex::make_session_and_context;
+    use crate::compact::SUMMARY_PREFIX;
+    use crate::protocol::CompactedItem;
     use assert_matches::assert_matches;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ReasoningItemReasoningSummary;
@@ -99,6 +281,28 @@ mod tests {
             }],
             end_turn: None,
             phase: None,
+        }
+    }
+
+    fn system_msg(text: &str) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: "system".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: text.to_string(),
+            }],
+            end_turn: None,
+        }
+    }
+
+    fn user_input_msg(text: &str) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: text.to_string(),
+            }],
+            end_turn: None,
         }
     }
 
@@ -188,6 +392,133 @@ mod tests {
             serde_json::to_value(&truncated).unwrap(),
             serde_json::to_value(&expected).unwrap()
         );
+    }
+
+    #[test]
+    fn effective_user_turns_use_replacement_history_for_compaction() {
+        let rollout_items = vec![
+            RolloutItem::ResponseItem(user_input_msg("u1")),
+            RolloutItem::ResponseItem(assistant_msg("a1")),
+            RolloutItem::Compacted(CompactedItem {
+                message: "ignored summary".to_string(),
+                replacement_history: Some(vec![
+                    user_input_msg("r1"),
+                    assistant_msg("ra1"),
+                    user_input_msg("r2"),
+                ]),
+            }),
+            RolloutItem::ResponseItem(user_input_msg("u2")),
+        ];
+
+        let turns = effective_user_turns(&rollout_items);
+        let texts: Vec<String> = turns.iter().map(|turn| turn.text.clone()).collect();
+        assert_eq!(
+            texts,
+            vec!["r1".to_string(), "r2".to_string(), "u2".to_string()]
+        );
+
+        let indices: Vec<usize> = turns.iter().map(|turn| turn.source_index).collect();
+        assert_eq!(indices, vec![2, 2, 3]);
+    }
+
+    #[test]
+    fn truncate_rollout_drop_last_n_user_turns_oversize_clears_user_history() {
+        let summary = format!("{SUMMARY_PREFIX}\nsummary");
+        let system = system_msg("system");
+        let rollout_items = vec![
+            RolloutItem::ResponseItem(system.clone()),
+            RolloutItem::ResponseItem(user_input_msg("u1")),
+            RolloutItem::ResponseItem(assistant_msg("a1")),
+            RolloutItem::ResponseItem(user_input_msg("u2")),
+            RolloutItem::ResponseItem(assistant_msg("a2")),
+            RolloutItem::Compacted(CompactedItem {
+                message: summary,
+                replacement_history: None,
+            }),
+        ];
+
+        let truncated = truncate_rollout_drop_last_n_user_turns(&rollout_items, 99);
+        let expected = vec![RolloutItem::ResponseItem(system)];
+        assert_eq!(
+            serde_json::to_value(&truncated).unwrap(),
+            serde_json::to_value(&expected).unwrap()
+        );
+    }
+
+    #[test]
+    fn truncate_rollout_drop_last_n_user_turns_truncates_replacement_history() {
+        let replacement = vec![
+            user_input_msg("u1"),
+            assistant_msg("a1"),
+            user_input_msg("u2"),
+            assistant_msg("a2"),
+        ];
+        let rollout_items = vec![
+            RolloutItem::ResponseItem(user_input_msg("pre")),
+            RolloutItem::Compacted(CompactedItem {
+                message: "ignored".to_string(),
+                replacement_history: Some(replacement),
+            }),
+            RolloutItem::ResponseItem(user_input_msg("u3")),
+            RolloutItem::ResponseItem(assistant_msg("a3")),
+        ];
+
+        let truncated = truncate_rollout_drop_last_n_user_turns(&rollout_items, 2);
+        let expected = vec![
+            RolloutItem::ResponseItem(user_input_msg("pre")),
+            RolloutItem::Compacted(CompactedItem {
+                message: "ignored".to_string(),
+                replacement_history: Some(vec![user_input_msg("u1"), assistant_msg("a1")]),
+            }),
+        ];
+        assert_eq!(
+            serde_json::to_value(&truncated).unwrap(),
+            serde_json::to_value(&expected).unwrap()
+        );
+    }
+
+    #[test]
+    fn effective_user_turns_skip_prior_compaction_summaries() {
+        let summary_one = format!("{SUMMARY_PREFIX}\nsummary one");
+        let summary_two = format!("{SUMMARY_PREFIX}\nsummary two");
+        let rollout_items = vec![
+            RolloutItem::ResponseItem(user_input_msg("u1")),
+            RolloutItem::Compacted(CompactedItem {
+                message: summary_one,
+                replacement_history: None,
+            }),
+            RolloutItem::ResponseItem(user_input_msg("u2")),
+            RolloutItem::Compacted(CompactedItem {
+                message: summary_two.clone(),
+                replacement_history: None,
+            }),
+        ];
+
+        let turns = effective_user_turns(&rollout_items);
+        let texts: Vec<String> = turns.iter().map(|turn| turn.text.clone()).collect();
+        assert_eq!(texts, vec!["u1".to_string(), "u2".to_string(), summary_two]);
+    }
+
+    #[test]
+    fn effective_user_turns_use_placeholder_when_summary_empty() {
+        let rollout_items = vec![
+            RolloutItem::ResponseItem(user_input_msg("u1")),
+            RolloutItem::ResponseItem(assistant_msg("a1")),
+            RolloutItem::Compacted(CompactedItem {
+                message: String::new(),
+                replacement_history: None,
+            }),
+        ];
+
+        let turns = effective_user_turns(&rollout_items);
+        let texts: Vec<String> = turns.iter().map(|turn| turn.text.clone()).collect();
+        assert_eq!(
+            texts,
+            vec!["u1".to_string(), "(no summary available)".to_string()]
+        );
+
+        let indices: Vec<usize> = turns.iter().map(|turn| turn.source_index).collect();
+        assert_eq!(indices, vec![0, 2]);
     }
 
     #[tokio::test]
