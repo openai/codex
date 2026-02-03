@@ -3117,11 +3117,6 @@ impl ChatComposer {
                     | FooterMode::ShortcutOverlay
                     | FooterMode::EscHint => false,
                 };
-                let left_mode_indicator = if footer_props.status_line_enabled {
-                    None
-                } else {
-                    self.collaboration_mode_indicator
-                };
                 let custom_height = self.custom_footer_height();
                 let footer_hint_height =
                     custom_height.unwrap_or_else(|| footer_height(&footer_props));
@@ -3142,16 +3137,23 @@ impl ChatComposer {
                     .status_line_value
                     .as_ref()
                     .map(|line| line.clone().dim());
-                let mut truncated_status_line = if footer_props.status_line_enabled
+                let status_line_candidate = footer_props.status_line_enabled
                     && matches!(
                         footer_props.mode,
                         FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
-                    ) {
+                    );
+                let mut truncated_status_line = if status_line_candidate {
                     status_line.as_ref().map(|line| {
                         truncate_line_with_ellipsis_if_overflow(line.clone(), available_width)
                     })
                 } else {
                     None
+                };
+                let status_line_active = status_line_candidate && truncated_status_line.is_some();
+                let left_mode_indicator = if status_line_active {
+                    None
+                } else {
+                    self.collaboration_mode_indicator
                 };
                 let mut left_width = if self.footer_flash_visible() {
                     self.footer_flash
@@ -3160,7 +3162,7 @@ impl ChatComposer {
                         .unwrap_or(0)
                 } else if let Some(items) = self.footer_hint_override.as_ref() {
                     footer_hint_items_width(items)
-                } else if footer_props.status_line_enabled {
+                } else if status_line_active {
                     truncated_status_line
                         .as_ref()
                         .map(|line| line.width() as u16)
@@ -3174,7 +3176,7 @@ impl ChatComposer {
                         show_queue_hint,
                     )
                 };
-                let right_line = if footer_props.status_line_enabled {
+                let right_line = if status_line_active {
                     let full =
                         mode_indicator_line(self.collaboration_mode_indicator, show_cycle_hint);
                     let compact = mode_indicator_line(self.collaboration_mode_indicator, false);
@@ -3191,7 +3193,7 @@ impl ChatComposer {
                     ))
                 };
                 let right_width = right_line.as_ref().map(|l| l.width() as u16).unwrap_or(0);
-                if footer_props.status_line_enabled
+                if status_line_active
                     && let Some(max_left) = max_left_width_for_right(hint_rect, right_width)
                     && left_width > max_left
                     && let Some(line) = status_line.as_ref().map(|line| {
@@ -3245,7 +3247,7 @@ impl ChatComposer {
                 if let Some((summary_left, _)) = single_line_layout {
                     match summary_left {
                         SummaryLeft::Default => {
-                            if footer_props.status_line_enabled {
+                            if status_line_active {
                                 if let Some(line) = truncated_status_line.clone() {
                                     render_footer_line(hint_rect, buf, line);
                                 } else {
@@ -3282,7 +3284,7 @@ impl ChatComposer {
                     }
                 } else if let Some(items) = self.footer_hint_override.as_ref() {
                     render_footer_hint_items(hint_rect, buf, items);
-                } else if footer_props.status_line_enabled {
+                } else if status_line_active {
                     if let Some(line) = truncated_status_line {
                         render_footer_line(hint_rect, buf, line);
                     }
