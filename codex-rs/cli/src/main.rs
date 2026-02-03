@@ -101,6 +101,7 @@ enum Subcommand {
     AppServer(AppServerCommand),
 
     /// Launch the Codex desktop app (downloads the macOS installer if missing).
+    #[cfg(target_os = "macos")]
     App(app_cmd::AppCommand),
 
     /// Generate shell completion scripts.
@@ -569,6 +570,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 )?;
             }
         },
+        #[cfg(target_os = "macos")]
         Some(Subcommand::App(app_cli)) => {
             app_cmd::run_app(app_cli).await?;
         }
