@@ -15,26 +15,16 @@ const LOCK_FILENAME: &str = ".lock";
 
 /// Keeps the per-session PATH entry alive and locked for the process lifetime.
 pub struct Arg0PathEntryGuard {
-    temp_dir: TempDir,
-    lock_file: File,
+    _temp_dir: TempDir,
+    _lock_file: File,
 }
 
 impl Arg0PathEntryGuard {
     fn new(temp_dir: TempDir, lock_file: File) -> Self {
         Self {
-            temp_dir,
-            lock_file,
+            _temp_dir: temp_dir,
+            _lock_file: lock_file,
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn path(&self) -> &Path {
-        self.temp_dir.path()
-    }
-
-    #[allow(dead_code)]
-    pub fn lock_file(&self) -> &File {
-        &self.lock_file
     }
 }
 
@@ -293,7 +283,12 @@ fn janitor_cleanup(temp_root: &Path) -> std::io::Result<()> {
             continue;
         };
 
-        std::fs::remove_dir_all(&path)?;
+        match std::fs::remove_dir_all(&path) {
+            Ok(()) => {}
+            // Expected TOCTOU race: directory can disappear after read_dir/lock checks.
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err),
+        }
     }
 
     Ok(())

@@ -26,12 +26,18 @@ pub static CODEX_ALIASES_TEMP_DIR: TestCodexAliasesGuard = unsafe {
         .tempdir()
         .unwrap();
     let previous_codex_home = std::env::var_os(CODEX_HOME_ENV_VAR);
+    // arg0_dispatch() creates helper links under CODEX_HOME/tmp. Point it at a
+    // test-owned temp dir so startup never mutates the developer's real ~/.codex.
+    //
+    // Safety: #[ctor] runs before tests start, so no test threads exist yet.
     unsafe {
         std::env::set_var(CODEX_HOME_ENV_VAR, codex_home.path());
     }
 
     #[allow(clippy::unwrap_used)]
     let arg0 = arg0_dispatch().unwrap();
+    // Restore the process environment immediately so later tests observe the
+    // same CODEX_HOME state they started with.
     match previous_codex_home.as_ref() {
         Some(value) => unsafe {
             std::env::set_var(CODEX_HOME_ENV_VAR, value);
