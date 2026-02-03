@@ -189,7 +189,15 @@ pub async fn load_config_layers_state(
     overrides: LoaderOverrides,
     cloud_requirements: Option<CloudRequirementsLoader>, // TODO(gt): Once exec and app-server are wired up, we can remove the option.
 ) -> io::Result<ConfigLayerStack> {
-    load_config_layers_state_with_env(codex_home, cwd, cli_overrides, overrides, &RealEnv).await
+    load_config_layers_state_with_env(
+        codex_home,
+        cwd,
+        cli_overrides,
+        overrides,
+        cloud_requirements,
+        &RealEnv,
+    )
+    .await
 }
 
 async fn load_config_layers_state_with_env(
@@ -197,6 +205,7 @@ async fn load_config_layers_state_with_env(
     cwd: Option<AbsolutePathBuf>,
     cli_overrides: &[(String, TomlValue)],
     overrides: LoaderOverrides,
+    cloud_requirements: Option<CloudRequirementsLoader>,
     env: &impl EnvProvider,
 ) -> io::Result<ConfigLayerStack> {
     let mut config_requirements_toml = ConfigRequirementsWithSources::default();
@@ -404,7 +413,7 @@ pub(crate) async fn load_config_layers_state_with_env_for_tests(
     overrides: LoaderOverrides,
     env: &impl EnvProvider,
 ) -> io::Result<ConfigLayerStack> {
-    load_config_layers_state_with_env(codex_home, cwd, cli_overrides, overrides, env).await
+    load_config_layers_state_with_env(codex_home, cwd, cli_overrides, overrides, None, env).await
 }
 
 /// Attempts to load a config.toml file from `config_toml`.

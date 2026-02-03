@@ -11,8 +11,8 @@ use crate::config::ConfigOverrides;
 use crate::config::ConfigToml;
 use crate::config::ConstraintError;
 use crate::config::ProjectConfig;
-use crate::config_loader::ConfigExpansionWarningInfo;
 use crate::config_loader::CloudRequirementsLoader;
+use crate::config_loader::ConfigExpansionWarningInfo;
 use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigLayerSource;
 use crate::config_loader::ConfigLoadError;
@@ -1040,6 +1040,7 @@ async fn codex_home_within_project_tree_is_not_double_loaded() -> std::io::Resul
             config: child_config.clone(),
             version: version_for_toml(&child_config),
             disabled_reason: None,
+            expansion_warnings: Vec::new(),
         }],
         project_layers
     );

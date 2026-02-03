@@ -1,17 +1,19 @@
 # Env + Tilde Expansion for config.toml
 
 ## Conversation Summary
+
 - We inspected the codebase and found `~/.codex/config.toml` is loaded at startup via the config loader stack.
   - Loader and layer stack: `codex-rs/core/src/config_loader/mod.rs` (`load_config_layers_state`).
   - Config building: `codex-rs/core/src/config/mod.rs` (e.g., `load_config_as_toml_with_cli_overrides`).
   - Entry points that load config early: `codex-rs/exec/src/lib.rs`, `codex-rs/app-server/src/lib.rs`, CLI/TUI via config builder.
-- User wants *universal* variable expansion at ingestion time (all strings + keys), not limited to `projects` paths.
-- If a variable is unset, they want a *user-visible warning* after load, similar to other config warnings (MCP-like). The warning should not hard-fail config loading.
+- User wants _universal_ variable expansion at ingestion time (all strings + keys), not limited to `projects` paths.
+- If a variable is unset, they want a _user-visible warning_ after load, similar to other config warnings (MCP-like). The warning should not hard-fail config loading.
 - We decided to add a **separate, strict `~` expansion feature** (not just shell-like behavior). Rules below.
 
 ## Goals
-- Expand `$VAR` and `${VAR}` *everywhere* in config TOML string values and table keys.
-- Add strict `~` expansion rule *as a separate feature*.
+
+- Expand `$VAR` and `${VAR}` _everywhere_ in config TOML string values and table keys.
+- Add strict `~` expansion rule _as a separate feature_.
 - If expansion fails (unset env var), leave the string/key unexpanded and **emit a warning**.
 - Surface warnings in all frontends:
   - App server: `ConfigWarningNotification` at startup.
@@ -19,12 +21,15 @@
   - CLI/exec: stderr warnings.
 
 ## Non-Goals
+
 - No `%VAR%` expansion (Windows style).
 - No `~user` or mid-string `foo/~` expansion.
 - No change to runtime overrides format or CLI flags.
 
 ## Proposed Expansion Rules
+
 ### Env vars
+
 - Supported syntax: `$VAR` and `${VAR}`.
 - Expansion occurs in **all string values and all table keys**.
 - `$$` escapes to a literal `$`.
@@ -38,6 +43,7 @@
   - Note: “first” is based on TOML map iteration order (typically lexicographic by key), not necessarily file order.
 
 ### Tilde
+
 - Only expand when the string **starts** with `~/` or `~\`.
 - No expansion for `~user`, `foo/~`, or `bar~baz`.
 - Source:
@@ -46,14 +52,17 @@
 - If required env var is unset: leave unexpanded + warning.
 
 ## Where to Implement
+
 ### Primary integration point
+
 - `codex-rs/core/src/config_loader/mod.rs` during config layer loading, **before merge** and **before `ConfigToml` deserialization**.
 - Introduce a pass that walks `toml::Value` and rewrites:
   - string values
   - table keys
-- Keep expansion *per-layer* so warnings can be attributed to a layer and shown with source info later.
+- Keep expansion _per-layer_ so warnings can be attributed to a layer and shown with source info later.
 
 ### Warning plumbing
+
 - Extend config loader data structures to carry expansion warnings.
   - Candidate: add `warnings: Vec<ConfigWarning>` (new type) to `ConfigLayerEntry`.
   - Or add warnings at the `ConfigLayerStack` level (aggregate list with source path).
@@ -62,6 +71,7 @@
 - CLI/exec: print warnings to stderr after config load (similar to other config warnings).
 
 ### Non-breaking warning model for key collisions
+
 - `ConfigExpansionWarning` is publicly re-exported from `codex_core::config_loader`.
 - Changing its public fields would be a breaking API change for downstream consumers.
 - To avoid a breaking change while still surfacing collisions:
@@ -71,6 +81,7 @@
   - Centralize user-facing rendering in `format_expansion_warnings(...)` so callers do not need to interpret sentinel values.
 
 ## Suggested Warning Text
+
 - Summary: `Config variable expansion failed; some values were left unchanged.`
 - Details: list like:
   - `1. $PROJECTS in [projects."$PROJECTS/foo"] is unset`
@@ -78,9 +89,11 @@
 - Include file path and (if available) TOML location. If no range info, include layer source + key path.
 
 Additional collision example:
+
 - `3. /path/to/config.toml: projects has duplicate key after expansion: "$ROOT/a" and "${ROOT}/a" both expand to "/abs/a" (kept first)`
 
 ## Tests to Add
+
 - `core/src/config_loader/tests.rs` or new test module in `config_loader`:
   - Expands `$VAR` in string value.
   - Expands `$VAR` in table key (e.g., `[projects."$PROJECTS/foo"]`).
@@ -92,6 +105,7 @@ Additional collision example:
 - If any warnings are surfaced to app server/tui, add lightweight tests around warning aggregation (or ensure existing tests still pass).
 
 ## Feature Checklist
+
 - Env var expansion for all TOML string values and table keys (`$VAR`, `${VAR}`).
 - `$$` escape to literal `$`.
 - Strict tilde expansion only at string start (`~/` or `~\\`).
@@ -104,6 +118,7 @@ Additional collision example:
   - Absolute duplicate entries with additional fields are preserved.
 
 ## Test Ideas (Concrete)
+
 - Unit tests for expansion parsing:
   - `$FOO` and `${FOO}` expand in strings.
   - `$$FOO` preserves literal `$FOO`.
@@ -123,6 +138,7 @@ Additional collision example:
   - Collision warnings render clearly via `format_expansion_warnings(...)`.
 
 ## Docs
+
 - Update `docs/config.md` (and any other relevant docs) to describe:
   - `$VAR`/`${VAR}` expansion
   - `$$` escaping
@@ -130,6 +146,7 @@ Additional collision example:
   - warning behavior for unset vars
 
 ## Implementation Steps (Detailed)
+
 1. **Add expansion utility**
    - New helper module in `core/src/config_loader/` (e.g., `expand.rs`) with:
      - `expand_toml(value: TomlValue) -> (TomlValue, Vec<ExpansionWarning>)`
@@ -173,6 +190,7 @@ Additional collision example:
    - Run project-specific tests (`cargo test -p codex-core` or relevant crate), then get user approval before `cargo test --all-features` if required.
 
 ## Notes/Constraints
+
 - Follow repo rule: do not modify any code related to `CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR` or `CODEX_SANDBOX_ENV_VAR`.
 - Use clippy style preferences (inline format args, no wildcard matches when avoidable, etc.).
 - Known trade-off (documented convention):
