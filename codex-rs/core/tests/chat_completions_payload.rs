@@ -102,7 +102,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
         SessionSource::Exec,
         TransportManager::new(),
     )
-    .new_session();
+    .new_session(None);
 
     let mut prompt = Prompt::default();
     prompt.input = input;

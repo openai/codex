@@ -103,7 +103,7 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
         SessionSource::Exec,
         TransportManager::new(),
     )
-    .new_session();
+    .new_session(None);
 
     let mut prompt = Prompt::default();
     prompt.input = vec![ResponseItem::Message {

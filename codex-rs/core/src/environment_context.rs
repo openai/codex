@@ -28,6 +28,7 @@ impl EnvironmentContext {
             cwd,
             // should compare all fields except shell
             shell: _,
+            ..
         } = other;
 
         self.cwd == *cwd

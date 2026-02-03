@@ -45,6 +45,7 @@ codex-utils-pty = { workspace = true }
 codex-utils-readiness = { workspace = true }
 codex-utils-string = { workspace = true }
 codex-windows-sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }
+dirs = { workspace = true }
 dunce = { workspace = true }
 encoding_rs = { workspace = true }
 env-flags = { workspace = true }
