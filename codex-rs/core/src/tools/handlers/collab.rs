@@ -146,7 +146,7 @@ mod spawn {
             .agent_control
             .spawn_agent(
                 config,
-                prompt.clone(),
+                Some(prompt.clone()),
                 Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                     parent_thread_id: session.conversation_id,
                     depth: child_depth,

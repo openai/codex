@@ -22,10 +22,10 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 
-/// Delegate should surface ExecApprovalRequest from sub-agent and proceed
+/// Review sub-agent should surface ExecApprovalRequest and proceed
 /// after parent submits an approval decision.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
+async fn review_subagent_forwards_exec_approval_and_proceeds_on_approval() {
     skip_if_no_network!();
 
     // Sub-agent turn 1: emit a shell_command function_call requiring approval, then complete.
@@ -46,7 +46,7 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
     let review_json = serde_json::json!({
         "findings": [],
         "overall_correctness": "ok",
-        "overall_explanation": "delegate approved exec",
+        "overall_explanation": "review sub-agent approved exec",
         "overall_confidence_score": 0.5
     })
     .to_string();
@@ -59,7 +59,7 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
     let server = start_mock_server().await;
     mount_sse_sequence(&server, vec![sse1, sse2]).await;
 
-    // Build a conversation configured to require approvals so the delegate
+    // Build a conversation configured to require approvals so the review sub-agent
     // routes ExecApprovalRequest via the parent.
     let mut builder = test_codex().with_model("gpt-5.1").with_config(|config| {
         config.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
@@ -86,7 +86,7 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
     })
     .await;
 
-    // Expect parent-side approval request (forwarded by delegate).
+    // Expect parent-side approval request forwarded by the review sub-agent.
     wait_for_event(&test.codex, |ev| {
         matches!(ev, EventMsg::ExecApprovalRequest(_))
     })
@@ -108,10 +108,10 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 }
 
-/// Delegate should surface ApplyPatchApprovalRequest and honor parent decision
+/// Review sub-agent should surface ApplyPatchApprovalRequest and honor parent decision
 /// so the sub-agent can proceed to completion.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
+async fn review_subagent_forwards_patch_approval_and_proceeds_on_decision() {
     skip_if_no_network!();
 
     let call_id = "call-patch-1";
@@ -124,7 +124,7 @@ async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
     let review_json = serde_json::json!({
         "findings": [],
         "overall_correctness": "ok",
-        "overall_explanation": "delegate patch handled",
+        "overall_explanation": "review sub-agent patch handled",
         "overall_confidence_score": 0.5
     })
     .to_string();
@@ -166,7 +166,7 @@ async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
     })
     .await;
 
-    // Deny via parent so delegate can continue; id "0" is the active sub_id in tests.
+    // Deny via parent so review sub-agent can continue; id "0" is the active sub_id in tests.
     test.codex
         .submit(Op::PatchApproval {
             id: "0".into(),
@@ -183,7 +183,7 @@ async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_delegate_ignores_legacy_deltas() {
+async fn review_subagent_ignores_legacy_deltas() {
     skip_if_no_network!();
 
     // Single response with reasoning summary deltas.
@@ -200,7 +200,7 @@ async fn codex_delegate_ignores_legacy_deltas() {
     let mut builder = test_codex();
     let test = builder.build(&server).await.expect("build test codex");
 
-    // Kick off review (delegated).
+    // Kick off review in a spawned sub-agent.
     test.codex
         .submit(Op::Review {
             review_request: ReviewRequest {
