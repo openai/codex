@@ -28,8 +28,10 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
+use codex_app_server_protocol::SkillsListUpdatedNotification;
 use codex_app_server_protocol::experimental_required_message;
 use codex_core::AuthManager;
+use codex_core::FileWatcherEvent;
 use codex_core::ThreadManager;
 use codex_core::auth::ExternalAuthRefreshContext;
 use codex_core::auth::ExternalAuthRefreshReason;
@@ -112,6 +114,7 @@ pub(crate) struct MessageProcessor {
     config: Arc<Config>,
     initialized: bool,
     experimental_api_enabled: Arc<AtomicBool>,
+    initialized_flag: Arc<AtomicBool>,
     config_warnings: Vec<ConfigWarningNotification>,
 }
 
@@ -156,6 +159,30 @@ impl MessageProcessor {
             auth_manager.clone(),
             SessionSource::VSCode,
         ));
+
+        // Watch for on-disk skill changes and send notifications to the client.
+        let initialized_flag = Arc::new(AtomicBool::new(false));
+        let mut skills_updates_rx = thread_manager.subscribe_file_watcher();
+        let outgoing_for_skills = Arc::clone(&outgoing);
+        let initialized_for_skills = Arc::clone(&initialized_flag);
+        tokio::spawn(async move {
+            loop {
+                match skills_updates_rx.recv().await {
+                    Ok(FileWatcherEvent::SkillsChanged { .. }) => {
+                        if !initialized_for_skills.load(Ordering::SeqCst) {
+                            continue;
+                        }
+                        outgoing_for_skills
+                            .send_server_notification(ServerNotification::SkillsListUpdated(
+                                SkillsListUpdatedNotification {},
+                            ))
+                            .await;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                }
+            }
+        });
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
             auth_manager,
             thread_manager,
@@ -180,6 +207,7 @@ impl MessageProcessor {
             config,
             initialized: false,
             experimental_api_enabled,
+            initialized_flag,
             config_warnings,
         }
     }
@@ -268,6 +296,7 @@ impl MessageProcessor {
                     self.outgoing.send_response(request_id, response).await;
 
                     self.initialized = true;
+                    self.initialized_flag.store(true, Ordering::SeqCst);
                     if !self.config_warnings.is_empty() {
                         for notification in self.config_warnings.drain(..) {
                             self.outgoing
