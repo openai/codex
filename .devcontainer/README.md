@@ -28,7 +28,6 @@ This is a Codex-focused devcontainer setup adapted for this monorepo.
   - applies firewall rules through `init-firewall.sh`
   - enforces IPv6 default-deny so strict mode cannot be bypassed over IPv6
   - optionally adds GitHub CIDR ranges from `api.github.com/meta`
-  - optionally adds Cloudflare IPv4 CIDR ranges for CDN-backed endpoints
 
 ## Firewall modes
 
@@ -38,7 +37,6 @@ This is a Codex-focused devcontainer setup adapted for this monorepo.
 Optional strict-mode enhancement:
 
 - `CODEX_INCLUDE_GITHUB_META_RANGES=1` (default) hydrates GitHub CIDRs into the allowlist.
-- `CODEX_INCLUDE_CLOUDFLARE_RANGES=1` (default) hydrates Cloudflare IPv4 CIDRs into the allowlist.
 
 To run in permissive mode during a session:
 

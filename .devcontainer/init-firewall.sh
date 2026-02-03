@@ -4,7 +4,6 @@ IFS=$'\n\t'
 
 allowed_domains_file="/etc/codex/allowed_domains.txt"
 include_github_meta_ranges="${CODEX_INCLUDE_GITHUB_META_RANGES:-1}"
-include_cloudflare_ranges="${CODEX_INCLUDE_CLOUDFLARE_RANGES:-1}"
 
 if [ -f "$allowed_domains_file" ]; then
   mapfile -t allowed_domains < <(sed '/^\s*#/d;/^\s*$/d' "$allowed_domains_file")
@@ -119,21 +118,6 @@ if [ "$include_github_meta_ranges" = "1" ]; then
     fi
     add_ipv4_cidr_to_allowlist "GitHub" "$cidr"
   done < <(echo "$github_meta" | jq -r '((.web // []) + (.api // []) + (.git // []))[]' | sort -u)
-fi
-
-if [ "$include_cloudflare_ranges" = "1" ]; then
-  echo "Fetching Cloudflare IPv4 ranges"
-  cloudflare_ranges="$(curl -fsSL --connect-timeout 10 https://www.cloudflare.com/ips-v4)"
-
-  if [ -z "$(echo "$cloudflare_ranges" | sed '/^\s*#/d;/^\s*$/d')" ]; then
-    echo "ERROR: Cloudflare range response was empty"
-    exit 1
-  fi
-
-  while IFS= read -r cidr; do
-    [ -z "$cidr" ] && continue
-    add_ipv4_cidr_to_allowlist "Cloudflare" "$cidr"
-  done < <(echo "$cloudflare_ranges" | sed '/^\s*#/d;/^\s*$/d' | sort -u)
 fi
 
 host_ip="$(ip route | awk '/default/ {print $3; exit}')"
