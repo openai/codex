@@ -87,8 +87,7 @@ pub fn run_main() -> ! {
     // Inner stage: apply seccomp/no_new_privs after bubblewrap has already
     // established the filesystem view.
     if apply_seccomp_then_exec {
-        if let Err(e) =
-            apply_sandbox_policy_to_current_thread(&sandbox_policy, &sandbox_policy_cwd, false)
+        if let Err(e) = apply_sandbox_policy_to_current_thread(&sandbox_policy, &sandbox_policy_cwd)
         {
             panic!("error applying Linux sandbox restrictions: {e:?}");
         }
@@ -96,8 +95,7 @@ pub fn run_main() -> ! {
     }
 
     let command = if sandbox_policy.has_full_disk_write_access() {
-        if let Err(e) =
-            apply_sandbox_policy_to_current_thread(&sandbox_policy, &sandbox_policy_cwd, false)
+        if let Err(e) = apply_sandbox_policy_to_current_thread(&sandbox_policy, &sandbox_policy_cwd)
         {
             panic!("error applying Linux sandbox restrictions: {e:?}");
         }
@@ -149,8 +147,7 @@ pub fn run_main() -> ! {
         .unwrap_or_else(|err| panic!("error building bubblewrap command: {err:?}"))
     } else {
         // Legacy path: Landlock enforcement only.
-        if let Err(e) =
-            apply_sandbox_policy_to_current_thread(&sandbox_policy, &sandbox_policy_cwd, true)
+        if let Err(e) = apply_sandbox_policy_to_current_thread(&sandbox_policy, &sandbox_policy_cwd)
         {
             panic!("error applying legacy Linux sandbox restrictions: {e:?}");
         }
