@@ -79,7 +79,6 @@ use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
 use serde_json;
 use serde_json::Value;
-use serde_json::json;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot;
@@ -4424,7 +4423,7 @@ async fn try_run_sampling_request(
                     .await;
             }
             ResponseEvent::Completed {
-                response_id,
+                response_id: _,
                 token_usage,
             } => {
                 if let Some(state) = plan_mode_state.as_mut() {
