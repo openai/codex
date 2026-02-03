@@ -158,9 +158,20 @@ enum DebugSubcommand {
 
 #[derive(Debug, Parser)]
 struct DebugAppServerCommand {
-    /// Message to send through codex-app-server-test-client send-message-v2.
-    #[arg(value_name = "USER_MESSAGE", required = true, num_args = 1.., trailing_var_arg = true)]
-    user_message_parts: Vec<String>,
+    #[command(subcommand)]
+    subcommand: DebugAppServerSubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum DebugAppServerSubcommand {
+    // Send message to app server V2.
+    SendMessageV2(DebugAppServerSendMessageV2Command),
+}
+
+#[derive(Debug, Parser)]
+struct DebugAppServerSendMessageV2Command {
+    #[arg(value_name = "USER_MESSAGE", required = true)]
+    user_message: String,
 }
 
 #[derive(Debug, Parser)]
@@ -439,9 +450,12 @@ fn run_execpolicycheck(cmd: ExecPolicyCheckCommand) -> anyhow::Result<()> {
 }
 
 fn run_debug_app_server_command(cmd: DebugAppServerCommand) -> anyhow::Result<()> {
-    let user_message = cmd.user_message_parts.join(" ");
-    let codex_bin = std::env::current_exe()?;
-    codex_app_server_test_client::send_message_v2(&codex_bin, &[], user_message, &None)
+    match cmd.subcommand {
+        DebugAppServerSubcommand::SendMessageV2(cmd) => {
+            let codex_bin = std::env::current_exe()?;
+            codex_app_server_test_client::send_message_v2(&codex_bin, &[], cmd.user_message, &None)
+        }
+    }
 }
 
 #[derive(Debug, Default, Parser, Clone)]

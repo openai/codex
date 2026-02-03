@@ -105,27 +105,23 @@ enum CliCommand {
     /// Send a user message through the Codex app-server.
     SendMessage {
         /// User message to send to Codex.
-        #[arg()]
         user_message: String,
     },
     /// Send a user message through the app-server V2 thread/turn APIs.
     SendMessageV2 {
         /// User message to send to Codex.
-        #[arg()]
         user_message: String,
     },
     /// Start a V2 turn that elicits an ExecCommand approval.
     #[command(name = "trigger-cmd-approval")]
     TriggerCmdApproval {
         /// Optional prompt; defaults to a simple python command.
-        #[arg()]
         user_message: Option<String>,
     },
     /// Start a V2 turn that elicits an ApplyPatch approval.
     #[command(name = "trigger-patch-approval")]
     TriggerPatchApproval {
         /// Optional prompt; defaults to creating a file via apply_patch.
-        #[arg()]
         user_message: Option<String>,
     },
     /// Start a V2 turn that should not elicit an ExecCommand approval.
@@ -134,10 +130,8 @@ enum CliCommand {
     /// Send two sequential V2 turns in the same thread to test follow-up behavior.
     SendFollowUpV2 {
         /// Initial user message for the first turn.
-        #[arg()]
         first_message: String,
         /// Follow-up user message for the second turn.
-        #[arg()]
         follow_up_message: String,
     },
     /// Trigger the ChatGPT login flow and wait for completion.
