@@ -22,7 +22,12 @@ use crate::tools::runtimes::shell::ShellRequest;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::default_exec_approval_requirement;
 
+const HOOKS_DIRNAME: &str = ".agent";
 const HOOKS_FILENAME: &str = "hook.toml";
+
+fn default_true() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Deserialize)]
 struct HookCommandToml {
@@ -31,10 +36,19 @@ struct HookCommandToml {
     args: Vec<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct HookStartToml {
+    command: String,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default = "default_true")]
+    run_on_hook_input: bool,
+}
+
 #[derive(Debug, Default, Clone, Deserialize)]
 struct HooksToml {
     #[serde(default)]
-    turn_start: Option<HookCommandToml>,
+    turn_start: Option<HookStartToml>,
     #[serde(default)]
     turn_end: Option<HookCommandToml>,
 }
@@ -45,9 +59,16 @@ pub(crate) struct HookCommand {
     pub(crate) args: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct HookStartCommand {
+    pub(crate) command: String,
+    pub(crate) args: Vec<String>,
+    pub(crate) run_on_hook_input: bool,
+}
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct HookConfig {
-    pub(crate) turn_start: Option<HookCommand>,
+    pub(crate) turn_start: Option<HookStartCommand>,
     pub(crate) turn_end: Option<HookCommand>,
 }
 
@@ -61,11 +82,21 @@ impl HookCommand {
 }
 
 impl HookConfig {
-    pub(crate) fn command_for(&self, kind: HookKind) -> Option<&HookCommand> {
+    pub(crate) fn command_for(&self, kind: HookKind) -> Option<HookCommand> {
         match kind {
-            HookKind::TurnStart => self.turn_start.as_ref(),
-            HookKind::TurnEnd => self.turn_end.as_ref(),
+            HookKind::TurnStart => self.turn_start.as_ref().map(|cmd| HookCommand {
+                command: cmd.command.clone(),
+                args: cmd.args.clone(),
+            }),
+            HookKind::TurnEnd => self.turn_end.clone(),
         }
+    }
+
+    pub(crate) fn run_turn_start_on_hook_input(&self) -> bool {
+        self.turn_start
+            .as_ref()
+            .map(|cmd| cmd.run_on_hook_input)
+            .unwrap_or(false)
     }
 }
 
@@ -89,15 +120,23 @@ pub(crate) async fn load_hook_config(cwd: &Path) -> Option<HookConfig> {
     };
 
     Some(HookConfig {
-        turn_start: parsed.turn_start.map(|cmd| HookCommand {
+        turn_start: parsed.turn_start.map(|cmd| HookStartCommand {
             command: cmd.command,
             args: cmd.args,
+            run_on_hook_input: cmd.run_on_hook_input,
         }),
         turn_end: parsed.turn_end.map(|cmd| HookCommand {
             command: cmd.command,
             args: cmd.args,
         }),
     })
+}
+
+pub(crate) async fn should_run_turn_start_on_hook_input(cwd: &Path) -> bool {
+    load_hook_config(cwd)
+        .await
+        .map(|config| config.run_turn_start_on_hook_input())
+        .unwrap_or(false)
 }
 
 pub(crate) async fn run_hook(
@@ -207,7 +246,7 @@ pub(crate) async fn run_hook(
 }
 
 fn hook_config_path(cwd: &Path) -> PathBuf {
-    cwd.join(".codex").join(HOOKS_FILENAME)
+    cwd.join(HOOKS_DIRNAME).join(HOOKS_FILENAME)
 }
 
 fn requires_approval(
