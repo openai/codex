@@ -33,6 +33,7 @@
     "CODEX_UNSAFE_ALLOW_NO_SANDBOX": "1",
     "CODEX_ENABLE_FIREWALL": "1",
     "CODEX_INCLUDE_GITHUB_META_RANGES": "1",
+    "CODEX_INCLUDE_CLOUDFLARE_RANGES": "1",
     "OPENAI_ALLOWED_DOMAINS": "api.openai.com auth.openai.com github.com api.github.com codeload.github.com raw.githubusercontent.com objects.githubusercontent.com crates.io index.crates.io static.crates.io static.rust-lang.org registry.npmjs.org",
     "CARGO_TARGET_DIR": "/workspace/codex-rs/target/devcontainer",
     "GIT_CONFIG_GLOBAL": "/home/vscode/.gitconfig.local",

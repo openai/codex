@@ -33,4 +33,4 @@ sudo chmod 0444 /etc/codex/allowed_domains.txt
 rm -f "$tmp_file"
 
 echo "[devcontainer] Applying firewall policy for domains: ${domains[*]}"
-sudo --preserve-env=CODEX_INCLUDE_GITHUB_META_RANGES /usr/local/bin/init-firewall.sh
+sudo --preserve-env=CODEX_INCLUDE_GITHUB_META_RANGES,CODEX_INCLUDE_CLOUDFLARE_RANGES /usr/local/bin/init-firewall.sh
