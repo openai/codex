@@ -682,6 +682,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ignores_rules_from_untrusted_project_layers() -> anyhow::Result<()> {
+        let project_dir = tempdir()?;
+        let policy_dir = project_dir.path().join(RULES_DIR_NAME);
+        fs::create_dir_all(&policy_dir)?;
+        fs::write(
+            policy_dir.join("untrusted.rules"),
+            r#"prefix_rule(pattern=["ls"], decision="forbidden")"#,
+        )?;
+
+        let project_dot_codex_folder = AbsolutePathBuf::from_absolute_path(project_dir.path())?;
+        let layers = vec![ConfigLayerEntry::new_disabled(
+            ConfigLayerSource::Project {
+                dot_codex_folder: project_dot_codex_folder,
+            },
+            TomlValue::Table(Default::default()),
+            "marked untrusted",
+        )];
+        let config_stack = ConfigLayerStack::new(
+            layers,
+            ConfigRequirements::default(),
+            ConfigRequirementsToml::default(),
+        )?;
+
+        let policy = load_exec_policy(&config_stack).await?;
+
+        assert_eq!(
+            Evaluation {
+                decision: Decision::Allow,
+                matched_rules: vec![RuleMatch::HeuristicsRuleMatch {
+                    command: vec!["ls".to_string()],
+                    decision: Decision::Allow,
+                }],
+            },
+            policy.check_multiple([vec!["ls".to_string()]].iter(), &|_| Decision::Allow)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn loads_policies_from_multiple_config_layers() -> anyhow::Result<()> {
         let user_dir = tempdir()?;
         let project_dir = tempdir()?;
