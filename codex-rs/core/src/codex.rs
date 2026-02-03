@@ -4536,6 +4536,7 @@ mod tests {
     use codex_app_server_protocol::AppInfo;
     use codex_app_server_protocol::AuthMode;
     use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseInputItem;
     use codex_protocol::models::ResponseItem;
     use std::path::Path;
     use std::time::Duration;
@@ -5708,6 +5709,50 @@ mod tests {
         }
         // No extra events should be emitted after an abort.
         assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn task_finish_persists_leftover_pending_input() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+        let input = vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }];
+        sess.spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: false,
+            },
+        )
+        .await;
+
+        sess.inject_response_items(vec![ResponseInputItem::Message {
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "late pending input".to_string(),
+            }],
+        }])
+        .await
+        .expect("inject pending input into active turn");
+
+        sess.on_task_finished(Arc::clone(&tc), None).await;
+
+        let history = sess.clone_history().await;
+        let expected = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "late pending input".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        };
+        assert!(
+            history.raw_items().iter().any(|item| item == &expected),
+            "expected pending input to be persisted into history on turn completion"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
