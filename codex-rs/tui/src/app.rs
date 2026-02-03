@@ -2222,14 +2222,21 @@ impl App {
             AppEvent::StatusLineSetup { items } => {
                 let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
                 let edit = codex_core::config::edit::status_line_items_edit(&ids);
-                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                let apply_result = ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_edits([edit])
                     .apply()
-                    .await
-                {
+                    .await;
+                if let Err(err) = &apply_result {
                     tracing::error!(error = %err, "failed to persist status line items");
                     self.chat_widget
                         .add_error_message(format!("Failed to save status line items: {err}"));
+                }
+                if apply_result.is_ok() {
+                    self.config.tui_status_line = if ids.is_empty() {
+                        None
+                    } else {
+                        Some(ids.clone())
+                    };
                 }
 
                 self.chat_widget.setup_status_line(items);
