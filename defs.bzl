@@ -85,6 +85,7 @@ def codex_rust_crate(
     proc_macro_dev_deps = all_crate_deps(proc_macro_dev = True)
 
     test_env = {
+        "INSTA_REQUIRE_FULL_MATCH": "0",
         "INSTA_WORKSPACE_ROOT": ".",
         "INSTA_SNAPSHOT_PATH": "src",
     }
