@@ -720,7 +720,6 @@ impl RequestUserInputOverlay {
                 },
             );
         }
-        let history_answers = answers.clone();
         self.app_event_tx
             .send(AppEvent::CodexOp(Op::UserInputAnswer {
                 id: self.request.turn_id.clone(),
@@ -729,7 +728,7 @@ impl RequestUserInputOverlay {
         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
             history_cell::RequestUserInputResultCell {
                 questions: self.request.questions.clone(),
-                answers: history_answers,
+                answers: answers.clone(),
                 interrupted: false,
             },
         )));
