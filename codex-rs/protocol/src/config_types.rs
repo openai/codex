@@ -316,9 +316,9 @@ mod tests {
     }
 
     #[test]
-    fn mode_kind_deserializes_legacy_values_to_default() {
-        for legacy in ["code", "pair_programming", "execute", "custom"] {
-            let json = format!("\"{legacy}\"");
+    fn mode_kind_deserializes_alias_values_to_default() {
+        for alias in ["code", "pair_programming", "execute", "custom"] {
+            let json = format!("\"{alias}\"");
             let mode: ModeKind = serde_json::from_str(&json).expect("deserialize mode");
             assert_eq!(ModeKind::Default, mode);
         }
