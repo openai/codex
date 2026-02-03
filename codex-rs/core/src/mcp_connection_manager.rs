@@ -463,16 +463,8 @@ impl McpConnectionManager {
     #[instrument(level = "trace", skip_all)]
     pub async fn list_all_tools(&self) -> HashMap<String, ToolInfo> {
         let mut tools = HashMap::new();
-        for (server_name, managed_client) in &self.clients {
-            let client = if server_name == CODEX_APPS_MCP_SERVER_NAME {
-                // Avoid blocking on codex_apps_mcp startup; use tools only when ready.
-                match managed_client.client.clone().now_or_never() {
-                    Some(Ok(client)) => Some(client),
-                    _ => None,
-                }
-            } else {
-                managed_client.client().await.ok()
-            };
+        for managed_client in self.clients.values() {
+            let client = managed_client.client().await.ok();
             if let Some(client) = client {
                 tools.extend(qualify_tools(filter_tools(
                     client.tools,
