@@ -74,11 +74,6 @@ async fn request_user_input_round_trip_resolves_pending() -> anyhow::Result<()> 
     request_user_input_round_trip_for_mode(ModeKind::Plan).await
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn request_user_input_round_trip_works_in_pair_mode() -> anyhow::Result<()> {
-    request_user_input_round_trip_for_mode(ModeKind::PairProgramming).await
-}
-
 async fn request_user_input_round_trip_for_mode(mode: ModeKind) -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -216,7 +211,7 @@ where
         .build(&server)
         .await?;
 
-    let mode_slug = mode_name.to_lowercase();
+    let mode_slug = mode_name.to_lowercase().replace(' ', "-");
     let call_id = format!("user-input-{mode_slug}-call");
     let request_args = json!({
         "questions": [{
@@ -283,7 +278,7 @@ where
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_user_input_rejected_in_execute_mode_alias() -> anyhow::Result<()> {
-    assert_request_user_input_rejected("Default", |model| CollaborationMode {
+    assert_request_user_input_rejected("Execute", |model| CollaborationMode {
         mode: ModeKind::Execute,
         settings: Settings {
             model,
@@ -298,6 +293,19 @@ async fn request_user_input_rejected_in_execute_mode_alias() -> anyhow::Result<(
 async fn request_user_input_rejected_in_default_mode() -> anyhow::Result<()> {
     assert_request_user_input_rejected("Default", |model| CollaborationMode {
         mode: ModeKind::Default,
+        settings: Settings {
+            model,
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    })
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_user_input_rejected_in_pair_mode_alias() -> anyhow::Result<()> {
+    assert_request_user_input_rejected("Pair Programming", |model| CollaborationMode {
+        mode: ModeKind::PairProgramming,
         settings: Settings {
             model,
             reasoning_effort: None,
