@@ -4050,18 +4050,28 @@ impl ChatWidget {
             StatusLineItem::ContextUsed => self
                 .status_line_context_used_percent()
                 .map(|used| format!("{used}% used")),
-            StatusLineItem::FiveDayLimit => self.status_line_limit_display(
-                self.rate_limit_snapshot
+            StatusLineItem::FiveDayLimit => {
+                let window = self
+                    .rate_limit_snapshot
                     .as_ref()
-                    .and_then(|s| s.primary.as_ref()),
-                "5h",
-            ),
-            StatusLineItem::WeeklyLimit => self.status_line_limit_display(
-                self.rate_limit_snapshot
+                    .and_then(|s| s.primary.as_ref());
+                let label = window
+                    .and_then(|window| window.window_minutes)
+                    .map(get_limits_duration)
+                    .unwrap_or_else(|| "5h".to_string());
+                self.status_line_limit_display(window, &label)
+            }
+            StatusLineItem::WeeklyLimit => {
+                let window = self
+                    .rate_limit_snapshot
                     .as_ref()
-                    .and_then(|s| s.secondary.as_ref()),
-                "7d",
-            ),
+                    .and_then(|s| s.secondary.as_ref());
+                let label = window
+                    .and_then(|window| window.window_minutes)
+                    .map(get_limits_duration)
+                    .unwrap_or_else(|| "weekly".to_string());
+                self.status_line_limit_display(window, &label)
+            }
             StatusLineItem::CodexVersion => Some(CODEX_CLI_VERSION.to_string()),
             StatusLineItem::ContextWindowSize => self
                 .status_line_context_window_size()
