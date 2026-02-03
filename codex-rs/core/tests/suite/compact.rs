@@ -1,8 +1,6 @@
 #![allow(clippy::expect_used)]
 use codex_core::CodexAuth;
 use codex_core::ModelProviderInfo;
-use codex_core::NewThread;
-use codex_core::ThreadManager;
 use codex_core::built_in_model_providers;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
@@ -10,14 +8,16 @@ use codex_core::config::Config;
 use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
+use codex_core::protocol::ItemCompletedEvent;
+use codex_core::protocol::ItemStartedEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::WarningEvent;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::items::TurnItem;
 use codex_protocol::user_input::UserInput;
-use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_local_shell_call;
 use core_test_support::responses::ev_reasoning_item;
 use core_test_support::skip_if_no_network;
@@ -25,7 +25,6 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use std::collections::VecDeque;
-use tempfile::TempDir;
 
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -140,21 +139,14 @@ async fn summarize_context_three_requests_and_instructions() {
 
     // Build config pointing to the mock server and spawn Codex.
     let model_provider = non_openai_model_provider(&server);
-    let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home).await;
-    config.model_provider = model_provider;
-    set_test_compact_prompt(&mut config);
-    config.model_auto_compact_token_limit = Some(200_000);
-    let thread_manager = ThreadManager::with_models_provider(
-        CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-    );
-    let NewThread {
-        thread: codex,
-        session_configured,
-        ..
-    } = thread_manager.start_thread(config).await.unwrap();
-    let rollout_path = session_configured.rollout_path;
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+        config.model_auto_compact_token_limit = Some(200_000);
+    });
+    let test = builder.build(&server).await.unwrap();
+    let codex = test.codex.clone();
+    let rollout_path = test.session_configured.rollout_path.expect("rollout path");
 
     // 1) Normal user input – should hit server once.
     codex
@@ -338,20 +330,15 @@ async fn manual_compact_uses_custom_prompt() {
     let custom_prompt = "Use this compact prompt instead";
 
     let model_provider = non_openai_model_provider(&server);
-    let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home).await;
-    config.model_provider = model_provider;
-    config.compact_prompt = Some(custom_prompt.to_string());
-
-    let thread_manager = ThreadManager::with_models_provider(
-        CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-    );
-    let codex = thread_manager
-        .start_thread(config)
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        config.compact_prompt = Some(custom_prompt.to_string());
+    });
+    let codex = builder
+        .build(&server)
         .await
         .expect("create conversation")
-        .thread;
+        .codex;
 
     codex.submit(Op::Compact).await.expect("trigger compact");
     let warning_event = wait_for_event(&codex, |ev| matches!(ev, EventMsg::Warning(_))).await;
@@ -414,16 +401,11 @@ async fn manual_compact_emits_api_and_local_token_usage_events() {
     mount_sse_once(&server, sse_compact).await;
 
     let model_provider = non_openai_model_provider(&server);
-    let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home).await;
-    config.model_provider = model_provider;
-    set_test_compact_prompt(&mut config);
-
-    let thread_manager = ThreadManager::with_models_provider(
-        CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-    );
-    let NewThread { thread: codex, .. } = thread_manager.start_thread(config).await.unwrap();
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+    });
+    let codex = builder.build(&server).await.unwrap().codex;
 
     // Trigger manual compact and collect TokenCount events for the compact turn.
     codex.submit(Op::Compact).await.unwrap();
@@ -459,6 +441,80 @@ async fn manual_compact_emits_api_and_local_token_usage_events() {
         last > 0,
         "second TokenCount should reflect a non-zero estimated context size after compaction"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn manual_compact_emits_context_compaction_items() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let sse1 = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed("r1"),
+    ]);
+    let sse2 = sse(vec![
+        ev_assistant_message("m2", SUMMARY_TEXT),
+        ev_completed("r2"),
+    ]);
+    mount_sse_sequence(&server, vec![sse1, sse2]).await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+    });
+    let codex = builder.build(&server).await.unwrap().codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "manual compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Compact).await.unwrap();
+
+    let mut started_item = None;
+    let mut completed_item = None;
+    let mut legacy_event = false;
+    let mut saw_turn_complete = false;
+
+    while !saw_turn_complete || started_item.is_none() || completed_item.is_none() || !legacy_event
+    {
+        let event = codex.next_event().await.unwrap();
+        match event.msg {
+            EventMsg::ItemStarted(ItemStartedEvent {
+                item: TurnItem::ContextCompaction(item),
+                ..
+            }) => {
+                started_item = Some(item);
+            }
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::ContextCompaction(item),
+                ..
+            }) => {
+                completed_item = Some(item);
+            }
+            EventMsg::ContextCompacted(_) => {
+                legacy_event = true;
+            }
+            EventMsg::TurnComplete(_) => {
+                saw_turn_complete = true;
+            }
+            _ => {}
+        }
+    }
+
+    let started_item = started_item.expect("context compaction item started");
+    let completed_item = completed_item.expect("context compaction item completed");
+    assert_eq!(started_item.id, completed_item.id);
+    assert!(legacy_event);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1039,16 +1095,12 @@ async fn auto_compact_runs_after_token_limit_hit() {
 
     let model_provider = non_openai_model_provider(&server);
 
-    let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home).await;
-    config.model_provider = model_provider;
-    set_test_compact_prompt(&mut config);
-    config.model_auto_compact_token_limit = Some(200_000);
-    let thread_manager = ThreadManager::with_models_provider(
-        CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-    );
-    let codex = thread_manager.start_thread(config).await.unwrap().thread;
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+        config.model_auto_compact_token_limit = Some(200_000);
+    });
+    let codex = builder.build(&server).await.unwrap().codex;
 
     codex
         .submit(Op::UserInput {
@@ -1204,6 +1256,184 @@ async fn auto_compact_runs_after_token_limit_hit() {
     );
 }
 
+// Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
+#[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
+#[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
+async fn auto_compact_emits_context_compaction_items() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let sse1 = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed_with_tokens("r1", 70_000),
+    ]);
+    let sse2 = sse(vec![
+        ev_assistant_message("m2", "SECOND_REPLY"),
+        ev_completed_with_tokens("r2", 330_000),
+    ]);
+    let sse3 = sse(vec![
+        ev_assistant_message("m3", AUTO_SUMMARY_TEXT),
+        ev_completed_with_tokens("r3", 200),
+    ]);
+    let sse4 = sse(vec![
+        ev_assistant_message("m4", FINAL_REPLY),
+        ev_completed_with_tokens("r4", 120),
+    ]);
+
+    mount_sse_sequence(&server, vec![sse1, sse2, sse3, sse4]).await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+        config.model_auto_compact_token_limit = Some(200_000);
+    });
+    let codex = builder.build(&server).await.unwrap().codex;
+
+    let mut started_item = None;
+    let mut completed_item = None;
+    let mut legacy_event = false;
+
+    for user in [FIRST_AUTO_MSG, SECOND_AUTO_MSG, POST_AUTO_USER_MSG] {
+        codex
+            .submit(Op::UserInput {
+                items: vec![UserInput::Text {
+                    text: user.into(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+            })
+            .await
+            .unwrap();
+
+        loop {
+            let event = codex.next_event().await.unwrap();
+            match event.msg {
+                EventMsg::ItemStarted(ItemStartedEvent {
+                    item: TurnItem::ContextCompaction(item),
+                    ..
+                }) => {
+                    started_item = Some(item);
+                }
+                EventMsg::ItemCompleted(ItemCompletedEvent {
+                    item: TurnItem::ContextCompaction(item),
+                    ..
+                }) => {
+                    completed_item = Some(item);
+                }
+                EventMsg::ContextCompacted(_) => {
+                    legacy_event = true;
+                }
+                EventMsg::TurnComplete(_) if !event.id.starts_with("auto-compact-") => {
+                    break;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let started_item = started_item.expect("context compaction item started");
+    let completed_item = completed_item.expect("context compaction item completed");
+    assert_eq!(started_item.id, completed_item.id);
+    assert!(legacy_event);
+}
+
+// Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
+#[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
+#[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
+async fn auto_compact_starts_after_turn_started() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let sse1 = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed_with_tokens("r1", 70_000),
+    ]);
+    let sse2 = sse(vec![
+        ev_assistant_message("m2", "SECOND_REPLY"),
+        ev_completed_with_tokens("r2", 330_000),
+    ]);
+    let sse3 = sse(vec![
+        ev_assistant_message("m3", AUTO_SUMMARY_TEXT),
+        ev_completed_with_tokens("r3", 200),
+    ]);
+    let sse4 = sse(vec![
+        ev_assistant_message("m4", FINAL_REPLY),
+        ev_completed_with_tokens("r4", 120),
+    ]);
+
+    mount_sse_sequence(&server, vec![sse1, sse2, sse3, sse4]).await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+        config.model_auto_compact_token_limit = Some(200_000);
+    });
+    let codex = builder.build(&server).await.unwrap().codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: FIRST_AUTO_MSG.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: SECOND_AUTO_MSG.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: POST_AUTO_USER_MSG.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+
+    let first = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::TurnStarted(_) => Some("turn"),
+        EventMsg::ItemStarted(ItemStartedEvent {
+            item: TurnItem::ContextCompaction(_),
+            ..
+        }) => Some("compaction"),
+        _ => None,
+    })
+    .await;
+    assert_eq!(first, "turn", "compaction started before turn started");
+
+    wait_for_event(&codex, |ev| {
+        matches!(
+            ev,
+            EventMsg::ItemStarted(ItemStartedEvent {
+                item: TurnItem::ContextCompaction(_),
+                ..
+            })
+        )
+    })
+    .await;
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
     skip_if_no_network!();
@@ -1237,7 +1467,11 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
     });
     let initial = builder.build(&server).await.unwrap();
     let home = initial.home.clone();
-    let rollout_path = initial.session_configured.rollout_path.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
 
     // A single over-limit completion should not auto-compact until the next user message.
     mount_sse_once(
@@ -1375,20 +1609,14 @@ async fn auto_compact_persists_rollout_entries() {
 
     let model_provider = non_openai_model_provider(&server);
 
-    let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home).await;
-    config.model_provider = model_provider;
-    set_test_compact_prompt(&mut config);
-    config.model_auto_compact_token_limit = Some(200_000);
-    let thread_manager = ThreadManager::with_models_provider(
-        CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-    );
-    let NewThread {
-        thread: codex,
-        session_configured,
-        ..
-    } = thread_manager.start_thread(config).await.unwrap();
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+        config.model_auto_compact_token_limit = Some(200_000);
+    });
+    let test = builder.build(&server).await.unwrap();
+    let codex = test.codex.clone();
+    let session_configured = test.session_configured;
 
     codex
         .submit(Op::UserInput {
@@ -1429,7 +1657,7 @@ async fn auto_compact_persists_rollout_entries() {
     codex.submit(Op::Shutdown).await.unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
 
-    let rollout_path = session_configured.rollout_path;
+    let rollout_path = session_configured.rollout_path.expect("rollout path");
     let text = std::fs::read_to_string(&rollout_path).unwrap_or_else(|e| {
         panic!(
             "failed to read rollout file {}: {e}",
@@ -1493,19 +1721,12 @@ async fn manual_compact_retries_after_context_window_error() {
 
     let model_provider = non_openai_model_provider(&server);
 
-    let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home).await;
-    config.model_provider = model_provider;
-    set_test_compact_prompt(&mut config);
-    config.model_auto_compact_token_limit = Some(200_000);
-    let codex = ThreadManager::with_models_provider(
-        CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-    )
-    .start_thread(config)
-    .await
-    .unwrap()
-    .thread;
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+        config.model_auto_compact_token_limit = Some(200_000);
+    });
+    let codex = builder.build(&server).await.unwrap().codex;
 
     codex
         .submit(Op::UserInput {
@@ -1628,18 +1849,11 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
 
     let model_provider = non_openai_model_provider(&server);
 
-    let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home).await;
-    config.model_provider = model_provider;
-    set_test_compact_prompt(&mut config);
-    let codex = ThreadManager::with_models_provider(
-        CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-    )
-    .start_thread(config)
-    .await
-    .unwrap()
-    .thread;
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+    });
+    let codex = builder.build(&server).await.unwrap().codex;
 
     codex
         .submit(Op::UserInput {
@@ -1696,12 +1910,11 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
                 && item
                     .get("content")
                     .and_then(|v| v.as_array())
-                    .map(|arr| {
+                    .is_some_and(|arr| {
                         arr.iter().any(|entry| {
                             entry.get("text").and_then(|v| v.as_str()) == Some(expected)
                         })
                     })
-                    .unwrap_or(false)
         })
     };
 
@@ -1839,16 +2052,12 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
 
     let model_provider = non_openai_model_provider(&server);
 
-    let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home).await;
-    config.model_provider = model_provider;
-    set_test_compact_prompt(&mut config);
-    config.model_auto_compact_token_limit = Some(200);
-    let thread_manager = ThreadManager::with_models_provider(
-        CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-    );
-    let codex = thread_manager.start_thread(config).await.unwrap().thread;
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+        config.model_auto_compact_token_limit = Some(200);
+    });
+    let codex = builder.build(&server).await.unwrap().codex;
 
     let mut auto_compact_lifecycle_events = Vec::new();
     for user in [MULTI_AUTO_MSG, follow_up_user, final_user] {
@@ -1950,21 +2159,13 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
 
     let model_provider = non_openai_model_provider(&server);
 
-    let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home).await;
-    config.model_provider = model_provider;
-    set_test_compact_prompt(&mut config);
-    config.model_context_window = Some(context_window);
-    config.model_auto_compact_token_limit = Some(limit);
-
-    let codex = ThreadManager::with_models_provider(
-        CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-    )
-    .start_thread(config)
-    .await
-    .unwrap()
-    .thread;
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+        config.model_context_window = Some(context_window);
+        config.model_auto_compact_token_limit = Some(limit);
+    });
+    let codex = builder.build(&server).await.unwrap().codex;
 
     codex
         .submit(Op::UserInput {

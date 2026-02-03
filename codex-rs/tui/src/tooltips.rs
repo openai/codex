@@ -15,15 +15,15 @@ lazy_static! {
     static ref ALL_TOOLTIPS: Vec<&'static str> = {
         let mut tips = Vec::new();
         tips.extend(TOOLTIPS.iter().copied());
-        tips.extend(beta_tooltips());
+        tips.extend(experimental_tooltips());
         tips
     };
 }
 
-fn beta_tooltips() -> Vec<&'static str> {
+fn experimental_tooltips() -> Vec<&'static str> {
     FEATURES
         .iter()
-        .filter_map(|spec| spec.stage.beta_announcement())
+        .filter_map(|spec| spec.stage.experimental_announcement())
         .collect()
 }
 
@@ -104,7 +104,12 @@ pub(crate) mod announcement {
     }
 
     fn blocking_init_announcement_tip() -> Option<String> {
-        let response = reqwest::blocking::Client::new()
+        // Avoid system proxy detection to prevent macOS system-configuration panics (#8912).
+        let client = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .build()
+            .ok()?;
+        let response = client
             .get(ANNOUNCEMENT_TIP_URL)
             .timeout(Duration::from_millis(2000))
             .send()

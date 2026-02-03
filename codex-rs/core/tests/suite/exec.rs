@@ -10,6 +10,7 @@ use codex_core::exec::process_exec_tool_call;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_core::spawn::CODEX_SANDBOX_ENV_VAR;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use tempfile::TempDir;
 
 use codex_core::error::Result;
@@ -27,7 +28,7 @@ fn skip_test() -> bool {
 
 #[expect(clippy::expect_used)]
 async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput> {
-    let sandbox_type = get_platform_sandbox().expect("should be able to get sandbox type");
+    let sandbox_type = get_platform_sandbox(false).expect("should be able to get sandbox type");
     assert_eq!(sandbox_type, SandboxType::MacosSeatbelt);
 
     let params = ExecParams {
@@ -36,6 +37,7 @@ async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput
         expiration: 1000.into(),
         env: HashMap::new(),
         sandbox_permissions: SandboxPermissions::UseDefault,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
         justification: None,
         arg0: None,
     };

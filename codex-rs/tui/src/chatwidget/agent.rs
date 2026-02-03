@@ -105,3 +105,18 @@ pub(crate) fn spawn_agent_from_existing(
 
     codex_op_tx
 }
+
+/// Spawn an op-forwarding loop for an existing thread without subscribing to events.
+pub(crate) fn spawn_op_forwarder(thread: std::sync::Arc<CodexThread>) -> UnboundedSender<Op> {
+    let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<Op>();
+
+    tokio::spawn(async move {
+        while let Some(op) = codex_op_rx.recv().await {
+            if let Err(e) = thread.submit(op).await {
+                tracing::error!("failed to submit op: {e}");
+            }
+        }
+    });
+
+    codex_op_tx
+}

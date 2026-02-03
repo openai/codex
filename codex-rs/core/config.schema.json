@@ -111,6 +111,13 @@
             "auto"
           ],
           "type": "string"
+        },
+        {
+          "description": "Store credentials in memory only for the current process.",
+          "enum": [
+            "ephemeral"
+          ],
+          "type": "string"
         }
       ]
     },
@@ -144,6 +151,9 @@
             "apply_patch_freeform": {
               "type": "boolean"
             },
+            "apps": {
+              "type": "boolean"
+            },
             "child_agents_md": {
               "type": "boolean"
             },
@@ -151,6 +161,9 @@
               "type": "boolean"
             },
             "collaboration_modes": {
+              "type": "boolean"
+            },
+            "connectors": {
               "type": "boolean"
             },
             "elevated_windows_sandbox": {
@@ -177,6 +190,9 @@
             "include_apply_patch_tool": {
               "type": "boolean"
             },
+            "personality": {
+              "type": "boolean"
+            },
             "powershell_utf8": {
               "type": "boolean"
             },
@@ -186,13 +202,28 @@
             "remote_models": {
               "type": "boolean"
             },
+            "request_rule": {
+              "type": "boolean"
+            },
             "responses_websockets": {
+              "type": "boolean"
+            },
+            "runtime_metrics": {
               "type": "boolean"
             },
             "shell_snapshot": {
               "type": "boolean"
             },
             "shell_tool": {
+              "type": "boolean"
+            },
+            "skill_env_var_dependency_prompt": {
+              "type": "boolean"
+            },
+            "skill_mcp_dependency_install": {
+              "type": "boolean"
+            },
+            "sqlite": {
               "type": "boolean"
             },
             "steer": {
@@ -230,9 +261,6 @@
           ],
           "description": "Optional path to a file containing model instructions."
         },
-        "model_personality": {
-          "$ref": "#/definitions/Personality"
-        },
         "model_provider": {
           "description": "The key in the `model_providers` map identifying the [`ModelProviderInfo`] to use.",
           "type": "string"
@@ -248,6 +276,9 @@
         },
         "oss_provider": {
           "type": "string"
+        },
+        "personality": {
+          "$ref": "#/definitions/Personality"
         },
         "sandbox_mode": {
           "$ref": "#/definitions/SandboxMode"
@@ -347,6 +378,7 @@
       "description": "Initial collaboration mode to use when the TUI starts.",
       "enum": [
         "plan",
+        "code",
         "pair_programming",
         "execute",
         "custom"
@@ -421,6 +453,11 @@
           "minimum": 0.0,
           "type": "integer"
         },
+        "supports_websockets": {
+          "default": false,
+          "description": "Whether this provider supports the Responses API WebSocket transport.",
+          "type": "boolean"
+        },
         "wire_api": {
           "allOf": [
             {
@@ -437,7 +474,6 @@
       "type": "object"
     },
     "Notice": {
-      "additionalProperties": false,
       "description": "Settings for notices we display to users via the tui and app-server clients (primarily the Codex IDE extension). NOTE: these are different from notifications - notices are warnings, NUX screens, acknowledgements, etc.",
       "properties": {
         "hide_full_access_warning": {
@@ -470,6 +506,14 @@
         }
       },
       "type": "object"
+    },
+    "NotificationMethod": {
+      "enum": [
+        "auto",
+        "osc9",
+        "bel"
+      ],
+      "type": "string"
     },
     "Notifications": {
       "anyOf": [
@@ -746,6 +790,13 @@
           },
           "type": "object"
         },
+        "scopes": {
+          "default": null,
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "startup_timeout_ms": {
           "default": null,
           "format": "uint64",
@@ -972,6 +1023,15 @@
           "default": null,
           "description": "Start the TUI in the specified collaboration mode (plan/execute/etc.). Defaults to unset."
         },
+        "notification_method": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/NotificationMethod"
+            }
+          ],
+          "default": "auto",
+          "description": "Notification method to use for unfocused terminal notifications. Defaults to `auto`."
+        },
         "notifications": {
           "allOf": [
             {
@@ -1033,13 +1093,6 @@
           "description": "The Responses API exposed by OpenAI at `/v1/responses`.",
           "enum": [
             "responses"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Experimental: Responses API over WebSocket transport.",
-          "enum": [
-            "responses_websocket"
           ],
           "type": "string"
         },
@@ -1126,6 +1179,9 @@
         "apply_patch_freeform": {
           "type": "boolean"
         },
+        "apps": {
+          "type": "boolean"
+        },
         "child_agents_md": {
           "type": "boolean"
         },
@@ -1133,6 +1189,9 @@
           "type": "boolean"
         },
         "collaboration_modes": {
+          "type": "boolean"
+        },
+        "connectors": {
           "type": "boolean"
         },
         "elevated_windows_sandbox": {
@@ -1159,6 +1218,9 @@
         "include_apply_patch_tool": {
           "type": "boolean"
         },
+        "personality": {
+          "type": "boolean"
+        },
         "powershell_utf8": {
           "type": "boolean"
         },
@@ -1168,13 +1230,28 @@
         "remote_models": {
           "type": "boolean"
         },
+        "request_rule": {
+          "type": "boolean"
+        },
         "responses_websockets": {
+          "type": "boolean"
+        },
+        "runtime_metrics": {
           "type": "boolean"
         },
         "shell_snapshot": {
           "type": "boolean"
         },
         "shell_tool": {
+          "type": "boolean"
+        },
+        "skill_env_var_dependency_prompt": {
+          "type": "boolean"
+        },
+        "skill_mcp_dependency_install": {
+          "type": "boolean"
+        },
+        "sqlite": {
           "type": "boolean"
         },
         "steer": {
@@ -1299,14 +1376,6 @@
       ],
       "description": "Optional path to a file containing model instructions that will override the built-in instructions for the selected model. Users are STRONGLY DISCOURAGED from using this field, as deviating from the instructions sanctioned by Codex will likely degrade model performance."
     },
-    "model_personality": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/Personality"
-        }
-      ],
-      "description": "EXPERIMENTAL Optionally specify a personality for the model"
-    },
     "model_provider": {
       "description": "Provider to use from the model_providers map.",
       "type": "string"
@@ -1364,6 +1433,14 @@
         }
       ],
       "description": "OTEL configuration."
+    },
+    "personality": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/Personality"
+        }
+      ],
+      "description": "Optionally specify a personality for the model"
     },
     "profile": {
       "description": "Profile to use from the `profiles` map.",
@@ -1450,6 +1527,10 @@
         }
       ],
       "description": "User-level skill config entries keyed by SKILL.md path."
+    },
+    "suppress_unstable_features_warning": {
+      "description": "Suppress warnings about unstable (under development) features.",
+      "type": "boolean"
     },
     "tool_output_token_limit": {
       "description": "Token budget applied when storing tool/function outputs in the context manager.",

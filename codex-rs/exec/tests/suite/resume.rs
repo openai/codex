@@ -4,7 +4,11 @@ use codex_utils_cargo_bin::find_resource;
 use core_test_support::test_codex_exec::test_codex_exec;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use std::fs::FileTimes;
+use std::fs::OpenOptions;
 use std::string::ToString;
+use std::time::Duration;
+use std::time::SystemTime;
 use tempfile::TempDir;
 use uuid::Uuid;
 use walkdir::WalkDir;
@@ -109,7 +113,7 @@ fn exec_fixture() -> anyhow::Result<std::path::PathBuf> {
 }
 
 fn exec_repo_root() -> anyhow::Result<std::path::PathBuf> {
-    Ok(find_resource!(".")?)
+    Ok(codex_utils_cargo_bin::repo_root()?)
 }
 
 #[test]
@@ -257,6 +261,17 @@ fn exec_resume_last_respects_cwd_filter_and_all_flag() -> anyhow::Result<()> {
         .expect("no session file found for marker_a");
     let path_b = find_session_file_containing_marker(&sessions_dir, &marker_b)
         .expect("no session file found for marker_b");
+
+    // Files are ordered by `updated_at`, then by `uuid`.
+    // We mutate the mtimes to ensure file_b is the newest file.
+    let file_a = OpenOptions::new().write(true).open(&path_a)?;
+    file_a.set_times(
+        FileTimes::new().set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1)),
+    )?;
+    let file_b = OpenOptions::new().write(true).open(&path_b)?;
+    file_b.set_times(
+        FileTimes::new().set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(2)),
+    )?;
 
     let marker_b2 = format!("resume-cwd-b-2-{}", Uuid::new_v4());
     let prompt_b2 = format!("echo {marker_b2}");

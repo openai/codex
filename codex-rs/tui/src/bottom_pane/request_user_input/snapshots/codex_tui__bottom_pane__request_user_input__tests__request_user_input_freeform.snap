@@ -2,11 +2,12 @@
 source: tui/src/bottom_pane/request_user_input/mod.rs
 expression: "render_snapshot(&overlay, area)"
 ---
-Question 1/1                                                    
-Goal                                                            
-Share details.                                                  
-+--------------------------------------------------------------+
-|Type your answer (optional)                                   |
-+--------------------------------------------------------------+
-Unanswered: 1 | Will submit as skipped                          
-↑/↓ scroll | enter next question | esc interrupt
+                                                                                                                        
+  Question 1/1 (1 unanswered)                                                                                           
+  Share details.                                                                                                        
+                                                                                                                        
+  › Type your answer (optional)                                                                                         
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+  enter to submit answer | esc to interrupt

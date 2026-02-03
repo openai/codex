@@ -28,6 +28,7 @@ fn model_from_preset(preset: ModelPreset) -> Model {
             preset.supported_reasoning_efforts,
         ),
         default_reasoning_effort: preset.default_reasoning_effort,
+        supports_personality: preset.supports_personality,
         is_default: preset.is_default,
     }
 }

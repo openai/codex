@@ -67,6 +67,7 @@ impl SessionTask for UserShellCommandTask {
 
         let event = EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: turn_context.client.get_model_context_window(),
+            collaboration_mode_kind: turn_context.collaboration_mode.mode,
         });
         let session = session.clone_session();
         session.send_event(turn_context.as_ref(), event).await;
@@ -109,6 +110,7 @@ impl SessionTask for UserShellCommandTask {
             // should use that instead of an "arbitrarily large" timeout here.
             expiration: USER_SHELL_TIMEOUT_MS.into(),
             sandbox: SandboxType::None,
+            windows_sandbox_level: turn_context.windows_sandbox_level,
             sandbox_permissions: SandboxPermissions::UseDefault,
             justification: None,
             arg0: None,

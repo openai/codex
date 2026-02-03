@@ -10,7 +10,6 @@ use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
 use crate::protocol::CompactedItem;
-use crate::protocol::ContextCompactedEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::TurnContextItem;
 use crate::protocol::TurnStartedEvent;
@@ -20,6 +19,7 @@ use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::truncate_text;
 use crate::util::backoff;
+use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
@@ -61,6 +61,7 @@ pub(crate) async fn run_compact_task(
 ) {
     let start_event = EventMsg::TurnStarted(TurnStartedEvent {
         model_context_window: turn_context.client.get_model_context_window(),
+        collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, start_event).await;
     run_compact_task_inner(sess.clone(), turn_context, input).await;
@@ -71,6 +72,9 @@ async fn run_compact_task_inner(
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
 ) {
+    let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
+    sess.emit_turn_item_started(&turn_context, &compaction_item)
+        .await;
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
 
     let mut history = sess.clone_history().await;
@@ -193,9 +197,8 @@ async fn run_compact_task_inner(
     });
     sess.persist_rollout_items(&[rollout_item]).await;
 
-    let event = EventMsg::ContextCompacted(ContextCompactedEvent {});
-    sess.send_event(&turn_context, event).await;
-
+    sess.emit_turn_item_completed(&turn_context, compaction_item)
+        .await;
     let warning = EventMsg::Warning(WarningEvent {
         message: "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.".to_string(),
     });

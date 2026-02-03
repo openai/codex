@@ -38,6 +38,8 @@ def codex_rust_crate(
         crate_edition = None,
         build_script_data = [],
         compile_data = [],
+        lib_data_extra = [],
+        rustc_env = {},
         deps_extra = [],
         integration_deps_extra = [],
         integration_compile_data_extra = [],
@@ -65,6 +67,8 @@ def codex_rust_crate(
             You probably don't want this, it's only here for a single caller.
         build_script_data: Data files exposed to the build script at runtime.
         compile_data: Non-Rust compile-time data for the library target.
+        lib_data_extra: Extra runtime data for the library target.
+        rustc_env: Extra rustc_env entries to merge with defaults.
         deps_extra: Extra normal deps beyond @crates resolution.
             Typically only needed when features add additional deps.
         integration_deps_extra: Extra deps for integration tests only.
@@ -90,11 +94,9 @@ def codex_rust_crate(
         # Keep Bazel/Cargo parity for code that uses `env!("CARGO_PKG_VERSION")`.
         # When bumping codez's version, update this to match `codex-rs/Cargo.toml`.
         "CARGO_PKG_VERSION": CODEX_CARGO_PKG_VERSION,
-    }
+    } | rustc_env
 
     binaries = DEP_DATA.get(native.package_name())["binaries"]
-
-    # TODO(zbarsky): cargo_build_script support?
 
     lib_srcs = crate_srcs or native.glob(["src/**/*.rs"], exclude = binaries.values(), allow_empty = True)
 
@@ -119,6 +121,7 @@ def codex_rust_crate(
             deps = deps,
             proc_macro_deps = proc_macro_deps,
             compile_data = compile_data,
+            data = lib_data_extra,
             srcs = lib_srcs,
             edition = crate_edition,
             rustc_env = rustc_env,
@@ -145,7 +148,7 @@ def codex_rust_crate(
     for binary, main in binaries.items():
         #binary = binary.replace("-", "_")
         sanitized_binaries.append(binary)
-        cargo_env["CARGO_BIN_EXE_" + binary] = "$(rootpath :%s)" % binary
+        cargo_env["CARGO_BIN_EXE_" + binary] = "$(rlocationpath :%s)" % binary
 
         rust_binary(
             name = binary,
@@ -161,7 +164,7 @@ def codex_rust_crate(
     for binary_label in extra_binaries:
         sanitized_binaries.append(binary_label)
         binary = Label(binary_label).name
-        cargo_env["CARGO_BIN_EXE_" + binary] = "$(rootpath %s)" % binary_label
+        cargo_env["CARGO_BIN_EXE_" + binary] = "$(rlocationpath %s)" % binary_label
 
     for test in native.glob(["tests/*.rs"], allow_empty = True):
         test_name = name + "-" + test.removeprefix("tests/").removesuffix(".rs").replace("/", "-")

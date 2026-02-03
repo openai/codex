@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::auth::McpAuthStatusEntry;
 use anyhow::Context;
 use anyhow::Result;
@@ -153,6 +154,8 @@ pub(crate) struct ToolInfo {
     pub(crate) server_name: String,
     pub(crate) tool_name: String,
     pub(crate) tool: Tool,
+    pub(crate) connector_id: Option<String>,
+    pub(crate) connector_name: Option<String>,
 }
 
 type ResponderMap = HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>;
@@ -434,13 +437,33 @@ impl McpConnectionManager {
             .await
     }
 
+    pub(crate) async fn wait_for_server_ready(&self, server_name: &str, timeout: Duration) -> bool {
+        let Some(async_managed_client) = self.clients.get(server_name) else {
+            return false;
+        };
+
+        match tokio::time::timeout(timeout, async_managed_client.client()).await {
+            Ok(Ok(_)) => true,
+            Ok(Err(_)) | Err(_) => false,
+        }
+    }
+
     /// Returns a single map that contains all tools. Each key is the
     /// fully-qualified name for the tool.
     #[instrument(level = "trace", skip_all)]
     pub async fn list_all_tools(&self) -> HashMap<String, ToolInfo> {
         let mut tools = HashMap::new();
-        for managed_client in self.clients.values() {
-            if let Ok(client) = managed_client.client().await {
+        for (server_name, managed_client) in &self.clients {
+            let client = if server_name == CODEX_APPS_MCP_SERVER_NAME {
+                // Avoid blocking on codex_apps_mcp startup; use tools only when ready.
+                match managed_client.client.clone().now_or_never() {
+                    Some(Ok(client)) => Some(client),
+                    _ => None,
+                }
+            } else {
+                managed_client.client().await.ok()
+            };
+            if let Some(client) = client {
                 tools.extend(qualify_tools(filter_tools(
                     client.tools,
                     client.tool_filter,
@@ -746,6 +769,32 @@ fn filter_tools(tools: Vec<ToolInfo>, filter: ToolFilter) -> Vec<ToolInfo> {
         .collect()
 }
 
+fn normalize_codex_apps_tool_title(
+    server_name: &str,
+    connector_name: Option<&str>,
+    value: &str,
+) -> String {
+    if server_name != CODEX_APPS_MCP_SERVER_NAME {
+        return value.to_string();
+    }
+
+    let Some(connector_name) = connector_name
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    else {
+        return value.to_string();
+    };
+
+    let prefix = format!("{connector_name}_");
+    if let Some(stripped) = value.strip_prefix(&prefix)
+        && !stripped.is_empty()
+    {
+        return stripped.to_string();
+    }
+
+    value.to_string()
+}
+
 fn resolve_bearer_token(
     server_name: &str,
     bearer_token_env_var: Option<&str>,
@@ -899,14 +948,27 @@ async fn list_tools_for_client(
     client: &Arc<RmcpClient>,
     timeout: Option<Duration>,
 ) -> Result<Vec<ToolInfo>> {
-    let resp = client.list_tools(None, timeout).await?;
+    let resp = client.list_tools_with_connector_ids(None, timeout).await?;
     Ok(resp
         .tools
         .into_iter()
-        .map(|tool| ToolInfo {
-            server_name: server_name.to_owned(),
-            tool_name: tool.name.clone(),
-            tool,
+        .map(|tool| {
+            let connector_name = tool.connector_name;
+            let mut tool_def = tool.tool;
+            if let Some(title) = tool_def.title.as_deref() {
+                let normalized_title =
+                    normalize_codex_apps_tool_title(server_name, connector_name.as_deref(), title);
+                if tool_def.title.as_deref() != Some(normalized_title.as_str()) {
+                    tool_def.title = Some(normalized_title);
+                }
+            }
+            ToolInfo {
+                server_name: server_name.to_owned(),
+                tool_name: tool_def.name.clone(),
+                tool: tool_def,
+                connector_id: tool.connector_id,
+                connector_name,
+            }
         })
         .collect())
 }
@@ -1004,6 +1066,8 @@ mod tests {
                 output_schema: None,
                 title: None,
             },
+            connector_id: None,
+            connector_name: None,
         }
     }
 
@@ -1176,6 +1240,7 @@ mod tests {
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
             auth_status: McpAuthStatus::Unsupported,
         };
@@ -1221,6 +1286,7 @@ mod tests {
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
             auth_status: McpAuthStatus::Unsupported,
         };

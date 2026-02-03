@@ -381,6 +381,19 @@ where
         Ok(())
     }
 
+    /// Clear terminal scrollback (if supported) and force a full redraw.
+    pub fn clear_scrollback(&mut self) -> io::Result<()> {
+        if self.viewport_area.is_empty() {
+            return Ok(());
+        }
+        self.backend
+            .set_cursor_position(self.viewport_area.as_position())?;
+        queue!(self.backend, Clear(crossterm::terminal::ClearType::Purge))?;
+        std::io::Write::flush(&mut self.backend)?;
+        self.previous_buffer_mut().reset();
+        Ok(())
+    }
+
     /// Clears the inactive buffer and swaps it with the current buffer
     pub fn swap_buffers(&mut self) {
         self.previous_buffer_mut().reset();

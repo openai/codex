@@ -73,6 +73,10 @@ pub struct McpServerConfig {
     /// Explicit deny-list of tools. These tools will be removed after applying `enabled_tools`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disabled_tools: Option<Vec<String>>,
+
+    /// Optional OAuth scopes to request during MCP login.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scopes: Option<Vec<String>>,
 }
 
 // Raw MCP config shape used for deserialization and JSON Schema generation.
@@ -113,6 +117,8 @@ pub(crate) struct RawMcpServerConfig {
     pub enabled_tools: Option<Vec<String>>,
     #[serde(default)]
     pub disabled_tools: Option<Vec<String>>,
+    #[serde(default)]
+    pub scopes: Option<Vec<String>>,
 }
 
 impl<'de> Deserialize<'de> for McpServerConfig {
@@ -134,6 +140,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
         let enabled = raw.enabled.unwrap_or_else(default_enabled);
         let enabled_tools = raw.enabled_tools.clone();
         let disabled_tools = raw.disabled_tools.clone();
+        let scopes = raw.scopes.clone();
 
         fn throw_if_set<E, T>(transport: &str, field: &str, value: Option<&T>) -> Result<(), E>
         where
@@ -188,6 +195,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             disabled_reason: None,
             enabled_tools,
             disabled_tools,
+            scopes,
         })
     }
 }
@@ -420,6 +428,25 @@ impl Default for Notifications {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum NotificationMethod {
+    #[default]
+    Auto,
+    Osc9,
+    Bel,
+}
+
+impl fmt::Display for NotificationMethod {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NotificationMethod::Auto => write!(f, "auto"),
+            NotificationMethod::Osc9 => write!(f, "osc9"),
+            NotificationMethod::Bel => write!(f, "bel"),
+        }
+    }
+}
+
 /// Collection of settings that are specific to the TUI.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -428,6 +455,11 @@ pub struct Tui {
     /// Defaults to `true`.
     #[serde(default)]
     pub notifications: Notifications,
+
+    /// Notification method to use for unfocused terminal notifications.
+    /// Defaults to `auto`.
+    #[serde(default)]
+    pub notification_method: NotificationMethod,
 
     /// Enable animations (welcome screen, shimmer effects, spinners).
     /// Defaults to `true`.
@@ -464,7 +496,6 @@ const fn default_true() -> bool {
 /// (primarily the Codex IDE extension). NOTE: these are different from
 /// notifications - notices are warnings, NUX screens, acknowledgements, etc.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
-#[schemars(deny_unknown_fields)]
 pub struct Notice {
     /// Tracks whether the user has acknowledged the full access warning prompt.
     pub hide_full_access_warning: Option<bool>,

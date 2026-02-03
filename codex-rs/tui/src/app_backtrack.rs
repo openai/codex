@@ -24,6 +24,7 @@
 //! both committed history and in-flight activity without changing flush or coalescing behavior.
 
 use std::any::TypeId;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::app::App;
@@ -37,6 +38,7 @@ use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_protocol::ThreadId;
+use codex_protocol::user_input::TextElement;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -78,6 +80,10 @@ pub(crate) struct BacktrackSelection {
     /// This is applied immediately on selection confirmation; if the rollback fails, the prefill
     /// remains as a convenience so the user can retry or edit.
     pub(crate) prefill: String,
+    /// Text elements associated with the selected user message.
+    pub(crate) text_elements: Vec<TextElement>,
+    /// Local image paths associated with the selected user message.
+    pub(crate) local_image_paths: Vec<PathBuf>,
 }
 
 /// An in-flight rollback requested from core.
@@ -198,16 +204,16 @@ impl App {
         }
 
         let prefill = selection.prefill.clone();
+        let text_elements = selection.text_elements.clone();
+        let local_image_paths = selection.local_image_paths.clone();
         self.backtrack.pending_rollback = Some(PendingBacktrackRollback {
             selection,
             thread_id: self.chat_widget.thread_id(),
         });
         self.chat_widget.submit_op(Op::ThreadRollback { num_turns });
-        if !prefill.is_empty() {
-            // TODO: Rehydrate text_elements/local_image_paths from the selected user cell so
-            // backtrack preserves image placeholders and attachments.
+        if !prefill.is_empty() || !text_elements.is_empty() || !local_image_paths.is_empty() {
             self.chat_widget
-                .set_composer_text(prefill, Vec::new(), Vec::new());
+                .set_composer_text(prefill, text_elements, local_image_paths);
         }
     }
 
@@ -481,15 +487,24 @@ impl App {
             return None;
         }
 
-        let prefill = nth_user_position(&self.transcript_cells, nth_user_message)
-            .and_then(|idx| self.transcript_cells.get(idx))
-            .and_then(|cell| cell.as_any().downcast_ref::<UserHistoryCell>())
-            .map(|c| c.message.clone())
-            .unwrap_or_default();
+        let (prefill, text_elements, local_image_paths) =
+            nth_user_position(&self.transcript_cells, nth_user_message)
+                .and_then(|idx| self.transcript_cells.get(idx))
+                .and_then(|cell| cell.as_any().downcast_ref::<UserHistoryCell>())
+                .map(|cell| {
+                    (
+                        cell.message.clone(),
+                        cell.text_elements.clone(),
+                        cell.local_image_paths.clone(),
+                    )
+                })
+                .unwrap_or_else(|| (String::new(), Vec::new(), Vec::new()));
 
         Some(BacktrackSelection {
             nth_user_message,
             prefill,
+            text_elements,
+            local_image_paths,
         })
     }
 

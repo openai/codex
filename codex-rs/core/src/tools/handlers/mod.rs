@@ -1,5 +1,6 @@
 pub mod apply_patch;
 pub(crate) mod collab;
+mod dynamic;
 mod grep_files;
 mod list_dir;
 mod mcp;
@@ -18,6 +19,7 @@ use serde::Deserialize;
 use crate::function_tool::FunctionCallError;
 pub use apply_patch::ApplyPatchHandler;
 pub use collab::CollabHandler;
+pub use dynamic::DynamicToolHandler;
 pub use grep_files::GrepFilesHandler;
 pub use list_dir::ListDirHandler;
 pub use mcp::McpHandler;

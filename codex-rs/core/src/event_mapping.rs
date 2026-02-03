@@ -21,6 +21,7 @@ use crate::instructions::SkillInstructions;
 use crate::instructions::UserInstructions;
 use crate::session_prefix::is_session_prefix;
 use crate::user_shell_command::is_user_shell_command_text;
+use crate::web_search::web_search_action_detail;
 
 fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
     if UserInstructions::is_user_instructions(message)
@@ -127,14 +128,17 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
                 raw_content,
             }))
         }
-        ResponseItem::WebSearchCall {
-            id,
-            action: WebSearchAction::Search { query },
-            ..
-        } => Some(TurnItem::WebSearch(WebSearchItem {
-            id: id.clone().unwrap_or_default(),
-            query: query.clone().unwrap_or_default(),
-        })),
+        ResponseItem::WebSearchCall { id, action, .. } => {
+            let (action, query) = match action {
+                Some(action) => (action.clone(), web_search_action_detail(action)),
+                None => (WebSearchAction::Other, String::new()),
+            };
+            Some(TurnItem::WebSearch(WebSearchItem {
+                id: id.clone().unwrap_or_default(),
+                query,
+                action,
+            }))
+        }
         _ => None,
     }
 }
@@ -144,6 +148,7 @@ mod tests {
     use super::parse_turn_item;
     use codex_protocol::items::AgentMessageContent;
     use codex_protocol::items::TurnItem;
+    use codex_protocol::items::WebSearchItem;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ReasoningItemContent;
     use codex_protocol::models::ReasoningItemReasoningSummary;
@@ -419,18 +424,104 @@ mod tests {
         let item = ResponseItem::WebSearchCall {
             id: Some("ws_1".to_string()),
             status: Some("completed".to_string()),
-            action: WebSearchAction::Search {
+            action: Some(WebSearchAction::Search {
                 query: Some("weather".to_string()),
-            },
+                queries: None,
+            }),
         };
 
         let turn_item = parse_turn_item(&item).expect("expected web search turn item");
 
         match turn_item {
-            TurnItem::WebSearch(search) => {
-                assert_eq!(search.id, "ws_1");
-                assert_eq!(search.query, "weather");
-            }
+            TurnItem::WebSearch(search) => assert_eq!(
+                search,
+                WebSearchItem {
+                    id: "ws_1".to_string(),
+                    query: "weather".to_string(),
+                    action: WebSearchAction::Search {
+                        query: Some("weather".to_string()),
+                        queries: None,
+                    },
+                }
+            ),
+            other => panic!("expected TurnItem::WebSearch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_web_search_open_page_call() {
+        let item = ResponseItem::WebSearchCall {
+            id: Some("ws_open".to_string()),
+            status: Some("completed".to_string()),
+            action: Some(WebSearchAction::OpenPage {
+                url: Some("https://example.com".to_string()),
+            }),
+        };
+
+        let turn_item = parse_turn_item(&item).expect("expected web search turn item");
+
+        match turn_item {
+            TurnItem::WebSearch(search) => assert_eq!(
+                search,
+                WebSearchItem {
+                    id: "ws_open".to_string(),
+                    query: "https://example.com".to_string(),
+                    action: WebSearchAction::OpenPage {
+                        url: Some("https://example.com".to_string()),
+                    },
+                }
+            ),
+            other => panic!("expected TurnItem::WebSearch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_web_search_find_in_page_call() {
+        let item = ResponseItem::WebSearchCall {
+            id: Some("ws_find".to_string()),
+            status: Some("completed".to_string()),
+            action: Some(WebSearchAction::FindInPage {
+                url: Some("https://example.com".to_string()),
+                pattern: Some("needle".to_string()),
+            }),
+        };
+
+        let turn_item = parse_turn_item(&item).expect("expected web search turn item");
+
+        match turn_item {
+            TurnItem::WebSearch(search) => assert_eq!(
+                search,
+                WebSearchItem {
+                    id: "ws_find".to_string(),
+                    query: "'needle' in https://example.com".to_string(),
+                    action: WebSearchAction::FindInPage {
+                        url: Some("https://example.com".to_string()),
+                        pattern: Some("needle".to_string()),
+                    },
+                }
+            ),
+            other => panic!("expected TurnItem::WebSearch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_partial_web_search_call_without_action_as_other() {
+        let item = ResponseItem::WebSearchCall {
+            id: Some("ws_partial".to_string()),
+            status: Some("in_progress".to_string()),
+            action: None,
+        };
+
+        let turn_item = parse_turn_item(&item).expect("expected web search turn item");
+        match turn_item {
+            TurnItem::WebSearch(search) => assert_eq!(
+                search,
+                WebSearchItem {
+                    id: "ws_partial".to_string(),
+                    query: String::new(),
+                    action: WebSearchAction::Other,
+                }
+            ),
             other => panic!("expected TurnItem::WebSearch, got {other:?}"),
         }
     }

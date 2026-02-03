@@ -8,6 +8,7 @@ use app::App;
 pub use app::AppExitInfo;
 pub use app::ExitReason;
 use codex_app_server_protocol::AuthMode;
+use codex_cloud_requirements::cloud_requirements_loader;
 use codex_common::oss::ensure_oss_provider_ready;
 use codex_common::oss::get_default_model_for_oss_provider;
 use codex_common::oss::ollama_chat_deprecation_notice;
@@ -23,20 +24,34 @@ use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::resolve_oss_provider;
+use codex_core::config_loader::CloudRequirementsLoader;
+use codex_core::config_loader::ConfigLoadError;
+use codex_core::config_loader::format_config_error_with_source;
+use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::find_thread_path_by_id_str;
-use codex_core::get_platform_sandbox;
+use codex_core::find_thread_path_by_name_str;
+use codex_core::path_utils;
 use codex_core::protocol::AskForApproval;
 use codex_core::read_session_meta_line;
 use codex_core::terminal::Multiplexer;
+use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
+use codex_state::log_db;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use cwd_prompt::CwdPromptAction;
+use cwd_prompt::CwdSelection;
 use std::fs::OpenOptions;
+use std::path::Path;
 use std::path::PathBuf;
 use tracing::error;
 use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
+use uuid::Uuid;
 
 mod additional_dirs;
 mod app;
@@ -52,6 +67,7 @@ mod collab;
 mod collaboration_modes;
 mod color;
 pub mod custom_terminal;
+mod cwd_prompt;
 mod diff_render;
 mod exec_cell;
 mod exec_command;
@@ -177,10 +193,39 @@ pub async fn run_main(
     {
         Ok(config_toml) => config_toml,
         Err(err) => {
-            eprintln!("Error loading config.toml: {err}");
+            let config_error = err
+                .get_ref()
+                .and_then(|err| err.downcast_ref::<ConfigLoadError>())
+                .map(ConfigLoadError::config_error);
+            if let Some(config_error) = config_error {
+                eprintln!(
+                    "Error loading config.toml:\n{}",
+                    format_config_error_with_source(config_error)
+                );
+            } else {
+                eprintln!("Error loading config.toml: {err}");
+            }
             std::process::exit(1);
         }
     };
+
+    if let Err(err) =
+        codex_core::personality_migration::maybe_migrate_personality(&codex_home, &config_toml)
+            .await
+    {
+        tracing::warn!(error = %err, "failed to run personality migration");
+    }
+
+    let cloud_auth_manager = AuthManager::shared(
+        codex_home.to_path_buf(),
+        false,
+        config_toml.cli_auth_credentials_store.unwrap_or_default(),
+    );
+    let chatgpt_base_url = config_toml
+        .chatgpt_base_url
+        .clone()
+        .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
+    let cloud_requirements = cloud_requirements_loader(cloud_auth_manager, chatgpt_base_url);
 
     let model_provider_override = if cli.oss {
         let resolved = resolve_oss_provider(
@@ -233,7 +278,13 @@ pub async fn run_main(
         ..Default::default()
     };
 
-    let config = load_config_or_exit(cli_kv_overrides.clone(), overrides.clone()).await;
+    let config = load_config_or_exit(
+        cli_kv_overrides.clone(),
+        overrides.clone(),
+        cloud_requirements.clone(),
+    )
+    .await;
+    set_default_client_residency_requirement(config.enforce_residency.value());
 
     if let Some(warning) = add_dir_warning_message(&cli.add_dir, config.sandbox_policy.get()) {
         #[allow(clippy::print_stderr)]
@@ -284,7 +335,10 @@ pub async fn run_main(
         // grep for a specific module/target while troubleshooting.
         .with_target(true)
         .with_ansi(false)
-        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
+        .with_span_events(
+            tracing_subscriber::fmt::format::FmtSpan::NEW
+                | tracing_subscriber::fmt::format::FmtSpan::CLOSE,
+        )
         .with_filter(env_filter());
 
     let feedback = codex_feedback::CodexFeedback::new();
@@ -330,17 +384,29 @@ pub async fn run_main(
 
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
+    let log_db_layer = codex_core::state_db::get_state_db(&config, None)
+        .await
+        .map(|db| log_db::start(db).with_filter(env_filter()));
+
     let _ = tracing_subscriber::registry()
         .with(file_layer)
         .with(feedback_layer)
         .with(feedback_metadata_layer)
+        .with(log_db_layer)
         .with(otel_logger_layer)
         .with(otel_tracing_layer)
         .try_init();
 
-    run_ratatui_app(cli, config, overrides, cli_kv_overrides, feedback)
-        .await
-        .map_err(|err| std::io::Error::other(err.to_string()))
+    run_ratatui_app(
+        cli,
+        config,
+        overrides,
+        cli_kv_overrides,
+        cloud_requirements,
+        feedback,
+    )
+    .await
+    .map_err(|err| std::io::Error::other(err.to_string()))
 }
 
 async fn run_ratatui_app(
@@ -348,6 +414,7 @@ async fn run_ratatui_app(
     initial_config: Config,
     overrides: ConfigOverrides,
     cli_kv_overrides: Vec<(String, toml::Value)>,
+    cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
 ) -> color_eyre::Result<AppExitInfo> {
     color_eyre::install()?;
@@ -381,6 +448,7 @@ async fn run_ratatui_app(
                     return Ok(AppExitInfo {
                         token_usage: codex_core::protocol::TokenUsage::default(),
                         thread_id: None,
+                        thread_name: None,
                         update_action: Some(action),
                         exit_reason: ExitReason::UserRequested,
                     });
@@ -421,6 +489,7 @@ async fn run_ratatui_app(
             return Ok(AppExitInfo {
                 token_usage: codex_core::protocol::TokenUsage::default(),
                 thread_id: None,
+                thread_name: None,
                 update_action: None,
                 exit_reason: ExitReason::UserRequested,
             });
@@ -431,7 +500,12 @@ async fn run_ratatui_app(
             .map(|d| d == TrustDirectorySelection::Trust)
             .unwrap_or(false)
         {
-            load_config_or_exit(cli_kv_overrides.clone(), overrides.clone()).await
+            load_config_or_exit(
+                cli_kv_overrides.clone(),
+                overrides.clone(),
+                cloud_requirements.clone(),
+            )
+            .await
         } else {
             initial_config
         }
@@ -454,6 +528,7 @@ async fn run_ratatui_app(
         Ok(AppExitInfo {
             token_usage: codex_core::protocol::TokenUsage::default(),
             thread_id: None,
+            thread_name: None,
             update_action: None,
             exit_reason: ExitReason::Fatal(format!(
                 "No saved session found with ID {id_str}. Run `codex {action}` without an ID to choose from existing sessions."
@@ -464,7 +539,13 @@ async fn run_ratatui_app(
     let use_fork = cli.fork_picker || cli.fork_last || cli.fork_session_id.is_some();
     let session_selection = if use_fork {
         if let Some(id_str) = cli.fork_session_id.as_deref() {
-            match find_thread_path_by_id_str(&config.codex_home, id_str).await? {
+            let is_uuid = Uuid::parse_str(id_str).is_ok();
+            let path = if is_uuid {
+                find_thread_path_by_id_str(&config.codex_home, id_str).await?
+            } else {
+                find_thread_path_by_name_str(&config.codex_home, id_str).await?
+            };
+            match path {
                 Some(path) => resume_picker::SessionSelection::Fork(path),
                 None => return missing_session_exit(id_str, "fork"),
             }
@@ -503,6 +584,7 @@ async fn run_ratatui_app(
                     return Ok(AppExitInfo {
                         token_usage: codex_core::protocol::TokenUsage::default(),
                         thread_id: None,
+                        thread_name: None,
                         update_action: None,
                         exit_reason: ExitReason::UserRequested,
                     });
@@ -513,7 +595,13 @@ async fn run_ratatui_app(
             resume_picker::SessionSelection::StartFresh
         }
     } else if let Some(id_str) = cli.resume_session_id.as_deref() {
-        match find_thread_path_by_id_str(&config.codex_home, id_str).await? {
+        let is_uuid = Uuid::parse_str(id_str).is_ok();
+        let path = if is_uuid {
+            find_thread_path_by_id_str(&config.codex_home, id_str).await?
+        } else {
+            find_thread_path_by_name_str(&config.codex_home, id_str).await?
+        };
+        match path {
             Some(path) => resume_picker::SessionSelection::Resume(path),
             None => return missing_session_exit(id_str, "resume"),
         }
@@ -554,6 +642,7 @@ async fn run_ratatui_app(
                 return Ok(AppExitInfo {
                     token_usage: codex_core::protocol::TokenUsage::default(),
                     thread_id: None,
+                    thread_name: None,
                     update_action: None,
                     exit_reason: ExitReason::UserRequested,
                 });
@@ -564,25 +653,28 @@ async fn run_ratatui_app(
         resume_picker::SessionSelection::StartFresh
     };
 
+    let current_cwd = config.cwd.clone();
+    let allow_prompt = cli.cwd.is_none();
+    let action_and_path_if_resume_or_fork = match &session_selection {
+        resume_picker::SessionSelection::Resume(path) => Some((CwdPromptAction::Resume, path)),
+        resume_picker::SessionSelection::Fork(path) => Some((CwdPromptAction::Fork, path)),
+        _ => None,
+    };
+    let fallback_cwd = match action_and_path_if_resume_or_fork {
+        Some((action, path)) => {
+            resolve_cwd_for_resume_or_fork(&mut tui, &current_cwd, path, action, allow_prompt)
+                .await?
+        }
+        None => None,
+    };
+
     let config = match &session_selection {
-        resume_picker::SessionSelection::Resume(path)
-        | resume_picker::SessionSelection::Fork(path) => {
-            let history_cwd = match read_session_meta_line(path).await {
-                Ok(meta_line) => Some(meta_line.meta.cwd),
-                Err(err) => {
-                    let rollout_path = path.display().to_string();
-                    tracing::warn!(
-                        %rollout_path,
-                        %err,
-                        "Failed to read session metadata from rollout"
-                    );
-                    None
-                }
-            };
+        resume_picker::SessionSelection::Resume(_) | resume_picker::SessionSelection::Fork(_) => {
             load_config_or_exit_with_fallback_cwd(
                 cli_kv_overrides.clone(),
                 overrides.clone(),
-                history_cwd,
+                cloud_requirements.clone(),
+                fallback_cwd,
             )
             .await
         }
@@ -605,6 +697,8 @@ async fn run_ratatui_app(
         &mut tui,
         auth_manager,
         config,
+        cli_kv_overrides.clone(),
+        overrides.clone(),
         active_profile,
         prompt,
         images,
@@ -620,6 +714,77 @@ async fn run_ratatui_app(
     session_log::log_session_end();
     // ignore error when collecting usage – report underlying error instead
     app_result
+}
+
+pub(crate) async fn read_session_cwd(path: &Path) -> Option<PathBuf> {
+    // Prefer the latest TurnContext cwd so resume/fork reflects the most recent
+    // session directory (for the changed-cwd prompt). The alternative would be
+    // mutating the SessionMeta line when the session cwd changes, but the rollout
+    // is an append-only JSONL log and rewriting the head would be error-prone.
+    // When rollouts move to SQLite, we can drop this scan.
+    if let Some(cwd) = parse_latest_turn_context_cwd(path).await {
+        return Some(cwd);
+    }
+    match read_session_meta_line(path).await {
+        Ok(meta_line) => Some(meta_line.meta.cwd),
+        Err(err) => {
+            let rollout_path = path.display().to_string();
+            tracing::warn!(
+                %rollout_path,
+                %err,
+                "Failed to read session metadata from rollout"
+            );
+            None
+        }
+    }
+}
+
+async fn parse_latest_turn_context_cwd(path: &Path) -> Option<PathBuf> {
+    let text = tokio::fs::read_to_string(path).await.ok()?;
+    for line in text.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(rollout_line) = serde_json::from_str::<RolloutLine>(trimmed) else {
+            continue;
+        };
+        if let RolloutItem::TurnContext(item) = rollout_line.item {
+            return Some(item.cwd);
+        }
+    }
+    None
+}
+
+pub(crate) fn cwds_differ(current_cwd: &Path, session_cwd: &Path) -> bool {
+    match (
+        path_utils::normalize_for_path_comparison(current_cwd),
+        path_utils::normalize_for_path_comparison(session_cwd),
+    ) {
+        (Ok(current), Ok(session)) => current != session,
+        _ => current_cwd != session_cwd,
+    }
+}
+
+pub(crate) async fn resolve_cwd_for_resume_or_fork(
+    tui: &mut Tui,
+    current_cwd: &Path,
+    path: &Path,
+    action: CwdPromptAction,
+    allow_prompt: bool,
+) -> color_eyre::Result<Option<PathBuf>> {
+    let Some(history_cwd) = read_session_cwd(path).await else {
+        return Ok(None);
+    };
+    if allow_prompt && cwds_differ(current_cwd, &history_cwd) {
+        let selection =
+            cwd_prompt::run_cwd_selection_prompt(tui, action, current_cwd, &history_cwd).await?;
+        return Ok(Some(match selection {
+            CwdSelection::Current => current_cwd.to_path_buf(),
+            CwdSelection::Session => history_cwd,
+        }));
+    }
+    Ok(Some(history_cwd))
 }
 
 #[expect(
@@ -677,7 +842,7 @@ fn get_login_status(config: &Config) -> LoginStatus {
         // to refresh the token. Block on it.
         let codex_home = config.codex_home.clone();
         match CodexAuth::from_auth_storage(&codex_home, config.cli_auth_credentials_store_mode) {
-            Ok(Some(auth)) => LoginStatus::AuthMode(auth.mode),
+            Ok(Some(auth)) => LoginStatus::AuthMode(auth.api_auth_mode()),
             Ok(None) => LoginStatus::NotAuthenticated,
             Err(err) => {
                 error!("Failed to read auth.json: {err}");
@@ -692,19 +857,23 @@ fn get_login_status(config: &Config) -> LoginStatus {
 async fn load_config_or_exit(
     cli_kv_overrides: Vec<(String, toml::Value)>,
     overrides: ConfigOverrides,
+    cloud_requirements: CloudRequirementsLoader,
 ) -> Config {
-    load_config_or_exit_with_fallback_cwd(cli_kv_overrides, overrides, None).await
+    load_config_or_exit_with_fallback_cwd(cli_kv_overrides, overrides, cloud_requirements, None)
+        .await
 }
 
 async fn load_config_or_exit_with_fallback_cwd(
     cli_kv_overrides: Vec<(String, toml::Value)>,
     overrides: ConfigOverrides,
+    cloud_requirements: CloudRequirementsLoader,
     fallback_cwd: Option<PathBuf>,
 ) -> Config {
     #[allow(clippy::print_stderr)]
     match ConfigBuilder::default()
         .cli_overrides(cli_kv_overrides)
         .harness_overrides(overrides)
+        .cloud_requirements(cloud_requirements)
         .fallback_cwd(fallback_cwd)
         .build()
         .await
@@ -721,7 +890,9 @@ async fn load_config_or_exit_with_fallback_cwd(
 /// or if the current cwd project is already trusted. If not, we need to
 /// show the trust screen.
 fn should_show_trust_screen(config: &Config) -> bool {
-    if cfg!(target_os = "windows") && get_platform_sandbox().is_none() {
+    if cfg!(target_os = "windows")
+        && WindowsSandboxLevel::from_config(config) == WindowsSandboxLevel::Disabled
+    {
         // If the experimental sandbox is not enabled, Native Windows cannot enforce sandboxed write access; skip the trust prompt entirely.
         return false;
     }
@@ -759,7 +930,14 @@ fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool 
 mod tests {
     use super::*;
     use codex_core::config::ConfigBuilder;
+    use codex_core::config::ConfigOverrides;
     use codex_core::config::ProjectConfig;
+    use codex_core::protocol::AskForApproval;
+    use codex_protocol::protocol::RolloutItem;
+    use codex_protocol::protocol::RolloutLine;
+    use codex_protocol::protocol::SessionMeta;
+    use codex_protocol::protocol::SessionMetaLine;
+    use codex_protocol::protocol::TurnContextItem;
     use serial_test::serial;
     use tempfile::TempDir;
 
@@ -777,7 +955,7 @@ mod tests {
         let mut config = build_config(&temp_dir).await?;
         config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig { trust_level: None };
-        config.set_windows_sandbox_globally(false);
+        config.set_windows_sandbox_enabled(false);
 
         let should_show = should_show_trust_screen(&config);
         if cfg!(target_os = "windows") {
@@ -800,7 +978,7 @@ mod tests {
         let mut config = build_config(&temp_dir).await?;
         config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig { trust_level: None };
-        config.set_windows_sandbox_globally(true);
+        config.set_windows_sandbox_enabled(true);
 
         let should_show = should_show_trust_screen(&config);
         if cfg!(target_os = "windows") {
@@ -831,6 +1009,182 @@ mod tests {
             !should_show,
             "Trust prompt should not be shown for projects explicitly marked as untrusted"
         );
+        Ok(())
+    }
+
+    fn build_turn_context(config: &Config, cwd: PathBuf) -> TurnContextItem {
+        let model = config
+            .model
+            .clone()
+            .unwrap_or_else(|| "gpt-5.1".to_string());
+        TurnContextItem {
+            cwd,
+            approval_policy: config.approval_policy.value(),
+            sandbox_policy: config.sandbox_policy.get().clone(),
+            model,
+            personality: None,
+            collaboration_mode: None,
+            effort: config.model_reasoning_effort,
+            summary: config.model_reasoning_summary,
+            user_instructions: None,
+            developer_instructions: None,
+            final_output_json_schema: None,
+            truncation_policy: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn read_session_cwd_prefers_latest_turn_context() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let config = build_config(&temp_dir).await?;
+        let first = temp_dir.path().join("first");
+        let second = temp_dir.path().join("second");
+        std::fs::create_dir_all(&first)?;
+        std::fs::create_dir_all(&second)?;
+
+        let rollout_path = temp_dir.path().join("rollout.jsonl");
+        let lines = vec![
+            RolloutLine {
+                timestamp: "t0".to_string(),
+                item: RolloutItem::TurnContext(build_turn_context(&config, first)),
+            },
+            RolloutLine {
+                timestamp: "t1".to_string(),
+                item: RolloutItem::TurnContext(build_turn_context(&config, second.clone())),
+            },
+        ];
+        let mut text = String::new();
+        for line in lines {
+            text.push_str(&serde_json::to_string(&line).expect("serialize rollout"));
+            text.push('\n');
+        }
+        std::fs::write(&rollout_path, text)?;
+
+        let cwd = read_session_cwd(&rollout_path).await.expect("expected cwd");
+        assert_eq!(cwd, second);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_prompt_when_meta_matches_current_but_latest_turn_differs() -> std::io::Result<()>
+    {
+        let temp_dir = TempDir::new()?;
+        let config = build_config(&temp_dir).await?;
+        let current = temp_dir.path().join("current");
+        let latest = temp_dir.path().join("latest");
+        std::fs::create_dir_all(&current)?;
+        std::fs::create_dir_all(&latest)?;
+
+        let rollout_path = temp_dir.path().join("rollout.jsonl");
+        let session_meta = SessionMeta {
+            cwd: current.clone(),
+            ..SessionMeta::default()
+        };
+        let lines = vec![
+            RolloutLine {
+                timestamp: "t0".to_string(),
+                item: RolloutItem::SessionMeta(SessionMetaLine {
+                    meta: session_meta,
+                    git: None,
+                }),
+            },
+            RolloutLine {
+                timestamp: "t1".to_string(),
+                item: RolloutItem::TurnContext(build_turn_context(&config, latest.clone())),
+            },
+        ];
+        let mut text = String::new();
+        for line in lines {
+            text.push_str(&serde_json::to_string(&line).expect("serialize rollout"));
+            text.push('\n');
+        }
+        std::fs::write(&rollout_path, text)?;
+
+        let session_cwd = read_session_cwd(&rollout_path).await.expect("expected cwd");
+        assert_eq!(session_cwd, latest);
+        assert!(cwds_differ(&current, &session_cwd));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn config_rebuild_changes_trust_defaults_with_cwd() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let codex_home = temp_dir.path().to_path_buf();
+        let trusted = temp_dir.path().join("trusted");
+        let untrusted = temp_dir.path().join("untrusted");
+        std::fs::create_dir_all(&trusted)?;
+        std::fs::create_dir_all(&untrusted)?;
+
+        // TOML keys need escaped backslashes on Windows paths.
+        let trusted_display = trusted.display().to_string().replace('\\', "\\\\");
+        let untrusted_display = untrusted.display().to_string().replace('\\', "\\\\");
+        let config_toml = format!(
+            r#"[projects."{trusted_display}"]
+trust_level = "trusted"
+
+[projects."{untrusted_display}"]
+trust_level = "untrusted"
+"#
+        );
+        std::fs::write(temp_dir.path().join("config.toml"), config_toml)?;
+
+        let trusted_overrides = ConfigOverrides {
+            cwd: Some(trusted.clone()),
+            ..Default::default()
+        };
+        let trusted_config = ConfigBuilder::default()
+            .codex_home(codex_home.clone())
+            .harness_overrides(trusted_overrides.clone())
+            .build()
+            .await?;
+        assert_eq!(
+            trusted_config.approval_policy.value(),
+            AskForApproval::OnRequest
+        );
+
+        let untrusted_overrides = ConfigOverrides {
+            cwd: Some(untrusted),
+            ..trusted_overrides
+        };
+        let untrusted_config = ConfigBuilder::default()
+            .codex_home(codex_home)
+            .harness_overrides(untrusted_overrides)
+            .build()
+            .await?;
+        assert_eq!(
+            untrusted_config.approval_policy.value(),
+            AskForApproval::UnlessTrusted
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_session_cwd_falls_back_to_session_meta() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let _config = build_config(&temp_dir).await?;
+        let session_cwd = temp_dir.path().join("session");
+        std::fs::create_dir_all(&session_cwd)?;
+
+        let rollout_path = temp_dir.path().join("rollout.jsonl");
+        let session_meta = SessionMeta {
+            cwd: session_cwd.clone(),
+            ..SessionMeta::default()
+        };
+        let meta_line = RolloutLine {
+            timestamp: "t0".to_string(),
+            item: RolloutItem::SessionMeta(SessionMetaLine {
+                meta: session_meta,
+                git: None,
+            }),
+        };
+        let text = format!(
+            "{}\n",
+            serde_json::to_string(&meta_line).expect("serialize meta")
+        );
+        std::fs::write(&rollout_path, text)?;
+
+        let cwd = read_session_cwd(&rollout_path).await.expect("expected cwd");
+        assert_eq!(cwd, session_cwd);
         Ok(())
     }
 }

@@ -23,6 +23,7 @@ use mcp_types::ListToolsResult;
 use mcp_types::ReadResourceRequestParams;
 use mcp_types::ReadResourceResult;
 use mcp_types::RequestId;
+use mcp_types::Tool;
 use reqwest::header::HeaderMap;
 use rmcp::model::CallToolRequestParam;
 use rmcp::model::ClientNotification;
@@ -44,6 +45,7 @@ use rmcp::transport::auth::AuthClient;
 use rmcp::transport::auth::OAuthState;
 use rmcp::transport::child_process::TokioChildProcess;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
+use serde_json::Value;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
 use tokio::process::Command;
@@ -94,6 +96,17 @@ pub type ElicitationResponse = CreateElicitationResult;
 pub type SendElicitation = Box<
     dyn Fn(RequestId, Elicitation) -> BoxFuture<'static, Result<ElicitationResponse>> + Send + Sync,
 >;
+
+pub struct ToolWithConnectorId {
+    pub tool: Tool,
+    pub connector_id: Option<String>,
+    pub connector_name: Option<String>,
+}
+
+pub struct ListToolsWithConnectorIdResult {
+    pub next_cursor: Option<String>,
+    pub tools: Vec<ToolWithConnectorId>,
+}
 
 /// MCP client implemented on top of the official `rmcp` SDK.
 /// https://github.com/modelcontextprotocol/rust-sdk
@@ -286,6 +299,18 @@ impl RmcpClient {
         params: Option<ListToolsRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListToolsResult> {
+        let result = self.list_tools_with_connector_ids(params, timeout).await?;
+        Ok(ListToolsResult {
+            next_cursor: result.next_cursor,
+            tools: result.tools.into_iter().map(|tool| tool.tool).collect(),
+        })
+    }
+
+    pub async fn list_tools_with_connector_ids(
+        &self,
+        params: Option<ListToolsRequestParams>,
+        timeout: Option<Duration>,
+    ) -> Result<ListToolsWithConnectorIdResult> {
         self.refresh_oauth_if_needed().await;
         let service = self.service().await?;
         let rmcp_params = params
@@ -294,9 +319,35 @@ impl RmcpClient {
 
         let fut = service.list_tools(rmcp_params);
         let result = run_with_timeout(fut, timeout, "tools/list").await?;
-        let converted = convert_to_mcp(result)?;
+        let tools = result
+            .tools
+            .into_iter()
+            .map(|tool| {
+                let meta = tool.meta.as_ref();
+                let connector_id = Self::meta_string(meta, "connector_id");
+                let connector_name = Self::meta_string(meta, "connector_name")
+                    .or_else(|| Self::meta_string(meta, "connector_display_name"));
+                let tool = convert_to_mcp(tool)?;
+                Ok(ToolWithConnectorId {
+                    tool,
+                    connector_id,
+                    connector_name,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         self.persist_oauth_tokens().await;
-        Ok(converted)
+        Ok(ListToolsWithConnectorIdResult {
+            next_cursor: result.next_cursor,
+            tools,
+        })
+    }
+
+    fn meta_string(meta: Option<&rmcp::model::Meta>, key: &str) -> Option<String> {
+        meta.and_then(|meta| meta.get(key))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
     }
 
     pub async fn list_resources(

@@ -30,6 +30,8 @@ codex-ansi-escape = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-backend-client = { workspace = true }
+codex-chatgpt = { workspace = true }
+codex-cloud-requirements = { workspace = true }
 codex-common = { workspace = true, features = [
     "cli",
     "elapsed",
@@ -41,6 +43,7 @@ codex-file-search = { workspace = true }
 codex-login = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
+codex-state = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 color-eyre = { workspace = true }
 crossterm = { workspace = true, features = ["bracketed-paste", "event-stream"] }
@@ -92,6 +95,7 @@ tree-sitter-highlight = { workspace = true }
 unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }
 url = { workspace = true }
+uuid = { workspace = true }
 
 codex-windows-sandbox = { workspace = true }
 tokio-util = { workspace = true, features = ["time"] }

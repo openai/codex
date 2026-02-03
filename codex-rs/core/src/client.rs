@@ -21,13 +21,13 @@ use codex_api::ResponsesWebsocketClient as ApiWebSocketResponsesClient;
 use codex_api::ResponsesWebsocketConnection as ApiWebSocketConnection;
 use codex_api::SseTelemetry;
 use codex_api::TransportError;
+use codex_api::WebsocketTelemetry;
 use codex_api::build_conversation_headers;
 use codex_api::common::Reasoning;
 use codex_api::common::ResponsesWsRequest;
 use codex_api::create_text_param_for_request;
 use codex_api::error::ApiError;
 use codex_api::requests::responses::Compression;
-use codex_app_server_protocol::AuthMode;
 use codex_otel::OtelManager;
 
 use codex_protocol::ThreadId;
@@ -47,9 +47,12 @@ use reqwest::StatusCode;
 use serde_json::Value;
 use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio_tungstenite::tungstenite::Error;
+use tokio_tungstenite::tungstenite::Message;
 use tracing::warn;
 
 use crate::AuthManager;
+use crate::auth::CodexAuth;
 use crate::auth::RefreshTokenError;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
@@ -65,6 +68,7 @@ use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::tools::spec::create_tools_json_for_chat_completions_api;
 use crate::tools::spec::create_tools_json_for_responses_api;
+use crate::transport_manager::TransportManager;
 
 pub const WEB_SEARCH_ELIGIBLE_HEADER: &str = "x-oai-web-search-eligible";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
@@ -80,6 +84,7 @@ struct ModelClientState {
     effort: Option<ReasoningEffortConfig>,
     summary: ReasoningSummaryConfig,
     session_source: SessionSource,
+    transport_manager: TransportManager,
 }
 
 #[derive(Debug, Clone)]
@@ -91,6 +96,7 @@ pub struct ModelClientSession {
     state: Arc<ModelClientState>,
     connection: Option<ApiWebSocketConnection>,
     websocket_last_items: Vec<ResponseItem>,
+    transport_manager: TransportManager,
     /// Turn state for sticky routing.
     ///
     /// This is an `OnceLock` that stores the turn state value received from the server
@@ -116,6 +122,7 @@ impl ModelClient {
         summary: ReasoningSummaryConfig,
         conversation_id: ThreadId,
         session_source: SessionSource,
+        transport_manager: TransportManager,
     ) -> Self {
         Self {
             state: Arc::new(ModelClientState {
@@ -128,6 +135,7 @@ impl ModelClient {
                 effort,
                 summary,
                 session_source,
+                transport_manager,
             }),
         }
     }
@@ -137,6 +145,7 @@ impl ModelClient {
             state: Arc::clone(&self.state),
             connection: None,
             websocket_last_items: Vec::new(),
+            transport_manager: self.state.transport_manager.clone(),
             turn_state: Arc::new(OnceLock::new()),
         }
     }
@@ -169,6 +178,10 @@ impl ModelClient {
 
     pub fn get_session_source(&self) -> SessionSource {
         self.state.session_source.clone()
+    }
+
+    pub(crate) fn transport_manager(&self) -> TransportManager {
+        self.state.transport_manager.clone()
     }
 
     /// Returns the currently configured model slug.
@@ -210,7 +223,7 @@ impl ModelClient {
         let api_provider = self
             .state
             .provider
-            .to_api_provider(auth.as_ref().map(|a| a.mode))?;
+            .to_api_provider(auth.as_ref().map(CodexAuth::internal_auth_mode))?;
         let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
         let transport = ReqwestTransport::new(build_reqwest_client());
         let request_telemetry = self.build_request_telemetry();
@@ -226,13 +239,11 @@ impl ModelClient {
 
         let mut extra_headers = ApiHeaderMap::new();
         if let SessionSource::SubAgent(sub) = &self.state.session_source {
-            let subagent = if let crate::protocol::SubAgentSource::Other(label) = sub {
-                label.clone()
-            } else {
-                serde_json::to_value(sub)
-                    .ok()
-                    .and_then(|v| v.as_str().map(std::string::ToString::to_string))
-                    .unwrap_or_else(|| "other".to_string())
+            let subagent = match sub {
+                crate::protocol::SubAgentSource::Review => "review".to_string(),
+                crate::protocol::SubAgentSource::Compact => "compact".to_string(),
+                crate::protocol::SubAgentSource::ThreadSpawn { .. } => "collab_spawn".to_string(),
+                crate::protocol::SubAgentSource::Other(label) => label.clone(),
             };
             if let Ok(val) = HeaderValue::from_str(&subagent) {
                 extra_headers.insert("x-openai-subagent", val);
@@ -252,9 +263,18 @@ impl ModelClientSession {
     /// For Chat providers, the underlying stream is optionally aggregated
     /// based on the `show_raw_agent_reasoning` flag in the config.
     pub async fn stream(&mut self, prompt: &Prompt) -> Result<ResponseStream> {
-        match self.state.provider.wire_api {
-            WireApi::Responses => self.stream_responses_api(prompt).await,
-            WireApi::ResponsesWebsocket => self.stream_responses_websocket(prompt).await,
+        let wire_api = self.state.provider.wire_api;
+        match wire_api {
+            WireApi::Responses => {
+                let websocket_enabled = self.responses_websocket_enabled()
+                    && !self.transport_manager.disable_websockets();
+
+                if websocket_enabled {
+                    self.stream_responses_websocket(prompt).await
+                } else {
+                    self.stream_responses_api(prompt).await
+                }
+            }
             WireApi::Chat => {
                 let api_stream = self.stream_chat_completions(prompt).await?;
 
@@ -271,6 +291,34 @@ impl ModelClientSession {
                 }
             }
         }
+    }
+
+    pub(crate) fn try_switch_fallback_transport(&mut self) -> bool {
+        let websocket_enabled = self.responses_websocket_enabled();
+        let activated = self
+            .transport_manager
+            .activate_http_fallback(websocket_enabled);
+        if activated {
+            warn!("falling back to HTTP");
+            self.state.otel_manager.counter(
+                "codex.transport.fallback_to_http",
+                1,
+                &[("from_wire_api", "responses_websocket")],
+            );
+
+            self.connection = None;
+            self.websocket_last_items.clear();
+        }
+        activated
+    }
+
+    fn responses_websocket_enabled(&self) -> bool {
+        self.state.provider.supports_websockets
+            && self
+                .state
+                .config
+                .features
+                .enabled(Feature::ResponsesWebsockets)
     }
 
     fn build_responses_request(&self, prompt: &Prompt) -> Result<ApiPrompt> {
@@ -406,9 +454,14 @@ impl ModelClientSession {
         if needs_new {
             let mut headers = options.extra_headers.clone();
             headers.extend(build_conversation_headers(options.conversation_id.clone()));
+            let websocket_telemetry = self.build_websocket_telemetry();
             let new_conn: ApiWebSocketConnection =
                 ApiWebSocketResponsesClient::new(api_provider, api_auth)
-                    .connect(headers, options.turn_state.clone())
+                    .connect(
+                        headers,
+                        options.turn_state.clone(),
+                        Some(websocket_telemetry),
+                    )
                     .await?;
             self.connection = Some(new_conn);
         }
@@ -424,7 +477,7 @@ impl ModelClientSession {
             .config
             .features
             .enabled(Feature::EnableRequestCompression)
-            && auth.is_some_and(|auth| auth.mode == AuthMode::ChatGPT)
+            && auth.is_some_and(CodexAuth::is_chatgpt_auth)
             && self.state.provider.is_openai()
         {
             Compression::Zstd
@@ -462,7 +515,7 @@ impl ModelClientSession {
             let api_provider = self
                 .state
                 .provider
-                .to_api_provider(auth.as_ref().map(|a| a.mode))?;
+                .to_api_provider(auth.as_ref().map(CodexAuth::internal_auth_mode))?;
             let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
             let transport = ReqwestTransport::new(build_reqwest_client());
             let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
@@ -518,7 +571,7 @@ impl ModelClientSession {
             let api_provider = self
                 .state
                 .provider
-                .to_api_provider(auth.as_ref().map(|a| a.mode))?;
+                .to_api_provider(auth.as_ref().map(CodexAuth::internal_auth_mode))?;
             let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
             let transport = ReqwestTransport::new(build_reqwest_client());
             let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
@@ -564,7 +617,7 @@ impl ModelClientSession {
             let api_provider = self
                 .state
                 .provider
-                .to_api_provider(auth.as_ref().map(|a| a.mode))?;
+                .to_api_provider(auth.as_ref().map(CodexAuth::internal_auth_mode))?;
             let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
             let compression = self.responses_request_compression(auth.as_ref());
 
@@ -605,6 +658,13 @@ impl ModelClientSession {
         let sse_telemetry: Arc<dyn SseTelemetry> = telemetry;
         (request_telemetry, sse_telemetry)
     }
+
+    /// Builds telemetry for the Responses API WebSocket transport.
+    fn build_websocket_telemetry(&self) -> Arc<dyn WebsocketTelemetry> {
+        let telemetry = Arc::new(ApiTelemetry::new(self.state.otel_manager.clone()));
+        let websocket_telemetry: Arc<dyn WebsocketTelemetry> = telemetry;
+        websocket_telemetry
+    }
 }
 
 impl ModelClient {
@@ -627,11 +687,13 @@ fn build_api_prompt(prompt: &Prompt, instructions: String, tools_json: Vec<Value
     }
 }
 
-fn beta_feature_headers(config: &Config) -> ApiHeaderMap {
+fn experimental_feature_headers(config: &Config) -> ApiHeaderMap {
     let enabled = FEATURES
         .iter()
         .filter_map(|spec| {
-            if spec.stage.beta_menu_description().is_some() && config.features.enabled(spec.id) {
+            if spec.stage.experimental_menu_description().is_some()
+                && config.features.enabled(spec.id)
+            {
                 Some(spec.key)
             } else {
                 None
@@ -652,7 +714,7 @@ fn build_responses_headers(
     config: &Config,
     turn_state: Option<&Arc<OnceLock<String>>>,
 ) -> ApiHeaderMap {
-    let mut headers = beta_feature_headers(config);
+    let mut headers = experimental_feature_headers(config);
     headers.insert(
         WEB_SEARCH_ELIGIBLE_HEADER,
         HeaderValue::from_static(
@@ -800,5 +862,21 @@ impl SseTelemetry for ApiTelemetry {
         duration: Duration,
     ) {
         self.otel_manager.log_sse_event(result, duration);
+    }
+}
+
+impl WebsocketTelemetry for ApiTelemetry {
+    fn on_ws_request(&self, duration: Duration, error: Option<&ApiError>) {
+        let error_message = error.map(std::string::ToString::to_string);
+        self.otel_manager
+            .record_websocket_request(duration, error_message.as_deref());
+    }
+
+    fn on_ws_event(
+        &self,
+        result: &std::result::Result<Option<std::result::Result<Message, Error>>, ApiError>,
+        duration: Duration,
+    ) {
+        self.otel_manager.record_websocket_event(result, duration);
     }
 }

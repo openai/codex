@@ -64,7 +64,7 @@ async fn thread_read_returns_summary_without_turns() -> Result<()> {
     assert_eq!(thread.id, conversation_id);
     assert_eq!(thread.preview, preview);
     assert_eq!(thread.model_provider, "mock_provider");
-    assert!(thread.path.is_absolute());
+    assert!(thread.path.as_ref().expect("thread path").is_absolute());
     assert_eq!(thread.cwd, PathBuf::from("/"));
     assert_eq!(thread.cli_version, "0.0.0");
     assert_eq!(thread.source, SessionSource::Cli);

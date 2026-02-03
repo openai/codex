@@ -39,6 +39,9 @@ use crate::mcp_cmd::McpCli;
 
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::edit::ConfigEditsBuilder;
+use codex_core::config::find_codex_home;
+use codex_core::features::Stage;
 use codex_core::features::is_known_feature_key;
 use codex_core::terminal::TerminalName;
 
@@ -141,13 +144,13 @@ struct CompletionCommand {
 
 #[derive(Debug, Parser)]
 struct ResumeCommand {
-    /// Conversation/session id (UUID). When provided, resumes this session.
+    /// Conversation/session id (UUID) or thread name. UUIDs take precedence if it parses.
     /// If omitted, use --last to pick the most recent recorded session.
     #[arg(value_name = "SESSION_ID")]
     session_id: Option<String>,
 
     /// Continue the most recent session without showing the picker.
-    #[arg(long = "last", default_value_t = false, conflicts_with = "session_id")]
+    #[arg(long = "last", default_value_t = false)]
     last: bool,
 
     /// Show all sessions (disables cwd filtering and shows CWD column).
@@ -320,6 +323,7 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
     let AppExitInfo {
         token_usage,
         thread_id: conversation_id,
+        thread_name,
         ..
     } = exit_info;
 
@@ -332,8 +336,9 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
         codex_core::protocol::FinalOutput::from(token_usage)
     )];
 
-    if let Some(session_id) = conversation_id {
-        let resume_cmd = format!("codex resume {session_id}");
+    if let Some(resume_cmd) =
+        codex_core::util::resume_command(thread_name.as_deref(), conversation_id)
+    {
         let command = if color_enabled {
             resume_cmd.cyan().to_string()
         } else {
@@ -396,8 +401,7 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     if !status.success() {
         anyhow::bail!("`{cmd_str}` failed with status {status}");
     }
-    println!();
-    println!("🎉 Update ran successfully! Please restart Codex.");
+    println!("\n🎉 Update ran successfully! Please restart Codex.");
     Ok(())
 }
 
@@ -449,13 +453,23 @@ struct FeaturesCli {
 enum FeaturesSubcommand {
     /// List known features with their stage and effective state.
     List,
+    /// Enable a feature in config.toml.
+    Enable(FeatureSetArgs),
+    /// Disable a feature in config.toml.
+    Disable(FeatureSetArgs),
+}
+
+#[derive(Debug, Parser)]
+struct FeatureSetArgs {
+    /// Feature key to update (for example: unified_exec).
+    feature: String,
 }
 
 fn stage_str(stage: codex_core::features::Stage) -> &'static str {
     use codex_core::features::Stage;
     match stage {
-        Stage::Beta => "experimental",
-        Stage::Experimental { .. } => "beta",
+        Stage::UnderDevelopment => "under development",
+        Stage::Experimental { .. } => "experimental",
         Stage::Stable => "stable",
         Stage::Deprecated => "deprecated",
         Stage::Removed => "removed",
@@ -696,17 +710,83 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                     overrides,
                 )
                 .await?;
+                let mut rows = Vec::with_capacity(codex_core::features::FEATURES.len());
+                let mut name_width = 0;
+                let mut stage_width = 0;
                 for def in codex_core::features::FEATURES.iter() {
                     let name = def.key;
                     let stage = stage_str(def.stage);
                     let enabled = config.features.enabled(def.id);
-                    println!("{name}\t{stage}\t{enabled}");
+                    name_width = name_width.max(name.len());
+                    stage_width = stage_width.max(stage.len());
+                    rows.push((name, stage, enabled));
                 }
+
+                for (name, stage, enabled) in rows {
+                    println!("{name:<name_width$}  {stage:<stage_width$}  {enabled}");
+                }
+            }
+            FeaturesSubcommand::Enable(FeatureSetArgs { feature }) => {
+                enable_feature_in_config(&interactive, &feature).await?;
+            }
+            FeaturesSubcommand::Disable(FeatureSetArgs { feature }) => {
+                disable_feature_in_config(&interactive, &feature).await?;
             }
         },
     }
 
     Ok(())
+}
+
+async fn enable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow::Result<()> {
+    FeatureToggles::validate_feature(feature)?;
+    let codex_home = find_codex_home()?;
+    ConfigEditsBuilder::new(&codex_home)
+        .with_profile(interactive.config_profile.as_deref())
+        .set_feature_enabled(feature, true)
+        .apply()
+        .await?;
+    println!("Enabled feature `{feature}` in config.toml.");
+    maybe_print_under_development_feature_warning(&codex_home, interactive, feature);
+    Ok(())
+}
+
+async fn disable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow::Result<()> {
+    FeatureToggles::validate_feature(feature)?;
+    let codex_home = find_codex_home()?;
+    ConfigEditsBuilder::new(&codex_home)
+        .with_profile(interactive.config_profile.as_deref())
+        .set_feature_enabled(feature, false)
+        .apply()
+        .await?;
+    println!("Disabled feature `{feature}` in config.toml.");
+    Ok(())
+}
+
+fn maybe_print_under_development_feature_warning(
+    codex_home: &std::path::Path,
+    interactive: &TuiCli,
+    feature: &str,
+) {
+    if interactive.config_profile.is_some() {
+        return;
+    }
+
+    let Some(spec) = codex_core::features::FEATURES
+        .iter()
+        .find(|spec| spec.key == feature)
+    else {
+        return;
+    };
+    if !matches!(spec.stage, Stage::UnderDevelopment) {
+        return;
+    }
+
+    let config_path = codex_home.join(codex_core::config::CONFIG_TOML_FILE);
+    eprintln!(
+        "Under-development features enabled: {feature}. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in {}.",
+        config_path.display()
+    );
 }
 
 /// Prepend root-level overrides so they have lower precedence than
@@ -936,6 +1016,24 @@ mod tests {
         finalize_fork_interactive(interactive, root_overrides, session_id, last, all, fork_cli)
     }
 
+    #[test]
+    fn exec_resume_last_accepts_prompt_positional() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "exec", "--json", "resume", "--last", "2+2"])
+                .expect("parse should succeed");
+
+        let Some(Subcommand::Exec(exec)) = cli.subcommand else {
+            panic!("expected exec subcommand");
+        };
+        let Some(codex_exec::Command::Resume(args)) = exec.command else {
+            panic!("expected exec resume");
+        };
+
+        assert!(args.last);
+        assert_eq!(args.session_id, None);
+        assert_eq!(args.prompt.as_deref(), Some("2+2"));
+    }
+
     fn app_server_from_args(args: &[&str]) -> AppServerCommand {
         let cli = MultitoolCli::try_parse_from(args).expect("parse");
         let Subcommand::AppServer(app_server) = cli.subcommand.expect("app-server present") else {
@@ -944,7 +1042,7 @@ mod tests {
         app_server
     }
 
-    fn sample_exit_info(conversation: Option<&str>) -> AppExitInfo {
+    fn sample_exit_info(conversation_id: Option<&str>, thread_name: Option<&str>) -> AppExitInfo {
         let token_usage = TokenUsage {
             output_tokens: 2,
             total_tokens: 2,
@@ -952,7 +1050,10 @@ mod tests {
         };
         AppExitInfo {
             token_usage,
-            thread_id: conversation.map(ThreadId::from_string).map(Result::unwrap),
+            thread_id: conversation_id
+                .map(ThreadId::from_string)
+                .map(Result::unwrap),
+            thread_name: thread_name.map(str::to_string),
             update_action: None,
             exit_reason: ExitReason::UserRequested,
         }
@@ -963,6 +1064,7 @@ mod tests {
         let exit_info = AppExitInfo {
             token_usage: TokenUsage::default(),
             thread_id: None,
+            thread_name: None,
             update_action: None,
             exit_reason: ExitReason::UserRequested,
         };
@@ -972,7 +1074,7 @@ mod tests {
 
     #[test]
     fn format_exit_messages_includes_resume_hint_without_color() {
-        let exit_info = sample_exit_info(Some("123e4567-e89b-12d3-a456-426614174000"));
+        let exit_info = sample_exit_info(Some("123e4567-e89b-12d3-a456-426614174000"), None);
         let lines = format_exit_messages(exit_info, false);
         assert_eq!(
             lines,
@@ -986,10 +1088,26 @@ mod tests {
 
     #[test]
     fn format_exit_messages_applies_color_when_enabled() {
-        let exit_info = sample_exit_info(Some("123e4567-e89b-12d3-a456-426614174000"));
+        let exit_info = sample_exit_info(Some("123e4567-e89b-12d3-a456-426614174000"), None);
         let lines = format_exit_messages(exit_info, true);
         assert_eq!(lines.len(), 2);
         assert!(lines[1].contains("\u{1b}[36m"));
+    }
+
+    #[test]
+    fn format_exit_messages_prefers_thread_name() {
+        let exit_info = sample_exit_info(
+            Some("123e4567-e89b-12d3-a456-426614174000"),
+            Some("my-thread"),
+        );
+        let lines = format_exit_messages(exit_info, false);
+        assert_eq!(
+            lines,
+            vec![
+                "Token usage: total=2 input=0 output=2".to_string(),
+                "To continue this session, run codex resume my-thread".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -1155,6 +1273,32 @@ mod tests {
         let app_server =
             app_server_from_args(["codex", "app-server", "--analytics-default-enabled"].as_ref());
         assert!(app_server.analytics_default_enabled);
+    }
+
+    #[test]
+    fn features_enable_parses_feature_name() {
+        let cli = MultitoolCli::try_parse_from(["codex", "features", "enable", "unified_exec"])
+            .expect("parse should succeed");
+        let Some(Subcommand::Features(FeaturesCli { sub })) = cli.subcommand else {
+            panic!("expected features subcommand");
+        };
+        let FeaturesSubcommand::Enable(FeatureSetArgs { feature }) = sub else {
+            panic!("expected features enable");
+        };
+        assert_eq!(feature, "unified_exec");
+    }
+
+    #[test]
+    fn features_disable_parses_feature_name() {
+        let cli = MultitoolCli::try_parse_from(["codex", "features", "disable", "shell_tool"])
+            .expect("parse should succeed");
+        let Some(Subcommand::Features(FeaturesCli { sub })) = cli.subcommand else {
+            panic!("expected features subcommand");
+        };
+        let FeaturesSubcommand::Disable(FeatureSetArgs { feature }) = sub else {
+            panic!("expected features disable");
+        };
+        assert_eq!(feature, "shell_tool");
     }
 
     #[test]

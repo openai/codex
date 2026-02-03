@@ -21,7 +21,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@1.92
-
       - name: Validate tag matches Cargo.toml version
         shell: bash
         run: |
@@ -88,9 +87,29 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@1.92
+      - name: Install UBSan runtime (musl)
+        if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libubsan1
+          fi
+      - uses: dtolnay/rust-toolchain@1.93
         with:
           targets: ${{ matrix.target }}
+
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
+        name: Use hermetic Cargo home (musl)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_home="${GITHUB_WORKSPACE}/.cargo-home"
+          mkdir -p "${cargo_home}/bin"
+          echo "CARGO_HOME=${cargo_home}" >> "$GITHUB_ENV"
+          echo "${cargo_home}/bin" >> "$GITHUB_PATH"
+          : > "${cargo_home}/config.toml"
 
       - uses: actions/cache@v5
         with:
@@ -99,14 +118,76 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
+            ${{ github.workspace }}/.cargo-home/bin/
+            ${{ github.workspace }}/.cargo-home/registry/index/
+            ${{ github.workspace }}/.cargo-home/registry/cache/
+            ${{ github.workspace }}/.cargo-home/git/db/
             ${{ github.workspace }}/codex-rs/target/
           key: cargo-${{ matrix.runner }}-${{ matrix.target }}-release-${{ hashFiles('**/Cargo.lock') }}
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
+        name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.0
+
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Install musl build tools
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
+
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
+        name: Configure rustc UBSan wrapper (musl host)
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools pkg-config
+          set -euo pipefail
+          ubsan=""
+          if command -v ldconfig >/dev/null 2>&1; then
+            ubsan="$(ldconfig -p | grep -m1 'libubsan\.so\.1' | sed -E 's/.*=> (.*)$/\1/')"
+          fi
+          wrapper_root="${RUNNER_TEMP:-/tmp}"
+          wrapper="${wrapper_root}/rustc-ubsan-wrapper"
+          cat > "${wrapper}" <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ -n "${ubsan}" ]]; then
+            export LD_PRELOAD="${ubsan}\${LD_PRELOAD:+:\${LD_PRELOAD}}"
+          fi
+          exec "\$1" "\${@:2}"
+          EOF
+          chmod +x "${wrapper}"
+          echo "RUSTC_WRAPPER=${wrapper}" >> "$GITHUB_ENV"
+          echo "RUSTC_WORKSPACE_WRAPPER=" >> "$GITHUB_ENV"
+
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
+        name: Clear sanitizer flags (musl)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Clear global Rust flags so host/proc-macro builds don't pull in UBSan.
+          echo "RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_ENCODED_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "RUSTDOCFLAGS=" >> "$GITHUB_ENV"
+          # Override any runner-level Cargo config rustflags as well.
+          echo "CARGO_BUILD_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS=" >> "$GITHUB_ENV"
+
+          sanitize_flags() {
+            local input="$1"
+            input="${input//-fsanitize=undefined/}"
+            input="${input//-fno-sanitize-recover=undefined/}"
+            input="${input//-fno-sanitize-trap=undefined/}"
+            echo "$input"
+          }
+
+          cflags="$(sanitize_flags "${CFLAGS-}")"
+          cxxflags="$(sanitize_flags "${CXXFLAGS-}")"
+          echo "CFLAGS=${cflags}" >> "$GITHUB_ENV"
+          echo "CXXFLAGS=${cxxflags}" >> "$GITHUB_ENV"
 
       - name: Cargo build
         shell: bash
@@ -244,6 +325,7 @@ jobs:
           # Path that contains the uncompressed binaries for the current
           # ${{ matrix.target }}
           dest="dist/${{ matrix.target }}"
+          repo_root=$PWD
 
           # We want to ship the raw Windows executables in the GitHub Release
           # in addition to the compressed archives. Keep the originals for
@@ -283,7 +365,30 @@ jobs:
             # Must run from inside the dest dir so 7z won't
             # embed the directory path inside the zip.
             if [[ "${{ matrix.runner }}" == windows* ]]; then
-              (cd "$dest" && 7z a "${base}.zip" "$base")
+              if [[ "$base" == "codex-${{ matrix.target }}.exe" ]]; then
+                # Bundle the sandbox helper binaries into the main codex zip so
+                # WinGet installs include the required helpers next to codex.exe.
+                # Fall back to the single-binary zip if the helpers are missing
+                # to avoid breaking releases.
+                bundle_dir="$(mktemp -d)"
+                runner_src="$dest/codex-command-runner-${{ matrix.target }}.exe"
+                setup_src="$dest/codex-windows-sandbox-setup-${{ matrix.target }}.exe"
+                if [[ -f "$runner_src" && -f "$setup_src" ]]; then
+                  cp "$dest/$base" "$bundle_dir/$base"
+                  cp "$runner_src" "$bundle_dir/codex-command-runner.exe"
+                  cp "$setup_src" "$bundle_dir/codex-windows-sandbox-setup.exe"
+                  # Use an absolute path so bundle zips land in the real dist
+                  # dir even when 7z runs from a temp directory.
+                  (cd "$bundle_dir" && 7z a "$repo_root/$dest/${base}.zip" .)
+                else
+                  echo "warning: missing sandbox binaries; falling back to single-binary zip"
+                  echo "warning: expected $runner_src and $setup_src"
+                  (cd "$dest" && 7z a "${base}.zip" "$base")
+                fi
+                rm -rf "$bundle_dir"
+              else
+                (cd "$dest" && 7z a "${base}.zip" "$base")
+              fi
             fi
 
             # Also create .zst (existing behaviour) *and* remove the original

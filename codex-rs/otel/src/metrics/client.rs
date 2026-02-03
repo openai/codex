@@ -22,18 +22,60 @@ use opentelemetry_otlp::WithTonicConfig;
 use opentelemetry_otlp::tonic_types::metadata::MetadataMap;
 use opentelemetry_otlp::tonic_types::transport::ClientTlsConfig;
 use opentelemetry_sdk::Resource;
+use opentelemetry_sdk::metrics::InstrumentKind;
+use opentelemetry_sdk::metrics::ManualReader;
 use opentelemetry_sdk::metrics::PeriodicReader;
+use opentelemetry_sdk::metrics::Pipeline;
 use opentelemetry_sdk::metrics::SdkMeterProvider;
 use opentelemetry_sdk::metrics::Temporality;
+use opentelemetry_sdk::metrics::data::ResourceMetrics;
+use opentelemetry_sdk::metrics::reader::MetricReader;
 use opentelemetry_semantic_conventions as semconv;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::Weak;
 use std::time::Duration;
 use tracing::debug;
 
 const ENV_ATTRIBUTE: &str = "env";
 const METER_NAME: &str = "codex";
+const DURATION_UNIT: &str = "ms";
+const DURATION_DESCRIPTION: &str = "Duration in milliseconds.";
+
+#[derive(Clone, Debug)]
+struct SharedManualReader {
+    inner: Arc<ManualReader>,
+}
+
+impl SharedManualReader {
+    fn new(inner: Arc<ManualReader>) -> Self {
+        Self { inner }
+    }
+}
+
+impl MetricReader for SharedManualReader {
+    fn register_pipeline(&self, pipeline: Weak<Pipeline>) {
+        self.inner.register_pipeline(pipeline);
+    }
+
+    fn collect(&self, rm: &mut ResourceMetrics) -> opentelemetry_sdk::error::OTelSdkResult {
+        self.inner.collect(rm)
+    }
+
+    fn force_flush(&self) -> opentelemetry_sdk::error::OTelSdkResult {
+        self.inner.force_flush()
+    }
+
+    fn shutdown_with_timeout(&self, timeout: Duration) -> opentelemetry_sdk::error::OTelSdkResult {
+        self.inner.shutdown_with_timeout(timeout)
+    }
+
+    fn temporality(&self, kind: InstrumentKind) -> Temporality {
+        self.inner.temporality(kind)
+    }
+}
 
 #[derive(Debug)]
 struct MetricsClientInner {
@@ -41,6 +83,8 @@ struct MetricsClientInner {
     meter: Meter,
     counters: Mutex<HashMap<String, Counter<u64>>>,
     histograms: Mutex<HashMap<String, Histogram<f64>>>,
+    duration_histograms: Mutex<HashMap<String, Histogram<f64>>>,
+    runtime_reader: Option<Arc<ManualReader>>,
     default_tags: BTreeMap<String, String>,
 }
 
@@ -77,6 +121,25 @@ impl MetricsClientInner {
         let histogram = histograms
             .entry(name.to_string())
             .or_insert_with(|| self.meter.f64_histogram(name.to_string()).build());
+        histogram.record(value as f64, &attributes);
+        Ok(())
+    }
+
+    fn duration_histogram(&self, name: &str, value: i64, tags: &[(&str, &str)]) -> Result<()> {
+        validate_metric_name(name)?;
+        let attributes = self.attributes(tags)?;
+
+        let mut histograms = self
+            .duration_histograms
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let histogram = histograms.entry(name.to_string()).or_insert_with(|| {
+            self.meter
+                .f64_histogram(name.to_string())
+                .with_unit(DURATION_UNIT)
+                .with_description(DURATION_DESCRIPTION)
+                .build()
+        });
         histogram.record(value as f64, &attributes);
         Ok(())
     }
@@ -119,26 +182,41 @@ pub struct MetricsClient(std::sync::Arc<MetricsClientInner>);
 impl MetricsClient {
     /// Build a metrics client from configuration and validate defaults.
     pub fn new(config: MetricsConfig) -> Result<Self> {
-        validate_tags(&config.default_tags)?;
+        let MetricsConfig {
+            environment,
+            service_name,
+            service_version,
+            exporter,
+            export_interval,
+            runtime_reader,
+            default_tags,
+        } = config;
+
+        validate_tags(&default_tags)?;
 
         let resource = Resource::builder()
-            .with_service_name(config.service_name.clone())
+            .with_service_name(service_name)
             .with_attributes(vec![
-                KeyValue::new(
-                    semconv::attribute::SERVICE_VERSION,
-                    config.service_version.clone(),
-                ),
-                KeyValue::new(ENV_ATTRIBUTE, config.environment.clone()),
+                KeyValue::new(semconv::attribute::SERVICE_VERSION, service_version),
+                KeyValue::new(ENV_ATTRIBUTE, environment),
             ])
             .build();
 
-        let (meter_provider, meter) = match config.exporter {
+        let runtime_reader = runtime_reader.then(|| {
+            Arc::new(
+                ManualReader::builder()
+                    .with_temporality(Temporality::Delta)
+                    .build(),
+            )
+        });
+
+        let (meter_provider, meter) = match exporter {
             MetricsExporter::InMemory(exporter) => {
-                build_provider(resource, exporter, config.export_interval)
+                build_provider(resource, exporter, export_interval, runtime_reader.clone())
             }
             MetricsExporter::Otlp(exporter) => {
                 let exporter = build_otlp_metric_exporter(exporter, Temporality::Delta)?;
-                build_provider(resource, exporter, config.export_interval)
+                build_provider(resource, exporter, export_interval, runtime_reader.clone())
             }
         };
 
@@ -147,7 +225,9 @@ impl MetricsClient {
             meter,
             counters: Mutex::new(HashMap::new()),
             histograms: Mutex::new(HashMap::new()),
-            default_tags: config.default_tags,
+            duration_histograms: Mutex::new(HashMap::new()),
+            runtime_reader,
+            default_tags,
         })))
     }
 
@@ -168,7 +248,7 @@ impl MetricsClient {
         duration: Duration,
         tags: &[(&str, &str)],
     ) -> Result<()> {
-        self.histogram(
+        self.0.duration_histogram(
             name,
             duration.as_millis().min(i64::MAX as u128) as i64,
             tags,
@@ -183,6 +263,18 @@ impl MetricsClient {
         Ok(Timer::new(name, tags, self))
     }
 
+    /// Collect a runtime metrics snapshot without shutting down the provider.
+    pub fn snapshot(&self) -> Result<ResourceMetrics> {
+        let Some(reader) = &self.0.runtime_reader else {
+            return Err(MetricsError::RuntimeSnapshotUnavailable);
+        };
+        let mut snapshot = ResourceMetrics::default();
+        reader
+            .collect(&mut snapshot)
+            .map_err(|source| MetricsError::RuntimeSnapshotCollect { source })?;
+        Ok(snapshot)
+    }
+
     /// Flush metrics and stop the underlying OTEL meter provider.
     pub fn shutdown(&self) -> Result<()> {
         self.0.shutdown()
@@ -193,6 +285,7 @@ fn build_provider<E>(
     resource: Resource,
     exporter: E,
     interval: Option<Duration>,
+    runtime_reader: Option<Arc<ManualReader>>,
 ) -> (SdkMeterProvider, Meter)
 where
     E: opentelemetry_sdk::metrics::exporter::PushMetricExporter + 'static,
@@ -202,10 +295,11 @@ where
         reader_builder = reader_builder.with_interval(interval);
     }
     let reader = reader_builder.build();
-    let provider = SdkMeterProvider::builder()
-        .with_resource(resource)
-        .with_reader(reader)
-        .build();
+    let mut provider_builder = SdkMeterProvider::builder().with_resource(resource);
+    if let Some(reader) = runtime_reader {
+        provider_builder = provider_builder.with_reader(SharedManualReader::new(reader));
+    }
+    let provider = provider_builder.with_reader(reader).build();
     let meter = provider.meter(METER_NAME);
     (provider, meter)
 }

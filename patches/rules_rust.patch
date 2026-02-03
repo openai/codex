@@ -31,4 +31,4 @@ index a28ad50b7..af627fe50 100644
 +        make_link_flags = _make_link_flags_default_direct if use_direct_link_driver else _make_link_flags_default_indirect
  
      return (make_link_flags, get_lib_name)
- 
+

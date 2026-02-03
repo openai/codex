@@ -8,4 +8,4 @@ expression: terminal.backend()
 "                                                                                "
 "› Ask Codex to do anything                                                      "
 "                                                                                "
-"  100% context left · ? for shortcuts                                           "
+"  ? for shortcuts                                            100% context left  "

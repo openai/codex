@@ -11,6 +11,7 @@ members = [
     "arg0",
     "feedback",
     "codex-backend-openapi-models",
+    "cloud-requirements",
     "cloud-tasks",
     "cloud-tasks-client",
     "cli",
@@ -27,6 +28,7 @@ members = [
     "login",
     "mcp-server",
     "mcp-types",
+    "network-proxy",
     "ollama",
     "process-hardening",
     "protocol",
@@ -41,16 +43,18 @@ members = [
     "utils/cache",
     "utils/image",
     "utils/json-to-toml",
+    "utils/home-dir",
     "utils/pty",
     "utils/readiness",
     "utils/string",
     "codex-client",
     "codex-api",
+    "state",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.89.0-codez.0"
+version = "0.94.0-codez.0"
 # Track the edition for all workspace crates in one place. Individual
 # crates can still override this value, but keeping it here means new
 # crates created with `cargo new -w ...` automatically inherit the 2024
@@ -69,6 +73,7 @@ codex-apply-patch = { path = "apply-patch" }
 codex-arg0 = { path = "arg0" }
 codex-async-utils = { path = "async-utils" }
 codex-backend-client = { path = "backend-client" }
+codex-cloud-requirements = { path = "cloud-requirements" }
 codex-chatgpt = { path = "chatgpt" }
 codex-cli = { path = "cli"}
 codex-client = { path = "codex-client" }
@@ -90,6 +95,7 @@ codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
+codex-state = { path = "state" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-tui = { path = "tui" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
@@ -97,6 +103,7 @@ codex-utils-cache = { path = "utils/cache" }
 codex-utils-cargo-bin = { path = "utils/cargo-bin" }
 codex-utils-image = { path = "utils/image" }
 codex-utils-json-to-toml = { path = "utils/json-to-toml" }
+codex-utils-home-dir = { path = "utils/home-dir" }
 codex-utils-pty = { path = "utils/pty" }
 codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-string = { path = "utils/string" }
@@ -125,6 +132,7 @@ clap = "4"
 clap_complete = "4"
 color-eyre = "0.6.3"
 crossterm = "0.28.1"
+crossbeam-channel = "0.5.15"
 ctor = "0.6.3"
 derive_more = "2"
 diffy = "0.4.2"
@@ -136,6 +144,7 @@ env-flags = "0.1.1"
 env_logger = "0.11.5"
 eventsource-stream = "0.2.3"
 futures = { version = "0.3", default-features = false }
+globset = "0.4"
 http = "1.3.1"
 icu_decimal = "2.1"
 icu_locale_core = "2.1"
@@ -157,7 +166,7 @@ maplit = "1.0.2"
 mime_guess = "2.0.5"
 multimap = "0.10.0"
 notify = "8.2.0"
-nucleo-matcher = "0.3.1"
+nucleo = { git = "https://github.com/helix-editor/nucleo.git", rev = "4253de9faabb4e5c6d81d946a5e35a90f87347ee" }
 once_cell = "1.20.2"
 openssl-sys = "*"
 opentelemetry = "0.31.0"
@@ -181,11 +190,13 @@ regex = "1.12.2"
 regex-lite = "0.1.8"
 reqwest = "0.12"
 rmcp = { version = "0.12.0", default-features = false }
+runfiles = { git = "https://github.com/dzbarsky/rules_rust", rev = "b56cbaa8465e74127f1ea216f813cd377295ad81" }
 schemars = "0.8.22"
 seccompiler = "0.5.0"
 sentry = "0.46.0"
 serde = "1"
 serde_json = "1"
+serde_path_to_error = "0.1.20"
 serde_with = "3.16"
 serde_yaml = "0.9"
 serial_test = "3.2.0"
@@ -195,6 +206,7 @@ semver = "1.0"
 shlex = "1.3.0"
 similar = "2.7.0"
 socket2 = "0.6.1"
+sqlx = { version = "0.8.6", default-features = false, features = ["chrono", "json", "macros", "migrate", "runtime-tokio-rustls", "sqlite", "time", "uuid"] }
 starlark = "0.13.0"
 strum = "0.27.2"
 strum_macros = "0.27.2"
@@ -209,11 +221,11 @@ tiny_http = "0.12"
 tokio = "1"
 tokio-stream = "0.1.18"
 tokio-test = "0.4"
-tokio-tungstenite = "0.21.0"
+tokio-tungstenite = { version = "0.28.0", features = ["proxy", "rustls-tls-native-roots"] }
 tokio-util = "0.7.18"
 toml = "0.9.5"
 toml_edit = "0.24.0"
-tracing = "0.1.43"
+tracing = "0.1.44"
 tracing-appender = "0.2.3"
 tracing-subscriber = "0.3.22"
 tracing-test = "0.2.5"
@@ -299,6 +311,10 @@ opt-level = 0
 # ratatui = { path = "../../ratatui" }
 crossterm = { git = "https://github.com/nornagon/crossterm", branch = "nornagon/color-query" }
 ratatui = { git = "https://github.com/nornagon/ratatui", branch = "nornagon-v0.29.0-patch" }
+tokio-tungstenite = { git = "https://github.com/JakkuSakura/tokio-tungstenite", rev = "2ae536b0de793f3ddf31fc2f22d445bf1ef2023d" }
 
 # Uncomment to debug local changes.
 # rmcp = { path = "../../rust-sdk/crates/rmcp" }
+
+[patch."ssh://git@github.com/JakkuSakura/tungstenite-rs.git"]
+tungstenite = { git = "https://github.com/JakkuSakura/tungstenite-rs", rev = "f514de8644821113e5d18a027d6d28a5c8cc0a6e" }

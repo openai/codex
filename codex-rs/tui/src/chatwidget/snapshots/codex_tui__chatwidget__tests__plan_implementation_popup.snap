@@ -1,0 +1,10 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: popup
+---
+  Implement this plan?
+
+› 1. Yes, implement this plan  Switch to Code and start coding.
+  2. No, stay in Plan mode     Continue planning with the model.
+
+  Press enter to confirm or esc to go back

@@ -16,7 +16,7 @@ use wiremock::matchers::path;
 
 fn repo_root() -> std::path::PathBuf {
     #[expect(clippy::expect_used)]
-    find_resource!(".").expect("failed to resolve repo root")
+    codex_utils_cargo_bin::repo_root().expect("failed to resolve repo root")
 }
 
 fn cli_responses_fixture() -> std::path::PathBuf {

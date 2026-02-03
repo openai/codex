@@ -13,6 +13,8 @@ use tokio::select;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
+use tracing::Instrument;
+use tracing::Span;
 use tracing::trace;
 use tracing::warn;
 
@@ -41,7 +43,7 @@ pub(crate) use undo::UndoTask;
 pub(crate) use user_shell::UserShellCommandTask;
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
-const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn. Do not continue or repeat work from that turn unless the user explicitly asks. If any tools/commands were aborted, they may have partially executed; verify current state before retrying.";
+const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn on purpose. If any tools/commands were aborted, they may have partially executed; verify current state before retrying.";
 
 /// Thin wrapper that exposes the parts of [`Session`] task runners need.
 #[derive(Clone)]
@@ -115,6 +117,8 @@ impl Session {
         task: T,
     ) {
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
+        self.seed_initial_context_if_needed(turn_context.as_ref())
+            .await;
 
         let task: Arc<dyn SessionTask> = Arc::new(task);
         let task_kind = task.kind();
@@ -128,25 +132,29 @@ impl Session {
             let ctx = Arc::clone(&turn_context);
             let task_for_run = Arc::clone(&task);
             let task_cancellation_token = cancellation_token.child_token();
-            tokio::spawn(async move {
-                let ctx_for_finish = Arc::clone(&ctx);
-                let last_agent_message = task_for_run
-                    .run(
-                        Arc::clone(&session_ctx),
-                        ctx,
-                        input,
-                        task_cancellation_token.child_token(),
-                    )
-                    .await;
-                session_ctx.clone_session().flush_rollout().await;
-                if !task_cancellation_token.is_cancelled() {
-                    // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
-                    let sess = session_ctx.clone_session();
-                    sess.on_task_finished(ctx_for_finish, last_agent_message)
+            let session_span = Span::current();
+            tokio::spawn(
+                async move {
+                    let ctx_for_finish = Arc::clone(&ctx);
+                    let last_agent_message = task_for_run
+                        .run(
+                            Arc::clone(&session_ctx),
+                            ctx,
+                            input,
+                            task_cancellation_token.child_token(),
+                        )
                         .await;
+                    session_ctx.clone_session().flush_rollout().await;
+                    if !task_cancellation_token.is_cancelled() {
+                        // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
+                        let sess = session_ctx.clone_session();
+                        sess.on_task_finished(ctx_for_finish, last_agent_message)
+                            .await;
+                    }
+                    done_clone.notify_waiters();
                 }
-                done_clone.notify_waiters();
-            })
+                .instrument(session_span),
+            )
         };
 
         let timer = turn_context
@@ -253,7 +261,7 @@ impl Session {
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
                     text: format!(
-                        "{TURN_ABORTED_OPEN_TAG}\n  <turn_id>{sub_id}</turn_id>\n  <reason>interrupted</reason>\n  <guidance>{TURN_ABORTED_INTERRUPTED_GUIDANCE}</guidance>\n</turn_aborted>"
+                        "{TURN_ABORTED_OPEN_TAG}\n{TURN_ABORTED_INTERRUPTED_GUIDANCE}\n</turn_aborted>"
                     ),
                 }],
                 end_turn: None,

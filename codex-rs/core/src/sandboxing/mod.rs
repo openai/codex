@@ -21,6 +21,7 @@ use crate::seatbelt::create_seatbelt_command_args;
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use crate::tools::sandboxing::SandboxablePreference;
+use codex_protocol::config_types::WindowsSandboxLevel;
 pub use codex_protocol::models::SandboxPermissions;
 use std::collections::HashMap;
 use std::path::Path;
@@ -44,6 +45,7 @@ pub struct ExecEnv {
     pub env: HashMap<String, String>,
     pub expiration: ExecExpiration,
     pub sandbox: SandboxType,
+    pub windows_sandbox_level: WindowsSandboxLevel,
     pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
     pub arg0: Option<String>,
@@ -76,19 +78,26 @@ impl SandboxManager {
         &self,
         policy: &SandboxPolicy,
         pref: SandboxablePreference,
+        windows_sandbox_level: WindowsSandboxLevel,
     ) -> SandboxType {
         match pref {
             SandboxablePreference::Forbid => SandboxType::None,
             SandboxablePreference::Require => {
                 // Require a platform sandbox when available; on Windows this
                 // respects the experimental_windows_sandbox feature.
-                crate::safety::get_platform_sandbox().unwrap_or(SandboxType::None)
+                crate::safety::get_platform_sandbox(
+                    windows_sandbox_level != WindowsSandboxLevel::Disabled,
+                )
+                .unwrap_or(SandboxType::None)
             }
             SandboxablePreference::Auto => match policy {
                 SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
                     SandboxType::None
                 }
-                _ => crate::safety::get_platform_sandbox().unwrap_or(SandboxType::None),
+                _ => crate::safety::get_platform_sandbox(
+                    windows_sandbox_level != WindowsSandboxLevel::Disabled,
+                )
+                .unwrap_or(SandboxType::None),
             },
         }
     }
@@ -100,6 +109,7 @@ impl SandboxManager {
         sandbox: SandboxType,
         sandbox_policy_cwd: &Path,
         codex_linux_sandbox_exe: Option<&PathBuf>,
+        windows_sandbox_level: WindowsSandboxLevel,
     ) -> Result<ExecEnv, SandboxTransformError> {
         let mut env = spec.env;
         if !policy.has_full_network_access() {
@@ -160,6 +170,7 @@ impl SandboxManager {
             env,
             expiration: spec.expiration,
             sandbox,
+            windows_sandbox_level,
             sandbox_permissions: spec.sandbox_permissions,
             justification: spec.justification,
             arg0: arg0_override,
