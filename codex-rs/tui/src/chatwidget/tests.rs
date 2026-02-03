@@ -902,8 +902,6 @@ async fn make_chatwidget_manual(
         status_line_branch_pending: false,
         status_line_branch_lookup_complete: false,
         external_editor_state: ExternalEditorState::Closed,
-        total_lines_added: 0,
-        total_lines_removed: 0,
     };
     widget.set_model(&resolved_model);
     (widget, rx, op_rx)

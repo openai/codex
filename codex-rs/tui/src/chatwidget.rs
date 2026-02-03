@@ -33,7 +33,6 @@ use std::time::Instant;
 
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::StatusLineSetupView;
-use crate::diff_render::calculate_add_remove_from_diff;
 use crate::status::RateLimitWindowDisplay;
 use crate::status::format_directory_display;
 use crate::status::format_tokens_compact;
@@ -601,8 +600,6 @@ pub(crate) struct ChatWidget {
     status_line_branch_pending: bool,
     status_line_branch_lookup_complete: bool,
     external_editor_state: ExternalEditorState,
-    total_lines_added: usize,
-    total_lines_removed: usize,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -1904,9 +1901,6 @@ impl ChatWidget {
 
     fn on_turn_diff(&mut self, unified_diff: String) {
         debug!("TurnDiffEvent: {unified_diff}");
-        let diff = calculate_add_remove_from_diff(&unified_diff);
-        self.total_lines_added = diff.0;
-        self.total_lines_removed = diff.1;
         self.refresh_status_line();
     }
 
@@ -2446,8 +2440,6 @@ impl ChatWidget {
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
-            total_lines_added: 0,
-            total_lines_removed: 0,
         };
 
         widget.prefetch_rate_limits();
@@ -2609,8 +2601,6 @@ impl ChatWidget {
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
-            total_lines_added: 0,
-            total_lines_removed: 0,
         };
 
         widget.prefetch_rate_limits();
@@ -2761,8 +2751,6 @@ impl ChatWidget {
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
-            total_lines_added: 0,
-            total_lines_removed: 0,
         };
 
         widget.prefetch_rate_limits();
