@@ -5114,13 +5114,14 @@ mod tests {
 
         let got = FunctionCallOutputPayload::from(&ctr);
         let expected = FunctionCallOutputPayload {
-            content: serde_json::to_string(&json!({
-                "ok": true,
-                "value": 42
-            }))
-            .unwrap(),
+            body: codex_protocol::models::FunctionCallOutputBody::Text(
+                serde_json::to_string(&json!({
+                    "ok": true,
+                    "value": 42
+                }))
+                .unwrap(),
+            ),
             success: Some(true),
-            ..Default::default()
         };
 
         assert_eq!(expected, got);
@@ -5157,10 +5158,10 @@ mod tests {
 
         let got = FunctionCallOutputPayload::from(&ctr);
         let expected = FunctionCallOutputPayload {
-            content: serde_json::to_string(&vec![text_block("hello"), text_block("world")])
-                .unwrap(),
+            body: codex_protocol::models::FunctionCallOutputBody::Text(
+                serde_json::to_string(&vec![text_block("hello"), text_block("world")]).unwrap(),
+            ),
             success: Some(true),
-            ..Default::default()
         };
 
         assert_eq!(expected, got);
@@ -5177,9 +5178,10 @@ mod tests {
 
         let got = FunctionCallOutputPayload::from(&ctr);
         let expected = FunctionCallOutputPayload {
-            content: serde_json::to_string(&json!({ "message": "bad" })).unwrap(),
+            body: codex_protocol::models::FunctionCallOutputBody::Text(
+                serde_json::to_string(&json!({ "message": "bad" })).unwrap(),
+            ),
             success: Some(false),
-            ..Default::default()
         };
 
         assert_eq!(expected, got);
@@ -5196,9 +5198,10 @@ mod tests {
 
         let got = FunctionCallOutputPayload::from(&ctr);
         let expected = FunctionCallOutputPayload {
-            content: serde_json::to_string(&vec![text_block("alpha")]).unwrap(),
+            body: codex_protocol::models::FunctionCallOutputBody::Text(
+                serde_json::to_string(&vec![text_block("alpha")]).unwrap(),
+            ),
             success: Some(true),
-            ..Default::default()
         };
 
         assert_eq!(expected, got);

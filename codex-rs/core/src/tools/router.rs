@@ -181,9 +181,8 @@ impl ToolRouter {
             ResponseInputItem::FunctionCallOutput {
                 call_id,
                 output: codex_protocol::models::FunctionCallOutputPayload {
-                    content: message,
+                    body: codex_protocol::models::FunctionCallOutputBody::Text(message),
                     success: Some(false),
-                    ..Default::default()
                 },
             }
         }

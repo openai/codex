@@ -5,6 +5,7 @@ use crate::tools::TELEMETRY_PREVIEW_MAX_LINES;
 use crate::tools::TELEMETRY_PREVIEW_TRUNCATION_NOTICE;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
@@ -97,13 +98,13 @@ impl ToolOutput {
                         output: content,
                     }
                 } else {
+                    let body = match content_items {
+                        Some(content_items) => FunctionCallOutputBody::ContentItems(content_items),
+                        None => FunctionCallOutputBody::Text(content),
+                    };
                     ResponseInputItem::FunctionCallOutput {
                         call_id: call_id.to_string(),
-                        output: FunctionCallOutputPayload {
-                            content,
-                            content_items,
-                            success,
-                        },
+                        output: FunctionCallOutputPayload { body, success },
                     }
                 }
             }
@@ -196,8 +197,8 @@ mod tests {
         match response {
             ResponseInputItem::FunctionCallOutput { call_id, output } => {
                 assert_eq!(call_id, "fn-1");
-                assert_eq!(output.content, "ok");
-                assert!(output.content_items.is_none());
+                assert_eq!(output.text_content(), Some("ok"));
+                assert!(output.content_items().is_none());
                 assert_eq!(output.success, Some(true));
             }
             other => panic!("expected FunctionCallOutput, got {other:?}"),

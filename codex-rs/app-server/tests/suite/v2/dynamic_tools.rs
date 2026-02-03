@@ -17,6 +17,7 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use core_test_support::responses;
@@ -223,11 +224,7 @@ async fn dynamic_tool_call_round_trip_sends_output_to_model() -> Result<()> {
         .iter()
         .find_map(|body| function_call_output_payload(body, call_id))
         .context("expected function_call_output in follow-up request")?;
-    let expected_payload = FunctionCallOutputPayload {
-        content: "dynamic-ok".to_string(),
-        content_items: None,
-        success: None,
-    };
+    let expected_payload = FunctionCallOutputPayload::from_text("dynamic-ok".to_string());
     assert_eq!(payload, expected_payload);
 
     Ok(())
@@ -377,10 +374,15 @@ async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<(
         .iter()
         .find_map(|body| function_call_output_payload(body, call_id))
         .context("expected function_call_output in follow-up request")?;
-    assert_eq!(payload.content_items, Some(content_items.clone()));
+    assert_eq!(
+        payload.body,
+        FunctionCallOutputBody::ContentItems(content_items.clone())
+    );
     assert_eq!(payload.success, None);
-    // The deserializer keeps a compatibility text mirror in `content`.
-    assert_eq!(payload.content, serde_json::to_string(&content_items)?);
+    assert_eq!(
+        serde_json::to_string(&payload)?,
+        serde_json::to_string(&content_items)?
+    );
 
     Ok(())
 }

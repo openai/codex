@@ -57,11 +57,18 @@ impl ToolHandler for McpHandler {
                 Ok(ToolOutput::Mcp { result })
             }
             codex_protocol::models::ResponseInputItem::FunctionCallOutput { output, .. } => {
-                let codex_protocol::models::FunctionCallOutputPayload {
-                    content,
-                    content_items,
-                    success,
-                } = output;
+                let success = output.success;
+                let (content, content_items) = match output.body {
+                    codex_protocol::models::FunctionCallOutputBody::Text(content) => {
+                        (content, None)
+                    }
+                    codex_protocol::models::FunctionCallOutputBody::ContentItems(content_items) => {
+                        (
+                            serde_json::to_string(&content_items).unwrap_or_default(),
+                            Some(content_items),
+                        )
+                    }
+                };
                 Ok(ToolOutput::Function {
                     content,
                     content_items,
