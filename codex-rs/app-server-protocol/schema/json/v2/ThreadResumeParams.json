@@ -242,6 +242,13 @@
       ],
       "type": "string"
     },
+    "MessagePhase": {
+      "enum": [
+        "commentary",
+        "final_answer"
+      ],
+      "type": "string"
+    },
     "Personality": {
       "enum": [
         "friendly",
@@ -339,6 +346,16 @@
                 "null"
               ],
               "writeOnly": true
+            },
+            "phase": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MessagePhase"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "role": {
               "type": "string"

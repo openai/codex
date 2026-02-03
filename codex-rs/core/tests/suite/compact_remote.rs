@@ -62,6 +62,7 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
                 text: "REMOTE_COMPACTED_SUMMARY".to_string(),
             }],
             end_turn: None,
+            phase: None,
         },
         ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
@@ -184,6 +185,7 @@ async fn remote_compact_runs_automatically() -> Result<()> {
                 text: "REMOTE_COMPACTED_SUMMARY".to_string(),
             }],
             end_turn: None,
+            phase: None,
         },
         ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
@@ -251,6 +253,7 @@ async fn remote_manual_compact_emits_context_compaction_items() -> Result<()> {
                 text: "REMOTE_COMPACTED_SUMMARY".to_string(),
             }],
             end_turn: None,
+            phase: None,
         },
         ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
@@ -352,6 +355,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
                 text: "COMPACTED_USER_SUMMARY".to_string(),
             }],
             end_turn: None,
+            phase: None,
         },
         ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
@@ -363,6 +367,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
                 text: "COMPACTED_ASSISTANT_NOTE".to_string(),
             }],
             end_turn: None,
+            phase: None,
         },
     ];
     let compact_mock = responses::mount_compact_json_once(

@@ -24,6 +24,7 @@ fn assistant_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         end_turn: None,
+        phase: None,
     }
 }
 
@@ -43,6 +44,7 @@ fn user_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         end_turn: None,
+        phase: None,
     }
 }
 
@@ -54,6 +56,7 @@ fn user_input_text_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         end_turn: None,
+        phase: None,
     }
 }
 
@@ -97,6 +100,7 @@ fn filters_non_api_messages() {
             text: "ignored".to_string(),
         }],
         end_turn: None,
+        phase: None,
     };
     let reasoning = reasoning_msg("thinking...");
     h.record_items([&system, &reasoning, &ResponseItem::Other], policy);
@@ -127,6 +131,7 @@ fn filters_non_api_messages() {
                     text: "hi".to_string()
                 }],
                 end_turn: None,
+                phase: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -135,6 +140,7 @@ fn filters_non_api_messages() {
                     text: "hello".to_string()
                 }],
                 end_turn: None,
+                phase: None,
             }
         ]
     );
@@ -262,6 +268,7 @@ fn replace_last_turn_images_does_not_touch_user_images() {
             image_url: "data:image/png;base64,AAA".to_string(),
         }],
         end_turn: None,
+        phase: None,
     }];
     let mut history = create_history_with_items(items.clone());
 

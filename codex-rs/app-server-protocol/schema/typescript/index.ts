@@ -115,6 +115,7 @@ export type { McpStartupStatus } from "./McpStartupStatus";
 export type { McpStartupUpdateEvent } from "./McpStartupUpdateEvent";
 export type { McpToolCallBeginEvent } from "./McpToolCallBeginEvent";
 export type { McpToolCallEndEvent } from "./McpToolCallEndEvent";
+export type { MessagePhase } from "./MessagePhase";
 export type { ModeKind } from "./ModeKind";
 export type { NetworkAccess } from "./NetworkAccess";
 export type { NewConversationParams } from "./NewConversationParams";

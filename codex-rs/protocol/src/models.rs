@@ -72,6 +72,13 @@ pub enum ContentItem {
     OutputText { text: String },
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum MessagePhase {
+    Commentary,
+    FinalAnswer,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseItem {
@@ -85,6 +92,11 @@ pub enum ResponseItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         end_turn: Option<bool>,
+        // Optional output-message phase (for example: "commentary", "final_answer").
+        // Do not use directly; availability can vary by provider and model.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        phase: Option<MessagePhase>,
     },
     Reasoning {
         #[serde(default, skip_serializing)]
@@ -439,6 +451,7 @@ impl From<DeveloperInstructions> for ResponseItem {
                 text: di.into_text(),
             }],
             end_turn: None,
+            phase: None,
         }
     }
 }
@@ -596,6 +609,7 @@ impl From<ResponseInputItem> for ResponseItem {
                 content,
                 id: None,
                 end_turn: None,
+                phase: None,
             },
             ResponseInputItem::FunctionCallOutput { call_id, output } => {
                 Self::FunctionCallOutput { call_id, output }

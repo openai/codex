@@ -1691,6 +1691,7 @@ impl From<CompactedItem> for ResponseItem {
                 text: value.message,
             }],
             end_turn: None,
+            phase: None,
         }
     }
 }

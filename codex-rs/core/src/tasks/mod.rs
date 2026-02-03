@@ -265,6 +265,7 @@ impl Session {
                     ),
                 }],
                 end_turn: None,
+                phase: None,
             };
             self.record_into_history(std::slice::from_ref(&marker), task.turn_context.as_ref())
                 .await;
