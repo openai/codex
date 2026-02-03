@@ -4010,10 +4010,6 @@ impl ChatWidget {
             StatusLineItem::ContextUsed => self
                 .status_line_context_used_percent()
                 .map(|used| format!("{used}% used")),
-            StatusLineItem::GitLines => Some(format!(
-                "+{}/-{}",
-                self.total_lines_added, self.total_lines_removed
-            )),
             StatusLineItem::FiveDayLimit => self.status_line_limit_display(
                 self.rate_limit_snapshot
                     .as_ref()
