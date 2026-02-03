@@ -13,7 +13,6 @@ use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
-use crate::chatwidget::build_status_line_payload;
 use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
@@ -30,7 +29,6 @@ use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
-use crate::status_line::StatusLineRunner;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
@@ -525,7 +523,6 @@ pub(crate) struct App {
     runtime_sandbox_policy_override: Option<SandboxPolicy>,
 
     pub(crate) file_search: FileSearchManager,
-    pub(crate) status_line_runner: StatusLineRunner,
 
     pub(crate) transcript_cells: Vec<Arc<dyn HistoryCell>>,
 
@@ -1081,7 +1078,6 @@ impl App {
         chat_widget.maybe_prompt_windows_sandbox_enable();
 
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
-        let status_line_runner = StatusLineRunner::new(config.clone(), app_event_tx.clone());
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
 
@@ -1098,7 +1094,6 @@ impl App {
             runtime_approval_policy_override: None,
             runtime_sandbox_policy_override: None,
             file_search,
-            status_line_runner,
             enhanced_keys_supported,
             transcript_cells: Vec::new(),
             overlay: None,
@@ -1384,10 +1379,6 @@ impl App {
                                 self.config = resume_config;
                                 tui.set_notification_method(self.config.tui_notification_method);
                                 self.file_search.update_search_dir(self.config.cwd.clone());
-                                self.status_line_runner = StatusLineRunner::new(
-                                    self.config.clone(),
-                                    self.app_event_tx.clone(),
-                                );
                                 let init = self.chatwidget_init_for_forked_or_resumed_thread(
                                     tui,
                                     self.config.clone(),
@@ -2228,23 +2219,24 @@ impl App {
                     ));
                 }
             },
-            AppEvent::StatusLineUpdated(status_line_value) => {
-                self.chat_widget.set_status_line(Some(status_line_value));
-            }
-            AppEvent::StatusLineTimeoutWarning { timeout_ms } => {
-                self.chat_widget.add_info_message(
-                    format!(
-                        "Status line command timed out after {timeout_ms}ms. Consider optimizing the command."
-                    ),
-                    None,
-                );
-            }
-            AppEvent::StatusLineErrorWarning { message } => {
-                self.chat_widget
-                    .add_error_message(format!("Status line command failed. Check tui.status_line in your config.toml. Error: {message}"));
-            }
             AppEvent::StatusLineSetup { items } => {
+                let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
+                let edit = codex_core::config::edit::status_line_items_edit(&ids);
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_edits([edit])
+                    .apply()
+                    .await
+                {
+                    tracing::error!(error = %err, "failed to persist status line items");
+                    self.chat_widget
+                        .add_error_message(format!("Failed to save status line items: {err}"));
+                }
+
                 self.chat_widget.setup_status_line(items);
+            }
+            AppEvent::StatusLineBranchUpdated { cwd, branch } => {
+                self.chat_widget.set_status_line_branch(cwd, branch);
+                self.refresh_status_line();
             }
             AppEvent::StatusLineSetupCancelled => {
                 self.chat_widget.cancel_status_line_setup();
@@ -2528,23 +2520,7 @@ impl App {
     }
 
     fn refresh_status_line(&mut self) {
-        let payload = match serde_json::to_string(&build_status_line_payload(
-            &self.chat_widget,
-            &self.config,
-        )) {
-            Ok(payload) => payload,
-            Err(err) => {
-                tracing::warn!(error = %err, "status line: failed to serialize payload");
-                return;
-            }
-        };
-        if let Err(err) = self.status_line_runner.update_payload(payload) {
-            tracing::warn!(error = %err, "status line: update_payload failed");
-            return;
-        }
-        if let Err(err) = self.status_line_runner.request_update() {
-            tracing::warn!(error = %err, "status line: request_update failed");
-        }
+        self.chat_widget.refresh_status_line();
     }
 
     #[cfg(target_os = "windows")]
@@ -2681,7 +2657,6 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
-        let status_line_runner = StatusLineRunner::new(config.clone(), app_event_tx.clone());
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let otel_manager = test_otel_manager(&config, model.as_str());
 
@@ -2698,7 +2673,6 @@ mod tests {
             runtime_approval_policy_override: None,
             runtime_sandbox_policy_override: None,
             file_search,
-            status_line_runner,
             transcript_cells: Vec::new(),
             overlay: None,
             deferred_history_lines: Vec::new(),
@@ -2735,7 +2709,6 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
-        let status_line_runner = StatusLineRunner::new(config.clone(), app_event_tx.clone());
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let otel_manager = test_otel_manager(&config, model.as_str());
 
@@ -2753,7 +2726,6 @@ mod tests {
                 runtime_approval_policy_override: None,
                 runtime_sandbox_policy_override: None,
                 file_search,
-                status_line_runner,
                 transcript_cells: Vec::new(),
                 overlay: None,
                 deferred_history_lines: Vec::new(),

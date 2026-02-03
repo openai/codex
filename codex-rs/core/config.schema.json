@@ -1049,7 +1049,7 @@
         },
         "status_line": {
           "default": null,
-          "description": "Optional command (argv form) to generate a custom TUI status line.\n\nWhen set, Codex will execute the command with a JSON payload on stdin and render the first line of stdout as the status line. Unset disables the custom status line.",
+          "description": "Ordered list of status line item identifiers.\n\nWhen set, the TUI renders the selected items as the status line.",
           "items": {
             "type": "string"
           },

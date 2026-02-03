@@ -1564,10 +1564,9 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: None,
             context_window_used_tokens: None,
-            status_line_value: Some(StatusLineValue {
-                text: "Status line content".to_string(),
-                spans: None,
-            }),
+            status_line_value: Some(StatusLineValue::from_text(
+                "Status line content".to_string(),
+            )),
             status_line_enabled: true,
         };
 
@@ -1651,11 +1650,9 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: Some(50),
             context_window_used_tokens: None,
-            status_line_value: Some(StatusLineValue {
-                text: "Status line content that should truncate before the mode indicator"
-                    .to_string(),
-                spans: None,
-            }),
+            status_line_value: Some(StatusLineValue::from_text(
+                "Status line content that should truncate before the mode indicator".to_string(),
+            )),
             status_line_enabled: true,
         };
 
@@ -1680,11 +1677,10 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: Some(50),
             context_window_used_tokens: None,
-            status_line_value: Some(StatusLineValue {
-                text: "Status line content that is definitely too long to fit alongside the mode label"
+            status_line_value: Some(StatusLineValue::from_text(
+                "Status line content that is definitely too long to fit alongside the mode label"
                     .to_string(),
-                spans: None,
-            }),
+            )),
             status_line_enabled: true,
         };
 

@@ -63,6 +63,7 @@ pub(crate) struct MultiSelectPicker {
     preview_line: Option<Line<'static>>,
     on_change: Option<ChangeCallBack>,
     on_confirm: Option<ConfirmCallback>,
+    #[allow(dead_code)]
     on_cancel: Option<CancelCallback>,
 }
 
@@ -488,11 +489,6 @@ impl MultiSelectPickerBuilder {
         self
     }
 
-    pub fn add_item(mut self, item: MultiSelectItem) -> Self {
-        self.items.push(item);
-        self
-    }
-
     pub fn instructions(mut self, instructions: Vec<Span<'static>>) -> Self {
         self.instructions = instructions;
         self
@@ -511,6 +507,7 @@ impl MultiSelectPickerBuilder {
         self
     }
 
+    #[allow(dead_code)]
     pub fn on_change<F>(mut self, callback: F) -> Self
     where
         F: Fn(&[MultiSelectItem], &AppEventSender) + Send + Sync + 'static,

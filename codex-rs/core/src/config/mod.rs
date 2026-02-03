@@ -224,7 +224,7 @@ pub struct Config {
     /// - `never`: Never use alternate screen (inline mode, preserves scrollback).
     pub tui_alternate_screen: AltScreenMode,
 
-    /// Optional command (argv form) to generate a custom TUI status line.
+    /// Ordered list of status line item identifiers for the TUI.
     pub tui_status_line: Option<Vec<String>>,
 
     /// The directory that should be treated as the current working directory

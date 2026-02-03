@@ -29,18 +29,25 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::StatusLineSetupView;
 use crate::diff_render::calculate_add_remove_from_diff;
+use crate::status::RateLimitWindowDisplay;
+use crate::status::format_directory_display;
+use crate::status::format_tokens_compact;
 use crate::status_line::StatusLineValue;
 use crate::version::CODEX_CLI_VERSION;
+use codex_app_server_protocol::ConfigLayerSource;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
 use codex_core::config::Config;
 use codex_core::config::ConstraintResult;
 use codex_core::config::types::Notifications;
+use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::features::FEATURES;
 use codex_core::features::Feature;
 use codex_core::git_info::current_branch_name;
+use codex_core::git_info::get_git_repo_root;
 use codex_core::git_info::local_git_branches;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
@@ -585,6 +592,9 @@ pub(crate) struct ChatWidget {
     current_rollout_path: Option<PathBuf>,
     // Current working directory (if known)
     current_cwd: Option<PathBuf>,
+    status_line_branch: Option<String>,
+    status_line_branch_cwd: Option<PathBuf>,
+    status_line_branch_pending: bool,
     external_editor_state: ExternalEditorState,
     total_lines_added: usize,
     total_lines_removed: usize,
@@ -803,13 +813,55 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn refresh_status_line(&mut self) {
+        let items = self.status_line_items();
+        let enabled = !items.is_empty();
+        self.bottom_pane.set_status_line_enabled(enabled);
+        if !enabled {
+            self.set_status_line(None);
+            return;
+        }
+
+        let cwd = self.status_line_cwd().to_path_buf();
+        self.sync_status_line_branch_state(&cwd);
+
+        if items.contains(&StatusLineItem::GitBranch) && self.status_line_branch.is_none() {
+            self.request_status_line_branch(cwd);
+        }
+
+        let mut parts = Vec::new();
+        for item in items {
+            if let Some(value) = self.status_line_value_for_item(&item) {
+                parts.push(value);
+            }
+        }
+
+        let line = if parts.is_empty() {
+            None
+        } else {
+            Some(StatusLineValue::from_text(parts.join(" · ")))
+        };
+        self.set_status_line(line);
+    }
+
     pub(crate) fn cancel_status_line_setup(&self) {
         tracing::info!("Status line setup canceled by user");
     }
 
-    pub(crate) fn setup_status_line(&mut self, items: Vec<String>) {
+    pub(crate) fn setup_status_line(&mut self, items: Vec<StatusLineItem>) {
         tracing::info!("status line setup confirmed with items: {items:#?}");
-        self.bottom_pane.setup_status_line(items);
+        let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
+        self.config.tui_status_line = if ids.is_empty() { None } else { Some(ids) };
+        self.refresh_status_line();
+    }
+
+    pub(crate) fn set_status_line_branch(&mut self, cwd: PathBuf, branch: Option<String>) {
+        if self.status_line_branch_cwd.as_ref() != Some(&cwd) {
+            self.status_line_branch_pending = false;
+            return;
+        }
+        self.status_line_branch = branch;
+        self.status_line_branch_pending = false;
     }
 
     fn restore_retry_status_header_if_present(&mut self) {
@@ -1300,6 +1352,7 @@ impl ChatWidget {
         } else {
             self.rate_limit_snapshot = None;
         }
+        self.refresh_status_line();
     }
     /// Finalize any active exec as failed and stop/clear agent-turn UI state.
     ///
@@ -1825,6 +1878,7 @@ impl ChatWidget {
         let diff = calculate_add_remove_from_diff(&unified_diff);
         self.total_lines_added = diff.0;
         self.total_lines_removed = diff.1;
+        self.refresh_status_line();
     }
 
     fn on_deprecation_notice(&mut self, event: DeprecationNoticeEvent) {
@@ -2356,6 +2410,9 @@ impl ChatWidget {
             feedback_audience,
             current_rollout_path: None,
             current_cwd,
+            status_line_branch: None,
+            status_line_branch_cwd: None,
+            status_line_branch_pending: false,
             external_editor_state: ExternalEditorState::Closed,
             total_lines_added: 0,
             total_lines_removed: 0,
@@ -2365,9 +2422,13 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
-        widget
-            .bottom_pane
-            .set_status_line_enabled(widget.config.tui_status_line.is_some());
+        widget.bottom_pane.set_status_line_enabled(
+            widget
+                .config
+                .tui_status_line
+                .as_ref()
+                .is_some_and(|items| !items.is_empty()),
+        );
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
@@ -2509,6 +2570,9 @@ impl ChatWidget {
             feedback_audience,
             current_rollout_path: None,
             current_cwd,
+            status_line_branch: None,
+            status_line_branch_cwd: None,
+            status_line_branch_pending: false,
             external_editor_state: ExternalEditorState::Closed,
             total_lines_added: 0,
             total_lines_removed: 0,
@@ -2518,9 +2582,13 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
-        widget
-            .bottom_pane
-            .set_status_line_enabled(widget.config.tui_status_line.is_some());
+        widget.bottom_pane.set_status_line_enabled(
+            widget
+                .config
+                .tui_status_line
+                .as_ref()
+                .is_some_and(|items| !items.is_empty()),
+        );
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
@@ -2651,6 +2719,9 @@ impl ChatWidget {
             feedback_audience,
             current_rollout_path: None,
             current_cwd,
+            status_line_branch: None,
+            status_line_branch_cwd: None,
+            status_line_branch_pending: false,
             external_editor_state: ExternalEditorState::Closed,
             total_lines_added: 0,
             total_lines_removed: 0,
@@ -2660,9 +2731,13 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
-        widget
-            .bottom_pane
-            .set_status_line_enabled(widget.config.tui_status_line.is_some());
+        widget.bottom_pane.set_status_line_enabled(
+            widget
+                .config
+                .tui_status_line
+                .as_ref()
+                .is_some_and(|items| !items.is_empty()),
+        );
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
@@ -3838,8 +3913,189 @@ impl ChatWidget {
     }
 
     fn open_status_line_setup(&mut self) {
-        let view = StatusLineSetupView::new(self.app_event_tx.clone());
+        let view = StatusLineSetupView::new(
+            self.config.tui_status_line.as_deref(),
+            self.app_event_tx.clone(),
+        );
         self.bottom_pane.show_view(Box::new(view));
+    }
+
+    fn status_line_items(&self) -> Vec<StatusLineItem> {
+        self.config
+            .tui_status_line
+            .as_ref()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|id| id.parse::<StatusLineItem>().ok())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn status_line_cwd(&self) -> &Path {
+        self.current_cwd.as_ref().unwrap_or(&self.config.cwd)
+    }
+
+    fn status_line_project_root(&self) -> Option<PathBuf> {
+        let cwd = self.status_line_cwd();
+        if let Some(repo_root) = get_git_repo_root(cwd) {
+            return Some(repo_root);
+        }
+
+        self.config
+            .config_layer_stack
+            .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
+            .iter()
+            .find_map(|layer| match &layer.name {
+                ConfigLayerSource::Project { dot_codex_folder } => {
+                    dot_codex_folder.as_path().parent().map(Path::to_path_buf)
+                }
+                _ => None,
+            })
+    }
+
+    fn status_line_project_root_name(&self) -> Option<String> {
+        self.status_line_project_root().map(|root| {
+            root.file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| format_directory_display(&root, None))
+        })
+    }
+
+    fn sync_status_line_branch_state(&mut self, cwd: &Path) {
+        if self
+            .status_line_branch_cwd
+            .as_ref()
+            .is_some_and(|path| path == cwd)
+        {
+            return;
+        }
+        self.status_line_branch_cwd = Some(cwd.to_path_buf());
+        self.status_line_branch = None;
+        self.status_line_branch_pending = false;
+    }
+
+    fn request_status_line_branch(&mut self, cwd: PathBuf) {
+        if self.status_line_branch_pending {
+            return;
+        }
+        self.status_line_branch_pending = true;
+        let tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let branch = current_branch_name(&cwd).await;
+            tx.send(AppEvent::StatusLineBranchUpdated { cwd, branch });
+        });
+    }
+
+    fn status_line_value_for_item(&self, item: &StatusLineItem) -> Option<String> {
+        match item {
+            StatusLineItem::ModelName => Some(self.model_display_name().to_string()),
+            StatusLineItem::ModelWithReasoning => {
+                let label =
+                    Self::status_line_reasoning_effort_label(self.effective_reasoning_effort());
+                Some(format!("{} {label}", self.model_display_name()))
+            }
+            StatusLineItem::CurrentDir => {
+                Some(format_directory_display(self.status_line_cwd(), None))
+            }
+            StatusLineItem::ProjectRoot => self.status_line_project_root_name(),
+            StatusLineItem::GitBranch => self.status_line_branch.clone(),
+            StatusLineItem::ContextRemaining => self
+                .status_line_context_remaining_percent()
+                .map(|remaining| format!("{remaining}% left")),
+            StatusLineItem::ContextUsed => self
+                .status_line_context_used_percent()
+                .map(|used| format!("{used}% used")),
+            StatusLineItem::GitLines => Some(format!(
+                "+{}/-{}",
+                self.total_lines_added, self.total_lines_removed
+            )),
+            StatusLineItem::FiveDayLimit => self.status_line_limit_display(
+                self.rate_limit_snapshot
+                    .as_ref()
+                    .and_then(|s| s.primary.as_ref()),
+                "5h",
+            ),
+            StatusLineItem::WeeklyLimit => self.status_line_limit_display(
+                self.rate_limit_snapshot
+                    .as_ref()
+                    .and_then(|s| s.secondary.as_ref()),
+                "7d",
+            ),
+            StatusLineItem::CodexVersion => Some(CODEX_CLI_VERSION.to_string()),
+            StatusLineItem::ContextWindowSize => self
+                .status_line_context_window_size()
+                .map(format_tokens_compact),
+            StatusLineItem::TotalInputTokens => Some(format_tokens_compact(
+                self.status_line_total_usage().input_tokens,
+            )),
+            StatusLineItem::TotalOutputTokens => Some(format_tokens_compact(
+                self.status_line_total_usage().output_tokens,
+            )),
+            StatusLineItem::SessionId => self.thread_id.map(|id| id.to_string()),
+            StatusLineItem::SessionIdPrefix => self
+                .thread_id
+                .map(|id| id.to_string())
+                .map(|id| id.chars().take(8).collect()),
+        }
+    }
+
+    fn status_line_context_window_size(&self) -> Option<i64> {
+        self.token_info
+            .as_ref()
+            .and_then(|info| info.model_context_window)
+            .or(self.config.model_context_window)
+    }
+
+    fn status_line_context_remaining_percent(&self) -> Option<i64> {
+        let Some(context_window) = self.status_line_context_window_size() else {
+            return Some(100);
+        };
+        let default_usage = TokenUsage::default();
+        let usage = self
+            .token_info
+            .as_ref()
+            .map(|info| &info.last_token_usage)
+            .unwrap_or(&default_usage);
+        Some(
+            usage
+                .percent_of_context_window_remaining(context_window)
+                .clamp(0, 100),
+        )
+    }
+
+    fn status_line_context_used_percent(&self) -> Option<i64> {
+        let remaining = self.status_line_context_remaining_percent().unwrap_or(100);
+        Some((100 - remaining).clamp(0, 100))
+    }
+
+    fn status_line_total_usage(&self) -> TokenUsage {
+        self.token_info
+            .as_ref()
+            .map(|info| info.total_token_usage.clone())
+            .unwrap_or_default()
+    }
+
+    fn status_line_limit_display(
+        &self,
+        window: Option<&RateLimitWindowDisplay>,
+        label: &str,
+    ) -> Option<String> {
+        let window = window?;
+        let remaining = (100.0f64 - window.used_percent).clamp(0.0f64, 100.0f64);
+        Some(format!("{label} {remaining:.0}%"))
+    }
+
+    fn status_line_reasoning_effort_label(effort: Option<ReasoningEffortConfig>) -> &'static str {
+        match effort {
+            Some(ReasoningEffortConfig::Minimal) => "minimal",
+            Some(ReasoningEffortConfig::Low) => "low",
+            Some(ReasoningEffortConfig::Medium) => "medium",
+            Some(ReasoningEffortConfig::High) => "high",
+            Some(ReasoningEffortConfig::XHigh) => "xhigh",
+            None | Some(ReasoningEffortConfig::None) => "default",
+        }
     }
 
     pub(crate) fn add_ps_output(&mut self) {
@@ -6415,182 +6671,6 @@ async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Option<RateLimi
             None
         }
     }
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct StatusLineInfo {
-    pub session_id: Option<ThreadId>,
-    pub transcript_path: Option<PathBuf>,
-    pub cwd: PathBuf,
-    pub workspace: StatusLineWorkspace,
-    pub model: StatusLineModel,
-    pub version: String,
-    pub cost: StatusLineCost,
-    pub context_window: StatusLineContextWindow,
-    pub usage: Option<StatusLineUsage>,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct StatusLineWorkspace {
-    pub project_dir: PathBuf,
-    pub current_dir: PathBuf,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct StatusLineModel {
-    pub id: String,
-    pub display_name: String,
-    pub reasoning_level: String,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct StatusLineCost {
-    pub total_lines_added: usize,
-    pub total_lines_removed: usize,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct StatusLineContextWindow {
-    pub total_input_tokens: i64,
-    pub total_output_tokens: i64,
-    pub context_window_size: Option<i64>,
-    pub used_percentage: Option<f64>,
-    pub remaining_percentage: Option<f64>,
-    pub current_usage: StatusLineCurrentUsage,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct StatusLineCurrentUsage {
-    pub input_tokens: i64,
-    pub output_tokens: i64,
-    pub cache_read_input_tokens: i64,
-    pub reasoning_output_tokens: i64,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct StatusLineUsageLimit {
-    pub percent_left: f64,
-    pub resets_at: Option<String>,
-    pub resets_at_raw: Option<String>,
-    pub window_minutes: Option<i64>,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct StatusLineUsage {
-    pub limit_5h: Option<StatusLineUsageLimit>,
-    pub limit_7d: Option<StatusLineUsageLimit>,
-}
-
-fn status_line_usage_limit(
-    used_percent: f64,
-    resets_at: Option<String>,
-    resets_at_raw: Option<String>,
-    window_minutes: Option<i64>,
-) -> StatusLineUsageLimit {
-    StatusLineUsageLimit {
-        percent_left: (100.0f64 - used_percent).clamp(0.0f64, 100.0f64),
-        resets_at,
-        resets_at_raw,
-        window_minutes,
-    }
-}
-
-fn status_line_usage_payload(chat: &ChatWidget) -> Option<StatusLineUsage> {
-    let auth = chat.auth_manager.auth_cached()?;
-    if !auth.is_chatgpt_auth() {
-        return None;
-    }
-
-    let snapshot = chat.rate_limit_snapshot.as_ref()?;
-    let payload = StatusLineUsage {
-        limit_5h: snapshot.primary.as_ref().map(|window| {
-            status_line_usage_limit(
-                window.used_percent,
-                window.resets_at.clone(),
-                window.resets_at_raw.clone(),
-                window.window_minutes,
-            )
-        }),
-        limit_7d: snapshot.secondary.as_ref().map(|window| {
-            status_line_usage_limit(
-                window.used_percent,
-                window.resets_at.clone(),
-                window.resets_at_raw.clone(),
-                window.window_minutes,
-            )
-        }),
-    };
-
-    if payload.limit_5h.is_none() && payload.limit_7d.is_none() {
-        return None;
-    }
-
-    Some(payload)
-}
-
-pub fn build_status_line_payload(chat: &ChatWidget, config: &Config) -> StatusLineInfo {
-    let session_id = chat.thread_id;
-    let transcript_path = chat.current_rollout_path.clone();
-    let cwd = chat.current_cwd.as_ref().unwrap_or(&config.cwd);
-    let project_dir = codex_core::git_info::resolve_root_git_project_for_trust(cwd)
-        .unwrap_or_else(|| cwd.clone());
-    let reasoning_level = chat
-        .effective_reasoning_effort()
-        .map(|effort| effort.to_string())
-        .unwrap_or_else(|| "none".to_string());
-    let version = CODEX_CLI_VERSION.to_string();
-    let default_usage = TokenUsage::default();
-    let (context_usage, context_window_size) = match chat.token_info.as_ref() {
-        Some(info) => (&info.last_token_usage, info.model_context_window),
-        None => (&default_usage, config.model_context_window),
-    };
-    let remaining_percentage = context_window_size
-        .map(|cws| context_usage.percent_of_context_window_remaining(cws) as f64);
-    let used_percentage = remaining_percentage.map(|rp| 100f64 - rp);
-    let model_display_name = chat
-        .models_manager
-        .try_list_models(&chat.config)
-        .ok()
-        .and_then(|models| models.into_iter().find(|m| m.model == chat.current_model()))
-        .map(|m| m.display_name)
-        .unwrap_or_else(|| chat.current_model().to_string());
-
-    let payload = StatusLineInfo {
-        session_id,
-        transcript_path,
-        cwd: cwd.clone(),
-        workspace: StatusLineWorkspace {
-            project_dir,
-            current_dir: cwd.clone(),
-        },
-        model: StatusLineModel {
-            id: chat.current_model().to_string(),
-            display_name: model_display_name,
-            reasoning_level,
-        },
-        version,
-        cost: StatusLineCost {
-            total_lines_added: chat.total_lines_added,
-            total_lines_removed: chat.total_lines_removed,
-        },
-        context_window: StatusLineContextWindow {
-            total_input_tokens: context_usage.input_tokens,
-            total_output_tokens: context_usage.output_tokens,
-            context_window_size,
-            used_percentage,
-            remaining_percentage,
-            current_usage: StatusLineCurrentUsage {
-                input_tokens: context_usage.input_tokens,
-                output_tokens: context_usage.output_tokens,
-                cache_read_input_tokens: context_usage.cached_input_tokens,
-                reasoning_output_tokens: context_usage.reasoning_output_tokens,
-            },
-        },
-        usage: status_line_usage_payload(chat),
-    };
-
-    tracing::debug!("status line payload: {:#?}", payload);
-    payload
 }
 
 #[cfg(test)]

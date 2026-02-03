@@ -487,11 +487,9 @@ pub struct Tui {
     #[serde(default)]
     pub alternate_screen: AltScreenMode,
 
-    /// Optional command (argv form) to generate a custom TUI status line.
+    /// Ordered list of status line item identifiers.
     ///
-    /// When set, Codex will execute the command with a JSON payload on stdin and
-    /// render the first line of stdout as the status line. Unset disables the
-    /// custom status line.
+    /// When set, the TUI renders the selected items as the status line.
     #[serde(default)]
     pub status_line: Option<Vec<String>>,
 }

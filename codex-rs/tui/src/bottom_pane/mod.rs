@@ -77,6 +77,7 @@ pub(crate) use feedback_view::feedback_selection_params;
 pub(crate) use feedback_view::feedback_upload_consent_params;
 pub(crate) use skills_toggle_view::SkillsToggleItem;
 pub(crate) use skills_toggle_view::SkillsToggleView;
+pub(crate) use status_line_setup::StatusLineItem;
 pub(crate) use status_line_setup::StatusLineSetupView;
 mod paste_burst;
 pub mod popup_consts;
@@ -875,10 +876,6 @@ impl BottomPane {
     pub(crate) fn set_status_line_enabled(&mut self, enabled: bool) {
         self.composer.set_status_line_enabled(enabled);
         self.request_redraw();
-    }
-
-    pub(crate) fn setup_status_line(&mut self, items: Vec<String>) {
-        tracing::info!("Setting up status line with items: {:?}", items);
     }
 }
 

@@ -19,8 +19,8 @@ use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 
 use crate::bottom_pane::ApprovalRequest;
+use crate::bottom_pane::StatusLineItem;
 use crate::history_cell::HistoryCell;
-use crate::status_line::StatusLineValue;
 
 use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
@@ -294,20 +294,13 @@ pub(crate) enum AppEvent {
     /// Launch the external editor after a normal draw has completed.
     LaunchExternalEditor,
 
-    /// The last text output of the status line script execution.
-    StatusLineUpdated(StatusLineValue),
-
-    /// Warns the user the first time the status line script times out.
-    StatusLineTimeoutWarning {
-        timeout_ms: u64,
-    },
-
-    /// Warns the user the first time the status line script fails (non-timeout).
-    StatusLineErrorWarning {
-        message: String,
+    /// Async update of the current git branch for status line rendering.
+    StatusLineBranchUpdated {
+        cwd: PathBuf,
+        branch: Option<String>,
     },
     StatusLineSetup {
-        items: Vec<String>,
+        items: Vec<StatusLineItem>,
     },
     StatusLineSetupCancelled,
 }
