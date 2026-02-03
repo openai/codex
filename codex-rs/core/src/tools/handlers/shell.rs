@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use crate::codex::TurnContext;
 use crate::exec::ExecParams;
+use crate::exec_env::CODEX_SESSION_ID_ENV_VAR;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::function_tool::FunctionCallError;
@@ -238,6 +239,10 @@ impl ShellHandler {
         if !dependency_env.is_empty() {
             exec_params.env.extend(dependency_env);
         }
+        exec_params
+            .env
+            .entry(CODEX_SESSION_ID_ENV_VAR.to_string())
+            .or_insert_with(|| session.conversation_id.to_string());
 
         // Approval policy guard for explicit escalation in non-OnRequest modes.
         if exec_params
