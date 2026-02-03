@@ -53,7 +53,7 @@ async fn responses_websocket_streams_request() {
     .await;
 
     let harness = websocket_harness(&server).await;
-    let mut session = harness.client.new_session();
+    let mut session = harness.client.new_session(None);
     let prompt = prompt_with_input(vec![message_item("hello")]);
 
     stream_until_complete(&mut session, &prompt).await;
@@ -83,7 +83,7 @@ async fn responses_websocket_emits_websocket_telemetry_events() {
 
     let harness = websocket_harness(&server).await;
     harness.otel_manager.reset_runtime_metrics();
-    let mut session = harness.client.new_session();
+    let mut session = harness.client.new_session(None);
     let prompt = prompt_with_input(vec![message_item("hello")]);
 
     stream_until_complete(&mut session, &prompt).await;
@@ -113,7 +113,7 @@ async fn responses_websocket_emits_reasoning_included_event() {
     .await;
 
     let harness = websocket_harness(&server).await;
-    let mut session = harness.client.new_session();
+    let mut session = harness.client.new_session(None);
     let prompt = prompt_with_input(vec![message_item("hello")]);
 
     let mut stream = session
@@ -147,7 +147,7 @@ async fn responses_websocket_appends_on_prefix() {
     .await;
 
     let harness = websocket_harness(&server).await;
-    let mut session = harness.client.new_session();
+    let mut session = harness.client.new_session(None);
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let prompt_two = prompt_with_input(vec![message_item("hello"), message_item("second")]);
 
@@ -183,7 +183,7 @@ async fn responses_websocket_creates_on_non_prefix() {
     .await;
 
     let harness = websocket_harness(&server).await;
-    let mut session = harness.client.new_session();
+    let mut session = harness.client.new_session(None);
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let prompt_two = prompt_with_input(vec![message_item("different")]);
 
