@@ -32,12 +32,28 @@ const MAX_REQUEST_MAX_RETRIES: u64 = 100;
 const OPENAI_PROVIDER_NAME: &str = "OpenAI";
 
 /// Wire protocol that the provider speaks.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum WireApi {
     /// The Responses API exposed by OpenAI at `/v1/responses`.
     #[default]
     Responses,
+}
+
+impl<'de> Deserialize<'de> for WireApi {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        match value.as_str() {
+            "responses" => Ok(Self::Responses),
+            "chat" => Err(serde::de::Error::custom(
+                "`wire_api = \"chat\"` is no longer supported. Support of `chat/completions` API has been removed; use `wire_api = \"responses\"`. See https://github.com/openai/codex/discussions/7782 for details.",
+            )),
+            _ => Err(serde::de::Error::unknown_variant(&value, &["responses"])),
+        }
+    }
 }
 
 /// Serializable representation of a provider definition.
@@ -425,5 +441,22 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
         assert_eq!(expected_provider, provider);
+    }
+
+    #[test]
+    fn test_deserialize_chat_wire_api_shows_helpful_error() {
+        let provider_toml = r#"
+name = "OpenAI using Chat Completions"
+base_url = "https://api.openai.com/v1"
+env_key = "OPENAI_API_KEY"
+wire_api = "chat"
+        "#;
+
+        let err = toml::from_str::<ModelProviderInfo>(provider_toml).unwrap_err();
+        assert!(
+            err.to_string().contains(
+                "`wire_api = \"chat\"` is no longer supported. Support of `chat/completions` API has been removed; use `wire_api = \"responses\"`. See https://github.com/openai/codex/discussions/7782 for details.",
+            )
+        );
     }
 }
