@@ -54,6 +54,8 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::request_user_input::RequestUserInputAnswer;
+use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::user_input::TextElement;
 use image::DynamicImage;
 use image::ImageReader;
@@ -1772,6 +1774,151 @@ pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     // in terminals like Ghostty.
     let lines: Vec<Line<'static>> = vec![vec![format!("■ {message}").red()].into()];
     PlainHistoryCell { lines }
+}
+
+/// Renders a completed (or interrupted) request_user_input exchange in history.
+#[derive(Debug)]
+pub(crate) struct RequestUserInputResultCell {
+    pub(crate) questions: Vec<RequestUserInputQuestion>,
+    pub(crate) answers: HashMap<String, RequestUserInputAnswer>,
+    pub(crate) interrupted: bool,
+}
+
+impl HistoryCell for RequestUserInputResultCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let width = width.max(1) as usize;
+        let total = self.questions.len();
+        let answered = self
+            .questions
+            .iter()
+            .filter(|question| {
+                self.answers
+                    .get(&question.id)
+                    .is_some_and(|answer| !answer.answers.is_empty())
+            })
+            .count();
+        let unanswered = total.saturating_sub(answered);
+
+        let mut header = vec!["•".dim(), " ".into(), "Questions".bold()];
+        header.push(format!(" {answered}/{total} answered").dim());
+        if self.interrupted {
+            header.push(" (interrupted)".cyan());
+        }
+
+        let mut lines: Vec<Line<'static>> = vec![header.into()];
+
+        for question in &self.questions {
+            let answer = self.answers.get(&question.id);
+            let answer_missing = match answer {
+                Some(answer) => answer.answers.is_empty(),
+                None => true,
+            };
+            let mut question_lines = wrap_with_prefix(
+                &question.question,
+                width,
+                "  • ".into(),
+                "    ".into(),
+                Style::default(),
+            );
+            if answer_missing && let Some(last) = question_lines.last_mut() {
+                last.spans.push(" (unanswered)".dim());
+            }
+            lines.extend(question_lines);
+
+            let Some(answer) = answer.filter(|answer| !answer.answers.is_empty()) else {
+                continue;
+            };
+            if question.is_secret {
+                lines.extend(wrap_with_prefix(
+                    "••••••",
+                    width,
+                    "    answer: ".dim(),
+                    "            ".dim(),
+                    Style::default().fg(Color::Cyan),
+                ));
+                continue;
+            }
+
+            let (options, note) = split_request_user_input_answer(answer);
+
+            for option in options {
+                lines.extend(wrap_with_prefix(
+                    &option,
+                    width,
+                    "    answer: ".dim(),
+                    "            ".dim(),
+                    Style::default().fg(Color::Cyan),
+                ));
+            }
+            if let Some(note) = note {
+                let (label, continuation, style) = if question.options.is_some() {
+                    (
+                        "    note: ".dim(),
+                        "          ".dim(),
+                        Style::default().fg(Color::Cyan),
+                    )
+                } else {
+                    (
+                        "    answer: ".dim(),
+                        "            ".dim(),
+                        Style::default().fg(Color::Cyan),
+                    )
+                };
+                lines.extend(wrap_with_prefix(&note, width, label, continuation, style));
+            }
+        }
+
+        if self.interrupted && unanswered > 0 {
+            let summary = format!("interrupted with {unanswered} unanswered");
+            lines.extend(wrap_with_prefix(
+                &summary,
+                width,
+                "  ↳ ".cyan().dim(),
+                "    ".dim(),
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM),
+            ));
+        }
+
+        lines
+    }
+}
+
+/// Wrap a plain string with textwrap and prefix each line, while applying a style to the content.
+fn wrap_with_prefix(
+    text: &str,
+    width: usize,
+    initial_prefix: Span<'static>,
+    subsequent_prefix: Span<'static>,
+    style: Style,
+) -> Vec<Line<'static>> {
+    let prefix_width = initial_prefix
+        .content
+        .width()
+        .max(subsequent_prefix.content.width());
+    let wrap_width = width.saturating_sub(prefix_width).max(1);
+    let wrapped = textwrap::wrap(text, wrap_width);
+    let wrapped_lines = wrapped
+        .into_iter()
+        .map(|segment| Span::from(segment.to_string()).set_style(style).into())
+        .collect::<Vec<Line<'static>>>();
+    prefix_lines(wrapped_lines, initial_prefix, subsequent_prefix)
+}
+
+/// Split a request_user_input answer into option labels and an optional freeform note.
+/// Notes are encoded as "user_note: <text>" entries in the answers list.
+fn split_request_user_input_answer(
+    answer: &RequestUserInputAnswer,
+) -> (Vec<String>, Option<String>) {
+    let mut options = Vec::new();
+    let mut note = None;
+    for entry in &answer.answers {
+        if let Some(note_text) = entry.strip_prefix("user_note: ") {
+            note = Some(note_text.to_string());
+        } else {
+            options.push(entry.clone());
+        }
+    }
+    (options, note)
 }
 
 /// Render a user‑friendly plan update styled like a checkbox todo list.
