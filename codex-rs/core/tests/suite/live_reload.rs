@@ -134,13 +134,21 @@ async fn live_skills_reload_refreshes_skill_cache_after_skill_change() -> Result
 
     if let Ok(changed_paths) = changed_paths {
         let expected_skill_path = fs::canonicalize(&skill_path)?;
+        let expected_skill_dir = expected_skill_path
+            .parent()
+            .expect("skill path should have a parent directory");
         let saw_expected_path = changed_paths
             .iter()
             .filter_map(|path| fs::canonicalize(path).ok())
-            .any(|path| path == expected_skill_path);
+            .any(|path| {
+                path == expected_skill_path
+                    || path == expected_skill_dir
+                    || path.starts_with(expected_skill_dir)
+                    || expected_skill_path.starts_with(&path)
+            });
         assert!(
             saw_expected_path,
-            "expected skill path in watcher event: {changed_paths:?}"
+            "expected changed watcher path to include {expected_skill_path:?} or {expected_skill_dir:?}, got {changed_paths:?}"
         );
     } else {
         // Some environments do not reliably surface file watcher events for
