@@ -11,7 +11,8 @@ pipelines:
 - The bubblewrap pipeline requires a Linux build that enables the vendored
   bubblewrap FFI path.
 - During rollout, enable bubblewrap with
-  `features.use_linux_sandbox_bwrap = true`.
+  `-c use_linux_sandbox_bwrap=true` (CLI override alias) or
+  `features.use_linux_sandbox_bwrap = true` in config.
 
 ## Filesystem Semantics (bubblewrap pipeline)
 

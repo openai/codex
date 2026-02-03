@@ -32,12 +32,6 @@ pub struct LandlockCommand {
     #[arg(long = "use-bwrap-sandbox", hide = true, default_value_t = false)]
     pub use_bwrap_sandbox: bool,
 
-    /// Experimental: call a build-time bubblewrap `main()` via FFI.
-    ///
-    /// This is opt-in and only works when the build script compiles bwrap.
-    #[arg(long = "use-vendored-bwrap", hide = true, default_value_t = false)]
-    pub use_vendored_bwrap: bool,
-
     /// Internal: apply seccomp and `no_new_privs` in the already-sandboxed
     /// process, then exec the user command.
     ///
@@ -69,12 +63,10 @@ pub fn run_main() -> ! {
         sandbox_policy_cwd,
         sandbox_policy,
         use_bwrap_sandbox,
-        use_vendored_bwrap,
         apply_seccomp_then_exec,
         no_proc,
         command,
     } = LandlockCommand::parse();
-    let use_bwrap_sandbox = use_bwrap_sandbox || use_vendored_bwrap;
 
     if command.is_empty() {
         panic!("No command specified to execute.");

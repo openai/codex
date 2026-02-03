@@ -80,7 +80,7 @@ run_sandbox() {
 
   local bwrap_flag=()
   if [[ "${use_bwrap}" == "1" ]]; then
-    bwrap_flag=(--use-bwrap-sandbox --use-vendored-bwrap)
+    bwrap_flag=(--use-bwrap-sandbox)
   fi
 
   "${debug_env[@]}" "${SANDBOX_BIN}" \
@@ -180,12 +180,12 @@ run_codex_cli_smoke() {
 
   echo
   echo "==== codex CLI smoke (feature flag path) ===="
-  echo "==> codex -c features.use_linux_sandbox_bwrap=true sandbox linux ..."
+  echo "==> codex -c use_linux_sandbox_bwrap=true sandbox linux ..."
 
   local output=""
   if ! output=$(
     "${CODEX_BIN}" \
-      -c features.use_linux_sandbox_bwrap=true \
+      -c use_linux_sandbox_bwrap=true \
       sandbox linux --full-auto -- /usr/bin/bash -lc 'echo BWRAP_OK' 2>&1
   ); then
     echo "${output}" >&2

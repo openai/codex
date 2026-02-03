@@ -14,7 +14,8 @@ into this binary.
 - Legacy Landlock + mount protections remain available as the legacy pipeline.
 - The bubblewrap pipeline is standardized on the vendored path.
 - During rollout, the bubblewrap pipeline is gated by the temporary feature
-  flag `features.use_linux_sandbox_bwrap` (legacy remains default when off).
+  flag `use_linux_sandbox_bwrap` (CLI `-c` alias for
+  `features.use_linux_sandbox_bwrap`; legacy remains default when off).
 - When enabled, the bubblewrap pipeline applies `PR_SET_NO_NEW_PRIVS` and a
   seccomp network filter in-process.
 - When enabled, the filesystem is read-only by default via `--ro-bind / /`.

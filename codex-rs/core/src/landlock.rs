@@ -75,7 +75,6 @@ pub(crate) fn create_linux_sandbox_command_args(
     ];
     if use_bwrap_sandbox {
         linux_cmd.push("--use-bwrap-sandbox".to_string());
-        linux_cmd.push("--use-vendored-bwrap".to_string());
     }
 
     // Separator so that command arguments starting with `-` are not parsed as
@@ -104,18 +103,10 @@ mod tests {
             with_bwrap.contains(&"--use-bwrap-sandbox".to_string()),
             true
         );
-        assert_eq!(
-            with_bwrap.contains(&"--use-vendored-bwrap".to_string()),
-            true
-        );
 
         let without_bwrap = create_linux_sandbox_command_args(command, &policy, cwd, false);
         assert_eq!(
             without_bwrap.contains(&"--use-bwrap-sandbox".to_string()),
-            false
-        );
-        assert_eq!(
-            without_bwrap.contains(&"--use-vendored-bwrap".to_string()),
             false
         );
     }
