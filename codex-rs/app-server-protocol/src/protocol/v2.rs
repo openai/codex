@@ -2775,44 +2775,35 @@ pub struct DynamicToolCallParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct DynamicToolCallResponse {
-    #[serde(flatten)]
     pub result: DynamicToolCallResult,
     pub success: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(untagged, rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum DynamicToolCallResult {
     /// Preferred structured tool output (for example text + images) that is
     /// forwarded directly to the model as content items.
+    #[serde(rename_all = "camelCase")]
     ContentItems {
-        #[serde(rename = "contentItems")]
         content_items: Vec<DynamicToolCallOutputContentItem>,
     },
-    /// Legacy plain-text tool output.
+    /// Plain-text tool output.
+    #[serde(rename_all = "camelCase")]
     Output { output: String },
 }
 
-/// App-server-facing dynamic tool output items.
-///
-/// This is intentionally defined separately from
-/// `codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem` and
-/// `codex_protocol::models::FunctionCallOutputContentItem` so the app-server API
-/// can evolve independently.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum DynamicToolCallOutputContentItem {
-    #[serde(alias = "input_text")]
+    #[serde(rename_all = "camelCase")]
     InputText { text: String },
-    #[serde(alias = "input_image", rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
-    InputImage {
-        #[serde(alias = "image_url")]
-        image_url: String,
-    },
+    #[serde(rename_all = "camelCase")]
+    InputImage { image_url: String },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -3190,30 +3181,39 @@ mod tests {
         assert_eq!(
             value,
             json!({
+                "result": {
+                    "type": "contentItems",
+                    "contentItems": [
+                        {
+                            "type": "inputText",
+                            "text": "dynamic-ok"
+                        }
+                    ]
+                },
                 "success": true,
-                "contentItems": [
-                    {
-                        "type": "inputText",
-                        "text": "dynamic-ok"
-                    }
-                ]
             })
         );
     }
 
     #[test]
-    fn dynamic_tool_content_item_accepts_legacy_snake_case_payloads() {
-        let item = serde_json::from_value::<DynamicToolCallOutputContentItem>(json!({
-            "type": "input_image",
-            "image_url": "data:image/png;base64,AAA"
-        }))
+    fn dynamic_tool_response_serializes_plain_text_output() {
+        let value = serde_json::to_value(DynamicToolCallResponse {
+            result: DynamicToolCallResult::Output {
+                output: "dynamic-ok".to_string(),
+            },
+            success: true,
+        })
         .unwrap();
 
         assert_eq!(
-            item,
-            DynamicToolCallOutputContentItem::InputImage {
-                image_url: "data:image/png;base64,AAA".to_string(),
-            }
+            value,
+            json!({
+                "result": {
+                    "type": "output",
+                    "output": "dynamic-ok"
+                },
+                "success": true,
+            })
         );
     }
 }
