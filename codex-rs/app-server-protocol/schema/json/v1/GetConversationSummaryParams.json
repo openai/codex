@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "anyOf": [
+    {
+      "properties": {
+        "rolloutPath": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rolloutPath"
+      ],
+      "title": "RolloutPathv1::GetConversationSummaryParams",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "conversationId": {
+          "$ref": "#/definitions/ThreadId"
+        }
+      },
+      "required": [
+        "conversationId"
+      ],
+      "title": "ConversationIdv1::GetConversationSummaryParams",
+      "type": "object"
+    }
+  ],
+  "definitions": {
+    "ThreadId": {
+      "type": "string"
+    }
+  },
+  "title": "GetConversationSummaryParams"
+}

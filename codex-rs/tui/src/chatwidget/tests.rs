@@ -1261,6 +1261,61 @@ async fn plan_implementation_popup_skips_replayed_turn_complete() {
 }
 
 #[tokio::test]
+async fn plan_implementation_popup_shows_once_when_replay_precedes_live_turn_complete() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+
+    chat.on_task_started();
+    chat.on_plan_delta("- Step 1\n- Step 2\n".to_string());
+    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
+
+    chat.replay_initial_messages(vec![EventMsg::TurnComplete(TurnCompleteEvent {
+        last_agent_message: Some("Plan details".to_string()),
+    })]);
+    let replay_popup = render_bottom_popup(&chat, 80);
+    assert!(
+        !replay_popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected no prompt for replayed turn completion, got {replay_popup:?}"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "live-turn-complete-1".to_string(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: Some("Plan details".to_string()),
+        }),
+    });
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected prompt for first live turn completion after replay, got {popup:?}"
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    let dismissed_popup = render_bottom_popup(&chat, 80);
+    assert!(
+        !dismissed_popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected prompt to dismiss on Esc, got {dismissed_popup:?}"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "live-turn-complete-2".to_string(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: Some("Plan details".to_string()),
+        }),
+    });
+    let duplicate_popup = render_bottom_popup(&chat, 80);
+    assert!(
+        !duplicate_popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected no prompt for duplicate live completion, got {duplicate_popup:?}"
+    );
+}
+
+#[tokio::test]
 async fn plan_implementation_popup_skips_when_messages_queued() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, true);
@@ -2317,6 +2372,50 @@ async fn plan_slash_command_switches_to_plan_mode() {
 }
 
 #[tokio::test]
+async fn plan_slash_command_with_args_submits_prompt_in_plan_mode() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+
+    let configured = codex_core::protocol::SessionConfiguredEvent {
+        session_id: ThreadId::new(),
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::ReadOnly,
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        rollout_path: None,
+    };
+    chat.handle_codex_event(Event {
+        id: "configured".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+
+    chat.bottom_pane
+        .set_composer_text("/plan build the plan".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let items = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => items,
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    };
+    assert_eq!(items.len(), 1);
+    assert_eq!(
+        items[0],
+        UserInput::Text {
+            text: "build the plan".to_string(),
+            text_elements: Vec::new(),
+        }
+    );
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+}
+
+#[tokio::test]
 async fn collaboration_modes_defaults_to_code_on_startup() {
     let codex_home = tempdir().expect("tempdir");
     let cfg = ConfigBuilder::default()
@@ -2992,14 +3091,14 @@ async fn experimental_features_toggle_saves_on_exit() {
     );
     chat.bottom_pane.show_view(Box::new(view));
 
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
 
     assert!(
         rx.try_recv().is_err(),
-        "expected no updates until exiting the popup"
+        "expected no updates until saving the popup"
     );
 
-    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     let mut updates = None;
     while let Ok(event) = rx.try_recv() {

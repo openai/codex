@@ -1,0 +1,158 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ParsedCommand": {
+      "oneOf": [
+        {
+          "properties": {
+            "cmd": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "path": {
+              "description": "(Best effort) Path to the file being read by the command. When possible, this is an absolute path, though when relative, it should be resolved against the `cwd`` that will be used to run the command to derive the absolute path.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "read"
+              ],
+              "title": "ReadParsedCommandType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd",
+            "name",
+            "path",
+            "type"
+          ],
+          "title": "ReadParsedCommand",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "cmd": {
+              "type": "string"
+            },
+            "path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "list_files"
+              ],
+              "title": "ListFilesParsedCommandType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd",
+            "type"
+          ],
+          "title": "ListFilesParsedCommand",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "cmd": {
+              "type": "string"
+            },
+            "path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "query": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "search"
+              ],
+              "title": "SearchParsedCommandType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd",
+            "type"
+          ],
+          "title": "SearchParsedCommand",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "cmd": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "unknown"
+              ],
+              "title": "UnknownParsedCommandType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd",
+            "type"
+          ],
+          "title": "UnknownParsedCommand",
+          "type": "object"
+        }
+      ]
+    },
+    "ThreadId": {
+      "type": "string"
+    }
+  },
+  "properties": {
+    "callId": {
+      "description": "Use to correlate this with [codex_core::protocol::ExecCommandBeginEvent] and [codex_core::protocol::ExecCommandEndEvent].",
+      "type": "string"
+    },
+    "command": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "conversationId": {
+      "$ref": "#/definitions/ThreadId"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "parsedCmd": {
+      "items": {
+        "$ref": "#/definitions/ParsedCommand"
+      },
+      "type": "array"
+    },
+    "reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "callId",
+    "command",
+    "conversationId",
+    "cwd",
+    "parsedCmd"
+  ],
+  "title": "ExecCommandApprovalParams",
+  "type": "object"
+}

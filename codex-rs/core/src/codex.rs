@@ -50,7 +50,9 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
+use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
@@ -71,14 +73,12 @@ use codex_rmcp_client::OAuthCredentialsStoreMode;
 use futures::future::BoxFuture;
 use futures::prelude::*;
 use futures::stream::FuturesOrdered;
-use mcp_types::CallToolResult;
-use mcp_types::ListResourceTemplatesRequestParams;
-use mcp_types::ListResourceTemplatesResult;
-use mcp_types::ListResourcesRequestParams;
-use mcp_types::ListResourcesResult;
-use mcp_types::ReadResourceRequestParams;
-use mcp_types::ReadResourceResult;
-use mcp_types::RequestId;
+use rmcp::model::ListResourceTemplatesResult;
+use rmcp::model::ListResourcesResult;
+use rmcp::model::PaginatedRequestParam;
+use rmcp::model::ReadResourceRequestParam;
+use rmcp::model::ReadResourceResult;
+use rmcp::model::RequestId;
 use serde_json;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -118,6 +118,7 @@ use crate::error::Result as CodexResult;
 use crate::exec::StreamOutput;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::feedback_tags;
+use crate::git_info::get_git_repo_root;
 use crate::instructions::UserInstructions;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::auth::compute_auth_statuses;
@@ -212,7 +213,6 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::models::render_command_prefix_list;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
@@ -333,9 +333,36 @@ impl Codex {
             .clone()
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
-        // Respect explicit thread-start tools; fall back to persisted tools when resuming a thread.
+
+        // Respect thread-start tools. When missing (resumed/forked threads), read from the db
+        // first, then fall back to rollout-file tools.
+        let persisted_tools = if dynamic_tools.is_empty()
+            && config.features.enabled(Feature::Sqlite)
+        {
+            let thread_id = match &conversation_history {
+                InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
+                InitialHistory::Forked(_) => conversation_history.forked_from_id(),
+                InitialHistory::New => None,
+            };
+            match thread_id {
+                Some(thread_id) => {
+                    let state_db_ctx = state_db::open_if_present(
+                        config.codex_home.as_path(),
+                        config.model_provider_id.as_str(),
+                    )
+                    .await;
+                    state_db::get_dynamic_tools(state_db_ctx.as_deref(), thread_id, "codex_spawn")
+                        .await
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
         let dynamic_tools = if dynamic_tools.is_empty() {
-            conversation_history.get_dynamic_tools().unwrap_or_default()
+            persisted_tools
+                .or_else(|| conversation_history.get_dynamic_tools())
+                .unwrap_or_default()
         } else {
             dynamic_tools
         };
@@ -490,7 +517,7 @@ pub(crate) struct TurnContext {
     pub(crate) developer_instructions: Option<String>,
     pub(crate) compact_prompt: Option<String>,
     pub(crate) user_instructions: Option<String>,
-    pub(crate) collaboration_mode_kind: ModeKind,
+    pub(crate) collaboration_mode: CollaborationMode,
     pub(crate) personality: Option<Personality>,
     pub(crate) approval_policy: AskForApproval,
     pub(crate) sandbox_policy: SandboxPolicy,
@@ -504,7 +531,6 @@ pub(crate) struct TurnContext {
     pub(crate) truncation_policy: TruncationPolicy,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
 }
-
 impl TurnContext {
     pub(crate) fn resolve_path(&self, path: Option<String>) -> PathBuf {
         path.as_ref()
@@ -692,7 +718,7 @@ impl Session {
             developer_instructions: session_configuration.developer_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
-            collaboration_mode_kind: session_configuration.collaboration_mode.mode,
+            collaboration_mode: session_configuration.collaboration_mode.clone(),
             personality: session_configuration.personality,
             approval_policy: session_configuration.approval_policy.value(),
             sandbox_policy: session_configuration.sandbox_policy.get().clone(),
@@ -1361,16 +1387,14 @@ impl Session {
 
     fn build_collaboration_mode_update_item(
         &self,
-        previous_collaboration_mode: &CollaborationMode,
-        next_collaboration_mode: Option<&CollaborationMode>,
+        previous: Option<&Arc<TurnContext>>,
+        next: &TurnContext,
     ) -> Option<ResponseItem> {
-        if let Some(next_mode) = next_collaboration_mode {
-            if previous_collaboration_mode == next_mode {
-                return None;
-            }
+        let prev = previous?;
+        if prev.collaboration_mode != next.collaboration_mode {
             // If the next mode has empty developer instructions, this returns None and we emit no
             // update, so prior collaboration instructions remain in the prompt history.
-            Some(DeveloperInstructions::from_collaboration_mode(next_mode)?.into())
+            Some(DeveloperInstructions::from_collaboration_mode(&next.collaboration_mode)?.into())
         } else {
             None
         }
@@ -1380,8 +1404,6 @@ impl Session {
         &self,
         previous_context: Option<&Arc<TurnContext>>,
         current_context: &TurnContext,
-        previous_collaboration_mode: &CollaborationMode,
-        next_collaboration_mode: Option<&CollaborationMode>,
     ) -> Vec<ResponseItem> {
         let mut update_items = Vec::new();
         if let Some(env_item) =
@@ -1394,10 +1416,9 @@ impl Session {
         {
             update_items.push(permissions_item);
         }
-        if let Some(collaboration_mode_item) = self.build_collaboration_mode_update_item(
-            previous_collaboration_mode,
-            next_collaboration_mode,
-        ) {
+        if let Some(collaboration_mode_item) =
+            self.build_collaboration_mode_update_item(previous_context, current_context)
+        {
             update_items.push(collaboration_mode_item);
         }
         if let Some(personality_item) =
@@ -1527,7 +1548,7 @@ impl Session {
         sub_id: &str,
         amendment: &ExecPolicyAmendment,
     ) {
-        let Some(prefixes) = render_command_prefix_list([amendment.command.as_slice()]) else {
+        let Some(prefixes) = format_allow_prefixes(vec![amendment.command.clone()]) else {
             warn!("execpolicy amendment for {sub_id} had no command prefix");
             return;
         };
@@ -2207,7 +2228,7 @@ impl Session {
     pub async fn list_resources(
         &self,
         server: &str,
-        params: Option<ListResourcesRequestParams>,
+        params: Option<PaginatedRequestParam>,
     ) -> anyhow::Result<ListResourcesResult> {
         self.services
             .mcp_connection_manager
@@ -2220,7 +2241,7 @@ impl Session {
     pub async fn list_resource_templates(
         &self,
         server: &str,
-        params: Option<ListResourceTemplatesRequestParams>,
+        params: Option<PaginatedRequestParam>,
     ) -> anyhow::Result<ListResourceTemplatesResult> {
         self.services
             .mcp_connection_manager
@@ -2233,7 +2254,7 @@ impl Session {
     pub async fn read_resource(
         &self,
         server: &str,
-        params: ReadResourceRequestParams,
+        params: ReadResourceRequestParam,
     ) -> anyhow::Result<ReadResourceResult> {
         self.services
             .mcp_connection_manager
@@ -2560,10 +2581,10 @@ mod handlers {
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::config_types::Settings;
     use codex_protocol::dynamic_tools::DynamicToolResponse;
+    use codex_protocol::mcp::RequestId as ProtocolRequestId;
     use codex_protocol::user_input::UserInput;
     use codex_rmcp_client::ElicitationAction;
     use codex_rmcp_client::ElicitationResponse;
-    use mcp_types::RequestId;
     use std::path::PathBuf;
     use std::sync::Arc;
     use tracing::info;
@@ -2578,18 +2599,6 @@ mod handlers {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) {
-        let previous_context = sess
-            .new_default_turn_with_sub_id(sess.next_internal_sub_id())
-            .await;
-        let previous_collaboration_mode = sess
-            .state
-            .lock()
-            .await
-            .session_configuration
-            .collaboration_mode
-            .clone();
-        let next_collaboration_mode = updates.collaboration_mode.clone();
-
         if let Err(err) = sess.update_settings(updates).await {
             sess.send_event_raw(Event {
                 id: sub_id,
@@ -2599,24 +2608,6 @@ mod handlers {
                 }),
             })
             .await;
-            return;
-        }
-
-        let initial_context_seeded = sess.state.lock().await.initial_context_seeded;
-        if !initial_context_seeded {
-            return;
-        }
-
-        let current_context = sess.new_default_turn_with_sub_id(sub_id).await;
-        let update_items = sess.build_settings_update_items(
-            Some(&previous_context),
-            &current_context,
-            &previous_collaboration_mode,
-            next_collaboration_mode.as_ref(),
-        );
-        if !update_items.is_empty() {
-            sess.record_conversation_items(&current_context, &update_items)
-                .await;
         }
     }
 
@@ -2676,14 +2667,6 @@ mod handlers {
             _ => unreachable!(),
         };
 
-        let previous_collaboration_mode = sess
-            .state
-            .lock()
-            .await
-            .session_configuration
-            .collaboration_mode
-            .clone();
-        let next_collaboration_mode = updates.collaboration_mode.clone();
         let Ok(current_context) = sess.new_turn_with_sub_id(sub_id, updates).await else {
             // new_turn_with_sub_id already emits the error event.
             return;
@@ -2696,12 +2679,8 @@ mod handlers {
         // Attempt to inject input into current task
         if let Err(items) = sess.inject_input(items).await {
             sess.seed_initial_context_if_needed(&current_context).await;
-            let update_items = sess.build_settings_update_items(
-                previous_context.as_ref(),
-                &current_context,
-                &previous_collaboration_mode,
-                next_collaboration_mode.as_ref(),
-            );
+            let update_items =
+                sess.build_settings_update_items(previous_context.as_ref(), &current_context);
             if !update_items.is_empty() {
                 sess.record_conversation_items(&current_context, &update_items)
                     .await;
@@ -2734,7 +2713,7 @@ mod handlers {
     pub async fn resolve_elicitation(
         sess: &Arc<Session>,
         server_name: String,
-        request_id: RequestId,
+        request_id: ProtocolRequestId,
         decision: codex_protocol::approvals::ElicitationAction,
     ) {
         let action = match decision {
@@ -2749,6 +2728,12 @@ mod handlers {
             ElicitationAction::Decline | ElicitationAction::Cancel => None,
         };
         let response = ElicitationResponse { action, content };
+        let request_id = match request_id {
+            ProtocolRequestId::String(value) => {
+                rmcp::model::NumberOrString::String(std::sync::Arc::from(value))
+            }
+            ProtocolRequestId::Integer(value) => rmcp::model::NumberOrString::Number(value),
+        };
         if let Err(err) = sess
             .resolve_elicitation(server_name, request_id, response)
             .await
@@ -3216,7 +3201,7 @@ async fn spawn_review_thread(
         developer_instructions: None,
         user_instructions: None,
         compact_prompt: parent_turn_context.compact_prompt.clone(),
-        collaboration_mode_kind: parent_turn_context.collaboration_mode_kind,
+        collaboration_mode: parent_turn_context.collaboration_mode.clone(),
         personality: parent_turn_context.personality,
         approval_policy: parent_turn_context.approval_policy,
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
@@ -3332,7 +3317,7 @@ pub(crate) async fn run_turn(
 
     let event = EventMsg::TurnStarted(TurnStartedEvent {
         model_context_window: turn_context.client.get_model_context_window(),
-        collaboration_mode_kind: turn_context.collaboration_mode_kind,
+        collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, event).await;
     if total_usage_tokens >= auto_compact_limit {
@@ -3432,7 +3417,9 @@ pub(crate) async fn run_turn(
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
 
-    let mut client_session = turn_context.client.new_session();
+    let mut client_session = turn_context
+        .client
+        .new_session(Some(turn_context.cwd.clone()));
 
     loop {
         // Note that pending_input would be something like a message the user
@@ -4258,7 +4245,7 @@ async fn try_run_sampling_request(
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
     let mut should_emit_turn_diff = false;
-    let plan_mode = turn_context.collaboration_mode_kind == ModeKind::Plan;
+    let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
     let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
     let receiving_span = trace_span!("receiving_stream");
     let outcome: CodexResult<SamplingRequestResult> = loop {
@@ -4508,8 +4495,6 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
 
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
-
-use crate::git_info::get_git_repo_root;
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context_with_rx;
 
@@ -4555,8 +4540,7 @@ mod tests {
     use std::time::Duration;
     use tokio::time::sleep;
 
-    use mcp_types::ContentBlock;
-    use mcp_types::TextContent;
+    use codex_protocol::mcp::CallToolResult as McpCallToolResult;
     use pretty_assertions::assert_eq;
     use serde::Deserialize;
     use serde_json::json;
@@ -5140,7 +5124,7 @@ mod tests {
 
     #[test]
     fn prefers_structured_content_when_present() {
-        let ctr = CallToolResult {
+        let ctr = McpCallToolResult {
             // Content present but should be ignored because structured_content is set.
             content: vec![text_block("ignored")],
             is_error: None,
@@ -5148,6 +5132,7 @@ mod tests {
                 "ok": true,
                 "value": 42
             })),
+            meta: None,
         };
 
         let got = FunctionCallOutputPayload::from(&ctr);
@@ -5186,10 +5171,11 @@ mod tests {
 
     #[test]
     fn falls_back_to_content_when_structured_is_null() {
-        let ctr = CallToolResult {
+        let ctr = McpCallToolResult {
             content: vec![text_block("hello"), text_block("world")],
             is_error: None,
             structured_content: Some(serde_json::Value::Null),
+            meta: None,
         };
 
         let got = FunctionCallOutputPayload::from(&ctr);
@@ -5205,10 +5191,11 @@ mod tests {
 
     #[test]
     fn success_flag_reflects_is_error_true() {
-        let ctr = CallToolResult {
+        let ctr = McpCallToolResult {
             content: vec![text_block("unused")],
             is_error: Some(true),
             structured_content: Some(json!({ "message": "bad" })),
+            meta: None,
         };
 
         let got = FunctionCallOutputPayload::from(&ctr);
@@ -5223,10 +5210,11 @@ mod tests {
 
     #[test]
     fn success_flag_true_with_no_error_and_content_used() {
-        let ctr = CallToolResult {
+        let ctr = McpCallToolResult {
             content: vec![text_block("alpha")],
             is_error: Some(false),
             structured_content: None,
+            meta: None,
         };
 
         let got = FunctionCallOutputPayload::from(&ctr);
@@ -5277,11 +5265,10 @@ mod tests {
         }
     }
 
-    fn text_block(s: &str) -> ContentBlock {
-        ContentBlock::TextContent(TextContent {
-            annotations: None,
-            text: s.to_string(),
-            r#type: "text".to_string(),
+    fn text_block(s: &str) -> serde_json::Value {
+        json!({
+            "type": "text",
+            "text": s,
         })
     }
 

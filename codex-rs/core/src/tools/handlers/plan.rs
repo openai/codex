@@ -104,7 +104,7 @@ pub(crate) async fn handle_update_plan(
     arguments: String,
     _call_id: String,
 ) -> Result<String, FunctionCallError> {
-    if turn_context.collaboration_mode_kind == ModeKind::Plan {
+    if turn_context.collaboration_mode.mode == ModeKind::Plan {
         return Err(FunctionCallError::RespondToModel(
             "update_plan is a TODO/checklist tool and is not allowed in Plan mode".to_string(),
         ));

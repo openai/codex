@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::protocol::common::AuthMode;
+use codex_experimental_api_macros::ExperimentalApi;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
 use codex_protocol::config_types::CollaborationMode;
@@ -14,6 +15,9 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
+use codex_protocol::mcp::Resource as McpResource;
+use codex_protocol::mcp::ResourceTemplate as McpResourceTemplate;
+use codex_protocol::mcp::Tool as McpTool;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
@@ -40,10 +44,6 @@ use codex_protocol::user_input::ByteRange as CoreByteRange;
 use codex_protocol::user_input::TextElement as CoreTextElement;
 use codex_protocol::user_input::UserInput as CoreUserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use mcp_types::ContentBlock as McpContentBlock;
-use mcp_types::Resource as McpResource;
-use mcp_types::ResourceTemplate as McpResourceTemplate;
-use mcp_types::Tool as McpTool;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -1165,7 +1165,9 @@ pub struct CommandExecResponse {
 
 // === Threads, Turns, and Items ===
 // Thread APIs
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
+#[derive(
+    Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS, ExperimentalApi,
+)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadStartParams {
@@ -1179,13 +1181,34 @@ pub struct ThreadStartParams {
     pub developer_instructions: Option<String>,
     pub personality: Option<Personality>,
     pub ephemeral: Option<bool>,
+    #[experimental("thread/start.dynamicTools")]
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
+    /// Test-only experimental field used to validate experimental gating and
+    /// schema filtering behavior in a stable way.
+    #[experimental("thread/start.mockExperimentalField")]
+    pub mock_experimental_field: Option<String>,
     /// If true, opt into emitting raw response items on the event stream.
     ///
     /// This is for internal use only (e.g. Codex Cloud).
     /// (TODO): Figure out a better way to categorize internal / experimental events & protocols.
     #[serde(default)]
     pub experimental_raw_events: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MockExperimentalMethodParams {
+    /// Test-only payload field.
+    pub value: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MockExperimentalMethodResponse {
+    /// Echoes the input `value`.
+    pub echoed: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -2336,7 +2359,12 @@ impl From<CoreAgentStatus> for CollabAgentState {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct McpToolCallResult {
-    pub content: Vec<McpContentBlock>,
+    // NOTE: `rmcp::model::Content` (and its `RawContent` variants) would be a more precise Rust
+    // representation of MCP content blocks. We intentionally use `serde_json::Value` here because
+    // this crate exports JSON schema + TS types (`schemars`/`ts-rs`), and the rmcp model types
+    // aren't set up to be schema/TS friendly (and would introduce heavier coupling to rmcp's Rust
+    // representations). Using `JsonValue` keeps the payload wire-shaped and easy to export.
+    pub content: Vec<JsonValue>,
     pub structured_content: Option<JsonValue>,
 }
 

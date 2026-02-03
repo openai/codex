@@ -61,7 +61,7 @@ pub(crate) async fn run_compact_task(
 ) {
     let start_event = EventMsg::TurnStarted(TurnStartedEvent {
         model_context_window: turn_context.client.get_model_context_window(),
-        collaboration_mode_kind: turn_context.collaboration_mode_kind,
+        collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, start_event).await;
     run_compact_task_inner(sess.clone(), turn_context, input).await;
@@ -335,7 +335,9 @@ async fn drain_to_completed(
     turn_context: &TurnContext,
     prompt: &Prompt,
 ) -> CodexResult<()> {
-    let mut client_session = turn_context.client.new_session();
+    let mut client_session = turn_context
+        .client
+        .new_session(Some(turn_context.cwd.clone()));
     let mut stream = client_session.stream(prompt).await?;
     loop {
         let maybe_event = stream.next().await;

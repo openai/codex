@@ -31,6 +31,10 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use supports_color::Stream;
 
+#[cfg(target_os = "macos")]
+mod app_cmd;
+#[cfg(target_os = "macos")]
+mod desktop_app;
 mod mcp_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
@@ -97,6 +101,10 @@ enum Subcommand {
 
     /// [experimental] Run the app server or related tooling.
     AppServer(AppServerCommand),
+
+    /// Launch the Codex desktop app (downloads the macOS installer if missing).
+    #[cfg(target_os = "macos")]
+    App(app_cmd::AppCommand),
 
     /// Generate shell completion scripts.
     Completion(CompletionCommand),
@@ -303,6 +311,10 @@ struct GenerateTsCommand {
     /// Optional path to the Prettier executable to format generated files
     #[arg(short = 'p', long = "prettier", value_name = "PRETTIER_BIN")]
     prettier: Option<PathBuf>,
+
+    /// Include experimental methods and fields in the generated output
+    #[arg(long = "experimental", default_value_t = false)]
+    experimental: bool,
 }
 
 #[derive(Debug, Args)]
@@ -310,6 +322,10 @@ struct GenerateJsonSchemaCommand {
     /// Output directory where the schema bundle will be written
     #[arg(short = 'o', long = "out", value_name = "DIR")]
     out_dir: PathBuf,
+
+    /// Include experimental methods and fields in the generated output
+    #[arg(long = "experimental", default_value_t = false)]
+    experimental: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -539,15 +555,27 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 .await?;
             }
             Some(AppServerSubcommand::GenerateTs(gen_cli)) => {
-                codex_app_server_protocol::generate_ts(
+                let options = codex_app_server_protocol::GenerateTsOptions {
+                    experimental_api: gen_cli.experimental,
+                    ..Default::default()
+                };
+                codex_app_server_protocol::generate_ts_with_options(
                     &gen_cli.out_dir,
                     gen_cli.prettier.as_deref(),
+                    options,
                 )?;
             }
             Some(AppServerSubcommand::GenerateJsonSchema(gen_cli)) => {
-                codex_app_server_protocol::generate_json(&gen_cli.out_dir)?;
+                codex_app_server_protocol::generate_json_with_experimental(
+                    &gen_cli.out_dir,
+                    gen_cli.experimental,
+                )?;
             }
         },
+        #[cfg(target_os = "macos")]
+        Some(Subcommand::App(app_cli)) => {
+            app_cmd::run_app(app_cli).await?;
+        }
         Some(Subcommand::Resume(ResumeCommand {
             session_id,
             last,
