@@ -81,6 +81,7 @@ impl From<EnvironmentContext> for ResponseItem {
                 text: ec.serialize_to_xml(),
             }],
             end_turn: None,
+            phase: None,
         }
     }
 }

@@ -12,6 +12,7 @@ use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::ReasoningEffortOption;
 use codex_app_server_protocol::RequestId;
+use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -72,6 +73,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
                 },
             ],
             default_reasoning_effort: ReasoningEffort::Medium,
+            input_modalities: vec![InputModality::Text, InputModality::Image],
             supports_personality: false,
             is_default: true,
         },
@@ -100,6 +102,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
                 },
             ],
             default_reasoning_effort: ReasoningEffort::Medium,
+            input_modalities: vec![InputModality::Text, InputModality::Image],
             supports_personality: false,
             is_default: false,
         },
@@ -120,6 +123,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
                 },
             ],
             default_reasoning_effort: ReasoningEffort::Medium,
+            input_modalities: vec![InputModality::Text, InputModality::Image],
             supports_personality: false,
             is_default: false,
         },
@@ -154,6 +158,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
                 },
             ],
             default_reasoning_effort: ReasoningEffort::Medium,
+            input_modalities: vec![InputModality::Text, InputModality::Image],
             supports_personality: false,
             is_default: false,
         },

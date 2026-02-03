@@ -113,6 +113,7 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
             text: "hello".to_string(),
         }],
         end_turn: None,
+        phase: None,
     }];
 
     let mut stream = match client.stream(&prompt).await {

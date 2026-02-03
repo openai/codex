@@ -139,6 +139,7 @@ fn user_message(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         end_turn: None,
+        phase: None,
     }
 }
 
@@ -150,6 +151,7 @@ fn assistant_message(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         end_turn: None,
+        phase: None,
     }
 }
 

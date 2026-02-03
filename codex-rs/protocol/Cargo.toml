@@ -19,7 +19,6 @@ codex-utils-image = { workspace = true }
 icu_decimal = { workspace = true }
 icu_locale_core = { workspace = true }
 icu_provider = { workspace = true, features = ["sync"] }
-mcp-types = { workspace = true }
 mime_guess = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

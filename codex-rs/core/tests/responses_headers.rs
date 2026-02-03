@@ -110,6 +110,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
             text: "hello".into(),
         }],
         end_turn: None,
+        phase: None,
     }];
 
     let mut stream = client_session.stream(&prompt).await.expect("stream failed");
@@ -209,6 +210,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
             text: "hello".into(),
         }],
         end_turn: None,
+        phase: None,
     }];
 
     let mut stream = client_session.stream(&prompt).await.expect("stream failed");
@@ -366,6 +368,7 @@ async fn responses_respects_model_info_overrides_from_config() {
             text: "hello".into(),
         }],
         end_turn: None,
+        phase: None,
     }];
 
     let mut stream = client.stream(&prompt).await.expect("stream failed");
@@ -473,6 +476,7 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
             text: "hello".into(),
         }],
         end_turn: None,
+        phase: None,
     }];
 
     let first_request = responses::mount_sse_once(&server, response_body.clone()).await;
