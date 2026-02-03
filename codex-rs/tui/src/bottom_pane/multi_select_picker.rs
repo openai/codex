@@ -18,6 +18,7 @@ use crate::bottom_pane::bottom_pane_view::BottomPaneView;
 use crate::bottom_pane::popup_consts::MAX_POPUP_ROWS;
 use crate::bottom_pane::scroll_state::ScrollState;
 use crate::bottom_pane::selection_popup_common::render_rows_single_line;
+use crate::bottom_pane::selection_popup_common::truncate_line_with_ellipsis_if_overflow;
 use crate::key_hint;
 use crate::render::Insets;
 use crate::render::RectExt;
@@ -441,7 +442,10 @@ impl Renderable for MultiSelectPicker {
                 width: preview_area.width.saturating_sub(2),
                 height: preview_area.height,
             };
-            preview_line.clone().render(preview_area, buf);
+            let max_preview_width = preview_area.width.saturating_sub(2) as usize;
+            let preview_line =
+                truncate_line_with_ellipsis_if_overflow(preview_line.clone(), max_preview_width);
+            preview_line.render(preview_area, buf);
             hint_area
         } else {
             footer_area
