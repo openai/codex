@@ -539,7 +539,8 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
         .unwrap_or_else(|_| cwd.to_path_buf())
         .to_string_lossy()
         .into_owned();
-    for _attempt in 0..10 {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
         let request_recorder = responses::mount_sse_once(&server, response_body.clone()).await;
         let mut session = client.new_session(Some(cwd.to_path_buf()));
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -579,8 +580,11 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
             return;
         }
 
+        if tokio::time::Instant::now() >= deadline {
+            break;
+        }
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
 
-    panic!("x-codex-turn-metadata was never observed after git setup");
+    panic!("x-codex-turn-metadata was never observed within 5s after git setup");
 }
