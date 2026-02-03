@@ -15,7 +15,9 @@ use uuid::Uuid;
 
 use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
+use crate::instructions::UserInstructions;
 use crate::protocol::EventMsg;
+use crate::session_prefix::is_session_prefix_content;
 use crate::state_db;
 use codex_file_search as file_search;
 use codex_protocol::ThreadId;
@@ -982,9 +984,12 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                     .created_at
                     .clone()
                     .or_else(|| Some(rollout_line.timestamp.clone()));
-                if let codex_protocol::models::ResponseItem::Message { role, .. } = &item
+                if let codex_protocol::models::ResponseItem::Message { role, content, .. } = &item
                     && role == "user"
+                    && !UserInstructions::is_user_instructions(content.as_slice())
+                    && !is_session_prefix_content(content.as_slice())
                 {
+                    tracing::warn!("Item: {item:#?}");
                     summary.saw_user_event = true;
                 }
                 if summary.head.len() < head_limit

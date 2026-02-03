@@ -2,8 +2,6 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use codex_utils_image::load_and_resize_to_fit;
-use mcp_types::CallToolResult;
-use mcp_types::ContentBlock;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -23,6 +21,8 @@ use codex_execpolicy::Policy;
 use codex_git::GhostCommit;
 use codex_utils_image::error::ImageProcessingError;
 use schemars::JsonSchema;
+
+use crate::mcp::CallToolResult;
 
 /// Controls whether a command should use the session sandbox or bypass it.
 #[derive(
@@ -72,6 +72,13 @@ pub enum ContentItem {
     OutputText { text: String },
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum MessagePhase {
+    Commentary,
+    FinalAnswer,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseItem {
@@ -85,6 +92,11 @@ pub enum ResponseItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         end_turn: Option<bool>,
+        // Optional output-message phase (for example: "commentary", "final_answer").
+        // Do not use directly; availability can vary by provider and model.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        phase: Option<MessagePhase>,
     },
     Reasoning {
         #[serde(default, skip_serializing)]
@@ -439,6 +451,7 @@ impl From<DeveloperInstructions> for ResponseItem {
                 text: di.into_text(),
             }],
             end_turn: None,
+            phase: None,
         }
     }
 }
@@ -596,6 +609,7 @@ impl From<ResponseInputItem> for ResponseItem {
                 content,
                 id: None,
                 end_turn: None,
+                phase: None,
             },
             ResponseInputItem::FunctionCallOutput { call_id, output } => {
                 Self::FunctionCallOutput { call_id, output }
@@ -833,6 +847,7 @@ impl From<&CallToolResult> for FunctionCallOutputPayload {
             content,
             structured_content,
             is_error,
+            meta: _,
         } = call_tool_result;
 
         let is_success = is_error != &Some(true);
@@ -869,7 +884,7 @@ impl From<&CallToolResult> for FunctionCallOutputPayload {
             }
         };
 
-        let content_items = convert_content_blocks_to_items(content);
+        let content_items = convert_mcp_content_to_items(content);
 
         FunctionCallOutputPayload {
             content: serialized_content,
@@ -879,32 +894,45 @@ impl From<&CallToolResult> for FunctionCallOutputPayload {
     }
 }
 
-fn convert_content_blocks_to_items(
-    blocks: &[ContentBlock],
+fn convert_mcp_content_to_items(
+    contents: &[serde_json::Value],
 ) -> Option<Vec<FunctionCallOutputContentItem>> {
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "type")]
+    enum McpContent {
+        #[serde(rename = "text")]
+        Text { text: String },
+        #[serde(rename = "image")]
+        Image {
+            data: String,
+            #[serde(rename = "mimeType", alias = "mime_type")]
+            mime_type: Option<String>,
+        },
+        #[serde(other)]
+        Unknown,
+    }
+
     let mut saw_image = false;
-    let mut items = Vec::with_capacity(blocks.len());
-    tracing::warn!("Blocks: {:?}", blocks);
-    for block in blocks {
-        match block {
-            ContentBlock::TextContent(text) => {
-                items.push(FunctionCallOutputContentItem::InputText {
-                    text: text.text.clone(),
-                });
-            }
-            ContentBlock::ImageContent(image) => {
+    let mut items = Vec::with_capacity(contents.len());
+
+    for content in contents {
+        let item = match serde_json::from_value::<McpContent>(content.clone()) {
+            Ok(McpContent::Text { text }) => FunctionCallOutputContentItem::InputText { text },
+            Ok(McpContent::Image { data, mime_type }) => {
                 saw_image = true;
-                // Just in case the content doesn't include a data URL, add it.
-                let image_url = if image.data.starts_with("data:") {
-                    image.data.clone()
+                let image_url = if data.starts_with("data:") {
+                    data
                 } else {
-                    format!("data:{};base64,{}", image.mime_type, image.data)
+                    let mime_type = mime_type.unwrap_or_else(|| "application/octet-stream".into());
+                    format!("data:{mime_type};base64,{data}")
                 };
-                items.push(FunctionCallOutputContentItem::InputImage { image_url });
+                FunctionCallOutputContentItem::InputImage { image_url }
             }
-            // TODO: render audio, resource, and embedded resource content to the model.
-            _ => return None,
-        }
+            Ok(McpContent::Unknown) | Err(_) => FunctionCallOutputContentItem::InputText {
+                text: serde_json::to_string(content).unwrap_or_else(|_| "<content>".to_string()),
+            },
+        };
+        items.push(item);
     }
 
     if saw_image { Some(items) } else { None }
@@ -936,11 +964,53 @@ mod tests {
     use crate::protocol::AskForApproval;
     use anyhow::Result;
     use codex_execpolicy::Policy;
-    use mcp_types::ImageContent;
-    use mcp_types::TextContent;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
     use tempfile::tempdir;
+
+    #[test]
+    fn convert_mcp_content_to_items_preserves_data_urls() {
+        let contents = vec![serde_json::json!({
+            "type": "image",
+            "data": "data:image/png;base64,Zm9v",
+            "mimeType": "image/png",
+        })];
+
+        let items = convert_mcp_content_to_items(&contents).expect("expected image items");
+        assert_eq!(
+            items,
+            vec![FunctionCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,Zm9v".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn convert_mcp_content_to_items_builds_data_urls_when_missing_prefix() {
+        let contents = vec![serde_json::json!({
+            "type": "image",
+            "data": "Zm9v",
+            "mimeType": "image/png",
+        })];
+
+        let items = convert_mcp_content_to_items(&contents).expect("expected image items");
+        assert_eq!(
+            items,
+            vec![FunctionCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,Zm9v".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn convert_mcp_content_to_items_returns_none_without_images() {
+        let contents = vec![serde_json::json!({
+            "type": "text",
+            "text": "hello",
+        })];
+
+        assert_eq!(convert_mcp_content_to_items(&contents), None);
+    }
 
     #[test]
     fn converts_sandbox_mode_into_developer_instructions() {
@@ -1124,20 +1194,12 @@ mod tests {
     fn serializes_image_outputs_as_array() -> Result<()> {
         let call_tool_result = CallToolResult {
             content: vec![
-                ContentBlock::TextContent(TextContent {
-                    annotations: None,
-                    text: "caption".into(),
-                    r#type: "text".into(),
-                }),
-                ContentBlock::ImageContent(ImageContent {
-                    annotations: None,
-                    data: "BASE64".into(),
-                    mime_type: "image/png".into(),
-                    r#type: "image".into(),
-                }),
+                serde_json::json!({"type":"text","text":"caption"}),
+                serde_json::json!({"type":"image","data":"BASE64","mimeType":"image/png"}),
             ],
-            is_error: None,
             structured_content: None,
+            is_error: Some(false),
+            meta: None,
         };
 
         let payload = FunctionCallOutputPayload::from(&call_tool_result);
@@ -1165,6 +1227,33 @@ mod tests {
 
         let output = v.get("output").expect("output field");
         assert!(output.is_array(), "expected array output");
+
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_existing_image_data_urls() -> Result<()> {
+        let call_tool_result = CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "image",
+                "data": "data:image/png;base64,BASE64",
+                "mimeType": "image/png"
+            })],
+            structured_content: None,
+            is_error: Some(false),
+            meta: None,
+        };
+
+        let payload = FunctionCallOutputPayload::from(&call_tool_result);
+        let Some(items) = payload.content_items else {
+            panic!("expected content items");
+        };
+        assert_eq!(
+            items,
+            vec![FunctionCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,BASE64".into(),
+            }]
+        );
 
         Ok(())
     }

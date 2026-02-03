@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::mcp::RequestId;
 use crate::parse_command::ParsedCommand;
 use crate::protocol::FileChange;
-use mcp_types::RequestId;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -62,6 +62,7 @@ pub struct ExecApprovalRequestEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ElicitationRequestEvent {
     pub server_name: String,
+    #[ts(type = "string | number")]
     pub id: RequestId,
     pub message: String,
     // TODO: MCP servers can request we fill out a schema for the elicitation. We don't support

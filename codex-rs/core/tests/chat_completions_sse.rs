@@ -103,7 +103,7 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
         SessionSource::Exec,
         TransportManager::new(),
     )
-    .new_session();
+    .new_session(None);
 
     let mut prompt = Prompt::default();
     prompt.input = vec![ResponseItem::Message {
@@ -113,6 +113,7 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
             text: "hello".to_string(),
         }],
         end_turn: None,
+        phase: None,
     }];
 
     let mut stream = match client.stream(&prompt).await {

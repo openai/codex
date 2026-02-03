@@ -86,6 +86,7 @@ mod tests {
                 text: text.to_string(),
             }],
             end_turn: None,
+            phase: None,
         }
     }
 
@@ -97,6 +98,7 @@ mod tests {
                 text: text.to_string(),
             }],
             end_turn: None,
+            phase: None,
         }
     }
 

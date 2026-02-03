@@ -40,6 +40,7 @@ owo-colors = { workspace = true }
 regex-lite = { workspace = true }
 serde_json = { workspace = true }
 supports-color = { workspace = true }
+tempfile = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",
@@ -59,4 +60,3 @@ assert_matches = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }
-tempfile = { workspace = true }

@@ -34,6 +34,7 @@ use windows_sys::Win32::Security::SECURITY_NT_AUTHORITY;
 pub const SETUP_VERSION: u32 = 5;
 pub const OFFLINE_USERNAME: &str = "CodexSandboxOffline";
 pub const ONLINE_USERNAME: &str = "CodexSandboxOnline";
+const ERROR_CANCELLED: u32 = 1223;
 const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x0000_0020;
 const DOMAIN_ALIAS_RID_ADMINS: u32 = 0x0000_0220;
 
@@ -411,8 +412,13 @@ fn run_setup_exe(
     let ok = unsafe { ShellExecuteExW(&mut sei) };
     if ok == 0 || sei.hProcess == 0 {
         let last_error = unsafe { GetLastError() };
+        let code = if last_error == ERROR_CANCELLED {
+            SetupErrorCode::OrchestratorHelperLaunchCanceled
+        } else {
+            SetupErrorCode::OrchestratorHelperLaunchFailed
+        };
         return Err(failure(
-            SetupErrorCode::OrchestratorHelperLaunchFailed,
+            code,
             format!("ShellExecuteExW failed to launch setup helper: {last_error}"),
         ));
     }

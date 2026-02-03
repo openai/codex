@@ -519,6 +519,7 @@ mod tests {
                 text: text.to_string(),
             }],
             end_turn: None,
+            phase: None,
         }
     }
     fn assistant_msg(text: &str) -> ResponseItem {
@@ -529,6 +530,7 @@ mod tests {
                 text: text.to_string(),
             }],
             end_turn: None,
+            phase: None,
         }
     }
 

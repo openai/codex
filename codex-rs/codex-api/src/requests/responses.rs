@@ -224,12 +224,14 @@ mod tests {
                 role: "assistant".into(),
                 content: Vec::new(),
                 end_turn: None,
+                phase: None,
             },
             ResponseItem::Message {
                 id: None,
                 role: "assistant".into(),
                 content: Vec::new(),
                 end_turn: None,
+                phase: None,
             },
         ];
 

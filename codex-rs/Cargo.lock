@@ -1108,7 +1108,6 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-json-to-toml",
  "core_test_support",
- "mcp-types",
  "os_info",
  "pretty_assertions",
  "rmcp",
@@ -1137,7 +1136,6 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "inventory",
- "mcp-types",
  "pretty_assertions",
  "schemars 0.8.22",
  "serde",
@@ -1422,6 +1420,7 @@ dependencies = [
  "core-foundation 0.9.4",
  "core_test_support",
  "ctor 0.6.3",
+ "dirs",
  "dunce",
  "encoding_rs",
  "env-flags",
@@ -1436,7 +1435,6 @@ dependencies = [
  "landlock",
  "libc",
  "maplit",
- "mcp-types",
  "multimap",
  "notify",
  "once_cell",
@@ -1449,6 +1447,7 @@ dependencies = [
  "regex",
  "regex-lite",
  "reqwest",
+ "rmcp",
  "schemars 0.8.22",
  "seccompiler",
  "serde",
@@ -1512,10 +1511,10 @@ dependencies = [
  "codex-utils-cargo-bin",
  "core_test_support",
  "libc",
- "mcp-types",
  "owo-colors",
  "predicates",
  "pretty_assertions",
+ "rmcp",
  "serde",
  "serde_json",
  "shlex",
@@ -1717,10 +1716,10 @@ dependencies = [
  "codex-protocol",
  "codex-utils-json-to-toml",
  "core_test_support",
- "mcp-types",
  "mcp_test_support",
  "os_info",
  "pretty_assertions",
+ "rmcp",
  "schemars 0.8.22",
  "serde",
  "serde_json",
@@ -1829,7 +1828,6 @@ dependencies = [
  "icu_decimal",
  "icu_locale_core",
  "icu_provider",
- "mcp-types",
  "mime_guess",
  "pretty_assertions",
  "schemars 0.8.22",
@@ -1873,7 +1871,6 @@ dependencies = [
  "codex-utils-home-dir",
  "futures",
  "keyring",
- "mcp-types",
  "oauth2",
  "pretty_assertions",
  "reqwest",
@@ -1902,6 +1899,7 @@ dependencies = [
  "codex-otel",
  "codex-protocol",
  "dirs",
+ "log",
  "owo-colors",
  "pretty_assertions",
  "serde",
@@ -1965,7 +1963,6 @@ dependencies = [
  "itertools 0.14.0",
  "lazy_static",
  "libc",
- "mcp-types",
  "pathdiff",
  "pretty_assertions",
  "pulldown-cmark",
@@ -1974,6 +1971,7 @@ dependencies = [
  "ratatui-macros",
  "regex-lite",
  "reqwest",
+ "rmcp",
  "serde",
  "serde_json",
  "serial_test",
@@ -4653,16 +4651,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b3eede3bdf92f3b4f9dc04072a9ce5ab557d5ec9038773bf9ffcd5588b3cc05b"
 
 [[package]]
-name = "mcp-types"
-version = "0.0.0"
-dependencies = [
- "schemars 0.8.22",
- "serde",
- "serde_json",
- "ts-rs",
-]
-
-[[package]]
 name = "mcp_test_support"
 version = "0.0.0"
 dependencies = [
@@ -4671,9 +4659,9 @@ dependencies = [
  "codex-mcp-server",
  "codex-utils-cargo-bin",
  "core_test_support",
- "mcp-types",
  "os_info",
  "pretty_assertions",
+ "rmcp",
  "serde",
  "serde_json",
  "shlex",
