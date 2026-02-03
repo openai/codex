@@ -9,6 +9,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ToolCallPreExecuteResponse;
 use std::path::PathBuf;
 use tokio::sync::watch;
 
@@ -72,5 +73,14 @@ impl CodexThread {
 
     pub async fn config_snapshot(&self) -> ThreadConfigSnapshot {
         self.codex.thread_config_snapshot().await
+    }
+
+    /// CRAFT AGENTS: Forward PreToolUse response to session.
+    pub async fn notify_tool_preexecute(
+        &self,
+        call_id: &str,
+        response: ToolCallPreExecuteResponse,
+    ) {
+        self.codex.notify_tool_preexecute(call_id, response).await;
     }
 }

@@ -3571,7 +3571,8 @@ impl ChatWidget {
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
-            | EventMsg::DynamicToolCallRequest(_) => {}
+            | EventMsg::DynamicToolCallRequest(_)
+            | EventMsg::ToolCallPreExecuteRequest(_) => {}
             EventMsg::ItemCompleted(event) => {
                 if let codex_protocol::items::TurnItem::Plan(plan_item) = event.item {
                     self.on_plan_item_completed(plan_item.text);

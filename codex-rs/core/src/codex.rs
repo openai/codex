@@ -461,6 +461,15 @@ impl Codex {
     pub(crate) fn state_db(&self) -> Option<state_db::StateDbHandle> {
         self.session.state_db()
     }
+
+    /// CRAFT AGENTS: Forward PreToolUse response to session.
+    pub async fn notify_tool_preexecute(
+        &self,
+        call_id: &str,
+        response: ToolCallPreExecuteResponse,
+    ) {
+        self.session.notify_tool_preexecute(call_id, response).await;
+    }
 }
 
 /// Context for an initialized model agent

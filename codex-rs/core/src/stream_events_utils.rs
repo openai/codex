@@ -153,6 +153,32 @@ pub(crate) async fn handle_output_item_done(
         Err(FunctionCallError::Fatal(message)) => {
             return Err(CodexErr::Fatal(message));
         }
+        // CRAFT AGENTS: Tool execution was blocked by PreToolUse hook.
+        Err(FunctionCallError::Blocked(reason)) => {
+            let msg = format!("Tool blocked: {}", reason);
+            tracing::info!(msg);
+
+            let response = ResponseInputItem::FunctionCallOutput {
+                call_id: String::new(),
+                output: FunctionCallOutputPayload {
+                    content: msg,
+                    ..Default::default()
+                },
+            };
+            ctx.sess
+                .record_conversation_items(&ctx.turn_context, std::slice::from_ref(&item))
+                .await;
+            if let Some(response_item) = response_input_to_response_item(&response) {
+                ctx.sess
+                    .record_conversation_items(
+                        &ctx.turn_context,
+                        std::slice::from_ref(&response_item),
+                    )
+                    .await;
+            }
+
+            output.needs_follow_up = true;
+        }
     }
 
     Ok(output)
