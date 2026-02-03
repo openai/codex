@@ -567,10 +567,10 @@ impl ModelClientSession {
                 Ok(stream) => {
                     return Ok(map_response_stream(stream, self.state.otel_manager.clone()));
                 }
-                Err(ApiError::Transport(TransportError::Http { status, .. }))
-                    if status == StatusCode::UNAUTHORIZED =>
-                {
-                    handle_unauthorized(status, &mut auth_recovery).await?;
+                Err(ApiError::Transport(
+                    unauthorized_transport @ TransportError::Http { status, .. },
+                )) if status == StatusCode::UNAUTHORIZED => {
+                    handle_unauthorized(unauthorized_transport, &mut auth_recovery).await?;
                     continue;
                 }
                 Err(err) => return Err(map_api_error(err)),
@@ -606,10 +606,10 @@ impl ModelClientSession {
                 .await
             {
                 Ok(connection) => connection,
-                Err(ApiError::Transport(TransportError::Http { status, .. }))
-                    if status == StatusCode::UNAUTHORIZED =>
-                {
-                    handle_unauthorized(status, &mut auth_recovery).await?;
+                Err(ApiError::Transport(
+                    unauthorized_transport @ TransportError::Http { status, .. },
+                )) if status == StatusCode::UNAUTHORIZED => {
+                    handle_unauthorized(unauthorized_transport, &mut auth_recovery).await?;
                     continue;
                 }
                 Err(err) => return Err(map_api_error(err)),
@@ -780,7 +780,7 @@ where
 /// When refresh succeeds, the caller should retry the API call; otherwise
 /// the mapped `CodexErr` is returned to the caller.
 async fn handle_unauthorized(
-    status: StatusCode,
+    transport: TransportError,
     auth_recovery: &mut Option<UnauthorizedRecovery>,
 ) -> Result<()> {
     if let Some(recovery) = auth_recovery
@@ -793,16 +793,7 @@ async fn handle_unauthorized(
         };
     }
 
-    Err(map_unauthorized_status(status))
-}
-
-fn map_unauthorized_status(status: StatusCode) -> CodexErr {
-    map_api_error(ApiError::Transport(TransportError::Http {
-        status,
-        url: None,
-        headers: None,
-        body: None,
-    }))
+    Err(map_api_error(ApiError::Transport(transport)))
 }
 
 struct ApiTelemetry {
