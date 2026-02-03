@@ -62,7 +62,6 @@ pub(crate) struct MultiSelectPicker {
     preview_line: Option<Line<'static>>,
     on_change: Option<ChangeCallBack>,
     on_confirm: Option<ConfirmCallback>,
-    #[allow(dead_code)]
     on_cancel: Option<CancelCallback>,
 }
 
@@ -262,6 +261,9 @@ impl MultiSelectPicker {
             return;
         }
         self.complete = true;
+        if let Some(on_cancel) = &self.on_cancel {
+            on_cancel(&self.app_event_tx);
+        }
     }
 }
 
@@ -543,9 +545,9 @@ impl MultiSelectPickerBuilder {
             vec![
                 "Press ".into(),
                 key_hint::plain(KeyCode::Char(' ')).into(),
-                " or ".into(),
-                key_hint::plain(KeyCode::Enter).into(),
                 " to toggle; ".into(),
+                key_hint::plain(KeyCode::Enter).into(),
+                " to confirm and close; ".into(),
                 key_hint::plain(KeyCode::Esc).into(),
                 " to close".into(),
             ]
