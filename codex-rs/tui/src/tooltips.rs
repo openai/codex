@@ -11,7 +11,7 @@ const PAID_TOOLTIP: &str =
 const OTHER_TOOLTIP: &str =
     "*New* Build faster with the **Codex App**. Run 'codex app' or visit https://chatgpt.com/codex";
 const FREE_GO_TOOLTIP: &str =
-    "*New* Codex is included in your plan for free through *March 2nd* – let’s build together. Run 'codex app' or visit https://chatgpt.com/codex";
+    "*New* Codex is included in your plan for free through *March 2nd* – let’s build together.";
 
 const RAW_TOOLTIPS: &str = include_str!("../tooltips.txt");
 
