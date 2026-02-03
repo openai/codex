@@ -7,11 +7,11 @@ const ANNOUNCEMENT_TIP_URL: &str =
     "https://raw.githubusercontent.com/openai/codex/main/announcement_tip.toml";
 
 const PAID_TOOLTIP: &str =
-    "*New* Try the **Codex App** with 2x rate limits until *April 2nd*. Launch with `codex app`. Learn more: https://chatgpt.com/codex";
+    "*New* Try the **Codex App** with 2x rate limits until *April 2nd*. Run 'codex app' or visit https://chatgpt.com/codex";
 const OTHER_TOOLTIP: &str =
-    "*New* Build faster with the **Codex App**. Launch with `codex app`. Learn more: https://chatgpt.com/codex";
+    "*New* Build faster with the **Codex App**. Run 'codex app' or visit https://chatgpt.com/codex";
 const FREE_GO_TOOLTIP: &str =
-    "*New* Codex is included in your plan for free through *March 2nd* – let’s build together. Launch with `codex app`. Learn more: https://chatgpt.com/codex";
+    "*New* Codex is included in your plan for free through *March 2nd* – let’s build together. Run 'codex app' or visit https://chatgpt.com/codex";
 
 const RAW_TOOLTIPS: &str = include_str!("../tooltips.txt");
 
