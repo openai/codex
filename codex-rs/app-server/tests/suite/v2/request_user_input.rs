@@ -78,20 +78,21 @@ async fn request_user_input_round_trip() -> Result<()> {
         mcp.read_stream_until_request_message(),
     )
     .await??;
-    let ServerRequest::AskUserQuestion { request_id, params } = server_req else {
-        panic!("expected AskUserQuestion request, got: {server_req:?}");
+    let ServerRequest::ToolRequestUserInput { request_id, params } = server_req else {
+        panic!("expected ToolRequestUserInput request, got: {server_req:?}");
     };
 
     assert_eq!(params.thread_id, thread.id);
     assert_eq!(params.turn_id, turn.id);
-    assert_eq!(params.call_id, "call1");
-    assert_eq!(params.request.questions.len(), 1);
+    assert_eq!(params.item_id, "call1");
+    assert_eq!(params.questions.len(), 1);
 
     mcp.send_response(
         request_id,
         serde_json::json!({
-            "cancelled": false,
-            "answers": { "confirm_path": ["yes"] }
+            "answers": {
+                "confirm_path": { "answers": ["yes"] }
+            }
         }),
     )
     .await?;

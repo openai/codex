@@ -40,6 +40,8 @@
 - **OpenCode / Server Info**
   - 起動時のサーバー情報カードから Config keys と Skills の一覧表示を削除（エラー時のみ表示）
   - codez/codex セッションで OpenCode の起動時カードが混ざる問題を修正（OpenCode started としてbackend/cwdでフィルタ）
+- **Skills**
+  - `No skills found` の案内に `./.codex/config.toml`（project）も明記（codez の config layering を反映）
 
 ## 0.2.7
 

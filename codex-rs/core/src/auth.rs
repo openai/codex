@@ -169,7 +169,13 @@ impl CodexAuth {
 
         match auth_mode {
             ApiAuthMode::Chatgpt => {
-                let storage = create_auth_storage(codex_home.to_path_buf(), storage_mode);
+                let account_name = if storage_mode == AuthCredentialsStoreMode::Ephemeral {
+                    None
+                } else {
+                    resolve_active_account(codex_home)?
+                };
+                let storage =
+                    create_auth_storage(codex_home.to_path_buf(), storage_mode, account_name);
                 Ok(Self::Chatgpt(ChatgptAuth { state, storage }))
             }
             ApiAuthMode::ChatgptAuthTokens => {

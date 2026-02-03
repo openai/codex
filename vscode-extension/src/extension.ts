@@ -2049,7 +2049,7 @@ export function activate(context: vscode.ExtensionContext): void {
           const msg =
             errors.length > 0
               ? "No skills found (some skills failed to load)."
-              : "No skills found. Enable [features].skills=true in $CODEX_HOME/config.toml.";
+              : "No skills found. Enable [features].skills=true in ./.codex/config.toml (if present) or $CODEX_HOME/config.toml.";
           void vscode.window.showInformationMessage(msg);
           return;
         }

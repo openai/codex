@@ -1,0 +1,61 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "AccountKind": {
+      "description": "CODEZ - A short summary of a configured account.",
+      "enum": [
+        "chatgpt",
+        "apiKey"
+      ],
+      "type": "string"
+    },
+    "AccountSummary": {
+      "description": "CODEZ - A short account summary for account switching UIs.",
+      "properties": {
+        "email": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AccountKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "CODEZ - List available accounts (multi-account support).",
+  "properties": {
+    "accounts": {
+      "items": {
+        "$ref": "#/definitions/AccountSummary"
+      },
+      "type": "array"
+    },
+    "activeAccount": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "accounts"
+  ],
+  "title": "ListAccountsResponse",
+  "type": "object"
+}

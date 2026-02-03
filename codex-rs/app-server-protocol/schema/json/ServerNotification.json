@@ -41,6 +41,12 @@
     },
     "AccountUpdatedNotification": {
       "properties": {
+        "activeAccount": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "authMode": {
           "anyOf": [
             {

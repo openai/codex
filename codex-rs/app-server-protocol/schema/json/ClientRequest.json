@@ -2152,6 +2152,22 @@
       },
       "type": "object"
     },
+    "SwitchAccountParams": {
+      "description": "CODEZ - Switch the active account (multi-account support).",
+      "properties": {
+        "createIfMissing": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "createIfMissing",
+        "name"
+      ],
+      "type": "object"
+    },
     "TextElement": {
       "properties": {
         "byteRange": {
@@ -2176,6 +2192,17 @@
       "type": "object"
     },
     "ThreadArchiveParams": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadCompactParams": {
       "properties": {
         "threadId": {
           "type": "string"
@@ -3201,6 +3228,30 @@
         },
         "method": {
           "enum": [
+            "thread/compact"
+          ],
+          "title": "Thread/compactRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadCompactParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/compactRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
             "thread/list"
           ],
           "title": "Thread/listRequestMethod",
@@ -3599,6 +3650,55 @@
         "method"
       ],
       "title": "Account/logoutRequest",
+      "type": "object"
+    },
+    {
+      "description": "CODEZ - List configured accounts (multi-account support).",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "account/list"
+          ],
+          "title": "Account/listRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "id",
+        "method"
+      ],
+      "title": "Account/listRequest",
+      "type": "object"
+    },
+    {
+      "description": "CODEZ - Switch the active account (multi-account support).",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "account/switch"
+          ],
+          "title": "Account/switchRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/SwitchAccountParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Account/switchRequest",
       "type": "object"
     },
     {

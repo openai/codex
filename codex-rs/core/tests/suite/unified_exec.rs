@@ -2580,7 +2580,10 @@ async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
+            // On macOS, `/usr/bin/python3` is often a shim that calls `xcrun`,
+            // which needs a writable temp directory. Use workspace-write so the
+            // process can create temp files while still running under Seatbelt.
+            sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,

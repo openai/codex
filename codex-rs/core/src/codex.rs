@@ -486,7 +486,7 @@ fn resolve_session_collaboration_settings(
     (
         Settings {
             model: if override_model {
-                fallback_settings.model.clone()
+                fallback_settings.model
             } else {
                 ctx.model
             },

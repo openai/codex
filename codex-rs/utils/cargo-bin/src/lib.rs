@@ -2,6 +2,7 @@ use std::ffi::OsString;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
 
 pub use runfiles;
 
@@ -19,6 +20,30 @@ pub enum CargoBinError {
     CurrentDir {
         #[source]
         source: std::io::Error,
+    },
+    #[error("failed to resolve repo root")]
+    RepoRoot {
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to run `cargo metadata`")]
+    CargoMetadata {
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to parse `cargo metadata` output")]
+    CargoMetadataJson {
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("`cargo metadata` did not include a bin target named {name:?}")]
+    BinNotInMetadata { name: String },
+    #[error("`cargo build` failed for {package:?} ({bin:?}) with status {status:?}: {stderr}")]
+    CargoBuildFailed {
+        package: String,
+        bin: String,
+        status: std::process::ExitStatus,
+        stderr: String,
     },
     #[error("CARGO_BIN_EXE env var {key} resolved to {path:?}, but it does not exist")]
     ResolvedPathDoesNotExist { key: String, path: PathBuf },
@@ -42,27 +67,12 @@ pub fn cargo_bin(name: &str) -> Result<PathBuf, CargoBinError> {
             return resolve_bin_from_env(key, value);
         }
     }
-    match assert_cmd::Command::cargo_bin(name) {
-        Ok(cmd) => {
-            let mut path = PathBuf::from(cmd.get_program());
-            if !path.is_absolute() {
-                path = std::env::current_dir()
-                    .map_err(|source| CargoBinError::CurrentDir { source })?
-                    .join(path);
-            }
-            if path.exists() {
-                Ok(path)
-            } else {
-                Err(CargoBinError::ResolvedPathDoesNotExist {
-                    key: "assert_cmd::Command::cargo_bin".to_owned(),
-                    path,
-                })
-            }
-        }
+    match cargo_bin_via_workspace_build(name) {
+        Ok(path) => Ok(path),
         Err(err) => Err(CargoBinError::NotFound {
             name: name.to_owned(),
             env_keys,
-            fallback: format!("assert_cmd fallback failed: {err}"),
+            fallback: format!("cargo build fallback failed: {err}"),
         }),
     }
 }
@@ -103,6 +113,94 @@ fn resolve_bin_from_env(key: &str, value: OsString) -> Result<PathBuf, CargoBinE
         key: key.to_owned(),
         path: raw,
     })
+}
+
+fn cargo_bin_via_workspace_build(name: &str) -> Result<PathBuf, CargoBinError> {
+    let workspace_root = repo_root().map_err(|source| CargoBinError::RepoRoot { source })?;
+    let codex_rs_root = workspace_root.join("codex-rs");
+    let metadata_output = Command::new("cargo")
+        .args(["metadata", "--format-version=1", "--no-deps"])
+        .current_dir(&codex_rs_root)
+        .output()
+        .map_err(|source| CargoBinError::CargoMetadata { source })?;
+    if !metadata_output.status.success() {
+        return Err(CargoBinError::CargoMetadata {
+            source: io::Error::other(String::from_utf8_lossy(&metadata_output.stderr)),
+        });
+    }
+    let meta: serde_json::Value = serde_json::from_slice(&metadata_output.stdout)
+        .map_err(|source| CargoBinError::CargoMetadataJson { source })?;
+    let target_dir = meta
+        .get("target_directory")
+        .and_then(serde_json::Value::as_str)
+        .map(PathBuf::from)
+        .ok_or_else(|| CargoBinError::BinNotInMetadata {
+            name: name.to_owned(),
+        })?;
+    let packages = meta
+        .get("packages")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| CargoBinError::BinNotInMetadata {
+            name: name.to_owned(),
+        })?;
+
+    let mut package_name: Option<String> = None;
+    for package in packages {
+        let Some(targets) = package.get("targets").and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        for target in targets {
+            let Some(target_name) = target.get("name").and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            let Some(kinds) = target.get("kind").and_then(serde_json::Value::as_array) else {
+                continue;
+            };
+            let is_bin = kinds.iter().any(|k| k.as_str() == Some("bin"));
+            if is_bin && target_name == name {
+                package_name = package
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned);
+                break;
+            }
+        }
+        if package_name.is_some() {
+            break;
+        }
+    }
+
+    let package = package_name.ok_or_else(|| CargoBinError::BinNotInMetadata {
+        name: name.to_owned(),
+    })?;
+
+    let build_output = Command::new("cargo")
+        .args(["build", "-p", &package, "--bin", name])
+        .current_dir(&codex_rs_root)
+        .output()
+        .map_err(|source| CargoBinError::CargoMetadata { source })?;
+    if !build_output.status.success() {
+        return Err(CargoBinError::CargoBuildFailed {
+            package,
+            bin: name.to_owned(),
+            status: build_output.status,
+            stderr: String::from_utf8_lossy(&build_output.stderr).to_string(),
+        });
+    }
+
+    let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_owned());
+    let mut path = target_dir.join(profile).join(name);
+    if cfg!(windows) {
+        path.set_extension("exe");
+    }
+    if path.exists() {
+        Ok(path)
+    } else {
+        Err(CargoBinError::ResolvedPathDoesNotExist {
+            key: "cargo build".to_owned(),
+            path,
+        })
+    }
 }
 
 /// Macro that derives the path to a test resource at runtime, the value of

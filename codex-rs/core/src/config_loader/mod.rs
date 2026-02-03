@@ -186,6 +186,7 @@ pub async fn load_config_layers_state(
             .await
             .map(|m| m.is_file())
             .unwrap_or(false);
+        let use_cwd_local_only = use_cwd_local_only && cwd_dot_codex != codex_home;
 
         if use_cwd_local_only {
             let dot_codex_folder = AbsolutePathBuf::from_absolute_path(&cwd_dot_codex)?;
@@ -218,49 +219,51 @@ pub async fn load_config_layers_state(
             let project_root_markers = match project_root_markers_from_config(&merged_so_far) {
                 Ok(markers) => markers.unwrap_or_else(default_project_root_markers),
                 Err(err) => {
-                    if let Some(config_error) = first_layer_config_error_from_entries(&layers).await {
-                    return Err(io_error_from_config_error(
-                        io::ErrorKind::InvalidData,
-                        config_error,
-                        None,
-                    ));
+                    if let Some(config_error) = first_layer_config_error_from_entries(&layers).await
+                    {
+                        return Err(io_error_from_config_error(
+                            io::ErrorKind::InvalidData,
+                            config_error,
+                            None,
+                        ));
+                    }
+                    return Err(err);
                 }
-                return Err(err);
-            }
-        };
-        let project_trust_context = match project_trust_context(
-            &merged_so_far,
-            &cwd,
-            &project_root_markers,
-            codex_home,
-            &user_file,
-        )
-        .await
-        {
-            Ok(context) => context,
-            Err(err) => {
-                let source = err
-                    .get_ref()
-                    .and_then(|err| err.downcast_ref::<toml::de::Error>())
-                    .cloned();
-                if let Some(config_error) = first_layer_config_error_from_entries(&layers).await {
-                    return Err(io_error_from_config_error(
-                        io::ErrorKind::InvalidData,
-                        config_error,
-                        source,
-                    ));
+            };
+            let project_trust_context = match project_trust_context(
+                &merged_so_far,
+                &cwd,
+                &project_root_markers,
+                codex_home,
+                &user_file,
+            )
+            .await
+            {
+                Ok(context) => context,
+                Err(err) => {
+                    let source = err
+                        .get_ref()
+                        .and_then(|err| err.downcast_ref::<toml::de::Error>())
+                        .cloned();
+                    if let Some(config_error) = first_layer_config_error_from_entries(&layers).await
+                    {
+                        return Err(io_error_from_config_error(
+                            io::ErrorKind::InvalidData,
+                            config_error,
+                            source,
+                        ));
+                    }
+                    return Err(err);
                 }
-                return Err(err);
-            }
-        };
-        let project_layers = load_project_layers(
-            &cwd,
-            &project_trust_context.project_root,
-            &project_trust_context,
-            codex_home,
-        )
-        .await?;
-        layers.extend(project_layers);
+            };
+            let project_layers = load_project_layers(
+                &cwd,
+                &project_trust_context.project_root,
+                &project_trust_context,
+                codex_home,
+            )
+            .await?;
+            layers.extend(project_layers);
         }
     } else {
         let user_layer = load_config_toml_for_required_layer(&user_file, |config_toml| {

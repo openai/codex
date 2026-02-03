@@ -1149,6 +1149,7 @@ impl CodexMessageProcessor {
 
         let payload_v2 = AccountUpdatedNotification {
             auth_mode: self.auth_manager.get_auth_mode(),
+            active_account: self.active_account_for_notification(),
         };
         self.outgoing
             .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
@@ -1328,9 +1329,11 @@ impl CodexMessageProcessor {
                         self.auth_manager.auth_cached(),
                     )
                 {
-                    let (kind, email) = match auth.mode {
-                        AuthMode::ChatGPT => (AccountKind::Chatgpt, auth.get_account_email()),
-                        AuthMode::ApiKey => (AccountKind::ApiKey, None),
+                    use codex_core::auth::AuthMode as CoreAuthMode;
+
+                    let (kind, email) = match auth.internal_auth_mode() {
+                        CoreAuthMode::Chatgpt => (AccountKind::Chatgpt, auth.get_account_email()),
+                        CoreAuthMode::ApiKey => (AccountKind::ApiKey, None),
                     };
                     if let Err(err) =
                         update_account_meta(&self.config.codex_home, &account, kind, email)
@@ -1346,7 +1349,11 @@ impl CodexMessageProcessor {
                 self.outgoing.send_response(request_id, response).await;
 
                 let payload_v2 = AccountUpdatedNotification {
-                    auth_mode: self.auth_manager.auth_cached().map(|auth| auth.mode),
+                    auth_mode: self
+                        .auth_manager
+                        .auth_cached()
+                        .as_ref()
+                        .map(CodexAuth::api_auth_mode),
                     active_account: self.active_account_for_notification(),
                 };
                 self.outgoing

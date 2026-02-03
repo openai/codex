@@ -360,7 +360,7 @@ impl EphemeralAuthStorage {
     where
         F: FnOnce(&mut HashMap<String, AuthDotJson>, String) -> std::io::Result<T>,
     {
-        let key = compute_store_key(&self.codex_home)?;
+        let key = compute_store_key(&self.codex_home, None)?;
         let mut store = EPHEMERAL_AUTH_STORE
             .lock()
             .map_err(|_| std::io::Error::other("failed to lock ephemeral auth storage"))?;
@@ -520,6 +520,7 @@ mod tests {
         let storage = create_auth_storage(
             dir.path().to_path_buf(),
             AuthCredentialsStoreMode::Ephemeral,
+            None,
         );
         let auth_dot_json = AuthDotJson {
             auth_mode: Some(AuthMode::ApiKey),

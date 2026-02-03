@@ -1,9 +1,6 @@
 use crate::config::Config;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
-use crate::config_loader::default_project_root_markers;
-use crate::config_loader::merge_toml_values;
-use crate::config_loader::project_root_markers_from_config;
 use crate::skills::model::SkillDependencies;
 use crate::skills::model::SkillError;
 use crate::skills::model::SkillInterface;
@@ -23,7 +20,6 @@ use std::fs;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
-use toml::Value as TomlValue;
 use tracing::error;
 
 #[derive(Debug, Deserialize)]
@@ -76,6 +72,7 @@ struct DependencyTool {
 }
 
 const SKILLS_FILENAME: &str = "SKILL.md";
+#[cfg(test)]
 const AGENTS_DIR_NAME: &str = ".agents";
 const SKILLS_METADATA_DIR: &str = "agents";
 const SKILLS_METADATA_FILENAME: &str = "openai.yaml";
@@ -214,7 +211,7 @@ fn skill_roots_from_layer_stack_inner(config_layer_stack: &ConfigLayerStack) -> 
 }
 
 fn skill_roots(config: &Config) -> Vec<SkillRoot> {
-    skill_roots_from_layer_stack_with_agents(&config.config_layer_stack, &config.cwd)
+    skill_roots_from_layer_stack_inner(&config.config_layer_stack)
 }
 
 #[cfg(test)]
@@ -226,90 +223,9 @@ pub(crate) fn skill_roots_from_layer_stack(
 
 pub(crate) fn skill_roots_from_layer_stack_with_agents(
     config_layer_stack: &ConfigLayerStack,
-    cwd: &Path,
+    _cwd: &Path,
 ) -> Vec<SkillRoot> {
-    let mut roots = skill_roots_from_layer_stack_inner(config_layer_stack);
-    roots.extend(repo_agents_skill_roots(config_layer_stack, cwd));
-    dedupe_skill_roots_by_path(&mut roots);
-    roots
-}
-
-fn dedupe_skill_roots_by_path(roots: &mut Vec<SkillRoot>) {
-    let mut seen: HashSet<PathBuf> = HashSet::new();
-    roots.retain(|root| seen.insert(root.path.clone()));
-}
-
-fn repo_agents_skill_roots(config_layer_stack: &ConfigLayerStack, cwd: &Path) -> Vec<SkillRoot> {
-    let project_root_markers = project_root_markers_from_stack(config_layer_stack);
-    let project_root = find_project_root(cwd, &project_root_markers);
-    let dirs = dirs_between_project_root_and_cwd(cwd, &project_root);
-    let mut roots = Vec::new();
-    for dir in dirs {
-        let agents_skills = dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME);
-        if agents_skills.is_dir() {
-            roots.push(SkillRoot {
-                path: agents_skills,
-                scope: SkillScope::Repo,
-            });
-        }
-    }
-    roots
-}
-
-fn project_root_markers_from_stack(config_layer_stack: &ConfigLayerStack) -> Vec<String> {
-    let mut merged = TomlValue::Table(toml::map::Map::new());
-    for layer in
-        config_layer_stack.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, false)
-    {
-        if matches!(layer.name, ConfigLayerSource::Project { .. }) {
-            continue;
-        }
-        merge_toml_values(&mut merged, &layer.config);
-    }
-
-    match project_root_markers_from_config(&merged) {
-        Ok(Some(markers)) => markers,
-        Ok(None) => default_project_root_markers(),
-        Err(err) => {
-            tracing::warn!("invalid project_root_markers: {err}");
-            default_project_root_markers()
-        }
-    }
-}
-
-fn find_project_root(cwd: &Path, project_root_markers: &[String]) -> PathBuf {
-    if project_root_markers.is_empty() {
-        return cwd.to_path_buf();
-    }
-
-    for ancestor in cwd.ancestors() {
-        for marker in project_root_markers {
-            let marker_path = ancestor.join(marker);
-            if marker_path.exists() {
-                return ancestor.to_path_buf();
-            }
-        }
-    }
-
-    cwd.to_path_buf()
-}
-
-fn dirs_between_project_root_and_cwd(cwd: &Path, project_root: &Path) -> Vec<PathBuf> {
-    let mut dirs = cwd
-        .ancestors()
-        .scan(false, |done, a| {
-            if *done {
-                None
-            } else {
-                if a == project_root {
-                    *done = true;
-                }
-                Some(a.to_path_buf())
-            }
-        })
-        .collect::<Vec<_>>();
-    dirs.reverse();
-    dirs
+    skill_roots_from_layer_stack_inner(config_layer_stack)
 }
 
 fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut SkillLoadOutcome) {
@@ -1729,18 +1645,10 @@ interface:
             "unexpected errors: {:?}",
             outcome.errors
         );
-        assert_eq!(
-            outcome.skills,
-            vec![SkillMetadata {
-                name: "agents-skill".to_string(),
-                description: "from agents".to_string(),
-                short_description: None,
-                interface: None,
-                dependencies: None,
-                path: normalized(&skill_path),
-                scope: SkillScope::Repo,
-            }]
-        );
+        assert_eq!(outcome.skills, Vec::<SkillMetadata>::new());
+
+        // Avoid unused variable warning when `.agents/skills` is intentionally ignored.
+        let _ = skill_path;
     }
 
     #[tokio::test]

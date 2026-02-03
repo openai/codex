@@ -250,11 +250,11 @@ mod tests {
         let codex_home = TempDir::new().unwrap();
         let mut config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(root.path().to_path_buf()))
             .build()
             .await
             .expect("defaults for test should always succeed");
 
-        config.cwd = root.path().to_path_buf();
         config.project_doc_max_bytes = limit;
 
         config.user_instructions = instructions.map(ToOwned::to_owned);

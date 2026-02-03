@@ -311,6 +311,7 @@ args = ["-y", "@mobilenext/mobile-mcp@latest"]
         Some(AbsolutePathBuf::try_from(cwd.as_path()).expect("cwd")),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
     )
     .await
     .expect("load layers");
@@ -950,7 +951,7 @@ async fn cwd_local_config_applies_even_when_untrusted_or_unknown() -> std::io::R
         CloudRequirementsLoader::default(),
     )
     .await?;
-    let project_layers_untrusted: Vec<_> = layers_untrusted
+    let project_layers_untrusted = layers_untrusted
         .get_layers(
             super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
             true,
@@ -983,7 +984,7 @@ async fn cwd_local_config_applies_even_when_untrusted_or_unknown() -> std::io::R
         CloudRequirementsLoader::default(),
     )
     .await?;
-    let project_layers_unknown: Vec<_> = layers_unknown
+    let project_layers_unknown = layers_unknown
         .get_layers(
             super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
             true,
