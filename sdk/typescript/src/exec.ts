@@ -185,10 +185,67 @@ export class CodexExec {
       crlfDelay: Infinity,
     });
 
+    // Create an abort promise that rejects when signal is aborted
+    // This allows us to race against readline iteration
+    let abortReject: ((reason: Error) => void) | null = null;
+    const abortPromise = args.signal
+      ? new Promise<never>((_, reject) => {
+          abortReject = reject;
+        })
+      : null;
+
+    // Handle abort signal by forcefully closing everything and rejecting
+    const abortHandler = () => {
+      // Destroy the stdout stream to force readline to stop
+      if (child.stdout) {
+        child.stdout.destroy();
+      }
+      rl.close();
+      if (!child.killed) {
+        child.kill("SIGKILL"); // Use SIGKILL for immediate termination
+      }
+      if (abortReject) {
+        abortReject(new DOMException("The operation was aborted.", "AbortError"));
+      }
+    };
+    args.signal?.addEventListener("abort", abortHandler);
+
+    // Check if already aborted before starting
+    if (args.signal?.aborted) {
+      throw new DOMException("The operation was aborted.", "AbortError");
+    }
+
     try {
-      for await (const line of rl) {
+      const rlIterator = rl[Symbol.asyncIterator]();
+
+      while (true) {
+        // Check abort at START of iteration (catches abort during previous yield)
+        if (args.signal?.aborted) {
+          throw new DOMException("The operation was aborted.", "AbortError");
+        }
+
+        // Race between getting next line and abort signal
+        const nextPromise = rlIterator.next();
+        const result = abortPromise
+          ? await Promise.race([nextPromise, abortPromise])
+          : await nextPromise;
+
+        if (result.done) {
+          break;
+        }
+
+        // Check if aborted after receiving line (in case abort happened during yield)
+        if (args.signal?.aborted) {
+          throw new DOMException("The operation was aborted.", "AbortError");
+        }
+
         // `line` is a string (Node sets default encoding to utf8 for readline)
-        yield line as string;
+        yield result.value as string;
+
+        // Check immediately after yield returns (consumer may have called abort)
+        if (args.signal?.aborted) {
+          throw new DOMException("The operation was aborted.", "AbortError");
+        }
       }
 
       if (spawnError) throw spawnError;
@@ -199,10 +256,13 @@ export class CodexExec {
         throw new Error(`Codex Exec exited with ${detail}: ${stderrBuffer.toString("utf8")}`);
       }
     } finally {
+      args.signal?.removeEventListener("abort", abortHandler);
       rl.close();
       child.removeAllListeners();
       try {
-        if (!child.killed) child.kill();
+        if (!child.killed) {
+          child.kill("SIGKILL"); // Use SIGKILL to ensure immediate termination
+        }
       } catch {
         // ignore
       }

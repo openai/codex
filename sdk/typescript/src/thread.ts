@@ -93,8 +93,47 @@ export class Thread {
       approvalPolicy: options?.approvalPolicy,
       additionalDirectories: options?.additionalDirectories,
     });
+    // Create abort promise for racing
+    let abortReject: ((error: Error) => void) | null = null;
+    const abortPromise = turnOptions.signal
+      ? new Promise<never>((_, reject) => {
+          abortReject = reject;
+        })
+      : null;
+
+    const abortHandler = () => {
+      if (abortReject) {
+        abortReject(new DOMException("The operation was aborted.", "AbortError"));
+      }
+    };
+    turnOptions.signal?.addEventListener("abort", abortHandler);
+
     try {
-      for await (const item of generator) {
+      const iter = generator[Symbol.asyncIterator]();
+
+      while (true) {
+        // Check if aborted at start of iteration
+        if (turnOptions.signal?.aborted) {
+          throw new DOMException("The operation was aborted.", "AbortError");
+        }
+
+        // Race between getting next item and abort
+        const nextPromise = iter.next();
+        const result = abortPromise
+          ? await Promise.race([nextPromise, abortPromise])
+          : await nextPromise;
+
+        if (result.done) {
+          break;
+        }
+
+        const item = result.value;
+
+        // Check if aborted after receiving item
+        if (turnOptions.signal?.aborted) {
+          throw new DOMException("The operation was aborted.", "AbortError");
+        }
+
         let parsed: ThreadEvent;
         try {
           parsed = JSON.parse(item) as ThreadEvent;
@@ -105,8 +144,14 @@ export class Thread {
           this._id = parsed.thread_id;
         }
         yield parsed;
+
+        // Check if aborted after yield
+        if (turnOptions.signal?.aborted) {
+          throw new DOMException("The operation was aborted.", "AbortError");
+        }
       }
     } finally {
+      turnOptions.signal?.removeEventListener("abort", abortHandler);
       await cleanup();
     }
   }
