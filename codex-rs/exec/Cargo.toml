@@ -28,7 +28,6 @@ codex-common = { workspace = true, features = [
 codex-core = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
-mcp-types = { workspace = true }
 owo-colors = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -56,9 +55,9 @@ assert_cmd = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 core_test_support = { workspace = true }
 libc = { workspace = true }
-mcp-types = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }
+rmcp = { workspace = true }
 tempfile = { workspace = true }
 uuid = { workspace = true }
 walkdir = { workspace = true }

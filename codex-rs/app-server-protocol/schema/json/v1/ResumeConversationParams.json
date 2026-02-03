@@ -266,6 +266,13 @@
       ],
       "type": "string"
     },
+    "MessagePhase": {
+      "enum": [
+        "commentary",
+        "final_answer"
+      ],
+      "type": "string"
+    },
     "NewConversationParams": {
       "properties": {
         "approvalPolicy": {
@@ -436,6 +443,16 @@
                 "null"
               ],
               "writeOnly": true
+            },
+            "phase": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MessagePhase"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "role": {
               "type": "string"

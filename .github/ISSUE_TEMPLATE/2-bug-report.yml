@@ -19,7 +19,7 @@ body:
     id: version
     attributes:
       label: What version of Codex is running?
-      description: Copy the output of `codex --version`
+      description: (App) look in "About Codex" dialog; (CLI) use `codex --version`; (IDE Extension) look in extensions panel.
     validations:
       required: true
   - type: input

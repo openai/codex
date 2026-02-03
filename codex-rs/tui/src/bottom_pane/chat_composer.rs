@@ -394,6 +394,14 @@ impl ChatComposer {
         self.skills = skills;
     }
 
+    /// Toggle composer-side image paste handling.
+    ///
+    /// This only affects whether image-like paste content is converted into attachments; the
+    /// `ChatWidget` layer still performs capability checks before images are submitted.
+    pub fn set_image_paste_enabled(&mut self, enabled: bool) {
+        self.config.image_paste_enabled = enabled;
+    }
+
     pub fn set_connector_mentions(&mut self, connectors_snapshot: Option<ConnectorsSnapshot>) {
         self.connectors_snapshot = connectors_snapshot;
     }
@@ -712,18 +720,45 @@ impl ChatComposer {
     }
 
     /// Replace the entire composer content with `text` and reset cursor.
-    /// This clears any pending paste payloads.
+    ///
+    /// This is the "fresh draft" path: it clears pending paste payloads and
+    /// mention link targets. Callers restoring a previously submitted draft
+    /// that must keep `$name -> path` resolution should use
+    /// [`Self::set_text_content_with_mention_paths`] instead.
     pub(crate) fn set_text_content(
         &mut self,
         text: String,
         text_elements: Vec<TextElement>,
         local_image_paths: Vec<PathBuf>,
     ) {
+        self.set_text_content_with_mention_paths(
+            text,
+            text_elements,
+            local_image_paths,
+            HashMap::new(),
+        );
+    }
+
+    /// Replace the entire composer content while restoring mention link targets.
+    ///
+    /// Mention popup insertion stores both visible text (for example `$file`)
+    /// and hidden `mention_paths` used to resolve the canonical target during
+    /// submission. Use this method when restoring an interrupted or blocked
+    /// draft; if callers restore only text and images, mentions can appear
+    /// intact to users while resolving to the wrong target or dropping on
+    /// retry.
+    pub(crate) fn set_text_content_with_mention_paths(
+        &mut self,
+        text: String,
+        text_elements: Vec<TextElement>,
+        local_image_paths: Vec<PathBuf>,
+        mention_paths: HashMap<String, String>,
+    ) {
         // Clear any existing content, placeholders, and attachments first.
         self.textarea.set_text_clearing_elements("");
         self.pending_pastes.clear();
         self.attached_images.clear();
-        self.mention_paths.clear();
+        self.mention_paths = mention_paths;
 
         self.textarea.set_text_with_elements(&text, &text_elements);
 

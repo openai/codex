@@ -27,7 +27,6 @@ members = [
     "lmstudio",
     "login",
     "mcp-server",
-    "mcp-types",
     "network-proxy",
     "ollama",
     "process-hardening",
@@ -112,7 +111,6 @@ codex-utils-string = { path = "utils/string" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }
 core_test_support = { path = "core/tests/common" }
 exec_server_test_support = { path = "exec-server/tests/common" }
-mcp-types = { path = "mcp-types" }
 mcp_test_support = { path = "mcp-server/tests/common" }
 
 # External
