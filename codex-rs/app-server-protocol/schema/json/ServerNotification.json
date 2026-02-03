@@ -5567,6 +5567,9 @@
       ],
       "type": "object"
     },
+    "SkillsListUpdatedNotification": {
+      "type": "object"
+    },
     "StepStatus": {
       "enum": [
         "pending",
@@ -7818,6 +7821,26 @@
         "params"
       ],
       "title": "ConfigWarningNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "skills/list/updated"
+          ],
+          "title": "Skills/list/updatedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/SkillsListUpdatedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Skills/list/updatedNotification",
       "type": "object"
     },
     {
