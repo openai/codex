@@ -305,7 +305,11 @@ export class OpencodeHttpClient {
                   .map((v) => String(v ?? "").trim())
                   .filter((v) => supportedEfforts.has(v))
               : [];
-          modelEntries.push({ id: modelID, name: modelName, supportedEfforts: efforts });
+          modelEntries.push({
+            id: modelID,
+            name: modelName,
+            supportedEfforts: efforts,
+          });
         }
       } else if (typeof rawModels === "object" && rawModels !== null) {
         for (const [modelID, meta] of Object.entries(
@@ -329,7 +333,11 @@ export class OpencodeHttpClient {
                   .map((v) => String(v ?? "").trim())
                   .filter((v) => supportedEfforts.has(v))
               : [];
-          modelEntries.push({ id: modelID, name: modelName, supportedEfforts: efforts });
+          modelEntries.push({
+            id: modelID,
+            name: modelName,
+            supportedEfforts: efforts,
+          });
         }
       }
 
@@ -361,6 +369,7 @@ export class OpencodeHttpClient {
             description: "",
           })),
           defaultReasoningEffort: "none",
+          supportsPersonality: false,
           isDefault: defaultModelID ? defaultModelID === m.id : false,
         });
       }
@@ -608,7 +617,9 @@ export class OpencodeHttpClient {
     } catch (err) {
       const causeText =
         err instanceof Error ? err.message : `Unknown error: ${String(err)}`;
-      const e = new Error(`POST ${pathname} fetch failed: url=${url}; cause=${causeText}`);
+      const e = new Error(
+        `POST ${pathname} fetch failed: url=${url}; cause=${causeText}`,
+      );
       (e as any).cause = err;
       throw e;
     }

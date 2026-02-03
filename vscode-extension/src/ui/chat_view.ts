@@ -4,8 +4,6 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 
 import type { Session } from "../sessions";
-import type { AskUserQuestionRequest } from "../generated/AskUserQuestionRequest";
-import type { AskUserQuestionResponse } from "../generated/v2/AskUserQuestionResponse";
 
 export type ChatBlock =
   | { id: string; type: "user"; text: string }
@@ -249,13 +247,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     string,
     string
   >();
-  private readonly pendingAskUserQuestionsByKey = new Map<
-    string,
-    {
-      resolve: (resp: AskUserQuestionResponse) => void;
-      reject: (err: unknown) => void;
-    }
-  >();
   private opencodeAgentsCache: Array<{
     id: string;
     name: string;
@@ -359,61 +350,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.view?.show?.(true);
   }
 
-  public async promptAskUserQuestion(args: {
-    requestKey: string;
-    request: AskUserQuestionRequest;
-  }): Promise<AskUserQuestionResponse> {
-    if (this.pendingAskUserQuestionsByKey.has(args.requestKey)) {
-      throw new Error(
-        `AskUserQuestion already pending for requestKey=${args.requestKey}`,
-      );
-    }
-
-    const withTimeout = async <T>(
-      p: Promise<T>,
-      timeoutMs: number,
-    ): Promise<T> => {
-      if (timeoutMs <= 0) return await p;
-      return await Promise.race([
-        p,
-        new Promise<T>((_, reject) => {
-          setTimeout(
-            () => reject(new Error("Timed out waiting for chat view")),
-            timeoutMs,
-          );
-        }),
-      ]);
-    };
-
-    // Ensure the webview is available before prompting.
-    // If the user never opened the view, the provider hasn't been resolved yet.
-    await withTimeout(this.viewReadyPromise, 5000);
-    if (!this.view) {
-      throw new Error("Chat view is not available (webview not initialized)");
-    }
-
-    const p = new Promise<AskUserQuestionResponse>((resolve, reject) => {
-      this.pendingAskUserQuestionsByKey.set(args.requestKey, {
-        resolve,
-        reject,
-      });
-    });
-
-    try {
-      await this.view.webview.postMessage({
-        type: "askUserQuestionStart",
-        requestKey: args.requestKey,
-        request: args.request,
-      });
-    } catch (err) {
-      const pending = this.pendingAskUserQuestionsByKey.get(args.requestKey);
-      this.pendingAskUserQuestionsByKey.delete(args.requestKey);
-      pending?.reject(err);
-    }
-
-    return await p;
-  }
-
   public refresh(): void {
     // Avoid flooding the Webview with full-state updates (especially during streaming).
     this.statePostDirty = true;
@@ -515,16 +451,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (this.blockAppendFlushTimer) clearTimeout(this.blockAppendFlushTimer);
       this.blockAppendFlushTimer = null;
       this.pendingBlockAppends.clear();
-
-      // Explicitly fail any pending AskUserQuestion prompts; the UI is gone.
-      for (const [requestKey, pending] of this.pendingAskUserQuestionsByKey) {
-        pending.reject(
-          new Error(
-            `Chat view disposed while AskUserQuestion pending (requestKey=${requestKey})`,
-          ),
-        );
-      }
-      this.pendingAskUserQuestionsByKey.clear();
 
       // Reset the ready barrier so future prompts wait for a new webview.
       this.viewReadyPromise = new Promise((resolve) => {
@@ -638,33 +564,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (typeof requestID !== "string" || !requestID) return;
       if (reply !== "once" && reply !== "always" && reply !== "reject") return;
       const st = this.getState();
-      const session = (st.sessions || []).find((s) => s.id === sessionId) ?? null;
+      const session =
+        (st.sessions || []).find((s) => s.id === sessionId) ?? null;
       if (!session) return;
       if (session.backendId !== "opencode") return;
       await this.onOpencodePermissionReply(session, { requestID, reply });
-      return;
-    }
-
-    if (type === "askUserQuestionResponse") {
-      const requestKey = anyMsg["requestKey"];
-      const response = anyMsg["response"];
-      if (typeof requestKey !== "string" || !requestKey) return;
-      if (typeof response !== "object" || response === null) return;
-
-      const cancelled = Boolean((response as any)["cancelled"]);
-      const answersRaw = (response as any)["answers"];
-      const answers =
-        typeof answersRaw === "object" && answersRaw !== null ? answersRaw : {};
-
-      const pending = this.pendingAskUserQuestionsByKey.get(requestKey);
-      if (!pending) {
-        this.onUiError(
-          `AskUserQuestion response ignored; no pending request (requestKey=${requestKey})`,
-        );
-        return;
-      }
-      this.pendingAskUserQuestionsByKey.delete(requestKey);
-      pending.resolve({ cancelled, answers });
       return;
     }
 
@@ -1700,6 +1604,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .suggest { position: absolute; left: 12px; right: 12px; bottom: calc(100% + 8px); border: 1px solid var(--vscode-editorSuggestWidget-border, rgba(127,127,127,0.35)); border-radius: 10px; background: var(--vscode-editorSuggestWidget-background, rgba(30,30,30,0.95)); color: var(--vscode-editorSuggestWidget-foreground, inherit); max-height: 160px; overflow: auto; display: none; z-index: 20; box-shadow: 0 8px 24px rgba(0,0,0,0.35); }
       button.iconBtn.attachBtn::before { content: "📎"; font-size: 14px; }
+      .requestUserInput { padding: 10px 12px; border-top: 1px solid rgba(127,127,127,0.25); border-bottom: 1px solid rgba(127,127,127,0.25); display: none; }
       .attachments { display: none; flex-wrap: wrap; gap: 8px; }
       .attachmentChip { border: 1px solid rgba(127,127,127,0.35); border-radius: 10px; padding: 6px 8px; font-size: 12px; display: inline-flex; gap: 8px; align-items: center; max-width: 320px; }
       .attachmentThumb { width: 44px; height: 44px; object-fit: cover; border-radius: 8px; border: 1px solid rgba(127,127,127,0.25); background: rgba(0,0,0,0.02); flex: 0 0 auto; }
@@ -1721,7 +1626,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .autoUrlLink.modHover:hover { color: var(--vscode-textLink-activeForeground, rgba(0,120,212,1)); }
       .fileLink, .autoFileLink, .autoUrlLink { overflow-wrap: anywhere; word-break: break-word; }
 	      .fileDiff { margin-top: 8px; }
-      .askUserQuestion { padding: 10px 12px; border-top: 1px solid rgba(127,127,127,0.25); border-bottom: 1px solid rgba(127,127,127,0.25); display: none; }
       .askCard { border: 1px solid rgba(127,127,127,0.35); border-radius: 10px; padding: 10px 12px; background: rgba(0,0,0,0.03); }
       .askHeader { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; }
       .askTitle { font-weight: 600; }
@@ -1802,7 +1706,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       <div id="hydrateBanner" class="hydrateBanner" style="display:none"></div>
 		    <div id="composer" class="composer">
 	      <div id="editBanner" class="editBanner" style="display:none"></div>
-	      <div id="askUserQuestion" class="askUserQuestion"></div>
+	      <div id="requestUserInput" class="requestUserInput"></div>
 	      <div id="attachments" class="attachments"></div>
 	      <button id="returnToBottom" class="returnToBottomBtn" title="Scroll to bottom">Return to Bottom</button>
 	      <div id="inputRow" class="inputRow">

@@ -13,12 +13,10 @@ import { listAgentsFromDisk } from "./agents_disk";
 import type { AnyServerNotification } from "./backend/types";
 import type { ContentBlock } from "./generated/ContentBlock";
 import type { ImageContent } from "./generated/ImageContent";
-import type { AskUserQuestionRequest } from "./generated/AskUserQuestionRequest";
 import type { CommandAction } from "./generated/v2/CommandAction";
 import type { Model } from "./generated/v2/Model";
 import type { RateLimitSnapshot } from "./generated/v2/RateLimitSnapshot";
 import type { RateLimitWindow } from "./generated/v2/RateLimitWindow";
-import type { AskUserQuestionResponse } from "./generated/v2/AskUserQuestionResponse";
 import type { Thread } from "./generated/v2/Thread";
 import type { ThreadItem } from "./generated/v2/ThreadItem";
 import type { ThreadTokenUsage } from "./generated/v2/ThreadTokenUsage";
@@ -544,93 +542,9 @@ export function activate(context: vscode.ExtensionContext): void {
       rt.approvalResolvers.set(requestKey, resolve);
     });
   };
-  backendManager.onAskUserQuestionRequest = async (session, req) => {
-    if (!chatView) throw new Error("chatView is not initialized");
-    if (!session || typeof session.id !== "string") {
-      throw new Error("AskUserQuestion requires a valid session");
-    }
-
-    const params = (req as any).params as any;
-    const callId = typeof params?.callId === "string" ? params.callId : null;
-    const request = params?.request;
-    if (!callId) throw new Error("AskUserQuestion missing callId");
-    if (!request || typeof request !== "object") {
-      throw new Error("AskUserQuestion missing request payload");
-    }
-
-    // Switch UI context to the requesting session so the prompt is visible.
-    setActiveSession(session.id, { markRead: false });
-    chatView.refresh();
-    await showCodezViewContainer();
-    // Ensure the webview is actually instantiated and visible.
-    await vscode.commands.executeCommand("codez.chatView.focus");
-    chatView.reveal();
-
-    const response = await chatView.promptAskUserQuestion({
-      requestKey: callId,
-      request: request as AskUserQuestionRequest,
-    });
-
-    // Persist a concise summary in the chat history so the selection isn't lost
-    // after the inline card is dismissed.
-    const summaryText = formatAskUserQuestionSummary(
-      request as AskUserQuestionRequest,
-      response,
-    );
-    upsertBlock(session.id, {
-      id: `askUserQuestion:${callId}`,
-      type: "info",
-      title: "AskUserQuestion",
-      text: summaryText,
-    });
-
-    return response;
-  };
 
   diffProvider = new DiffDocumentProvider();
 
-  // NOTE: This is intentionally not contributed to the command palette in package.json.
-  // It's a helper for local/dev workflows (e.g. taking docs screenshots) without requiring
-  // an actual backend request.
-  context.subscriptions.push(
-    vscode.commands.registerCommand(
-      "codez._dev.askUserQuestionDemo",
-      async () => {
-        if (!chatView) throw new Error("chatView is not initialized");
-        await showCodezViewContainer();
-        await vscode.commands.executeCommand("codez.chatView.focus");
-        chatView.reveal();
-
-        const response = await chatView.promptAskUserQuestion({
-          requestKey: `demo:${Date.now()}`,
-          request: {
-            title: "Codex question",
-            questions: [
-              {
-                id: "context",
-                prompt: "Which context should I include?",
-                type: "multi_select",
-                allowOther: true,
-                required: false,
-                options: [
-                  {
-                    label: "Workspace files",
-                    value: "files",
-                    recommended: true,
-                  },
-                  { label: "Open editors", value: "editors" },
-                  { label: "Terminal output", value: "terminal" },
-                ],
-              },
-            ],
-          },
-        });
-        void vscode.window.showInformationMessage(
-          `AskUserQuestion demo result: ${JSON.stringify(response)}`,
-        );
-      },
-    ),
-  );
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider(
       "codez-diff",
@@ -4579,9 +4493,13 @@ function applyServerNotification(
         metadata?: unknown;
       };
       const requestID =
-        typeof p?.requestID === "string" ? p.requestID : String(p?.requestID ?? "");
+        typeof p?.requestID === "string"
+          ? p.requestID
+          : String(p?.requestID ?? "");
       const permission =
-        typeof p?.permission === "string" ? p.permission : String(p?.permission ?? "");
+        typeof p?.permission === "string"
+          ? p.permission
+          : String(p?.permission ?? "");
       if (!requestID.trim() || !permission.trim()) return;
       const patterns = Array.isArray(p?.patterns)
         ? (p.patterns as unknown[]).map((x) => String(x ?? "")).filter(Boolean)
@@ -4615,7 +4533,9 @@ function applyServerNotification(
         reply?: unknown;
       };
       const requestID =
-        typeof p?.requestID === "string" ? p.requestID : String(p?.requestID ?? "");
+        typeof p?.requestID === "string"
+          ? p.requestID
+          : String(p?.requestID ?? "");
       const replyRaw =
         typeof p?.reply === "string" ? p.reply : String(p?.reply ?? "");
       if (!requestID.trim()) return;
@@ -5114,7 +5034,8 @@ function applyItemLifecycle(
           }));
           const opencodeSeqRaw = anyItem.opencodeSeq as unknown;
           const opencodeSeq =
-            typeof opencodeSeqRaw === "number" && Number.isFinite(opencodeSeqRaw)
+            typeof opencodeSeqRaw === "number" &&
+            Number.isFinite(opencodeSeqRaw)
               ? Math.trunc(opencodeSeqRaw)
               : null;
           if (block.type === "step") {
@@ -5164,10 +5085,12 @@ function applyItemLifecycle(
           if (container.type !== "step") break;
           const opencodeSeqRaw = anyItem.opencodeSeq as unknown;
           const opencodeSeq =
-            typeof opencodeSeqRaw === "number" && Number.isFinite(opencodeSeqRaw)
+            typeof opencodeSeqRaw === "number" &&
+            Number.isFinite(opencodeSeqRaw)
               ? Math.trunc(opencodeSeqRaw)
               : null;
-          if (opencodeSeq !== null) (container as any).opencodeSeq = opencodeSeq;
+          if (opencodeSeq !== null)
+            (container as any).opencodeSeq = opencodeSeq;
 
           const status =
             anyItem.status === "completed"
@@ -5344,7 +5267,9 @@ function applyItemLifecycle(
               ? String(anyItem.hash).trim()
               : null;
           const files = Array.isArray(anyItem.files)
-            ? (anyItem.files as unknown[]).map((x) => String(x ?? "")).filter(Boolean)
+            ? (anyItem.files as unknown[])
+                .map((x) => String(x ?? ""))
+                .filter(Boolean)
             : [];
           const lines: string[] = [];
           lines.push(hash ? `hash: \`${hash.slice(0, 12)}\`` : "hash: —");
@@ -5353,7 +5278,11 @@ function applyItemLifecycle(
             lines.push("files:");
             for (const f of files) lines.push(`- ${f}`);
           }
-          upsertOpencodeInfo({ id, title: "OpenCode Patch", text: lines.join("\n") });
+          upsertOpencodeInfo({
+            id,
+            title: "OpenCode Patch",
+            text: lines.join("\n"),
+          });
           break;
         }
 
@@ -5371,8 +5300,12 @@ function applyItemLifecycle(
           const lines: string[] = [];
           lines.push(`name: \`${name}\``);
           if (typeof source?.value === "string" && source.value.trim()) {
-            const start = typeof source.start === "number" ? Math.trunc(source.start) : null;
-            const end = typeof source.end === "number" ? Math.trunc(source.end) : null;
+            const start =
+              typeof source.start === "number"
+                ? Math.trunc(source.start)
+                : null;
+            const end =
+              typeof source.end === "number" ? Math.trunc(source.end) : null;
             const range =
               start !== null && end !== null ? ` (${start}-${end})` : "";
             lines.push("");
@@ -5381,7 +5314,11 @@ function applyItemLifecycle(
             lines.push(String(source.value).trimEnd());
             lines.push("```");
           }
-          upsertOpencodeInfo({ id, title: "OpenCode Agent", text: lines.join("\n") });
+          upsertOpencodeInfo({
+            id,
+            title: "OpenCode Agent",
+            text: lines.join("\n"),
+          });
           break;
         }
 
@@ -5392,7 +5329,9 @@ function applyItemLifecycle(
             typeof anyItem.snapshot === "string" && anyItem.snapshot.trim()
               ? String(anyItem.snapshot).trim()
               : null;
-          const text = snapshot ? `snapshot: \`${snapshot.slice(0, 12)}\`` : "snapshot: —";
+          const text = snapshot
+            ? `snapshot: \`${snapshot.slice(0, 12)}\``
+            : "snapshot: —";
           upsertOpencodeInfo({ id, title: "OpenCode Snapshot", text });
           break;
         }
@@ -5401,7 +5340,8 @@ function applyItemLifecycle(
           const id = String(anyItem.id ?? "");
           if (!id) break;
           const attempt =
-            typeof anyItem.attempt === "number" && Number.isFinite(anyItem.attempt)
+            typeof anyItem.attempt === "number" &&
+            Number.isFinite(anyItem.attempt)
               ? Math.trunc(anyItem.attempt)
               : 1;
           const err =
@@ -5432,7 +5372,8 @@ function applyItemLifecycle(
           const id = String(anyItem.id ?? "");
           if (!id) break;
           const description =
-            typeof anyItem.description === "string" && anyItem.description.trim()
+            typeof anyItem.description === "string" &&
+            anyItem.description.trim()
               ? String(anyItem.description).trim()
               : null;
           const agent =
@@ -5454,8 +5395,14 @@ function applyItemLifecycle(
           const lines: string[] = [];
           if (description) lines.push(`**${description}**`);
           if (agent) lines.push(`- agent: \`${agent}\``);
-          if (model && typeof model.providerID === "string" && typeof model.modelID === "string") {
-            lines.push(`- model: \`${String(model.providerID)}/${String(model.modelID)}\``);
+          if (
+            model &&
+            typeof model.providerID === "string" &&
+            typeof model.modelID === "string"
+          ) {
+            lines.push(
+              `- model: \`${String(model.providerID)}/${String(model.modelID)}\``,
+            );
           }
           if (command) lines.push(`- command: \`${command}\``);
           if (prompt) {
@@ -5866,114 +5813,6 @@ function formatParamsForDisplay(params: unknown): string {
   const limit = 10_000;
   if (json.length <= limit) return json;
   return `${json.slice(0, limit)}\n...(truncated ${json.length - limit} chars)`;
-}
-
-function formatAskUserQuestionSummary(
-  request: AskUserQuestionRequest,
-  response: AskUserQuestionResponse,
-): string {
-  const title =
-    typeof (request as any)?.title === "string" && (request as any).title.trim()
-      ? String((request as any).title).trim()
-      : "Codex question";
-
-  const answers =
-    typeof (response as any)?.answers === "object" &&
-    (response as any).answers !== null
-      ? ((response as any).answers as Record<string, unknown>)
-      : {};
-
-  const questions = Array.isArray((request as any)?.questions)
-    ? ((request as any).questions as Array<any>)
-    : [];
-
-  const lines: string[] = [];
-  lines.push(`**${title}**`);
-  if ((response as any)?.cancelled) lines.push("_Cancelled_");
-  lines.push("");
-
-  for (const q of questions) {
-    const id = typeof q?.id === "string" ? q.id : null;
-    const prompt = typeof q?.prompt === "string" ? q.prompt : null;
-    if (!id || !prompt) continue;
-
-    const rawAnswer = answers[id];
-    const optLabelByValue = new Map<string, string>();
-    const rawOptions = Array.isArray(q?.options) ? (q.options as any[]) : [];
-    for (const opt of rawOptions) {
-      const value = typeof opt?.value === "string" ? opt.value : null;
-      const label = typeof opt?.label === "string" ? opt.label : null;
-      if (value && label) optLabelByValue.set(value, label);
-    }
-
-    const allowOther = Boolean(q?.allow_other);
-    const questionType = typeof q?.type === "string" ? q.type : null;
-
-    lines.push(`- **${prompt}**`);
-
-    if (questionType === "single_select" || questionType === "multi_select") {
-      const optionValues = new Set<string>(optLabelByValue.keys());
-
-      const selectedValues: string[] = (() => {
-        if (rawAnswer === null || rawAnswer === undefined) return [];
-        if (Array.isArray(rawAnswer)) return rawAnswer.map((v) => String(v));
-        return [String(rawAnswer)];
-      })();
-
-      const selectedOptionValues = new Set<string>(
-        selectedValues.filter((v) => optionValues.has(v)),
-      );
-      const selectedOtherValues = selectedValues
-        .filter((v) => !optionValues.has(v))
-        .map((v) => v.trim())
-        .filter(Boolean);
-
-      for (const opt of rawOptions) {
-        const value = typeof opt?.value === "string" ? opt.value : null;
-        const label = typeof opt?.label === "string" ? opt.label : null;
-        if (!value || !label) continue;
-        const checked = selectedOptionValues.has(value) ? "x" : " ";
-        lines.push(`  - [${checked}] ${label}`);
-      }
-
-      if (allowOther) {
-        const checked = selectedOtherValues.length > 0 ? "x" : " ";
-        const other =
-          selectedOtherValues.length > 0
-            ? `: ${selectedOtherValues.join(", ")}`
-            : "";
-        lines.push(`  - [${checked}] Other…${other}`);
-      }
-
-      if (
-        rawOptions.length === 0 &&
-        selectedValues.length > 0 &&
-        selectedOtherValues.length > 0
-      ) {
-        lines.push(`  - Answer: ${selectedOtherValues.join(", ")}`);
-      }
-
-      if (selectedValues.length === 0) lines.push("  - _No selection_");
-      continue;
-    }
-
-    const rendered = (() => {
-      if (rawAnswer === null || rawAnswer === undefined) return "—";
-      if (Array.isArray(rawAnswer)) {
-        const parts = rawAnswer
-          .map((v) => String(v))
-          .map((s) => s.trim())
-          .filter(Boolean);
-        return parts.length > 0 ? parts.join(", ") : "—";
-      }
-      const s = String(rawAnswer).trim();
-      return s ? s : "—";
-    })();
-
-    lines.push(`  - Answer: ${rendered}`);
-  }
-
-  return lines.join("\n").trim();
 }
 
 function removeGlobalWhere(pred: (b: ChatBlock) => boolean): void {

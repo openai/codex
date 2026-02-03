@@ -12,8 +12,6 @@ export type { AppInfo } from "./AppInfo";
 export type { AppsListParams } from "./AppsListParams";
 export type { AppsListResponse } from "./AppsListResponse";
 export type { AskForApproval } from "./AskForApproval";
-export type { AskUserQuestionParams } from "./AskUserQuestionParams";
-export type { AskUserQuestionResponse } from "./AskUserQuestionResponse";
 export type { ByteRange } from "./ByteRange";
 export type { CancelLoginAccountParams } from "./CancelLoginAccountParams";
 export type { CancelLoginAccountResponse } from "./CancelLoginAccountResponse";

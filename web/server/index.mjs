@@ -892,7 +892,7 @@ async function getOrStartAppServer(root) {
 
   proc.rpc.on("serverRequest", (req) => {
     const id = req.id;
-    // approvals / askQuestion は UI へ委譲
+    // approvals / requestUserInput は UI へ委譲
     state.pending.set(id, { req, createdAtMs: Date.now() });
     const payload = JSON.stringify({ type: "backend.request", rootId: key, request: req });
     for (const ws of state.subscribers) {
@@ -978,6 +978,7 @@ wssWebview.on("connection", async (ws, req) => {
 
   let seq = 1;
   const approvalsByKey = new Map(); // requestKey -> { requestId:number, method:string, params:any, canAcceptForSession:boolean }
+  const requestUserInputByKey = new Map(); // requestKey -> { requestId:number, params:any }
   const activeTurnByThreadId = new Map(); // threadId -> turnId
   const assistantByThreadId = new Map(); // threadId -> { sessionId, blockId, text }
 
@@ -1168,9 +1169,10 @@ wssWebview.on("connection", async (ws, req) => {
       return;
     }
 
-    if (method === "user/askQuestion") {
+    if (method === "item/tool/requestUserInput") {
       const requestKey = `${root.id}:${String(requestId)}`;
-      wsSend(ws, { type: "askUserQuestionStart", requestKey, request: params });
+      requestUserInputByKey.set(requestKey, { requestId, params });
+      wsSend(ws, { type: "requestUserInputStart", requestKey, params });
       return;
     }
   }
@@ -1331,14 +1333,14 @@ wssWebview.on("connection", async (ws, req) => {
           return;
         }
 
-        if (inner.type === "askUserQuestionResponse") {
+        if (inner.type === "requestUserInputResponse") {
           const requestKey = typeof inner.requestKey === "string" ? inner.requestKey : null;
           const response = inner.response ?? null;
           if (!requestKey) throw new Error("requestKey が不正です");
-          const [, idStr] = requestKey.split(":");
-          const requestId = Number(idStr);
-          if (!Number.isFinite(requestId)) throw new Error("requestId が不正です");
-          backend.proc.rpc.respond(requestId, response);
+          const pending = requestUserInputByKey.get(requestKey);
+          if (!pending) throw new Error("unknown requestUserInput request");
+          requestUserInputByKey.delete(requestKey);
+          backend.proc.rpc.respond(pending.requestId, response);
           return;
         }
 

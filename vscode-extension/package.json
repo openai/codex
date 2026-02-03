@@ -40,7 +40,6 @@
     "onCommand:codez.reloadSession",
     "onCommand:codez.debug.stressUi",
     "onCommand:codez.debug.stopStressUi",
-    "onCommand:codez._dev.askUserQuestionDemo",
     "onCommand:codez.showSkills",
     "onCommand:codez.showAgents",
     "onCommand:codez.resumeFromHistory",
@@ -128,10 +127,6 @@
         "title": "Codex UI: Debug Stop Stress (UI streaming)"
       },
       {
-        "command": "codez._dev.askUserQuestionDemo",
-        "title": "Codex UI (Dev): AskUserQuestion Demo"
-      },
-      {
         "command": "codez.showSkills",
         "title": "Codex UI: Skills"
       },
@@ -152,13 +147,7 @@
         "title": "Codex UI: Switch Account"
       }
     ],
-    "keybindings": [
-      {
-        "command": "codez._dev.askUserQuestionDemo",
-        "key": "f8",
-        "when": "true"
-      }
-    ],
+    "keybindings": [],
     "menus": {
       "view/item/context": [
         {

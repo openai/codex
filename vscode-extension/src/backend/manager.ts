@@ -26,8 +26,8 @@ import {
   makeBackendInstanceKey,
   parseBackendInstanceKey,
 } from "./backend_instance_key";
-import type { ApprovalDecision } from "../generated/v2/ApprovalDecision";
-import type { AskUserQuestionResponse } from "../generated/v2/AskUserQuestionResponse";
+import type { CommandExecutionApprovalDecision } from "../generated/v2/CommandExecutionApprovalDecision";
+import type { FileChangeApprovalDecision } from "../generated/v2/FileChangeApprovalDecision";
 import type { ServerRequest } from "../generated/ServerRequest";
 import type { ThreadResumeResponse } from "../generated/v2/ThreadResumeResponse";
 import type { ThreadRollbackResponse } from "../generated/v2/ThreadRollbackResponse";
@@ -50,6 +50,7 @@ import type { FuzzyFileSearchResponse } from "../generated/FuzzyFileSearchRespon
 import type { ListMcpServerStatusResponse } from "../generated/v2/ListMcpServerStatusResponse";
 import type { AskForApproval } from "../generated/v2/AskForApproval";
 import type { SandboxPolicy } from "../generated/v2/SandboxPolicy";
+import { promptRequestUserInput } from "./request_user_input";
 
 type ModelSettings = {
   model: string | null;
@@ -176,13 +177,10 @@ export class BackendManager implements vscode.Disposable {
       ) => void)
     | null = null;
   public onApprovalRequest:
-    | ((session: Session, req: V2ApprovalRequest) => Promise<ApprovalDecision>)
-    | null = null;
-  public onAskUserQuestionRequest:
     | ((
         session: Session,
-        req: V2AskUserQuestionRequest,
-      ) => Promise<AskUserQuestionResponse>)
+        req: V2ApprovalRequest,
+      ) => Promise<V2ApprovalDecision>)
     | null = null;
   public onServerEvent:
     | ((
@@ -511,8 +509,6 @@ export class BackendManager implements vscode.Disposable {
       proc.onNotification = (n) => this.onServerNotification(backendKey, n);
       proc.onApprovalRequest = async (req) =>
         this.handleApprovalRequest(backendKey, req);
-      proc.onAskUserQuestionRequest = async (req) =>
-        this.handleAskUserQuestionRequest(backendKey, req);
     })();
 
     this.startInFlight.set(
@@ -597,6 +593,9 @@ export class BackendManager implements vscode.Disposable {
         : null,
       baseInstructions: null,
       developerInstructions: null,
+      personality: null,
+      ephemeral: null,
+      dynamicTools: null,
       experimentalRawEvents: false,
     };
     const res = await proc.threadStart(params);
@@ -911,6 +910,7 @@ export class BackendManager implements vscode.Disposable {
       config: null,
       baseInstructions: null,
       developerInstructions: null,
+      personality: null,
     };
     return await proc.threadResume(params);
   }
@@ -971,6 +971,7 @@ export class BackendManager implements vscode.Disposable {
         : null,
       baseInstructions: null,
       developerInstructions: null,
+      personality: null,
     };
     return await proc.threadResume(params);
   }
@@ -1295,7 +1296,9 @@ export class BackendManager implements vscode.Disposable {
 
       const imageSuffix = images.length > 0 ? ` [images=${images.length}]` : "";
       const preview = trimmed ? trimmed : "(image only)";
-      this.output.appendLine(`\n>> (${session.title}) ${preview}${imageSuffix}`);
+      this.output.appendLine(
+        `\n>> (${session.title}) ${preview}${imageSuffix}`,
+      );
       this.output.append(`<< (${session.title}) `);
 
       try {
@@ -1386,6 +1389,7 @@ export class BackendManager implements vscode.Disposable {
       model: modelSettings?.model ?? null,
       effort,
       summary: null,
+      personality: null,
       outputSchema: null,
       collaborationMode: null,
     };
@@ -2684,77 +2688,38 @@ export class BackendManager implements vscode.Disposable {
     questions: OpencodeQuestionRequest["questions"];
     tool?: { messageID: string; callID: string };
   }): Promise<void> {
-    if (!this.onAskUserQuestionRequest) {
-      throw new Error("onAskUserQuestionRequest handler is not set");
-    }
+    const title =
+      args.questions[0] && typeof args.questions[0].header === "string"
+        ? args.questions[0].header
+        : "OpenCode question";
 
-    const callId = args.tool?.callID?.trim()
-      ? args.tool.callID
-      : args.requestID;
-    const request = {
-      title:
-        args.questions[0] && typeof args.questions[0].header === "string"
-          ? args.questions[0].header
-          : "OpenCode question",
-      questions: args.questions.map((q, idx) => {
-        const id = `${args.requestID}:${String(idx)}`;
-        const hasOptions = Array.isArray(q.options) && q.options.length > 0;
-        const type: "text" | "single_select" | "multi_select" = hasOptions
-          ? q.multiple
-            ? "multi_select"
-            : "single_select"
-          : "text";
-        return {
-          id,
-          prompt: q.question,
-          type,
-          description: null,
-          allowOther: q.custom === false ? false : true,
-          required: null,
-          placeholder: null,
-          options: hasOptions
-            ? q.options.map((o) => ({
-                label: o.label,
-                value: o.label,
-                description: o.description || null,
-                recommended: null,
-              }))
-            : null,
-        };
-      }),
-    };
+    const questions = args.questions.map((q, idx) => ({
+      id: `${args.requestID}:${String(idx)}`,
+      header: q.header ?? title,
+      question: q.question,
+      allowMultiple: Boolean(q.multiple),
+      isOther: q.custom === false ? false : true,
+      isSecret: false,
+      options:
+        Array.isArray(q.options) && q.options.length > 0
+          ? q.options.map((o) => ({
+              label: o.label,
+              description: o.description,
+            }))
+          : null,
+    }));
 
-    const fakeReq = {
-      method: "user/askQuestion",
-      id: 0,
-      params: {
-        threadId: args.sessionID,
-        turnId: args.turnId,
-        callId,
-        request,
-      },
-    } as any;
+    const { cancelled, answersById } = await promptRequestUserInput({
+      title,
+      questions,
+    });
 
-    const response = await this.onAskUserQuestionRequest(args.session, fakeReq);
-    if (response.cancelled) {
+    if (cancelled) {
       await args.client.rejectQuestion({ requestID: args.requestID });
       return;
     }
 
-    const answers: string[][] = [];
-    for (let i = 0; i < args.questions.length; i++) {
-      const qid = `${args.requestID}:${String(i)}`;
-      const v = (response.answers as any)?.[qid];
-      if (typeof v === "string") {
-        answers.push([v]);
-        continue;
-      }
-      if (Array.isArray(v)) {
-        answers.push(v.map((x) => String(x)));
-        continue;
-      }
-      answers.push([]);
-    }
+    const answers: string[][] = questions.map((q) => answersById[q.id] ?? []);
     await args.client.replyQuestion({ requestID: args.requestID, answers });
   }
 
@@ -3038,7 +3003,7 @@ export class BackendManager implements vscode.Disposable {
   private async handleApprovalRequest(
     backendKey: string,
     req: V2ApprovalRequest,
-  ): Promise<ApprovalDecision> {
+  ): Promise<V2ApprovalDecision> {
     const session = this.sessions.getByThreadId(
       backendKey,
       req.params.threadId,
@@ -3052,25 +3017,6 @@ export class BackendManager implements vscode.Disposable {
       throw new Error("onApprovalRequest handler is not set");
     }
     return this.onApprovalRequest(session, req);
-  }
-
-  private async handleAskUserQuestionRequest(
-    backendKey: string,
-    req: V2AskUserQuestionRequest,
-  ): Promise<AskUserQuestionResponse> {
-    const session = this.sessions.getByThreadId(
-      backendKey,
-      req.params.threadId,
-    );
-    if (!session) {
-      throw new Error(
-        `Session not found for ask-question request: threadId=${req.params.threadId}`,
-      );
-    }
-    if (!this.onAskUserQuestionRequest) {
-      throw new Error("onAskUserQuestionRequest handler is not set");
-    }
-    return this.onAskUserQuestionRequest(session, req);
   }
 
   private resolveWorkspaceFolder(
@@ -3235,8 +3181,17 @@ function opencodePartItemIdFromPart(args: {
   index: number;
 }): string {
   const key = args.partId?.trim() ?? "";
-  if (key) return opencodePartItemIdKey({ messageID: args.messageID, partType: args.partType, key });
-  return opencodePartItemId({ messageID: args.messageID, partType: args.partType, index: args.index });
+  if (key)
+    return opencodePartItemIdKey({
+      messageID: args.messageID,
+      partType: args.partType,
+      key,
+    });
+  return opencodePartItemId({
+    messageID: args.messageID,
+    partType: args.partType,
+    index: args.index,
+  });
 }
 
 function opencodeStepItemId(args: {
@@ -3541,12 +3496,9 @@ type V2ApprovalRequest = Extract<
   }
 >;
 
-type V2AskUserQuestionRequest = Extract<
-  ServerRequest,
-  {
-    method: "user/askQuestion";
-  }
->;
+type V2ApprovalDecision =
+  | CommandExecutionApprovalDecision
+  | FileChangeApprovalDecision;
 
 function parseOpencodeDefaultModelKey(
   cfg: Record<string, unknown> | null,

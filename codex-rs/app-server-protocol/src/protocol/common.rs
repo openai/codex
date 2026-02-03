@@ -553,12 +553,6 @@ server_request_definitions! {
         response: v2::FileChangeRequestApprovalResponse,
     },
 
-    /// CODEZ - Request structured input from the user (legacy compatibility).
-    AskUserQuestion => "user/askQuestion" {
-        params: v2::AskUserQuestionParams,
-        response: v2::AskUserQuestionResponse,
-    },
-
     /// EXPERIMENTAL - Request input from the user for a tool call.
     ToolRequestUserInput => "item/tool/requestUserInput" {
         params: v2::ToolRequestUserInputParams,
@@ -614,65 +608,6 @@ pub struct FuzzyFileSearchResult {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 pub struct FuzzyFileSearchResponse {
     pub files: Vec<FuzzyFileSearchResult>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(rename_all = "snake_case")]
-pub enum AskUserQuestionType {
-    Text,
-    SingleSelect,
-    MultiSelect,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub struct AskUserQuestionOption {
-    pub label: String,
-    pub value: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub recommended: Option<bool>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub struct AskUserQuestion {
-    pub id: String,
-    pub prompt: String,
-    #[serde(rename = "type")]
-    #[ts(rename = "type")]
-    pub question_type: AskUserQuestionType,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub placeholder: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub options: Option<Vec<AskUserQuestionOption>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub allow_other: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub required: Option<bool>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub struct AskUserQuestionRequest {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub title: Option<String>,
-    pub questions: Vec<AskUserQuestion>,
 }
 
 server_notification_definitions! {

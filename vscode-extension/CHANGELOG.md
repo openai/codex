@@ -142,12 +142,8 @@
 - **MCP**
   - セッション開始時の `MCP servers` 表示が他プロジェクトと混ざることがある問題を修正
     - セッションの `cwd` に対して `mcpServerStatus/list` を問い合わせ、設定上有効な MCP のみを表示
-- **AskUserQuestion**
-  - AskUserQuestion（`ask_user_question` tool）の UI をサポート（デフォルト無効。`config.toml` で明示的に有効化した場合のみモデルへ露出）
-    - 推奨: `[features].ask_user_question_tool = true`（互換: `[tools].ask_user_question = true`）
-    - 質問カードの表示と回答の送信
-    - 選択肢（options）のクリック選択
-    - 回答（answers）をチャット履歴に保持
+- **Tools**
+  - AskUserQuestion（`user/askQuestion` / `ask_user_question`）のサポートを削除。ユーザーへの質問は `request_user_input` に統一
 - **Webview / Performance**
   - Webview が非表示の間は state 更新を送らず、ACK 待ちもしない（表示に戻ったら `refresh` で追いつく）
   - state 更新 ACK のタイムアウトは UI エラー扱いせず、デバッグログに出す

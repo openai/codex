@@ -210,37 +210,25 @@ type ChatViewState = {
   }> | null;
 };
 
-type AskUserQuestionType = "text" | "single_select" | "multi_select";
-type AskUserQuestionOption = {
-  label: string;
-  value: string;
-  description?: string;
-  recommended?: boolean;
-};
-type AskUserQuestion = {
-  id: string;
-  prompt: string;
-  type: AskUserQuestionType;
-  description?: string;
-  placeholder?: string;
-  options?: AskUserQuestionOption[];
-  allow_other?: boolean;
-  required?: boolean;
-};
-type AskUserQuestionRequest = {
-  title?: string;
-  questions: AskUserQuestion[];
-};
-type AskUserQuestionResponse = {
-  cancelled: boolean;
-  answers: Record<string, unknown>;
-};
-
 type SuggestItem = {
   insert: string;
   label: string;
   detail?: string;
   kind: "slash" | "at" | "file" | "dir" | "agent" | "skill";
+};
+
+type RequestUserInputOption = {
+  label: string;
+  description: string;
+};
+
+type RequestUserInputQuestion = {
+  id: string;
+  header: string;
+  question: string;
+  isOther?: boolean;
+  isSecret?: boolean;
+  options?: RequestUserInputOption[] | null;
 };
 
 const WORKTREE_COLORS = [
@@ -285,7 +273,7 @@ function main(): void {
   const hydrateBannerEl = mustGet<HTMLDivElement>("hydrateBanner");
   const logEl = mustGet("log");
   const approvalsEl = mustGet("approvals");
-  const askUserQuestionEl = mustGet("askUserQuestion");
+  const requestUserInputEl = mustGet("requestUserInput");
   const composerEl = mustGet("composer");
   const editBannerEl = mustGet("editBanner");
   const toastEl = mustGet<HTMLDivElement>("toast");
@@ -355,14 +343,13 @@ function main(): void {
   );
   placeholderObserver.observe(inputRowEl);
 
-  let askUserQuestionState: {
+  let requestUserInputState: {
     requestKey: string;
-    request: AskUserQuestionRequest;
+    questions: RequestUserInputQuestion[];
     index: number;
-    answers: Record<string, unknown>;
+    answersById: Record<string, string[]>;
     otherTextById: Record<string, string>;
   } | null = null;
-  let askUserQuestionError: string | null = null;
 
   const disableComposer = (disabled: boolean): void => {
     inputEl.disabled = disabled;
@@ -371,54 +358,48 @@ function main(): void {
     sendBtn.disabled = disabled;
   };
 
-  const clearAskUserQuestion = (): void => {
-    askUserQuestionState = null;
-    askUserQuestionError = null;
-    askUserQuestionEl.style.display = "none";
-    askUserQuestionEl.innerHTML = "";
+  const postRequestUserInputResponse = (): void => {
+    const st = requestUserInputState;
+    if (!st) return;
+
+    const answers: Record<string, { answers: string[] }> = {};
+    for (const q of st.questions) {
+      answers[q.id] = { answers: st.answersById[q.id] ?? [] };
+    }
+
+    vscode.postMessage({
+      type: "requestUserInputResponse",
+      requestKey: st.requestKey,
+      response: { answers },
+    });
+  };
+
+  const clearRequestUserInput = (): void => {
+    requestUserInputState = null;
+    requestUserInputEl.style.display = "none";
+    requestUserInputEl.innerHTML = "";
     disableComposer(false);
     inputEl.focus();
   };
 
-  const postAskUserQuestionResponse = (
-    response: AskUserQuestionResponse,
-  ): void => {
-    const st = askUserQuestionState;
-    if (!st) return;
-    vscode.postMessage({
-      type: "askUserQuestionResponse",
-      requestKey: st.requestKey,
-      response,
-    });
-  };
-
-  const renderAskUserQuestion = (): void => {
-    const st = askUserQuestionState;
+  const renderRequestUserInput = (): void => {
+    const st = requestUserInputState;
     if (!st) {
-      askUserQuestionEl.style.display = "none";
-      askUserQuestionEl.innerHTML = "";
+      requestUserInputEl.style.display = "none";
+      requestUserInputEl.innerHTML = "";
       disableComposer(false);
       return;
     }
 
-    const title =
-      typeof st.request.title === "string" && st.request.title.trim().length > 0
-        ? st.request.title.trim()
-        : "Codex question";
-
-    const questions = Array.isArray(st.request.questions)
-      ? st.request.questions
-      : [];
-    const q = questions[st.index] ?? null;
-    if (!q || typeof q.id !== "string" || typeof q.prompt !== "string") {
-      postAskUserQuestionResponse({ cancelled: true, answers: st.answers });
-      clearAskUserQuestion();
+    const q = st.questions[st.index] ?? null;
+    if (!q) {
+      postRequestUserInputResponse();
+      clearRequestUserInput();
       return;
     }
 
-    // Override the default `.askUserQuestion { display: none; }` stylesheet rule.
-    askUserQuestionEl.style.display = "block";
-    askUserQuestionEl.innerHTML = "";
+    requestUserInputEl.style.display = "block";
+    requestUserInputEl.innerHTML = "";
 
     const card = document.createElement("div");
     card.className = "askCard";
@@ -428,57 +409,20 @@ function main(): void {
 
     const titleNode = document.createElement("div");
     titleNode.className = "askTitle";
-    titleNode.textContent = title;
+    titleNode.textContent = q.header || "Request user input";
 
     const progress = document.createElement("div");
     progress.className = "askProgress";
-    progress.textContent = `${String(st.index + 1)}/${String(questions.length)}`;
+    progress.textContent = `${String(st.index + 1)}/${String(st.questions.length)}`;
 
     header.appendChild(titleNode);
     header.appendChild(progress);
+    card.appendChild(header);
 
     const prompt = document.createElement("div");
     prompt.className = "askPrompt";
-    prompt.textContent = q.prompt;
-
-    card.appendChild(header);
+    prompt.textContent = q.question || "";
     card.appendChild(prompt);
-
-    if (typeof q.description === "string" && q.description) {
-      const desc = document.createElement("div");
-      desc.className = "askDesc";
-      desc.textContent = q.description;
-      card.appendChild(desc);
-    }
-
-    const required = Boolean(q.required);
-    const allowOther = Boolean(q.allow_other);
-    const otherSentinel = "__other__";
-
-    const errorEl = document.createElement("div");
-    errorEl.className = "askError";
-    errorEl.style.display = askUserQuestionError ? "" : "none";
-    errorEl.textContent = askUserQuestionError || "";
-
-    const setError = (msg: string | null): void => {
-      askUserQuestionError = msg;
-      errorEl.textContent = msg || "";
-      errorEl.style.display = msg ? "" : "none";
-    };
-
-    const commitAndAdvance = (answer: unknown | null): void => {
-      setError(null);
-      if (answer === null) delete st.answers[q.id];
-      else st.answers[q.id] = answer;
-
-      st.index += 1;
-      if (st.index >= questions.length) {
-        postAskUserQuestionResponse({ cancelled: false, answers: st.answers });
-        clearAskUserQuestion();
-        return;
-      }
-      renderAskUserQuestion();
-    };
 
     const controls = document.createElement("div");
     controls.className = "askControls";
@@ -487,255 +431,131 @@ function main(): void {
     cancelBtn.className = "askBtn";
     cancelBtn.textContent = "Cancel";
     cancelBtn.addEventListener("click", () => {
-      postAskUserQuestionResponse({ cancelled: true, answers: st.answers });
-      clearAskUserQuestion();
+      postRequestUserInputResponse();
+      clearRequestUserInput();
     });
 
     const nextBtn = document.createElement("button");
     nextBtn.className = "askBtn primary";
-    nextBtn.textContent = st.index + 1 >= questions.length ? "Submit" : "Next";
+    nextBtn.textContent =
+      st.index + 1 >= st.questions.length ? "Submit" : "Next";
 
-    const optionsWrap = document.createElement("div");
-    optionsWrap.className = "askOptions";
-
-    const renderOtherInputIfNeeded = (
-      host: HTMLElement,
-      checked: () => boolean,
-      placeholder: string,
-    ): HTMLInputElement => {
-      const input = document.createElement("input");
-      input.className = "askInput";
-      input.placeholder = placeholder;
-      input.value = st.otherTextById[q.id] ?? "";
-      input.addEventListener("input", () => {
-        st.otherTextById[q.id] = input.value;
-        if (checked()) setError(null);
-      });
-      const wrapper = document.createElement("div");
-      wrapper.style.marginTop = "8px";
-      wrapper.appendChild(input);
-      host.appendChild(wrapper);
-      return input;
+    const commitAndAdvance = (answers: string[]): void => {
+      st.answersById[q.id] = answers;
+      st.index += 1;
+      renderRequestUserInput();
     };
 
-    if (q.type === "text") {
-      const input = document.createElement("textarea");
-      input.className = "askInput";
-      input.rows = 3;
-      input.placeholder =
-        typeof q.placeholder === "string" ? q.placeholder : "";
-      input.value =
-        typeof st.answers[q.id] === "string"
-          ? (st.answers[q.id] as string)
-          : "";
-      input.addEventListener("input", () => setError(null));
-      card.appendChild(input);
+    const normalize = (values: unknown[]): string[] =>
+      values.map((v) => String(v ?? "").trim()).filter(Boolean);
 
-      nextBtn.addEventListener("click", () => {
-        const v = input.value.trim();
-        if (required && !v) {
-          setError("This question is required.");
-          input.focus();
-          return;
-        }
-        commitAndAdvance(v ? v : null);
-      });
-    } else if (q.type === "single_select") {
-      const selected =
-        typeof st.answers[q.id] === "string"
-          ? (st.answers[q.id] as string)
-          : null;
+    const otherSentinel = "__other__";
+    const isOther = Boolean(q.isOther);
+    const hasOptions = Array.isArray(q.options) && q.options.length > 0;
 
-      const rawOptions = Array.isArray(q.options) ? q.options : [];
-      const options = rawOptions
-        .slice()
-        .sort(
-          (a, b) =>
-            Number(Boolean(b.recommended)) - Number(Boolean(a.recommended)),
-        );
+    if (hasOptions) {
+      const selected = (st.answersById[q.id]?.[0] ?? "").trim();
 
-      const makeOptionRow = (opt: AskUserQuestionOption): HTMLLabelElement => {
+      const optionsWrap = document.createElement("div");
+      optionsWrap.className = "askOptions";
+
+      const radioName = `rui-${st.requestKey}-${q.id}`;
+
+      const makeRadio = (
+        label: string,
+        value: string,
+        description: string,
+      ): HTMLLabelElement => {
         const row = document.createElement("label");
         row.className = "askOption";
         row.style.cursor = "pointer";
 
-        const radio = document.createElement("input");
-        radio.type = "radio";
-        radio.name = `ask_${st.requestKey}_${q.id}`;
-        radio.value = opt.value;
-        radio.checked = selected === opt.value;
-        radio.addEventListener("change", () => {
-          st.answers[q.id] = opt.value;
-          setError(null);
-          renderAskUserQuestion();
+        const input = document.createElement("input");
+        input.type = "radio";
+        input.name = radioName;
+        input.value = value;
+        input.checked = selected === value;
+        input.addEventListener("change", () => {
+          if (!input.checked) return;
+          st.answersById[q.id] = [value];
+          renderRequestUserInput();
         });
 
         const meta = document.createElement("div");
-        const label = document.createElement("div");
-        label.className = "askOptionLabel";
-        label.textContent = opt.recommended
-          ? `${opt.label} (Recommended)`
-          : opt.label;
-        meta.appendChild(label);
-        if (opt.description) {
+        const labelEl = document.createElement("div");
+        labelEl.className = "askOptionLabel";
+        labelEl.textContent = label;
+        meta.appendChild(labelEl);
+
+        if (description) {
           const d = document.createElement("div");
           d.className = "askOptionMeta";
-          d.textContent = opt.description;
+          d.textContent = description;
           meta.appendChild(d);
         }
 
-        row.appendChild(radio);
+        row.appendChild(input);
         row.appendChild(meta);
         return row;
       };
 
-      for (const opt of options) optionsWrap.appendChild(makeOptionRow(opt));
-      if (allowOther) {
+      for (const opt of q.options ?? []) {
         optionsWrap.appendChild(
-          makeOptionRow({ label: "Other…", value: otherSentinel }),
+          makeRadio(opt.label, opt.label, opt.description ?? ""),
         );
+      }
+      if (isOther) {
+        optionsWrap.appendChild(makeRadio("Other…", otherSentinel, ""));
       }
       card.appendChild(optionsWrap);
 
       let otherInput: HTMLInputElement | null = null;
-      if (allowOther && selected === otherSentinel) {
-        otherInput = renderOtherInputIfNeeded(
-          card,
-          () => selected === otherSentinel,
-          typeof q.placeholder === "string"
-            ? q.placeholder
-            : "Type your answer…",
-        );
-      }
-
-      nextBtn.addEventListener("click", () => {
-        if (!selected) {
-          if (required) {
-            setError("Pick an option, or cancel.");
-            return;
-          }
-          commitAndAdvance(null);
-          return;
-        }
-
-        if (selected === otherSentinel) {
-          const v = (otherInput?.value ?? st.otherTextById[q.id] ?? "").trim();
-          if (required && !v) {
-            setError("This question is required.");
-            otherInput?.focus();
-            return;
-          }
-          commitAndAdvance(v ? v : null);
-          return;
-        }
-
-        commitAndAdvance(selected);
-      });
-    } else if (q.type === "multi_select") {
-      const prev = Array.isArray(st.answers[q.id])
-        ? (st.answers[q.id] as unknown[])
-        : [];
-      const selected = new Set<string>(prev.map((v) => String(v)));
-
-      const rawOptions = Array.isArray(q.options) ? q.options : [];
-      const options = rawOptions
-        .slice()
-        .sort(
-          (a, b) =>
-            Number(Boolean(b.recommended)) - Number(Boolean(a.recommended)),
-        );
-
-      const makeOptionRow = (opt: AskUserQuestionOption): HTMLLabelElement => {
-        const row = document.createElement("label");
-        row.className = "askOption";
-        row.style.cursor = "pointer";
-
-        const cb = document.createElement("input");
-        cb.type = "checkbox";
-        cb.value = opt.value;
-        cb.checked = selected.has(opt.value);
-        cb.addEventListener("change", () => {
-          if (cb.checked) selected.add(opt.value);
-          else selected.delete(opt.value);
-          st.answers[q.id] = Array.from(selected);
-          setError(null);
-          renderAskUserQuestion();
+      if (isOther && selected === otherSentinel) {
+        otherInput = document.createElement("input");
+        otherInput.className = "askInput";
+        otherInput.type = q.isSecret ? "password" : "text";
+        otherInput.placeholder = "Type your answer…";
+        otherInput.value = st.otherTextById[q.id] ?? "";
+        otherInput.addEventListener("input", () => {
+          st.otherTextById[q.id] = otherInput?.value ?? "";
         });
-
-        const meta = document.createElement("div");
-        const label = document.createElement("div");
-        label.className = "askOptionLabel";
-        label.textContent = opt.recommended
-          ? `${opt.label} (Recommended)`
-          : opt.label;
-        meta.appendChild(label);
-        if (opt.description) {
-          const d = document.createElement("div");
-          d.className = "askOptionMeta";
-          d.textContent = opt.description;
-          meta.appendChild(d);
-        }
-
-        row.appendChild(cb);
-        row.appendChild(meta);
-        return row;
-      };
-
-      for (const opt of options) optionsWrap.appendChild(makeOptionRow(opt));
-      if (allowOther) {
-        optionsWrap.appendChild(
-          makeOptionRow({ label: "Other…", value: otherSentinel }),
-        );
-      }
-      card.appendChild(optionsWrap);
-
-      let otherInput: HTMLInputElement | null = null;
-      if (allowOther && selected.has(otherSentinel)) {
-        otherInput = renderOtherInputIfNeeded(
-          card,
-          () => selected.has(otherSentinel),
-          typeof q.placeholder === "string"
-            ? q.placeholder
-            : "Type your answer…",
-        );
+        card.appendChild(otherInput);
       }
 
       nextBtn.addEventListener("click", () => {
-        const out: string[] = [];
-        for (const v of selected) {
-          if (v === otherSentinel) continue;
-          out.push(v);
-        }
-
-        if (allowOther && selected.has(otherSentinel)) {
+        const raw = selected;
+        if (isOther && raw === otherSentinel) {
           const other = (
             otherInput?.value ??
             st.otherTextById[q.id] ??
             ""
           ).trim();
-          if (other) out.push(other);
-        }
-
-        if (required && out.length === 0) {
-          setError("Pick at least one option, or cancel.");
+          commitAndAdvance(normalize([other]));
           return;
         }
-
-        commitAndAdvance(out.length > 0 ? out : null);
+        commitAndAdvance(normalize(raw ? [raw] : []));
       });
     } else {
-      setError(`Unsupported question type: ${String((q as any).type)}`);
+      const input = document.createElement("textarea");
+      input.className = "askInput";
+      input.rows = 3;
+      input.placeholder = "Type your answer…";
+      input.value = (st.answersById[q.id]?.[0] ?? "").trim();
+      if (q.isSecret) {
+        input.style.setProperty("-webkit-text-security", "disc");
+      }
+      input.addEventListener("input", () => {});
+      card.appendChild(input);
+
       nextBtn.addEventListener("click", () => {
-        postAskUserQuestionResponse({ cancelled: true, answers: st.answers });
-        clearAskUserQuestion();
+        commitAndAdvance(normalize([input.value]));
       });
     }
 
     controls.appendChild(cancelBtn);
     controls.appendChild(nextBtn);
-    card.appendChild(errorEl);
     card.appendChild(controls);
-    askUserQuestionEl.appendChild(card);
+    requestUserInputEl.appendChild(card);
     disableComposer(true);
   };
 
@@ -956,9 +776,7 @@ function main(): void {
       const o = document.createElement("option");
       o.value = opt.value;
       o.textContent =
-        opt.value === "default"
-          ? (opts?.defaultLabel ?? "default")
-          : opt.label;
+        opt.value === "default" ? (opts?.defaultLabel ?? "default") : opt.label;
       if (opt.value === v) o.selected = true;
       el.appendChild(o);
     }
@@ -3735,10 +3553,16 @@ function main(): void {
     const defaultModelLabel = (() => {
       if (backendId === "opencode") {
         if (!opencodeDefaultKey) return "default";
-        const match = models.find((m) => (m.model || m.id) === opencodeDefaultKey);
+        const match = models.find(
+          (m) => (m.model || m.id) === opencodeDefaultKey,
+        );
         return String(match?.displayName || opencodeDefaultKey);
       }
-      const d = s.cliDefaultModelState || { model: null, provider: null, reasoning: null };
+      const d = s.cliDefaultModelState || {
+        model: null,
+        provider: null,
+        reasoning: null,
+      };
       const provider = d.provider ? String(d.provider).trim() : "";
       const model = d.model ? String(d.model).trim() : "";
       if (provider && model) return `${provider} / ${model}`;
@@ -3746,7 +3570,11 @@ function main(): void {
       if (model) return model;
       const backendDefault = models.find((m) => Boolean(m.isDefault));
       if (backendDefault) {
-        const label = String(backendDefault.displayName || backendDefault.model || backendDefault.id);
+        const label = String(
+          backendDefault.displayName ||
+            backendDefault.model ||
+            backendDefault.id,
+        );
         return label;
       }
       return "default";
@@ -3778,7 +3606,11 @@ function main(): void {
         // opencode does not expose the effective default variant/effort; show the explicit options instead.
         return "server default";
       }
-      const d = s.cliDefaultModelState || { model: null, provider: null, reasoning: null };
+      const d = s.cliDefaultModelState || {
+        model: null,
+        provider: null,
+        reasoning: null,
+      };
       const reasoning = d.reasoning ? String(d.reasoning).trim() : "";
       if (reasoning) return reasoning;
       const backendDefault = models.find((m) => Boolean(m.isDefault));
@@ -3915,9 +3747,8 @@ function main(): void {
       : "Settings";
     if (backendId !== "codez" && rewindTurnIndex !== null) setEditMode(null);
     // Keep input enabled so the user can draft messages even before selecting a session,
-    // but do not override ask_user_question which intentionally locks the composer.
     // Sending is still guarded by sendBtn.disabled and sendCurrentInput().
-    if (!askUserQuestionState) inputEl.disabled = false;
+    inputEl.disabled = false;
     updateInputPlaceholder();
 
     const hydrationText = String(s.hydrationBlockedText || "").trim();
@@ -4304,41 +4135,41 @@ function main(): void {
       return scored.map((x) => x.b);
     };
 
-	    const blocks = (() => {
-	      const raw = s.blocks || [];
-	      return s.activeSession?.backendId === "opencode"
-	        ? reorderBlocksForOpencode(raw)
-	        : raw;
-	    })();
+    const blocks = (() => {
+      const raw = s.blocks || [];
+      return s.activeSession?.backendId === "opencode"
+        ? reorderBlocksForOpencode(raw)
+        : raw;
+    })();
 
-	    const opencodeReorder = s.activeSession?.backendId === "opencode";
-	    const cursorStart = (() => {
-	      if (!opencodeReorder) return null;
-	      let cur: ChildNode | null = logEl.firstChild;
-	      while (cur) {
-	        const el = cur as HTMLElement;
-	        const cls = typeof el.className === "string" ? el.className : "";
-	        if (el.tagName.toLowerCase() === "details" && /\bnotice\b/.test(cls)) {
-	          cur = cur.nextSibling;
-	          continue;
-	        }
-	        break;
-	      }
-	      return cur;
-	    })();
-	    let cursor: ChildNode | null = cursorStart;
-	    const placeTopLevel = (el: HTMLElement): void => {
-	      if (!opencodeReorder) return;
-	      // Reorder DOM to match the (potentially reordered) blocks list.
-	      if (el.parentElement !== logEl || el !== cursor) {
-	        logEl.insertBefore(el, cursor);
-	      }
-	      cursor = el.nextSibling;
-	    };
+    const opencodeReorder = s.activeSession?.backendId === "opencode";
+    const cursorStart = (() => {
+      if (!opencodeReorder) return null;
+      let cur: ChildNode | null = logEl.firstChild;
+      while (cur) {
+        const el = cur as HTMLElement;
+        const cls = typeof el.className === "string" ? el.className : "";
+        if (el.tagName.toLowerCase() === "details" && /\bnotice\b/.test(cls)) {
+          cur = cur.nextSibling;
+          continue;
+        }
+        break;
+      }
+      return cur;
+    })();
+    let cursor: ChildNode | null = cursorStart;
+    const placeTopLevel = (el: HTMLElement): void => {
+      if (!opencodeReorder) return;
+      // Reorder DOM to match the (potentially reordered) blocks list.
+      if (el.parentElement !== logEl || el !== cursor) {
+        logEl.insertBefore(el, cursor);
+      }
+      cursor = el.nextSibling;
+    };
 
     let userTurnIndex = 0;
     for (const block of blocks) {
-	      if (block.type === "divider") {
+      if (block.type === "divider") {
         const key = "b:" + block.id;
         const dividerText = String(block.text ?? "");
         const hasText = dividerText.trim().length > 0;
@@ -4378,22 +4209,22 @@ function main(): void {
         } else if (existingIcon) {
           existingIcon.remove();
         }
-	        const pre = ensurePre(div, "body");
-	        if (pre.textContent !== dividerText) pre.textContent = dividerText;
-	        placeTopLevel(div);
-	        continue;
-	      }
+        const pre = ensurePre(div, "body");
+        if (pre.textContent !== dividerText) pre.textContent = dividerText;
+        placeTopLevel(div);
+        continue;
+      }
 
-	      if (block.type === "note") {
-	        const key = "b:" + block.id;
-	        const div = ensureDiv(key, "note");
-	        const text = String(block.text ?? "");
-	        if (div.textContent !== text) div.textContent = text;
-	        placeTopLevel(div);
-	        continue;
-	      }
+      if (block.type === "note") {
+        const key = "b:" + block.id;
+        const div = ensureDiv(key, "note");
+        const text = String(block.text ?? "");
+        if (div.textContent !== text) div.textContent = text;
+        placeTopLevel(div);
+        continue;
+      }
 
-	      if (block.type === "image") {
+      if (block.type === "image") {
         const key = "b:" + block.id;
         const div = ensureDiv(
           key,
@@ -4436,13 +4267,13 @@ function main(): void {
             div.appendChild(c);
             return c;
           })();
-	        void ensureImageRendered(block, img, captionEl).catch((err) => {
-	          captionEl.textContent = `画像の描画に失敗: ${String(err)}`;
-	          captionEl.style.display = "";
-	        });
-	        placeTopLevel(div);
-	        continue;
-	      }
+        void ensureImageRendered(block, img, captionEl).catch((err) => {
+          captionEl.textContent = `画像の描画に失敗: ${String(err)}`;
+          captionEl.style.display = "";
+        });
+        placeTopLevel(div);
+        continue;
+      }
 
       if (block.type === "imageGallery") {
         const key = "b:" + block.id;
@@ -4540,12 +4371,12 @@ function main(): void {
         continue;
       }
 
-	      if (block.type === "user" || block.type === "assistant") {
-	        const key = "b:" + block.id;
-	        const div = ensureDiv(
-	          key,
-	          "msg " + (block.type === "user" ? "user" : "assistant"),
-	        );
+      if (block.type === "user" || block.type === "assistant") {
+        const key = "b:" + block.id;
+        const div = ensureDiv(
+          key,
+          "msg " + (block.type === "user" ? "user" : "assistant"),
+        );
 
         if (block.type === "user") {
           const backendId = state.activeSession?.backendId ?? null;
@@ -4638,8 +4469,8 @@ function main(): void {
         ) as HTMLDivElement | null;
         if (!metaText) {
           if (existingMeta) existingMeta.remove();
-	        } else {
-	          const metaEl =
+        } else {
+          const metaEl =
             existingMeta ??
             (() => {
               const m = document.createElement("div");
@@ -4648,17 +4479,23 @@ function main(): void {
               div.appendChild(m);
               return m;
             })();
-	          if (metaEl.textContent !== metaText) metaEl.textContent = metaText;
-	        }
-	        placeTopLevel(div);
-	        continue;
-	      }
+          if (metaEl.textContent !== metaText) metaEl.textContent = metaText;
+        }
+        placeTopLevel(div);
+        continue;
+      }
 
-	      if (block.type === "opencodePermission") {
-	        const id = "opencodePermission:" + block.id;
+      if (block.type === "opencodePermission") {
+        const id = "opencodePermission:" + block.id;
         const title = `Permission required: ${String(block.permission ?? "").trim() || "permission"}`;
         const open = block.status === "pending";
-        const det = ensureDetails(id, "tool opencodePermission", open, title, id);
+        const det = ensureDetails(
+          id,
+          "tool opencodePermission",
+          open,
+          title,
+          id,
+        );
         const status =
           block.status === "pending"
             ? "inProgress"
@@ -4734,14 +4571,14 @@ function main(): void {
           return btn;
         };
 
-	        actions.appendChild(mk("Allow once", "once"));
-	        actions.appendChild(mk("Always allow", "always"));
-	        actions.appendChild(mk("Reject", "reject"));
-	        placeTopLevel(det);
-	        continue;
-	      }
+        actions.appendChild(mk("Allow once", "once"));
+        actions.appendChild(mk("Always allow", "always"));
+        actions.appendChild(mk("Reject", "reject"));
+        placeTopLevel(det);
+        continue;
+      }
 
-	      if (block.type === "reasoning") {
+      if (block.type === "reasoning") {
         const summary = (block.summaryParts || [])
           .map((s) => String(s ?? ""))
           .filter((s) => s.trim().length > 0)
@@ -4777,17 +4614,17 @@ function main(): void {
           const mdEl = ensureMd(det, "summary");
           renderMarkdownInto(mdEl, summary);
         }
-	        if (raw.trim()) {
+        if (raw.trim()) {
           const rawId = id + ":raw";
           const rawDet = ensureDetails(rawId, "", false, "Raw", rawId);
           // Ensure raw is nested under the reasoning details.
           if (rawDet.parentElement !== det) det.appendChild(rawDet);
-	          const pre = ensurePre(rawDet, "body");
-	          if (pre.textContent !== raw) pre.textContent = raw;
-	        }
-	        placeTopLevel(det);
-	        continue;
-	      }
+          const pre = ensurePre(rawDet, "body");
+          if (pre.textContent !== raw) pre.textContent = raw;
+        }
+        placeTopLevel(det);
+        continue;
+      }
 
       if (block.type === "command") {
         const id = "command:" + block.id;
@@ -4972,7 +4809,7 @@ function main(): void {
         continue;
       }
 
-	      if (block.type === "step") {
+      if (block.type === "step") {
         const id = "step:" + block.id;
         const tools = Array.isArray(block.tools) ? block.tools : [];
         const toolCount = tools.length;
@@ -5055,17 +4892,17 @@ function main(): void {
           if (pre.textContent !== text) pre.textContent = text;
         }
 
-	        for (const [k, el] of blockElByKey.entries()) {
-	          if (!k.startsWith(id + ":tool:")) continue;
-	          if (wantedKeys.has(k)) continue;
-	          if (el.parentElement) el.parentElement.removeChild(el);
-	          blockElByKey.delete(k);
-	          delete detailsState[k];
-	        }
+        for (const [k, el] of blockElByKey.entries()) {
+          if (!k.startsWith(id + ":tool:")) continue;
+          if (wantedKeys.has(k)) continue;
+          if (el.parentElement) el.parentElement.removeChild(el);
+          blockElByKey.delete(k);
+          delete detailsState[k];
+        }
 
-	        placeTopLevel(det);
-	        continue;
-	      }
+        placeTopLevel(det);
+        continue;
+      }
 
       if (block.type === "plan") {
         const id = "plan:" + block.id;
@@ -5764,24 +5601,26 @@ function main(): void {
       scheduleBlocksRender();
       return;
     }
-    if (anyMsg.type === "askUserQuestionStart") {
+    if (anyMsg.type === "requestUserInputStart") {
       const requestKey =
         typeof (anyMsg as any).requestKey === "string"
           ? (anyMsg as any).requestKey
           : null;
       if (!requestKey) return;
-      const request = (anyMsg as any).request as AskUserQuestionRequest;
-      if (!request || typeof request !== "object") return;
+      const params = (anyMsg as any).params;
+      const questions = Array.isArray(params?.questions)
+        ? (params.questions as RequestUserInputQuestion[])
+        : [];
+      if (questions.length === 0) return;
 
-      askUserQuestionState = {
+      requestUserInputState = {
         requestKey,
-        request,
+        questions,
         index: 0,
-        answers: {},
+        answersById: {},
         otherTextById: {},
       };
-      askUserQuestionError = null;
-      renderAskUserQuestion();
+      renderRequestUserInput();
       return;
     }
     if (anyMsg.type === "blockUpsert") {

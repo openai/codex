@@ -64,7 +64,7 @@ export function renderVscodeChatHtml(args) {
       textarea { flex: 1; resize: none; box-sizing: border-box; border-radius: 8px; border: 1px solid rgba(127,127,127,0.35); padding: 6px 10px; background: transparent; color: inherit; font-family: var(--cm-editor-font-family); font-size: var(--cm-editor-font-size); font-weight: var(--cm-editor-font-weight); line-height: 1.2; overflow-y: hidden; min-height: 30px; max-height: 200px; }
       textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .suggest { position: absolute; left: 12px; right: 12px; bottom: calc(100% + 8px); border: 1px solid rgba(127,127,127,0.35); border-radius: 10px; background: rgba(30,30,30,0.95); max-height: 160px; overflow: auto; display: none; z-index: 20; box-shadow: 0 8px 24px rgba(0,0,0,0.35); }
-      .askUserQuestion { display: none; }
+      .requestUserInput { display: none; padding: 10px 12px; border-top: 1px solid rgba(127,127,127,0.25); border-bottom: 1px solid rgba(127,127,127,0.25); }
       .footerBar { padding: 8px 12px; border-top: 1px solid rgba(127,127,127,0.25); display: none; }
       .footerStatus { font-size: 12px; opacity: 0.75; white-space: pre-wrap; word-break: break-word; }
       .toast { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 1000; max-width: min(820px, calc(100vw - 32px)); border-radius: 10px; padding: 10px 12px; border: 1px solid rgba(127,127,127,0.35); box-shadow: 0 10px 30px rgba(0,0,0,0.35); background: rgba(30,30,30,0.95); display: none; }
@@ -95,7 +95,7 @@ export function renderVscodeChatHtml(args) {
     <div id="log" class="log"></div>
     <div id="composer" class="composer">
       <div id="editBanner" class="editBanner" style="display:none"></div>
-      <div id="askUserQuestion" class="askUserQuestion"></div>
+      <div id="requestUserInput" class="requestUserInput"></div>
       <div id="attachments" class="attachments"></div>
       <button id="returnToBottom" class="returnToBottomBtn" title="Scroll to bottom">Return to Bottom</button>
       <div id="inputRow" class="inputRow">

@@ -112,23 +112,9 @@ node scripts/sync-opencode-config.cjs
 node scripts/sync-opencode-config.cjs --force
 ```
 
-#### ツールの有効化（例: AskUserQuestion）
+#### ユーザー入力の要求（request_user_input）
 
-`ask_user_question` はデフォルト無効で、明示的に有効化した場合のみモデルへ露出する。
-
-推奨（canonical）: feature で有効化する:
-
-```toml
-[features]
-ask_user_question_tool = true
-```
-
-互換（legacy）: tools で有効化する（内部的には feature にマップされる）:
-
-```toml
-[tools]
-ask_user_question = true
-```
+Codez では AskUserQuestion（`user/askQuestion` / `ask_user_question`）は廃止し、ユーザーへの質問は `request_user_input` に統一する。
 
 ### subagents
 
