@@ -4820,6 +4820,21 @@ async fn status_line_invalid_items_warn_once() {
 }
 
 #[tokio::test]
+async fn status_line_branch_state_resets_when_git_branch_disabled() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.status_line_branch = Some("main".to_string());
+    chat.status_line_branch_pending = true;
+    chat.status_line_branch_lookup_complete = true;
+    chat.config.tui_status_line = Some(vec!["model_name".to_string()]);
+
+    chat.refresh_status_line();
+
+    assert_eq!(chat.status_line_branch, None);
+    assert!(!chat.status_line_branch_pending);
+    assert!(!chat.status_line_branch_lookup_complete);
+}
+
+#[tokio::test]
 async fn stream_recovery_restores_previous_status_header() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.handle_codex_event(Event {

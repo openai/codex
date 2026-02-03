@@ -838,6 +838,11 @@ impl ChatWidget {
             );
             self.on_warning(message);
         }
+        if !items.contains(&StatusLineItem::GitBranch) {
+            self.status_line_branch = None;
+            self.status_line_branch_pending = false;
+            self.status_line_branch_lookup_complete = false;
+        }
         let enabled = !items.is_empty();
         self.bottom_pane.set_status_line_enabled(enabled);
         if !enabled {
