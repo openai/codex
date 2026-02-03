@@ -23,9 +23,7 @@ use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
-use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
-use tokio::time::Duration;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_compact_replaces_history_for_followups() -> Result<()> {
@@ -262,13 +260,7 @@ async fn remote_compact_trims_function_call_history_to_fit_context_window() -> R
                 responses::ev_completed("retained-final-response"),
             ]),
             sse(vec![
-                responses::ev_shell_command_call_with_args(
-                    trimmed_call_id,
-                    &serde_json::json!({
-                        "command": trimmed_command,
-                        "timeout_ms": 5_000,
-                    }),
-                ),
+                responses::ev_shell_command_call(trimmed_call_id, &trimmed_command),
                 responses::ev_completed("trimmed-call-response"),
             ]),
             sse(vec![responses::ev_completed("trimmed-final-response")]),
@@ -285,12 +277,7 @@ async fn remote_compact_trims_function_call_history_to_fit_context_window() -> R
             final_output_json_schema: None,
         })
         .await?;
-    wait_for_event_with_timeout(
-        &codex,
-        |event| matches!(event, EventMsg::TurnComplete(_)),
-        Duration::from_secs(20),
-    )
-    .await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     codex
         .submit(Op::UserInput {
