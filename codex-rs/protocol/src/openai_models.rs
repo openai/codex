@@ -53,7 +53,6 @@ pub enum ReasoningEffort {
     Debug,
     Serialize,
     Deserialize,
-    Default,
     Clone,
     Copy,
     PartialEq,
@@ -68,7 +67,6 @@ pub enum ReasoningEffort {
 #[strum(serialize_all = "lowercase")]
 pub enum InputModality {
     /// Plain text turns and tool payloads.
-    #[default]
     Text,
     /// Image attachments included in user turns.
     Image,
