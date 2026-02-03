@@ -43,19 +43,33 @@ impl StatusLineItem {
             StatusLineItem::ModelName => "Current model name",
             StatusLineItem::ModelWithReasoning => "Current model name with reasoning level",
             StatusLineItem::CurrentDir => "Current working directory",
-            StatusLineItem::ProjectRoot => "Project root directory",
-            StatusLineItem::GitBranch => "Current Git branch",
-            StatusLineItem::ContextRemaining => "Percentage of context window remaining",
-            StatusLineItem::ContextUsed => "Percentage of context window used",
-            StatusLineItem::FiveDayLimit => "Remaining usage on 5-day usage limit",
-            StatusLineItem::WeeklyLimit => "Remaining usage on weekly usage limit",
+            StatusLineItem::ProjectRoot => "Project root directory (omitted when unavailable)",
+            StatusLineItem::GitBranch => "Current Git branch (omitted when unavailable)",
+            StatusLineItem::ContextRemaining => {
+                "Percentage of context window remaining (omitted when unknown)"
+            }
+            StatusLineItem::ContextUsed => {
+                "Percentage of context window used (omitted when unknown)"
+            }
+            StatusLineItem::FiveDayLimit => {
+                "Remaining usage on 5-day usage limit (omitted when unavailable)"
+            }
+            StatusLineItem::WeeklyLimit => {
+                "Remaining usage on weekly usage limit (omitted when unavailable)"
+            }
             StatusLineItem::CodexVersion => "Codex application version",
-            StatusLineItem::ContextWindowSize => "Total context window size in tokens",
-            StatusLineItem::UsedTokens => "Total tokens used in session",
+            StatusLineItem::ContextWindowSize => {
+                "Total context window size in tokens (omitted when unknown)"
+            }
+            StatusLineItem::UsedTokens => "Total tokens used in session (omitted when zero)",
             StatusLineItem::TotalInputTokens => "Total input tokens used in session",
             StatusLineItem::TotalOutputTokens => "Total output tokens used in session",
-            StatusLineItem::SessionId => "Current session identifier",
-            StatusLineItem::SessionIdPrefix => "Current session identifier (shortened)",
+            StatusLineItem::SessionId => {
+                "Current session identifier (omitted until session starts)"
+            }
+            StatusLineItem::SessionIdPrefix => {
+                "Current session identifier (shortened; omitted until session starts)"
+            }
         }
     }
 

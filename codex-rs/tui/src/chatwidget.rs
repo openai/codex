@@ -4049,7 +4049,12 @@ impl ChatWidget {
             StatusLineItem::GitBranch => self.status_line_branch.clone(),
             StatusLineItem::UsedTokens => {
                 let usage = self.status_line_total_usage();
-                Some(format_tokens_compact(usage.tokens_in_context_window()))
+                let total = usage.tokens_in_context_window();
+                if total <= 0 {
+                    None
+                } else {
+                    Some(format_tokens_compact(total))
+                }
             }
             StatusLineItem::ContextRemaining => self
                 .status_line_context_remaining_percent()
