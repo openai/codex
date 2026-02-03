@@ -8,4 +8,4 @@ export type ConfigReadParams = { includeLayers: boolean,
  * return the effective config as seen from that directory (i.e., including any
  * project layers between `cwd` and the project/repo root).
  */
-cwd: string | null, };
+cwd?: string | null, };

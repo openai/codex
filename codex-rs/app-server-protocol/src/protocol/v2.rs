@@ -1218,6 +1218,7 @@ pub struct ThreadStartParams {
     /// Test-only experimental field used to validate experimental gating and
     /// schema filtering behavior in a stable way.
     #[experimental("thread/start.mockExperimentalField")]
+    #[ts(optional = nullable)]
     pub mock_experimental_field: Option<String>,
     /// If true, opt into emitting raw response items on the event stream.
     ///
@@ -1232,6 +1233,7 @@ pub struct ThreadStartParams {
 #[ts(export_to = "v2/")]
 pub struct MockExperimentalMethodParams {
     /// Test-only payload field.
+    #[ts(optional = nullable)]
     pub value: Option<String>,
 }
 
