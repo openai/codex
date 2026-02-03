@@ -1070,6 +1070,9 @@ impl ChatWidget {
         if !from_replay && self.queued_user_messages.is_empty() {
             self.maybe_prompt_plan_implementation();
         }
+        // `saw_plan_item_this_turn` is only meaningful while a turn is active; clearing it here
+        // avoids replay/live duplicate TurnComplete events re-triggering the plan prompt.
+        self.saw_plan_item_this_turn = false;
         // If there is a queued user message, send exactly one now to begin the next turn.
         self.maybe_send_next_queued_input();
         // Emit a notification when the turn completes (suppressed if focused).
