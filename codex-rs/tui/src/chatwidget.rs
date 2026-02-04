@@ -3005,6 +3005,9 @@ impl ChatWidget {
             SlashCommand::Status => {
                 self.add_status_output();
             }
+            SlashCommand::DebugConfig => {
+                self.add_debug_config_output();
+            }
             SlashCommand::Ps => {
                 self.add_ps_output();
             }
@@ -3778,6 +3781,10 @@ impl ChatWidget {
             collaboration_mode,
             reasoning_effort_override,
         ));
+    }
+
+    pub(crate) fn add_debug_config_output(&mut self) {
+        self.add_to_history(crate::debug_config::new_debug_config_output(&self.config));
     }
 
     pub(crate) fn add_ps_output(&mut self) {
