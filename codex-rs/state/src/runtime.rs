@@ -878,6 +878,7 @@ mod tests {
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::SandboxPolicy;
     use pretty_assertions::assert_eq;
+    use sqlx::Row;
     use std::path::Path;
     use std::path::PathBuf;
     use std::time::SystemTime;
@@ -1077,6 +1078,155 @@ mod tests {
             .await
             .expect("list missing cwd memories");
         assert_eq!(none, Vec::new());
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn upsert_thread_memory_errors_for_unknown_thread() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let unknown_thread_id =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let err = runtime
+            .upsert_thread_memory(unknown_thread_id, "trace", "memory")
+            .await
+            .expect_err("unknown thread should fail");
+        assert!(
+            err.to_string().contains("thread not found"),
+            "error should mention missing thread: {err}"
+        );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn get_last_n_thread_memories_for_cwd_zero_returns_empty() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let cwd = codex_home.join("workspace");
+        runtime
+            .upsert_thread(&test_thread_metadata(&codex_home, thread_id, cwd.clone()))
+            .await
+            .expect("upsert thread");
+        runtime
+            .upsert_thread_memory(thread_id, "trace", "memory")
+            .await
+            .expect("upsert memory");
+
+        let memories = runtime
+            .get_last_n_thread_memories_for_cwd(cwd.as_path(), 0)
+            .await
+            .expect("query memories");
+        assert_eq!(memories, Vec::new());
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn get_last_n_thread_memories_for_cwd_does_not_prefix_match() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let cwd_exact = codex_home.join("workspace");
+        let cwd_prefix = codex_home.join("workspace-child");
+        let t_exact = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let t_prefix = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                t_exact,
+                cwd_exact.clone(),
+            ))
+            .await
+            .expect("upsert exact thread");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                t_prefix,
+                cwd_prefix.clone(),
+            ))
+            .await
+            .expect("upsert prefix thread");
+        runtime
+            .upsert_thread_memory(t_exact, "trace-exact", "memory-exact")
+            .await
+            .expect("upsert exact memory");
+        runtime
+            .upsert_thread_memory(t_prefix, "trace-prefix", "memory-prefix")
+            .await
+            .expect("upsert prefix memory");
+
+        let exact_only = runtime
+            .get_last_n_thread_memories_for_cwd(cwd_exact.as_path(), 10)
+            .await
+            .expect("query exact cwd");
+        assert_eq!(exact_only.len(), 1);
+        assert_eq!(exact_only[0].thread_id, t_exact);
+        assert_eq!(exact_only[0].memory_summary, "memory-exact");
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn deleting_thread_cascades_thread_memory() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let cwd = codex_home.join("workspace");
+        runtime
+            .upsert_thread(&test_thread_metadata(&codex_home, thread_id, cwd))
+            .await
+            .expect("upsert thread");
+        runtime
+            .upsert_thread_memory(thread_id, "trace", "memory")
+            .await
+            .expect("upsert memory");
+
+        let count_before =
+            sqlx::query("SELECT COUNT(*) AS count FROM thread_memory WHERE thread_id = ?")
+                .bind(thread_id.to_string())
+                .fetch_one(runtime.pool.as_ref())
+                .await
+                .expect("count before delete")
+                .try_get::<i64, _>("count")
+                .expect("count value");
+        assert_eq!(count_before, 1);
+
+        sqlx::query("DELETE FROM threads WHERE id = ?")
+            .bind(thread_id.to_string())
+            .execute(runtime.pool.as_ref())
+            .await
+            .expect("delete thread");
+
+        let count_after =
+            sqlx::query("SELECT COUNT(*) AS count FROM thread_memory WHERE thread_id = ?")
+                .bind(thread_id.to_string())
+                .fetch_one(runtime.pool.as_ref())
+                .await
+                .expect("count after delete")
+                .try_get::<i64, _>("count")
+                .expect("count value");
+        assert_eq!(count_after, 0);
+        assert_eq!(
+            runtime
+                .get_thread_memory(thread_id)
+                .await
+                .expect("get memory after delete"),
+            None
+        );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
