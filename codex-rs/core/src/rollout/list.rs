@@ -1125,7 +1125,7 @@ async fn find_thread_path_by_id_str_in_subdir(
     let found = results.matches.into_iter().next().map(|m| m.full_path());
     if found.is_some() {
         tracing::error!("state db missing rollout path for thread {id_str}");
-        state_db::record_discrepancy("find_thread_path_by_id_str_in_subdir", "path_mismatch");
+        state_db::record_discrepancy("find_thread_path_by_id_str_in_subdir", "falling_back");
     }
 
     Ok(found)

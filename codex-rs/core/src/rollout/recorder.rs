@@ -187,6 +187,8 @@ impl RolloutRecorder {
             populate_thread_heads(page.items.as_mut_slice()).await;
             return Ok(page);
         }
+        tracing::error!("Falling back on rollout system");
+        state_db::record_discrepancy("list_threads_with_db_fallback", "falling_back");
 
         if archived {
             let root = codex_home.join(ARCHIVED_SESSIONS_SUBDIR);
