@@ -232,6 +232,27 @@ async fn list_threads_falls_back_to_files_when_state_db_is_unavailable() {
     );
 }
 
+#[tokio::test]
+async fn find_thread_path_falls_back_when_db_path_is_stale() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+    let uuid = Uuid::from_u128(302);
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+    let ts = "2025-01-03T13-00-00";
+    write_session_file(home, ts, uuid, 1, Some(SessionSource::Cli)).unwrap();
+    let fs_rollout_path = home.join(format!("sessions/2025/01/03/rollout-{ts}-{uuid}.jsonl"));
+
+    let stale_db_path = home.join(format!(
+        "sessions/2099/01/01/rollout-2099-01-01T00-00-00-{uuid}.jsonl"
+    ));
+    insert_state_db_thread(home, thread_id, stale_db_path.as_path(), false).await;
+
+    let found = crate::rollout::find_thread_path_by_id_str(home, &uuid.to_string())
+        .await
+        .expect("lookup should succeed");
+    assert_eq!(found, Some(fs_rollout_path));
+}
+
 #[test]
 fn rollout_date_parts_extracts_directory_components() {
     let file_name = OsStr::new("rollout-2025-03-01T09-00-00-123.jsonl");
