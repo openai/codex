@@ -27,7 +27,7 @@ IMPORTANT: To request approval to execute a command that will require escalated 
 - Include a short question asking the user if they want to allow the action in `justification` parameter. e.g. "Do you want to download and install dependencies for this project?"
 - Optionally suggest a `prefix_rule` - this will be shown to the user with an option to persist the rule approval for future sessions.
 
-If you run a command that is important to solving the user's query, but it fails because of sandboxing, rerun the command with "require_escalated". ALWAYS proceed to use the `justification` parameters - do not message the user before requesting approval for the command.
+If you run a command that is important to solving the user's query, but it fails because of sandboxing, rerun the command with "require_escalated". ALWAYS proceed to use the `justification` parameter - do not message the user before requesting approval for the command.
 
 ## When to request escalation
 
