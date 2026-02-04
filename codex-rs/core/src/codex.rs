@@ -1482,6 +1482,27 @@ impl Session {
         }
     }
 
+    fn build_model_instructions_update_item(
+        &self,
+        previous: Option<&Arc<TurnContext>>,
+        next: &TurnContext,
+    ) -> Option<ResponseItem> {
+        let prev = previous?;
+        if prev.client.get_model() == next.client.get_model() {
+            return None;
+        }
+
+        let model_instructions = next
+            .client
+            .get_model_info()
+            .get_model_instructions(next.personality);
+        if model_instructions.is_empty() {
+            return None;
+        }
+
+        Some(DeveloperInstructions::new(model_instructions).into())
+    }
+
     fn build_settings_update_items(
         &self,
         previous_context: Option<&Arc<TurnContext>>,
@@ -1502,6 +1523,11 @@ impl Session {
             self.build_collaboration_mode_update_item(previous_context, current_context)
         {
             update_items.push(collaboration_mode_item);
+        }
+        if let Some(model_instructions_item) =
+            self.build_model_instructions_update_item(previous_context, current_context)
+        {
+            update_items.push(model_instructions_item);
         }
         if let Some(personality_item) =
             self.build_personality_update_item(previous_context, current_context)
@@ -5818,6 +5844,63 @@ mod tests {
             }
             other => panic!("expected user message, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn model_change_appends_model_instructions_developer_message() {
+        let (session, previous_context, _rx) = make_session_and_context_with_rx().await;
+        let previous_model = previous_context.client.get_model().to_string();
+        let config = session.get_config().await;
+        let available_models = session
+            .services
+            .models_manager
+            .list_models(
+                config.as_ref(),
+                crate::models_manager::manager::RefreshStrategy::Offline,
+            )
+            .await;
+        let next_model = available_models
+            .into_iter()
+            .map(|preset| preset.model)
+            .find(|model| model != &previous_model)
+            .expect("expected at least one alternate model for test");
+        let next_context = session
+            .new_turn_with_sub_id(
+                "sub_id_2".to_string(),
+                SessionSettingsUpdate {
+                    collaboration_mode: Some(CollaborationMode {
+                        mode: ModeKind::Default,
+                        settings: Settings {
+                            model: next_model,
+                            reasoning_effort: previous_context
+                                .collaboration_mode
+                                .reasoning_effort(),
+                            developer_instructions: None,
+                        },
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("new turn with alternate model should succeed");
+
+        let update_items =
+            session.build_settings_update_items(Some(&previous_context), next_context.as_ref());
+
+        let expected = ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: next_context
+                    .client
+                    .get_model_info()
+                    .get_model_instructions(next_context.personality),
+            }],
+            end_turn: None,
+            phase: None,
+        };
+
+        assert!(update_items.contains(&expected));
     }
 
     #[derive(Clone, Copy)]
