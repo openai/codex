@@ -1,13 +1,12 @@
 use anyhow::Result;
 use codex_core::config::Constrained;
 use codex_core::protocol::AskForApproval;
-use codex_core::protocol::COLLABORATION_MODE_CLOSE_TAG;
-use codex_core::protocol::COLLABORATION_MODE_OPEN_TAG;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
 use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
+use codex_protocol::artificial_messages::ArtificialMessage;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -34,7 +33,10 @@ fn collab_mode_with_instructions(instructions: Option<&str>) -> CollaborationMod
 }
 
 fn collab_xml(text: &str) -> String {
-    format!("{COLLABORATION_MODE_OPEN_TAG}{text}{COLLABORATION_MODE_CLOSE_TAG}")
+    ArtificialMessage::CollaborationMode {
+        body: text.to_string(),
+    }
+    .render()
 }
 
 async fn read_rollout_text(path: &Path) -> anyhow::Result<String> {

@@ -2,6 +2,7 @@ use super::*;
 use crate::truncate;
 use crate::truncate::TruncationPolicy;
 use codex_git::GhostCommit;
+use codex_protocol::artificial_messages::ArtificialMessage;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -58,6 +59,15 @@ fn user_input_text_msg(text: &str) -> ResponseItem {
         end_turn: None,
         phase: None,
     }
+}
+
+fn demo_skill_message() -> String {
+    ArtificialMessage::Skill {
+        name: "demo".to_string(),
+        path: "skills/demo/SKILL.md".to_string(),
+        body: "body".to_string(),
+    }
+    .render()
 }
 
 fn function_call_output(call_id: &str, content: &str) -> ResponseItem {
@@ -445,10 +455,13 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
         user_input_text_msg(
             "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
         ),
+        user_input_text_msg(&demo_skill_message()),
         user_input_text_msg(
-            "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
+            &ArtificialMessage::UserShellCommand {
+                body: "echo 42".to_string(),
+            }
+            .render(),
         ),
-        user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
         user_input_text_msg("turn 1 user"),
         assistant_msg("turn 1 assistant"),
         user_input_text_msg("turn 2 user"),
@@ -464,10 +477,13 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
         user_input_text_msg(
             "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
         ),
+        user_input_text_msg(&demo_skill_message()),
         user_input_text_msg(
-            "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
+            &ArtificialMessage::UserShellCommand {
+                body: "echo 42".to_string(),
+            }
+            .render(),
         ),
-        user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
         user_input_text_msg("turn 1 user"),
         assistant_msg("turn 1 assistant"),
     ];
@@ -480,10 +496,13 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
         user_input_text_msg(
             "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
         ),
+        user_input_text_msg(&demo_skill_message()),
         user_input_text_msg(
-            "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
+            &ArtificialMessage::UserShellCommand {
+                body: "echo 42".to_string(),
+            }
+            .render(),
         ),
-        user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
     ];
 
     let mut history = create_history_with_items(vec![
@@ -492,10 +511,13 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
         user_input_text_msg(
             "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
         ),
+        user_input_text_msg(&demo_skill_message()),
         user_input_text_msg(
-            "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
+            &ArtificialMessage::UserShellCommand {
+                body: "echo 42".to_string(),
+            }
+            .render(),
         ),
-        user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
         user_input_text_msg("turn 1 user"),
         assistant_msg("turn 1 assistant"),
         user_input_text_msg("turn 2 user"),
@@ -510,10 +532,13 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
         user_input_text_msg(
             "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
         ),
+        user_input_text_msg(&demo_skill_message()),
         user_input_text_msg(
-            "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
+            &ArtificialMessage::UserShellCommand {
+                body: "echo 42".to_string(),
+            }
+            .render(),
         ),
-        user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
         user_input_text_msg("turn 1 user"),
         assistant_msg("turn 1 assistant"),
         user_input_text_msg("turn 2 user"),

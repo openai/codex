@@ -204,6 +204,7 @@ use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_async_utils::OrCancelExt;
 use codex_otel::OtelManager;
+use codex_protocol::artificial_messages::ArtificialMessage;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -1563,8 +1564,9 @@ impl Session {
             warn!("execpolicy amendment for {sub_id} had no command prefix");
             return;
         };
-        let text = format!("Approved command prefix saved:\n{prefixes}");
-        let message: ResponseItem = DeveloperInstructions::new(text.clone()).into();
+        let body = format!("Approved command prefix saved:\n{prefixes}");
+        let message =
+            ArtificialMessage::ExecPolicyAmendment { body: body.clone() }.to_response_item();
 
         if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
             self.record_conversation_items(&turn_context, std::slice::from_ref(&message))
@@ -1575,7 +1577,9 @@ impl Session {
         if self
             .inject_response_items(vec![ResponseInputItem::Message {
                 role: "developer".to_string(),
-                content: vec![ContentItem::InputText { text }],
+                content: vec![ContentItem::InputText {
+                    text: ArtificialMessage::ExecPolicyAmendment { body }.render(),
+                }],
             }])
             .await
             .is_err()
@@ -1843,15 +1847,10 @@ impl Session {
         self.services
             .otel_manager
             .counter("codex.model_warning", 1, &[]);
-        let item = ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: format!("Warning: {}", message.into()),
-            }],
-            end_turn: None,
-            phase: None,
-        };
+        let item = ArtificialMessage::ModelWarning {
+            body: message.into(),
+        }
+        .to_response_item();
 
         self.record_conversation_items(ctx, &[item]).await;
     }
@@ -5704,10 +5703,14 @@ mod tests {
         match last {
             ResponseItem::Message { role, content, .. } => {
                 assert_eq!(role, "user");
+                let expected_warning = ArtificialMessage::ModelWarning {
+                    body: "too many unified exec processes".to_string(),
+                }
+                .render();
                 assert_eq!(
                     content,
                     &vec![ContentItem::InputText {
-                        text: "Warning: too many unified exec processes".to_string(),
+                        text: expected_warning,
                     }]
                 );
             }

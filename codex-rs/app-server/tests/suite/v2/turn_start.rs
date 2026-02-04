@@ -37,6 +37,7 @@ use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::features::FEATURES;
 use codex_core::features::Feature;
 use codex_core::protocol_config_types::ReasoningSummary;
+use codex_protocol::artificial_messages::ArtificialMessage;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
@@ -475,9 +476,10 @@ async fn turn_start_accepts_personality_override_v2() -> Result<()> {
     }
 
     assert!(
-        developer_texts
-            .iter()
-            .any(|text| text.contains("<personality_spec>")),
+        developer_texts.iter().any(|text| matches!(
+            ArtificialMessage::parse(text),
+            Ok(ArtificialMessage::PersonalitySpec { .. })
+        )),
         "expected personality update message in developer input, got {developer_texts:?}"
     );
 
@@ -578,17 +580,19 @@ async fn turn_start_change_personality_mid_thread_v2() -> Result<()> {
 
     let first_developer_texts = requests[0].message_input_texts("developer");
     assert!(
-        first_developer_texts
-            .iter()
-            .all(|text| !text.contains("<personality_spec>")),
+        first_developer_texts.iter().all(|text| !matches!(
+            ArtificialMessage::parse(text),
+            Ok(ArtificialMessage::PersonalitySpec { .. })
+        )),
         "expected no personality update message in first request, got {first_developer_texts:?}"
     );
 
     let second_developer_texts = requests[1].message_input_texts("developer");
     assert!(
-        second_developer_texts
-            .iter()
-            .any(|text| text.contains("<personality_spec>")),
+        second_developer_texts.iter().any(|text| matches!(
+            ArtificialMessage::parse(text),
+            Ok(ArtificialMessage::PersonalitySpec { .. })
+        )),
         "expected personality update message in second request, got {second_developer_texts:?}"
     );
 

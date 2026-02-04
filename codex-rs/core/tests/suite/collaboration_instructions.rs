@@ -1,8 +1,7 @@
 use anyhow::Result;
-use codex_core::protocol::COLLABORATION_MODE_CLOSE_TAG;
-use codex_core::protocol::COLLABORATION_MODE_OPEN_TAG;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
+use codex_protocol::artificial_messages::ArtificialMessage;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -60,7 +59,10 @@ fn developer_texts(input: &[Value]) -> Vec<String> {
 }
 
 fn collab_xml(text: &str) -> String {
-    format!("{COLLABORATION_MODE_OPEN_TAG}{text}{COLLABORATION_MODE_CLOSE_TAG}")
+    ArtificialMessage::CollaborationMode {
+        body: text.to_string(),
+    }
+    .render()
 }
 
 fn count_exact(texts: &[String], target: &str) -> usize {
@@ -90,7 +92,10 @@ async fn no_collaboration_instructions_by_default() -> Result<()> {
     let input = req.single_request().input();
     let dev_texts = developer_texts(&input);
     assert_eq!(dev_texts.len(), 1);
-    assert!(dev_texts[0].contains("<permissions instructions>"));
+    assert!(matches!(
+        ArtificialMessage::parse(&dev_texts[0]),
+        Ok(ArtificialMessage::Permission { .. })
+    ));
 
     Ok(())
 }

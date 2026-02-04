@@ -8,11 +8,10 @@ use serde::Serialize;
 use serde::ser::Serializer;
 use ts_rs::TS;
 
+use crate::artificial_messages::ArtificialMessage;
 use crate::config_types::CollaborationMode;
 use crate::config_types::SandboxMode;
 use crate::protocol::AskForApproval;
-use crate::protocol::COLLABORATION_MODE_CLOSE_TAG;
-use crate::protocol::COLLABORATION_MODE_OPEN_TAG;
 use crate::protocol::NetworkAccess;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::WritableRoot;
@@ -275,10 +274,10 @@ impl DeveloperInstructions {
     }
 
     pub fn personality_spec_message(spec: String) -> Self {
-        let message = format!(
-            "<personality_spec> The user has requested a new communication style. Future messages should adhere to the following personality: \n{spec} </personality_spec>"
+        let body = format!(
+            " The user has requested a new communication style. Future messages should adhere to the following personality: \n{spec} "
         );
-        DeveloperInstructions::new(message)
+        DeveloperInstructions::new(ArtificialMessage::PersonalitySpec { body }.render())
     }
 
     pub fn from_policy(
@@ -322,9 +321,8 @@ impl DeveloperInstructions {
             .as_ref()
             .filter(|instructions| !instructions.is_empty())
             .map(|instructions| {
-                DeveloperInstructions::new(format!(
-                    "{COLLABORATION_MODE_OPEN_TAG}{instructions}{COLLABORATION_MODE_CLOSE_TAG}"
-                ))
+                let body = instructions.to_string();
+                DeveloperInstructions::new(ArtificialMessage::CollaborationMode { body }.render())
             })
     }
 
@@ -336,20 +334,16 @@ impl DeveloperInstructions {
         request_rule_enabled: bool,
         writable_roots: Option<Vec<WritableRoot>>,
     ) -> Self {
-        let start_tag = DeveloperInstructions::new("<permissions instructions>");
-        let end_tag = DeveloperInstructions::new("</permissions instructions>");
-        start_tag
-            .concat(DeveloperInstructions::sandbox_text(
-                sandbox_mode,
-                network_access,
-            ))
+        let body = DeveloperInstructions::sandbox_text(sandbox_mode, network_access)
             .concat(DeveloperInstructions::from(
                 approval_policy,
                 exec_policy,
                 request_rule_enabled,
             ))
             .concat(DeveloperInstructions::from_writable_roots(writable_roots))
-            .concat(end_tag)
+            .into_text();
+
+        DeveloperInstructions::new(ArtificialMessage::Permission { body }.render())
     }
 
     fn from_writable_roots(writable_roots: Option<Vec<WritableRoot>>) -> Self {

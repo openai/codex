@@ -5,6 +5,7 @@ use anyhow::Result;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
+use codex_protocol::artificial_messages::ArtificialMessage;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -91,13 +92,15 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
     let request = mock.single_request();
     let user_texts = request.message_input_texts("user");
     let skill_path_str = skill_path.to_string_lossy();
+    let skill_contents = fs::read_to_string(&skill_path)?;
+    let expected_skill_text = ArtificialMessage::Skill {
+        name: "demo".to_string(),
+        path: skill_path_str.to_string(),
+        body: skill_contents,
+    }
+    .render();
     assert!(
-        user_texts.iter().any(|text| {
-            text.contains("<skill>\n<name>demo</name>")
-                && text.contains("<path>")
-                && text.contains(skill_body)
-                && text.contains(skill_path_str.as_ref())
-        }),
+        user_texts.iter().any(|text| text == &expected_skill_text),
         "expected skill instructions in user input, got {user_texts:?}"
     );
 

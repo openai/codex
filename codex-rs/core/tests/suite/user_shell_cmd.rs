@@ -7,6 +7,7 @@ use codex_core::protocol::ExecOutputStream;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TurnAbortReason;
+use codex_protocol::artificial_messages::ArtificialMessage;
 use core_test_support::assert_regex_match;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
@@ -187,12 +188,17 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
     let command_message = request
         .message_input_texts("user")
         .into_iter()
-        .find(|text| text.contains("<user_shell_command>"))
+        .find(|text| {
+            matches!(
+                ArtificialMessage::parse(text),
+                Ok(ArtificialMessage::UserShellCommand { .. })
+            )
+        })
         .expect("command message recorded in request");
     let command_message = command_message.replace("\r\n", "\n");
     let escaped_command = escape(&command);
     let expected_pattern = format!(
-        r"(?m)\A<user_shell_command>\n<command>\n{escaped_command}\n</command>\n<result>\nExit code: 0\nDuration: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\nnot-set\n</result>\n</user_shell_command>\z"
+        r"(?m)\A<user_shell_cmd><command>\n{escaped_command}\n</command>\n<result>\nExit code: 0\nDuration: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\nnot-set\n</result></user_shell_cmd>\z"
     );
     assert_regex_match(&expected_pattern, &command_message);
 
@@ -244,7 +250,12 @@ async fn user_shell_command_output_is_truncated_in_history() -> anyhow::Result<(
     let command_message = request
         .message_input_texts("user")
         .into_iter()
-        .find(|text| text.contains("<user_shell_command>"))
+        .find(|text| {
+            matches!(
+                ArtificialMessage::parse(text),
+                Ok(ArtificialMessage::UserShellCommand { .. })
+            )
+        })
         .expect("command message recorded in request");
     let command_message = command_message.replace("\r\n", "\n");
 
@@ -255,7 +266,7 @@ async fn user_shell_command_output_is_truncated_in_history() -> anyhow::Result<(
     let escaped_command = escape(&command);
     let escaped_truncated_body = escape(&truncated_body);
     let expected_pattern = format!(
-        r"(?m)\A<user_shell_command>\n<command>\n{escaped_command}\n</command>\n<result>\nExit code: 0\nDuration: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\n{escaped_truncated_body}\n</result>\n</user_shell_command>\z"
+        r"(?m)\A<user_shell_cmd><command>\n{escaped_command}\n</command>\n<result>\nExit code: 0\nDuration: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\n{escaped_truncated_body}\n</result></user_shell_cmd>\z"
     );
     assert_regex_match(&expected_pattern, &command_message);
 

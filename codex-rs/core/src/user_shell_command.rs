@@ -1,20 +1,12 @@
 use std::time::Duration;
 
+use codex_protocol::artificial_messages::ArtificialMessage;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 
 use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
 use crate::tools::format_exec_output_str;
-
-pub const USER_SHELL_COMMAND_OPEN: &str = "<user_shell_command>";
-pub const USER_SHELL_COMMAND_CLOSE: &str = "</user_shell_command>";
-
-pub fn is_user_shell_command_text(text: &str) -> bool {
-    let trimmed = text.trim_start();
-    let lowered = trimmed.to_ascii_lowercase();
-    lowered.starts_with(USER_SHELL_COMMAND_OPEN)
-}
 
 fn format_duration_line(duration: Duration) -> String {
     let duration_seconds = duration.as_secs_f64();
@@ -48,7 +40,7 @@ pub fn format_user_shell_command_record(
     turn_context: &TurnContext,
 ) -> String {
     let body = format_user_shell_command_body(command, exec_output, turn_context);
-    format!("{USER_SHELL_COMMAND_OPEN}\n{body}\n{USER_SHELL_COMMAND_CLOSE}")
+    ArtificialMessage::UserShellCommand { body }.render()
 }
 
 pub fn user_shell_command_record_item(
@@ -72,15 +64,8 @@ mod tests {
     use super::*;
     use crate::codex::make_session_and_context;
     use crate::exec::StreamOutput;
+    use codex_protocol::models::ContentItem;
     use pretty_assertions::assert_eq;
-
-    #[test]
-    fn detects_user_shell_command_text_variants() {
-        assert!(is_user_shell_command_text(
-            "<user_shell_command>\necho hi\n</user_shell_command>"
-        ));
-        assert!(!is_user_shell_command_text("echo hi"));
-    }
 
     #[tokio::test]
     async fn formats_basic_record() {
@@ -102,7 +87,7 @@ mod tests {
         };
         assert_eq!(
             text,
-            "<user_shell_command>\n<command>\necho hi\n</command>\n<result>\nExit code: 0\nDuration: 1.0000 seconds\nOutput:\nhi\n</result>\n</user_shell_command>"
+            "<user_shell_cmd><command>\necho hi\n</command>\n<result>\nExit code: 0\nDuration: 1.0000 seconds\nOutput:\nhi\n</result></user_shell_cmd>"
         );
     }
 
@@ -120,7 +105,7 @@ mod tests {
         let record = format_user_shell_command_record("false", &exec_output, &turn_context);
         assert_eq!(
             record,
-            "<user_shell_command>\n<command>\nfalse\n</command>\n<result>\nExit code: 42\nDuration: 0.1200 seconds\nOutput:\ncombined output wins\n</result>\n</user_shell_command>"
+            "<user_shell_cmd><command>\nfalse\n</command>\n<result>\nExit code: 42\nDuration: 0.1200 seconds\nOutput:\ncombined output wins\n</result></user_shell_cmd>"
         );
     }
 }

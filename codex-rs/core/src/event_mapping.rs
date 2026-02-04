@@ -1,3 +1,4 @@
+use codex_protocol::artificial_messages::ArtificialMessage;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::ReasoningItem;
@@ -20,7 +21,6 @@ use uuid::Uuid;
 use crate::instructions::SkillInstructions;
 use crate::instructions::UserInstructions;
 use crate::session_prefix::is_session_prefix;
-use crate::user_shell_command::is_user_shell_command_text;
 use crate::web_search::web_search_action_detail;
 
 fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
@@ -43,7 +43,12 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
                 {
                     continue;
                 }
-                if is_session_prefix(text) || is_user_shell_command_text(text) {
+                if is_session_prefix(text)
+                    || matches!(
+                        ArtificialMessage::parse(text),
+                        Ok(ArtificialMessage::UserShellCommand { .. })
+                    )
+                {
                     return None;
                 }
                 content.push(UserInput::Text {
@@ -146,6 +151,7 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
 #[cfg(test)]
 mod tests {
     use super::parse_turn_item;
+    use codex_protocol::artificial_messages::ArtificialMessage;
     use codex_protocol::items::AgentMessageContent;
     use codex_protocol::items::TurnItem;
     use codex_protocol::items::WebSearchItem;
@@ -284,6 +290,12 @@ mod tests {
 
     #[test]
     fn skips_user_instructions_and_env() {
+        let skill_message = ArtificialMessage::Skill {
+            name: "demo".to_string(),
+            path: "skills/demo/SKILL.md".to_string(),
+            body: "body".to_string(),
+        }
+        .render();
         let items = vec![
             ResponseItem::Message {
                 id: None,
@@ -316,8 +328,7 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>"
-                        .to_string(),
+                    text: skill_message,
                 }],
                 end_turn: None,
             phase: None,
@@ -326,10 +337,13 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<user_shell_command>echo 42</user_shell_command>".to_string(),
+                    text: ArtificialMessage::UserShellCommand {
+                        body: "echo 42".to_string(),
+                    }
+                    .render(),
                 }],
                 end_turn: None,
-            phase: None,
+                phase: None,
             },
         ];
 

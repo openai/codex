@@ -23,6 +23,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
+use codex_protocol::artificial_messages::ArtificialMessage;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ReasoningSummary;
@@ -343,7 +344,13 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     );
     let pos_permissions = messages
         .iter()
-        .position(|(role, text)| role == "developer" && text.contains("<permissions instructions>"))
+        .position(|(role, text)| {
+            role == "developer"
+                && matches!(
+                    ArtificialMessage::parse(text),
+                    Ok(ArtificialMessage::Permission { .. })
+                )
+        })
         .expect("permissions message");
     let pos_user_instructions = messages
         .iter()
