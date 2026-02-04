@@ -23,7 +23,6 @@ landlock = { workspace = true }
 libc = { workspace = true }
 seccompiler = { workspace = true }
 serde_json = { workspace = true }
-which = "8.0.0"
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 pretty_assertions = { workspace = true }
