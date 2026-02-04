@@ -182,10 +182,9 @@ struct McpToolApprovalMetadata {
 }
 
 const MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX: &str = "mcp_tool_call_approval";
-const MCP_TOOL_APPROVAL_ACCEPT: &str = "Yes, proceed once";
-const MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER: &str =
-    "Yes, and don't ask again for this tool and session";
-const MCP_TOOL_APPROVAL_DECLINE: &str = "No";
+const MCP_TOOL_APPROVAL_ACCEPT: &str = "Approve Once";
+const MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER: &str = "Approve this Session";
+const MCP_TOOL_APPROVAL_DECLINE: &str = "Deny";
 const MCP_TOOL_APPROVAL_CANCEL: &str = "Cancel";
 
 #[derive(Debug, Serialize)]
