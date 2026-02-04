@@ -11,7 +11,6 @@ use codex_app_server_protocol::AuthMode;
 use codex_cloud_requirements::cloud_requirements_loader;
 use codex_common::oss::ensure_oss_provider_ready;
 use codex_common::oss::get_default_model_for_oss_provider;
-use codex_common::oss::ollama_chat_deprecation_notice;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
@@ -68,6 +67,7 @@ mod collaboration_modes;
 mod color;
 pub mod custom_terminal;
 mod cwd_prompt;
+mod debug_config;
 mod diff_render;
 mod exec_cell;
 mod exec_command;
@@ -114,7 +114,6 @@ mod wrapping;
 #[cfg(test)]
 pub mod test_backend;
 
-use crate::onboarding::TrustDirectorySelection;
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::onboarding::onboarding_screen::run_onboarding_app;
 use crate::tui::Tui;
@@ -494,12 +493,9 @@ async fn run_ratatui_app(
                 exit_reason: ExitReason::UserRequested,
             });
         }
-        // if the user acknowledged windows or made an explicit decision ato trust the directory, reload the config accordingly
-        if onboarding_result
-            .directory_trust_decision
-            .map(|d| d == TrustDirectorySelection::Trust)
-            .unwrap_or(false)
-        {
+        // If the user made an explicit trust decision, reload config so current
+        // process state reflects what was persisted to config.toml.
+        if onboarding_result.directory_trust_decision.is_some() {
             load_config_or_exit(
                 cli_kv_overrides.clone(),
                 overrides.clone(),
@@ -511,14 +507,6 @@ async fn run_ratatui_app(
         }
     } else {
         initial_config
-    };
-
-    let ollama_chat_support_notice = match ollama_chat_deprecation_notice(&config).await {
-        Ok(notice) => notice,
-        Err(err) => {
-            tracing::warn!(?err, "Failed to detect Ollama wire API");
-            None
-        }
     };
     let mut missing_session_exit = |id_str: &str, action: &str| {
         error!("Error finding conversation path: {id_str}");
@@ -705,7 +693,6 @@ async fn run_ratatui_app(
         session_selection,
         feedback,
         should_show_trust_screen, // Proxy to: is it a first run in this directory?
-        ollama_chat_support_notice,
     )
     .await;
 

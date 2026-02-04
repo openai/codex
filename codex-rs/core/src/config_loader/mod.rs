@@ -37,6 +37,7 @@ use toml::Value as TomlValue;
 pub use cloud_requirements::CloudRequirementsLoader;
 pub use config_requirements::ConfigRequirements;
 pub use config_requirements::ConfigRequirementsToml;
+pub use config_requirements::ConstrainedWithSource;
 pub use config_requirements::McpServerIdentity;
 pub use config_requirements::McpServerRequirement;
 pub use config_requirements::RequirementSource;
@@ -157,8 +158,8 @@ fn format_collision_warning(display_index: usize, source: &str, path: &str) -> S
 /// configuration layers in the following order, but a constraint defined in an
 /// earlier layer cannot be overridden by a later layer:
 ///
-/// - admin:    managed preferences (*)
 /// - cloud:    managed cloud requirements
+/// - admin:    managed preferences (*)
 /// - system    `/etc/codex/requirements.toml`
 ///
 /// For backwards compatibility, we also load from
@@ -210,6 +211,11 @@ async fn load_config_layers_state_with_env(
     env: &impl EnvProvider,
 ) -> io::Result<ConfigLayerStack> {
     let mut config_requirements_toml = ConfigRequirementsWithSources::default();
+
+    if let Some(requirements) = cloud_requirements.get().await {
+        config_requirements_toml
+            .merge_unset_fields(RequirementSource::CloudRequirements, requirements);
+    }
 
     #[cfg(target_os = "macos")]
     macos::load_managed_admin_requirements_toml(

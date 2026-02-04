@@ -100,6 +100,7 @@ Each response yields:
   - `defaultReasoningEffort` – suggested effort for the UI
   - `supportsPersonality` – whether the model supports personality-specific instructions
   - `isDefault` – whether the model is recommended for most users
+  - `upgrade` – optional recommended upgrade model id
 - `nextCursor` – pass into the next request to continue paging (optional)
 
 ## Collaboration modes (experimental)

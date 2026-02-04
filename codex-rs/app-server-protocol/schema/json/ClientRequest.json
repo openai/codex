@@ -526,7 +526,7 @@
       ]
     },
     "FunctionCallOutputPayload": {
-      "description": "The payload we send back to OpenAI when reporting a tool call result.\n\n`content` preserves the historical plain-string payload so downstream integrations (tests, logging, etc.) can keep treating tool output as `String`. When an MCP server returns richer data we additionally populate `content_items` with the structured form that the Responses/Chat Completions APIs understand.",
+      "description": "The payload we send back to OpenAI when reporting a tool call result.\n\n`content` preserves the historical plain-string payload so downstream integrations (tests, logging, etc.) can keep treating tool output as `String`. When an MCP server returns richer data we additionally populate `content_items` with the structured form that the Responses API understands.",
       "properties": {
         "content": {
           "type": "string"
@@ -1038,14 +1038,18 @@
       ],
       "type": "string"
     },
+    "MessagePhase": {
+      "enum": [
+        "commentary",
+        "final_answer"
+      ],
+      "type": "string"
+    },
     "ModeKind": {
       "description": "Initial collaboration mode to use when the TUI starts.",
       "enum": [
         "plan",
-        "code",
-        "pair_programming",
-        "execute",
-        "custom"
+        "default"
       ],
       "type": "string"
     },
@@ -1317,6 +1321,16 @@
               ],
               "writeOnly": true
             },
+            "phase": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MessagePhase"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "role": {
               "type": "string"
             },
@@ -1393,7 +1407,7 @@
               ]
             },
             "id": {
-              "description": "Set when using the chat completions API.",
+              "description": "Legacy id field retained for compatibility with older payloads.",
               "type": [
                 "string",
                 "null"
@@ -2169,6 +2183,24 @@
       },
       "type": "object"
     },
+    "SkillsRemoteReadParams": {
+      "type": "object"
+    },
+    "SkillsRemoteWriteParams": {
+      "properties": {
+        "hazelnutId": {
+          "type": "string"
+        },
+        "isPreload": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "hazelnutId",
+        "isPreload"
+      ],
+      "type": "object"
+    },
     "TextElement": {
       "properties": {
         "byteRange": {
@@ -2193,6 +2225,17 @@
       "type": "object"
     },
     "ThreadArchiveParams": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadCompactStartParams": {
       "properties": {
         "threadId": {
           "type": "string"
@@ -3185,6 +3228,30 @@
         },
         "method": {
           "enum": [
+            "thread/compact/start"
+          ],
+          "title": "Thread/compact/startRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadCompactStartParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/compact/startRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
             "thread/rollback"
           ],
           "title": "Thread/rollbackRequestMethod",
@@ -3296,6 +3363,54 @@
         "params"
       ],
       "title": "Skills/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "skills/remote/read"
+          ],
+          "title": "Skills/remote/readRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/SkillsRemoteReadParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Skills/remote/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "skills/remote/write"
+          ],
+          "title": "Skills/remote/writeRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/SkillsRemoteWriteParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Skills/remote/writeRequest",
       "type": "object"
     },
     {

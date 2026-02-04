@@ -1,0 +1,80 @@
+# shellcheck shell=bash
+
+# bash completion file for bubblewrap commands
+#
+
+_bwrap() {
+    local cur prev words cword
+    _init_completion || return
+
+	# Please keep sorted in LC_ALL=C order
+	local boolean_options="
+		--as-pid-1
+		--assert-userns-disabled
+		--clearenv
+		--disable-userns
+		--help
+		--new-session
+		--unshare-all
+		--unshare-cgroup
+		--unshare-cgroup-try
+		--unshare-ipc
+		--unshare-net
+		--unshare-pid
+		--unshare-user
+		--unshare-user-try
+		--unshare-uts
+		--version
+	"
+
+	# Please keep sorted in LC_ALL=C order
+	local options_with_args="
+		$boolean_optons
+		--add-seccomp-fd
+		--args
+		--argv0
+		--bind
+		--bind-data
+		--block-fd
+		--cap-add
+		--cap-drop
+		--chdir
+		--chmod
+		--dev
+		--dev-bind
+		--die-with-parent
+		--dir
+		--exec-label
+		--file
+		--file-label
+		--gid
+		--hostname
+		--info-fd
+		--lock-file
+		--overlay
+		--overlay-src
+		--perms
+		--proc
+		--remount-ro
+		--ro-bind
+		--ro-overlay
+		--seccomp
+		--setenv
+		--size
+		--symlink
+		--sync-fd
+		--tmp-overlay
+		--uid
+		--unsetenv
+		--userns-block-fd
+	"
+
+    if [[ "$cur" == -* ]]; then
+        COMPREPLY=( $( compgen -W "$boolean_options $options_with_args" -- "$cur" ) )
+    fi
+
+    return 0
+}
+complete -F _bwrap bwrap
+
+# vim:set ft=bash:

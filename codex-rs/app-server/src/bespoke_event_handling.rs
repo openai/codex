@@ -1841,12 +1841,11 @@ mod tests {
     use codex_core::protocol::RateLimitWindow;
     use codex_core::protocol::TokenUsage;
     use codex_core::protocol::TokenUsageInfo;
+    use codex_protocol::mcp::CallToolResult;
     use codex_protocol::plan_tool::PlanItemArg;
     use codex_protocol::plan_tool::StepStatus;
-    use mcp_types::CallToolResult;
-    use mcp_types::ContentBlock;
-    use mcp_types::TextContent;
     use pretty_assertions::assert_eq;
+    use rmcp::model::Content;
     use serde_json::Value as JsonValue;
     use std::collections::HashMap;
     use std::time::Duration;
@@ -2374,15 +2373,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_construct_mcp_tool_call_end_notification_success() {
-        let content = vec![ContentBlock::TextContent(TextContent {
-            annotations: None,
-            text: "{\"resources\":[]}".to_string(),
-            r#type: "text".to_string(),
-        })];
+        let content = vec![
+            serde_json::to_value(Content::text("{\"resources\":[]}"))
+                .expect("content should serialize"),
+        ];
         let result = CallToolResult {
             content: content.clone(),
             is_error: Some(false),
             structured_content: None,
+            meta: None,
         };
 
         let end_event = McpToolCallEndEvent {

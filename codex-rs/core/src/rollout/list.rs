@@ -261,6 +261,14 @@ impl<'de> serde::Deserialize<'de> for Cursor {
     }
 }
 
+impl From<codex_state::Anchor> for Cursor {
+    fn from(anchor: codex_state::Anchor) -> Self {
+        let ts = OffsetDateTime::from_unix_timestamp(anchor.ts.timestamp())
+            .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+        Self::new(ts, anchor.id)
+    }
+}
+
 /// Retrieve recorded thread file paths with token pagination. The returned `next_cursor`
 /// can be supplied on the next call to resume after the last returned item, resilient to
 /// concurrent new sessions being appended. Ordering is stable by the requested sort key
@@ -989,7 +997,6 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                     && !UserInstructions::is_user_instructions(content.as_slice())
                     && !is_session_prefix_content(content.as_slice())
                 {
-                    tracing::warn!("Item: {item:#?}");
                     summary.saw_user_event = true;
                 }
                 if summary.head.len() < head_limit
@@ -1074,6 +1081,34 @@ async fn find_thread_path_by_id_str_in_subdir(
         return Ok(None);
     }
 
+    // Prefer DB lookup, then fall back to rollout file search.
+    // TODO(jif): sqlite migration phase 1
+    let archived_only = match subdir {
+        SESSIONS_SUBDIR => Some(false),
+        ARCHIVED_SESSIONS_SUBDIR => Some(true),
+        _ => None,
+    };
+    let state_db_ctx = state_db::open_if_present(codex_home, "").await;
+    if let Some(state_db_ctx) = state_db_ctx.as_deref()
+        && let Ok(thread_id) = ThreadId::from_string(id_str)
+        && let Some(db_path) = state_db::find_rollout_path_by_id(
+            Some(state_db_ctx),
+            thread_id,
+            archived_only,
+            "find_path_query",
+        )
+        .await
+    {
+        if tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
+            return Ok(Some(db_path));
+        }
+        tracing::error!(
+            "state db returned stale rollout path for thread {id_str}: {}",
+            db_path.display()
+        );
+        state_db::record_discrepancy("find_thread_path_by_id_str_in_subdir", "stale_db_path");
+    }
+
     let mut root = codex_home.to_path_buf();
     root.push(subdir);
     if !root.exists() {
@@ -1093,33 +1128,11 @@ async fn find_thread_path_by_id_str_in_subdir(
         .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
 
     let found = results.matches.into_iter().next().map(|m| m.full_path());
-
-    // Checking if DB is at parity.
-    // TODO(jif): sqlite migration phase 1
-    let archived_only = match subdir {
-        SESSIONS_SUBDIR => Some(false),
-        ARCHIVED_SESSIONS_SUBDIR => Some(true),
-        _ => None,
-    };
-    let state_db_ctx = state_db::open_if_present(codex_home, "").await;
-    if let Some(state_db_ctx) = state_db_ctx.as_deref()
-        && let Ok(thread_id) = ThreadId::from_string(id_str)
-    {
-        let db_path = state_db::find_rollout_path_by_id(
-            Some(state_db_ctx),
-            thread_id,
-            archived_only,
-            "find_path_query",
-        )
-        .await;
-        let canonical_path = found.as_deref();
-        if db_path.as_deref() != canonical_path {
-            tracing::warn!(
-                "state db path mismatch for thread {thread_id:?}: canonical={canonical_path:?} db={db_path:?}"
-            );
-            state_db::record_discrepancy("find_thread_path_by_id_str_in_subdir", "path_mismatch");
-        }
+    if found.is_some() {
+        tracing::error!("state db missing rollout path for thread {id_str}");
+        state_db::record_discrepancy("find_thread_path_by_id_str_in_subdir", "falling_back");
     }
+
     Ok(found)
 }
 

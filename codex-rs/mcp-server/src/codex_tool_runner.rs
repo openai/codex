@@ -23,14 +23,11 @@ use codex_core::protocol::Submission;
 use codex_core::protocol::TurnCompleteEvent;
 use codex_protocol::ThreadId;
 use codex_protocol::user_input::UserInput;
-use mcp_types::CallToolResult;
-use mcp_types::ContentBlock;
-use mcp_types::RequestId;
-use mcp_types::TextContent;
+use rmcp::model::CallToolResult;
+use rmcp::model::Content;
+use rmcp::model::RequestId;
 use serde_json::json;
 use tokio::sync::Mutex;
-
-pub(crate) const INVALID_PARAMS_ERROR_CODE: i64 = -32602;
 
 /// To adhere to MCP `tools/call` response format, include the Codex
 /// `threadId` in the `structured_content` field of the response.
@@ -42,11 +39,7 @@ pub(crate) fn create_call_tool_result_with_thread_id(
     is_error: Option<bool>,
 ) -> CallToolResult {
     let content_text = text;
-    let content = vec![ContentBlock::TextContent(TextContent {
-        r#type: "text".to_string(),
-        text: content_text.clone(),
-        annotations: None,
-    })];
+    let content = vec![Content::text(content_text.clone())];
     let structured_content = json!({
         "threadId": thread_id,
         "content": content_text,
@@ -55,6 +48,7 @@ pub(crate) fn create_call_tool_result_with_thread_id(
         content,
         is_error,
         structured_content: Some(structured_content),
+        meta: None,
     }
 }
 
@@ -78,13 +72,10 @@ pub async fn run_codex_tool_session(
         Ok(res) => res,
         Err(e) => {
             let result = CallToolResult {
-                content: vec![ContentBlock::TextContent(TextContent {
-                    r#type: "text".to_string(),
-                    text: format!("Failed to start Codex session: {e}"),
-                    annotations: None,
-                })],
+                content: vec![Content::text(format!("Failed to start Codex session: {e}"))],
                 is_error: Some(true),
                 structured_content: None,
+                meta: None,
             };
             outgoing.send_response(id.clone(), result).await;
             return;
@@ -109,10 +100,7 @@ pub async fn run_codex_tool_session(
     // Use the original MCP request ID as the `sub_id` for the Codex submission so that
     // any events emitted for this tool-call can be correlated with the
     // originating `tools/call` request.
-    let sub_id = match &id {
-        RequestId::String(s) => s.clone(),
-        RequestId::Integer(n) => n.to_string(),
-    };
+    let sub_id = id.to_string();
     running_requests_id_to_codex_uuid
         .lock()
         .await
@@ -207,10 +195,7 @@ async fn run_codex_tool_session_inner(
     request_id: RequestId,
     running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, ThreadId>>>,
 ) {
-    let request_id_str = match &request_id {
-        RequestId::String(s) => s.clone(),
-        RequestId::Integer(n) => n.to_string(),
-    };
+    let request_id_str = request_id.to_string();
 
     // Stream events until the task needs to pause for user interaction or
     // completes.
@@ -337,6 +322,8 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::McpListToolsResponse(_)
                     | EventMsg::ListCustomPromptsResponse(_)
                     | EventMsg::ListSkillsResponse(_)
+                    | EventMsg::ListRemoteSkillsResponse(_)
+                    | EventMsg::RemoteSkillDownloaded(_)
                     | EventMsg::ExecCommandBegin(_)
                     | EventMsg::TerminalInteraction(_)
                     | EventMsg::ExecCommandOutputDelta(_)

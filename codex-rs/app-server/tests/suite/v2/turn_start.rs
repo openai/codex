@@ -365,7 +365,7 @@ async fn turn_start_accepts_collaboration_mode_override_v2() -> Result<()> {
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
 
     let collaboration_mode = CollaborationMode {
-        mode: ModeKind::Custom,
+        mode: ModeKind::Default,
         settings: Settings {
             model: "mock-model-collab".to_string(),
             reasoning_effort: Some(ReasoningEffort::High),
@@ -1652,6 +1652,7 @@ async fn command_execution_notifications_include_process_id() -> Result<()> {
                 text: "run a command".to_string(),
                 text_elements: Vec::new(),
             }],
+            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
             ..Default::default()
         })
         .await?;

@@ -65,6 +65,7 @@ mod skill_popup;
 mod skills_toggle_view;
 mod slash_commands;
 pub(crate) use footer::CollaborationModeIndicator;
+pub(crate) use list_selection_view::ColumnWidthMode;
 pub(crate) use list_selection_view::SelectionViewParams;
 mod feedback_view;
 pub(crate) use feedback_view::FeedbackAudience;
@@ -206,6 +207,14 @@ impl BottomPane {
 
     pub fn set_skills(&mut self, skills: Option<Vec<SkillMetadata>>) {
         self.composer.set_skill_mentions(skills);
+        self.request_redraw();
+    }
+
+    /// Update image-paste behavior for the active composer and repaint immediately.
+    ///
+    /// Callers use this to keep composer affordances aligned with model capabilities.
+    pub fn set_image_paste_enabled(&mut self, enabled: bool) {
+        self.composer.set_image_paste_enabled(enabled);
         self.request_redraw();
     }
 
@@ -402,6 +411,10 @@ impl BottomPane {
     }
 
     /// Replace the composer text with `text`.
+    ///
+    /// This is intended for fresh input where mention linkage does not need to
+    /// survive; it routes to `ChatComposer::set_text_content`, which resets
+    /// `mention_paths`.
     pub(crate) fn set_composer_text(
         &mut self,
         text: String,
@@ -411,6 +424,27 @@ impl BottomPane {
         self.composer
             .set_text_content(text, text_elements, local_image_paths);
         self.composer.move_cursor_to_end();
+        self.request_redraw();
+    }
+
+    /// Replace the composer text while preserving mention link targets.
+    ///
+    /// Use this when rehydrating a draft after a local validation/gating
+    /// failure (for example unsupported image submit) so previously selected
+    /// mention targets remain stable across retry.
+    pub(crate) fn set_composer_text_with_mention_paths(
+        &mut self,
+        text: String,
+        text_elements: Vec<TextElement>,
+        local_image_paths: Vec<PathBuf>,
+        mention_paths: HashMap<String, String>,
+    ) {
+        self.composer.set_text_content_with_mention_paths(
+            text,
+            text_elements,
+            local_image_paths,
+            mention_paths,
+        );
         self.request_redraw();
     }
 

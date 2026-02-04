@@ -97,9 +97,15 @@ use codex_app_server_protocol::SkillsConfigWriteParams;
 use codex_app_server_protocol::SkillsConfigWriteResponse;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
+use codex_app_server_protocol::SkillsRemoteReadParams;
+use codex_app_server_protocol::SkillsRemoteReadResponse;
+use codex_app_server_protocol::SkillsRemoteWriteParams;
+use codex_app_server_protocol::SkillsRemoteWriteResponse;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
+use codex_app_server_protocol::ThreadCompactStartParams;
+use codex_app_server_protocol::ThreadCompactStartResponse;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadItem;
@@ -176,6 +182,8 @@ use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::rollout_date_parts;
 use codex_core::sandboxing::SandboxPermissions;
+use codex_core::skills::remote::download_remote_skill;
+use codex_core::skills::remote::list_remote_skills;
 use codex_core::state_db::get_state_db;
 use codex_core::token_data::parse_id_token;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
@@ -449,6 +457,9 @@ impl CodexMessageProcessor {
             ClientRequest::ThreadUnarchive { request_id, params } => {
                 self.thread_unarchive(request_id, params).await;
             }
+            ClientRequest::ThreadCompactStart { request_id, params } => {
+                self.thread_compact_start(request_id, params).await;
+            }
             ClientRequest::ThreadRollback { request_id, params } => {
                 self.thread_rollback(request_id, params).await;
             }
@@ -463,6 +474,12 @@ impl CodexMessageProcessor {
             }
             ClientRequest::SkillsList { request_id, params } => {
                 self.skills_list(request_id, params).await;
+            }
+            ClientRequest::SkillsRemoteRead { request_id, params } => {
+                self.skills_remote_read(request_id, params).await;
+            }
+            ClientRequest::SkillsRemoteWrite { request_id, params } => {
+                self.skills_remote_write(request_id, params).await;
             }
             ClientRequest::AppsList { request_id, params } => {
                 self.apps_list(request_id, params).await;
@@ -1430,7 +1447,7 @@ impl CodexMessageProcessor {
         }
 
         let cwd = params.cwd.unwrap_or_else(|| self.config.cwd.clone());
-        let env = create_env(&self.config.shell_environment_policy);
+        let env = create_env(&self.config.shell_environment_policy, None);
         let timeout_ms = params
             .timeout_ms
             .and_then(|timeout_ms| u64::try_from(timeout_ms).ok());
@@ -1467,6 +1484,7 @@ impl CodexMessageProcessor {
         let outgoing = self.outgoing.clone();
         let req_id = request_id;
         let sandbox_cwd = self.config.cwd.clone();
+        let use_linux_sandbox_bwrap = self.config.features.enabled(Feature::UseLinuxSandboxBwrap);
 
         tokio::spawn(async move {
             match codex_core::exec::process_exec_tool_call(
@@ -1474,6 +1492,7 @@ impl CodexMessageProcessor {
                 &effective_policy,
                 sandbox_cwd.as_path(),
                 &codex_linux_sandbox_exe,
+                use_linux_sandbox_bwrap,
                 None,
             )
             .await
@@ -2079,6 +2098,30 @@ impl CodexMessageProcessor {
 
             self.send_internal_error(request_id, format!("failed to start rollback: {err}"))
                 .await;
+        }
+    }
+
+    async fn thread_compact_start(&self, request_id: RequestId, params: ThreadCompactStartParams) {
+        let ThreadCompactStartParams { thread_id } = params;
+
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match thread.submit(Op::Compact).await {
+            Ok(_) => {
+                self.outgoing
+                    .send_response(request_id, ThreadCompactStartResponse {})
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(request_id, format!("failed to start compaction: {err}"))
+                    .await;
+            }
         }
     }
 
@@ -4051,6 +4094,61 @@ impl CodexMessageProcessor {
         self.outgoing
             .send_response(request_id, SkillsListResponse { data })
             .await;
+    }
+
+    async fn skills_remote_read(&self, request_id: RequestId, _params: SkillsRemoteReadParams) {
+        match list_remote_skills(&self.config).await {
+            Ok(skills) => {
+                let data = skills
+                    .into_iter()
+                    .map(|skill| codex_app_server_protocol::RemoteSkillSummary {
+                        id: skill.id,
+                        name: skill.name,
+                        description: skill.description,
+                    })
+                    .collect();
+                self.outgoing
+                    .send_response(request_id, SkillsRemoteReadResponse { data })
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to read remote skills: {err}"),
+                )
+                .await;
+            }
+        }
+    }
+
+    async fn skills_remote_write(&self, request_id: RequestId, params: SkillsRemoteWriteParams) {
+        let SkillsRemoteWriteParams {
+            hazelnut_id,
+            is_preload,
+        } = params;
+        let response = download_remote_skill(&self.config, hazelnut_id.as_str(), is_preload).await;
+
+        match response {
+            Ok(downloaded) => {
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        SkillsRemoteWriteResponse {
+                            id: downloaded.id,
+                            name: downloaded.name,
+                            path: downloaded.path,
+                        },
+                    )
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to download remote skill: {err}"),
+                )
+                .await;
+            }
+        }
     }
 
     async fn skills_config_write(&self, request_id: RequestId, params: SkillsConfigWriteParams) {

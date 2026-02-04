@@ -9,6 +9,7 @@ use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
 use crate::tools::handlers::collab::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::collab::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::collab::MIN_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::request_user_input_tool_description;
 use crate::tools::registry::ToolRegistryBuilder;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -623,9 +624,7 @@ fn create_request_user_input_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "request_user_input".to_string(),
-        description:
-            "Request user input for one to three short questions and wait for the response."
-                .to_string(),
+        description: request_user_input_tool_description(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -1048,59 +1047,29 @@ pub fn create_tools_json_for_responses_api(
 
     Ok(tools_json)
 }
-/// Returns JSON values that are compatible with Function Calling in the
-/// Chat Completions API:
-/// https://platform.openai.com/docs/guides/function-calling?api-mode=chat
-pub(crate) fn create_tools_json_for_chat_completions_api(
-    tools: &[ToolSpec],
-) -> crate::error::Result<Vec<serde_json::Value>> {
-    // We start with the JSON for the Responses API and than rewrite it to match
-    // the chat completions tool call format.
-    let responses_api_tools_json = create_tools_json_for_responses_api(tools)?;
-    let tools_json = responses_api_tools_json
-        .into_iter()
-        .filter_map(|mut tool| {
-            if tool.get("type") != Some(&serde_json::Value::String("function".to_string())) {
-                return None;
-            }
-
-            if let Some(map) = tool.as_object_mut() {
-                let name = map
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string();
-                // Remove "type" field as it is not needed in chat completions.
-                map.remove("type");
-                Some(json!({
-                    "type": "function",
-                    "name": name,
-                    "function": map,
-                }))
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<serde_json::Value>>();
-    Ok(tools_json)
-}
 
 pub(crate) fn mcp_tool_to_openai_tool(
     fully_qualified_name: String,
-    tool: mcp_types::Tool,
+    tool: rmcp::model::Tool,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
-    let mcp_types::Tool {
+    let rmcp::model::Tool {
         description,
-        mut input_schema,
+        input_schema,
         ..
     } = tool;
 
-    // OpenAI models mandate the "properties" field in the schema. The Agents
-    // SDK fixed this by inserting an empty object for "properties" if it is not
-    // already present https://github.com/openai/openai-agents-python/issues/449
-    // so here we do the same.
-    if input_schema.properties.is_none() {
-        input_schema.properties = Some(serde_json::Value::Object(serde_json::Map::new()));
+    let mut serialized_input_schema = serde_json::Value::Object(input_schema.as_ref().clone());
+
+    // OpenAI models mandate the "properties" field in the schema. Some MCP
+    // servers omit it (or set it to null), so we insert an empty object to
+    // match the behavior of the Agents SDK.
+    if let serde_json::Value::Object(obj) = &mut serialized_input_schema
+        && obj.get("properties").is_none_or(serde_json::Value::is_null)
+    {
+        obj.insert(
+            "properties".to_string(),
+            serde_json::Value::Object(serde_json::Map::new()),
+        );
     }
 
     // Serialize to a raw JSON value so we can sanitize schemas coming from MCP
@@ -1108,13 +1077,12 @@ pub(crate) fn mcp_tool_to_openai_tool(
     // Schemas (e.g. using enum/anyOf), or use unsupported variants like
     // `integer`. Our internal JsonSchema is a small subset and requires
     // `type`, so we coerce/sanitize here for compatibility.
-    let mut serialized_input_schema = serde_json::to_value(input_schema)?;
     sanitize_json_schema(&mut serialized_input_schema);
     let input_schema = serde_json::from_value::<JsonSchema>(serialized_input_schema)?;
 
     Ok(ResponsesApiTool {
         name: fully_qualified_name,
-        description: description.unwrap_or_default(),
+        description: description.map(Into::into).unwrap_or_default(),
         strict: false,
         parameters: input_schema,
     })
@@ -1254,7 +1222,7 @@ fn sanitize_json_schema(value: &mut JsonValue) {
 /// Builds the tool registry builder while collecting tool specs for later serialization.
 pub(crate) fn build_specs(
     config: &ToolsConfig,
-    mcp_tools: Option<HashMap<String, mcp_types::Tool>>,
+    mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
     use crate::tools::handlers::ApplyPatchHandler;
@@ -1289,13 +1257,19 @@ pub(crate) fn build_specs(
 
     match &config.shell_type {
         ConfigShellToolType::Default => {
-            builder.push_spec(create_shell_tool(config.request_rule_enabled));
+            builder.push_spec_with_parallel_support(
+                create_shell_tool(config.request_rule_enabled),
+                true,
+            );
         }
         ConfigShellToolType::Local => {
-            builder.push_spec(ToolSpec::LocalShell {});
+            builder.push_spec_with_parallel_support(ToolSpec::LocalShell {}, true);
         }
         ConfigShellToolType::UnifiedExec => {
-            builder.push_spec(create_exec_command_tool(config.request_rule_enabled));
+            builder.push_spec_with_parallel_support(
+                create_exec_command_tool(config.request_rule_enabled),
+                true,
+            );
             builder.push_spec(create_write_stdin_tool());
             builder.register_handler("exec_command", unified_exec_handler.clone());
             builder.register_handler("write_stdin", unified_exec_handler);
@@ -1304,7 +1278,10 @@ pub(crate) fn build_specs(
             // Do nothing.
         }
         ConfigShellToolType::ShellCommand => {
-            builder.push_spec(create_shell_command_tool(config.request_rule_enabled));
+            builder.push_spec_with_parallel_support(
+                create_shell_command_tool(config.request_rule_enabled),
+                true,
+            );
         }
     }
 
@@ -1410,7 +1387,7 @@ pub(crate) fn build_specs(
     }
 
     if let Some(mcp_tools) = mcp_tools {
-        let mut entries: Vec<(String, mcp_types::Tool)> = mcp_tools.into_iter().collect();
+        let mut entries: Vec<(String, rmcp::model::Tool)> = mcp_tools.into_iter().collect();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
 
         for (name, tool) in entries.into_iter() {
@@ -1452,10 +1429,49 @@ mod tests {
     use crate::config::test_config;
     use crate::models_manager::manager::ModelsManager;
     use crate::tools::registry::ConfiguredToolSpec;
-    use mcp_types::ToolInputSchema;
     use pretty_assertions::assert_eq;
 
     use super::*;
+
+    fn mcp_tool(
+        name: &str,
+        description: &str,
+        input_schema: serde_json::Value,
+    ) -> rmcp::model::Tool {
+        rmcp::model::Tool {
+            name: name.to_string().into(),
+            title: None,
+            description: Some(description.to_string().into()),
+            input_schema: std::sync::Arc::new(rmcp::model::object(input_schema)),
+            output_schema: None,
+            annotations: None,
+            icons: None,
+            meta: None,
+        }
+    }
+
+    #[test]
+    fn mcp_tool_to_openai_tool_inserts_empty_properties() {
+        let mut schema = rmcp::model::JsonObject::new();
+        schema.insert("type".to_string(), serde_json::json!("object"));
+
+        let tool = rmcp::model::Tool {
+            name: "no_props".to_string().into(),
+            title: None,
+            description: Some("No properties".to_string().into()),
+            input_schema: std::sync::Arc::new(schema),
+            output_schema: None,
+            annotations: None,
+            icons: None,
+            meta: None,
+        };
+
+        let openai_tool =
+            mcp_tool_to_openai_tool("server/no_props".to_string(), tool).expect("convert tool");
+        let parameters = serde_json::to_value(openai_tool.parameters).expect("serialize schema");
+
+        assert_eq!(parameters.get("properties"), Some(&serde_json::json!({})));
+    }
 
     fn tool_name(tool: &ToolSpec) -> &str {
         match tool {
@@ -1671,6 +1687,22 @@ mod tests {
         assert_eq!(&tool_names, &expected_tools,);
     }
 
+    fn assert_default_model_tools(
+        model_slug: &str,
+        features: &Features,
+        web_search_mode: Option<WebSearchMode>,
+        shell_tool: &'static str,
+        expected_tail: &[&str],
+    ) {
+        let mut expected = if features.enabled(Feature::UnifiedExec) {
+            vec!["exec_command", "write_stdin"]
+        } else {
+            vec![shell_tool]
+        };
+        expected.extend(expected_tail);
+        assert_model_tools(model_slug, features, web_search_mode, &expected);
+    }
+
     #[test]
     fn web_search_mode_cached_sets_external_web_access_false() {
         let config = test_config();
@@ -1719,12 +1751,12 @@ mod tests {
     fn test_build_specs_gpt5_codex_default() {
         let mut features = Features::with_defaults();
         features.enable(Feature::CollaborationModes);
-        assert_model_tools(
+        assert_default_model_tools(
             "gpt-5-codex",
             &features,
             Some(WebSearchMode::Cached),
+            "shell_command",
             &[
-                "shell_command",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1741,12 +1773,12 @@ mod tests {
     fn test_build_specs_gpt51_codex_default() {
         let mut features = Features::with_defaults();
         features.enable(Feature::CollaborationModes);
-        assert_model_tools(
+        assert_default_model_tools(
             "gpt-5.1-codex",
             &features,
             Some(WebSearchMode::Cached),
+            "shell_command",
             &[
-                "shell_command",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1811,12 +1843,12 @@ mod tests {
     fn test_codex_mini_defaults() {
         let mut features = Features::with_defaults();
         features.enable(Feature::CollaborationModes);
-        assert_model_tools(
+        assert_default_model_tools(
             "codex-mini-latest",
             &features,
             Some(WebSearchMode::Cached),
+            "local_shell",
             &[
-                "local_shell",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1832,12 +1864,12 @@ mod tests {
     fn test_codex_5_1_mini_defaults() {
         let mut features = Features::with_defaults();
         features.enable(Feature::CollaborationModes);
-        assert_model_tools(
+        assert_default_model_tools(
             "gpt-5.1-codex-mini",
             &features,
             Some(WebSearchMode::Cached),
+            "shell_command",
             &[
-                "shell_command",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1854,12 +1886,12 @@ mod tests {
     fn test_gpt_5_defaults() {
         let mut features = Features::with_defaults();
         features.enable(Feature::CollaborationModes);
-        assert_model_tools(
+        assert_default_model_tools(
             "gpt-5",
             &features,
             Some(WebSearchMode::Cached),
+            "shell",
             &[
-                "shell",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1875,12 +1907,12 @@ mod tests {
     fn test_gpt_5_1_defaults() {
         let mut features = Features::with_defaults();
         features.enable(Feature::CollaborationModes);
-        assert_model_tools(
+        assert_default_model_tools(
             "gpt-5.1",
             &features,
             Some(WebSearchMode::Cached),
+            "shell_command",
             &[
-                "shell_command",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1974,7 +2006,7 @@ mod tests {
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
 
-        assert!(!find_tool(&tools, "exec_command").supports_parallel_tool_calls);
+        assert!(find_tool(&tools, "exec_command").supports_parallel_tool_calls);
         assert!(!find_tool(&tools, "write_stdin").supports_parallel_tool_calls);
         assert!(find_tool(&tools, "grep_files").supports_parallel_tool_calls);
         assert!(find_tool(&tools, "list_dir").supports_parallel_tool_calls);
@@ -2026,37 +2058,26 @@ mod tests {
             &tools_config,
             Some(HashMap::from([(
                 "test_server/do_something_cool".to_string(),
-                mcp_types::Tool {
-                    name: "do_something_cool".to_string(),
-                    input_schema: ToolInputSchema {
-                        properties: Some(serde_json::json!({
-                            "string_argument": {
-                                "type": "string",
-                            },
-                            "number_argument": {
-                                "type": "number",
-                            },
+                mcp_tool(
+                    "do_something_cool",
+                    "Do something cool",
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "string_argument": { "type": "string" },
+                            "number_argument": { "type": "number" },
                             "object_argument": {
                                 "type": "object",
                                 "properties": {
                                     "string_property": { "type": "string" },
                                     "number_property": { "type": "number" },
                                 },
-                                "required": [
-                                    "string_property",
-                                    "number_property",
-                                ],
-                                "additionalProperties": Some(false),
+                                "required": ["string_property", "number_property"],
+                                "additionalProperties": false,
                             },
-                        })),
-                        required: None,
-                        r#type: "object".to_string(),
-                    },
-                    output_schema: None,
-                    title: None,
-                    annotations: None,
-                    description: Some("Do something cool".to_string()),
-                },
+                        },
+                    }),
+                ),
             )])),
             &[],
         )
@@ -2120,51 +2141,18 @@ mod tests {
         });
 
         // Intentionally construct a map with keys that would sort alphabetically.
-        let tools_map: HashMap<String, mcp_types::Tool> = HashMap::from([
+        let tools_map: HashMap<String, rmcp::model::Tool> = HashMap::from([
             (
                 "test_server/do".to_string(),
-                mcp_types::Tool {
-                    name: "a".to_string(),
-                    input_schema: ToolInputSchema {
-                        properties: Some(serde_json::json!({})),
-                        required: None,
-                        r#type: "object".to_string(),
-                    },
-                    output_schema: None,
-                    title: None,
-                    annotations: None,
-                    description: Some("a".to_string()),
-                },
+                mcp_tool("a", "a", serde_json::json!({"type": "object"})),
             ),
             (
                 "test_server/something".to_string(),
-                mcp_types::Tool {
-                    name: "b".to_string(),
-                    input_schema: ToolInputSchema {
-                        properties: Some(serde_json::json!({})),
-                        required: None,
-                        r#type: "object".to_string(),
-                    },
-                    output_schema: None,
-                    title: None,
-                    annotations: None,
-                    description: Some("b".to_string()),
-                },
+                mcp_tool("b", "b", serde_json::json!({"type": "object"})),
             ),
             (
                 "test_server/cool".to_string(),
-                mcp_types::Tool {
-                    name: "c".to_string(),
-                    input_schema: ToolInputSchema {
-                        properties: Some(serde_json::json!({})),
-                        required: None,
-                        r#type: "object".to_string(),
-                    },
-                    output_schema: None,
-                    title: None,
-                    annotations: None,
-                    description: Some("c".to_string()),
-                },
+                mcp_tool("c", "c", serde_json::json!({"type": "object"})),
             ),
         ]);
 
@@ -2200,22 +2188,16 @@ mod tests {
             &tools_config,
             Some(HashMap::from([(
                 "dash/search".to_string(),
-                mcp_types::Tool {
-                    name: "search".to_string(),
-                    input_schema: ToolInputSchema {
-                        properties: Some(serde_json::json!({
-                            "query": {
-                                "description": "search query"
-                            }
-                        })),
-                        required: None,
-                        r#type: "object".to_string(),
-                    },
-                    output_schema: None,
-                    title: None,
-                    annotations: None,
-                    description: Some("Search docs".to_string()),
-                },
+                mcp_tool(
+                    "search",
+                    "Search docs",
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "query": {"description": "search query"}
+                        }
+                    }),
+                ),
             )])),
             &[],
         )
@@ -2258,20 +2240,14 @@ mod tests {
             &tools_config,
             Some(HashMap::from([(
                 "dash/paginate".to_string(),
-                mcp_types::Tool {
-                    name: "paginate".to_string(),
-                    input_schema: ToolInputSchema {
-                        properties: Some(serde_json::json!({
-                            "page": { "type": "integer" }
-                        })),
-                        required: None,
-                        r#type: "object".to_string(),
-                    },
-                    output_schema: None,
-                    title: None,
-                    annotations: None,
-                    description: Some("Pagination".to_string()),
-                },
+                mcp_tool(
+                    "paginate",
+                    "Pagination",
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": {"page": {"type": "integer"}}
+                    }),
+                ),
             )])),
             &[],
         )
@@ -2313,20 +2289,14 @@ mod tests {
             &tools_config,
             Some(HashMap::from([(
                 "dash/tags".to_string(),
-                mcp_types::Tool {
-                    name: "tags".to_string(),
-                    input_schema: ToolInputSchema {
-                        properties: Some(serde_json::json!({
-                            "tags": { "type": "array" }
-                        })),
-                        required: None,
-                        r#type: "object".to_string(),
-                    },
-                    output_schema: None,
-                    title: None,
-                    annotations: None,
-                    description: Some("Tags".to_string()),
-                },
+                mcp_tool(
+                    "tags",
+                    "Tags",
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": {"tags": {"type": "array"}}
+                    }),
+                ),
             )])),
             &[],
         )
@@ -2370,20 +2340,16 @@ mod tests {
             &tools_config,
             Some(HashMap::from([(
                 "dash/value".to_string(),
-                mcp_types::Tool {
-                    name: "value".to_string(),
-                    input_schema: ToolInputSchema {
-                        properties: Some(serde_json::json!({
-                            "value": { "anyOf": [ { "type": "string" }, { "type": "number" } ] }
-                        })),
-                        required: None,
-                        r#type: "object".to_string(),
-                    },
-                    output_schema: None,
-                    title: None,
-                    annotations: None,
-                    description: Some("AnyOf Value".to_string()),
-                },
+                mcp_tool(
+                    "value",
+                    "AnyOf Value",
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "value": {"anyOf": [{"type": "string"}, {"type": "number"}]}
+                        }
+                    }),
+                ),
             )])),
             &[],
         )
@@ -2482,46 +2448,33 @@ Examples of valid command strings:
             &tools_config,
             Some(HashMap::from([(
                 "test_server/do_something_cool".to_string(),
-                mcp_types::Tool {
-                    name: "do_something_cool".to_string(),
-                    input_schema: ToolInputSchema {
-                        properties: Some(serde_json::json!({
-                            "string_argument": {
-                                "type": "string",
-                            },
-                            "number_argument": {
-                                "type": "number",
-                            },
+                mcp_tool(
+                    "do_something_cool",
+                    "Do something cool",
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "string_argument": {"type": "string"},
+                            "number_argument": {"type": "number"},
                             "object_argument": {
                                 "type": "object",
                                 "properties": {
-                                    "string_property": { "type": "string" },
-                                    "number_property": { "type": "number" },
+                                    "string_property": {"type": "string"},
+                                    "number_property": {"type": "number"}
                                 },
-                                "required": [
-                                    "string_property",
-                                    "number_property",
-                                ],
+                                "required": ["string_property", "number_property"],
                                 "additionalProperties": {
                                     "type": "object",
                                     "properties": {
-                                        "addtl_prop": { "type": "string" },
+                                        "addtl_prop": {"type": "string"}
                                     },
-                                    "required": [
-                                        "addtl_prop",
-                                    ],
-                                    "additionalProperties": false,
-                                },
-                            },
-                        })),
-                        required: None,
-                        r#type: "object".to_string(),
-                    },
-                    output_schema: None,
-                    title: None,
-                    annotations: None,
-                    description: Some("Do something cool".to_string()),
-                },
+                                    "required": ["addtl_prop"],
+                                    "additionalProperties": false
+                                }
+                            }
+                        }
+                    }),
+                ),
             )])),
             &[],
         )
@@ -2611,27 +2564,6 @@ Examples of valid command strings:
                         "foo": { "type": "string" }
                     },
                 },
-            })]
-        );
-
-        let tools_json = create_tools_json_for_chat_completions_api(&tools).unwrap();
-
-        assert_eq!(
-            tools_json,
-            vec![json!({
-                "type": "function",
-                "name": "demo",
-                "function": {
-                    "name": "demo",
-                    "description": "A demo tool",
-                    "strict": false,
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "foo": { "type": "string" }
-                        },
-                    },
-                }
             })]
         );
     }
