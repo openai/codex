@@ -111,10 +111,15 @@ pub(crate) fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> L
         return Line::from(Vec::<Span<'static>>::new());
     }
 
+    let Line {
+        style,
+        alignment,
+        spans,
+    } = line;
     let mut used = 0usize;
     let mut spans_out: Vec<Span<'static>> = Vec::new();
 
-    for span in line.spans {
+    for span in spans {
         let text = span.content.into_owned();
         let style = span.style;
         let span_width = UnicodeWidthStr::width(text.as_str());
@@ -151,7 +156,11 @@ pub(crate) fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> L
         break;
     }
 
-    Line::from(spans_out)
+    Line {
+        style,
+        alignment,
+        spans: spans_out,
+    }
 }
 
 pub(crate) fn truncate_line_with_ellipsis_if_overflow(
@@ -168,10 +177,18 @@ pub(crate) fn truncate_line_with_ellipsis_if_overflow(
     }
 
     let truncated = truncate_line_to_width(line, max_width.saturating_sub(1));
-    let mut spans = truncated.spans;
+    let Line {
+        style,
+        alignment,
+        mut spans,
+    } = truncated;
     let ellipsis_style = spans.last().map(|span| span.style).unwrap_or_default();
     spans.push(Span::styled("…", ellipsis_style));
-    Line::from(spans)
+    Line {
+        style,
+        alignment,
+        spans,
+    }
 }
 
 /// Computes the shared start column used for descriptions in selection rows.
