@@ -157,6 +157,7 @@ mod windows_impl {
     use super::token::create_workspace_write_token_with_caps_from;
     use super::winutil::format_last_error;
     use super::winutil::quote_windows_arg;
+    use super::winutil::string_from_sid_bytes;
     use super::winutil::to_wide;
     use super::workspace_acl::is_command_cwd_root;
     use super::workspace_acl::protect_workspace_codex_dir;
@@ -263,18 +264,46 @@ mod windows_impl {
             match &policy {
                 SandboxPolicy::ReadOnly => {
                     let psid = convert_string_sid_to_sid(&caps.readonly).unwrap();
-                    let (h, _) = super::token::create_readonly_token_with_cap(psid)?;
+                    let sandbox_group_sid_vec = super::token::resolve_sid("CodexSandboxUsers").unwrap_or_default();
+                    let psid_group = if !sandbox_group_sid_vec.is_empty() {
+                        convert_string_sid_to_sid(&string_from_sid_bytes(&sandbox_group_sid_vec).unwrap())
+                    } else {
+                        None
+                    };
+                    let caps = if let Some(g) = psid_group {
+                        vec![psid, g]
+                    } else {
+                        vec![psid]
+                    };
+                    let h = super::token::create_readonly_token_with_caps_from_base(caps.as_slice())?;
+                    // Clean up group SID if we allocated it
+                    if let Some(g) = psid_group {
+                        windows_sys::Win32::Foundation::LocalFree(g as _);
+                    }
                     (h, psid, None)
                 }
                 SandboxPolicy::WorkspaceWrite { .. } => {
                     let psid_generic = convert_string_sid_to_sid(&caps.workspace).unwrap();
                     let ws_sid = workspace_cap_sid_for_cwd(codex_home, cwd)?;
                     let psid_workspace = convert_string_sid_to_sid(&ws_sid).unwrap();
+                    let sandbox_group_sid_vec = super::token::resolve_sid("CodexSandboxUsers").unwrap_or_default();
+                    let psid_group = if !sandbox_group_sid_vec.is_empty() {
+                        convert_string_sid_to_sid(&string_from_sid_bytes(&sandbox_group_sid_vec).unwrap())
+                    } else {
+                        None
+                    };
+                    let mut caps = vec![psid_generic, psid_workspace];
+                    if let Some(g) = psid_group {
+                        caps.push(g);
+                    }
                     let base = super::token::get_current_token_for_restriction()?;
                     let h_res = create_workspace_write_token_with_caps_from(
                         base,
-                        &[psid_generic, psid_workspace],
+                        &caps,
                     );
+                    if let Some(g) = psid_group {
+                        windows_sys::Win32::Foundation::LocalFree(g as _);
+                    }
                     windows_sys::Win32::Foundation::CloseHandle(base);
                     let h = h_res?;
                     (h, psid_generic, Some(psid_workspace))

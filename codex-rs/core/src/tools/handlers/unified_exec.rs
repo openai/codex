@@ -32,8 +32,8 @@ struct ExecCommandArgs {
     workdir: Option<String>,
     #[serde(default)]
     shell: Option<String>,
-    #[serde(default = "default_login")]
-    login: bool,
+    #[serde(default)]
+    login: Option<bool>,
     #[serde(default = "default_tty")]
     tty: bool,
     #[serde(default = "default_exec_yield_time_ms")]
@@ -68,9 +68,6 @@ fn default_write_stdin_yield_time_ms() -> u64 {
     250
 }
 
-fn default_login() -> bool {
-    true
-}
 
 fn default_tty() -> bool {
     false
@@ -98,7 +95,7 @@ impl ToolHandler for UnifiedExecHandler {
         let Ok(params) = serde_json::from_str::<ExecCommandArgs>(arguments) else {
             return true;
         };
-        let command = get_command(&params, invocation.session.user_shell());
+        let command = get_command(&params, invocation.session.user_shell(), invocation.turn.shell_environment_policy.use_profile);
         !is_known_safe_command(&command)
     }
 
@@ -129,7 +126,7 @@ impl ToolHandler for UnifiedExecHandler {
             "exec_command" => {
                 let args: ExecCommandArgs = parse_arguments(&arguments)?;
                 let process_id = manager.allocate_process_id().await;
-                let command = get_command(&args, session.user_shell());
+                let command = get_command(&args, session.user_shell(), turn.shell_environment_policy.use_profile);
 
                 let ExecCommandArgs {
                     workdir,
@@ -245,7 +242,7 @@ impl ToolHandler for UnifiedExecHandler {
     }
 }
 
-fn get_command(args: &ExecCommandArgs, session_shell: Arc<Shell>) -> Vec<String> {
+fn get_command(args: &ExecCommandArgs, session_shell: Arc<Shell>, default_use_profile: bool) -> Vec<String> {
     let model_shell = args.shell.as_ref().map(|shell_str| {
         let mut shell = get_shell_by_model_provided_path(&PathBuf::from(shell_str));
         shell.shell_snapshot = crate::shell::empty_shell_snapshot_receiver();
@@ -254,7 +251,7 @@ fn get_command(args: &ExecCommandArgs, session_shell: Arc<Shell>) -> Vec<String>
 
     let shell = model_shell.as_ref().unwrap_or(session_shell.as_ref());
 
-    shell.derive_exec_args(&args.cmd, args.login)
+    shell.derive_exec_args(&args.cmd, args.login.unwrap_or(default_use_profile))
 }
 
 fn format_response(response: &UnifiedExecResponse) -> String {
@@ -300,7 +297,7 @@ mod tests {
 
         assert!(args.shell.is_none());
 
-        let command = get_command(&args, Arc::new(default_user_shell()));
+        let command = get_command(&args, Arc::new(default_user_shell()), true);
 
         assert_eq!(command.len(), 3);
         assert_eq!(command[2], "echo hello");
@@ -315,7 +312,7 @@ mod tests {
 
         assert_eq!(args.shell.as_deref(), Some("/bin/bash"));
 
-        let command = get_command(&args, Arc::new(default_user_shell()));
+        let command = get_command(&args, Arc::new(default_user_shell()), true);
 
         assert_eq!(command.last(), Some(&"echo hello".to_string()));
         if command
@@ -335,7 +332,7 @@ mod tests {
 
         assert_eq!(args.shell.as_deref(), Some("powershell"));
 
-        let command = get_command(&args, Arc::new(default_user_shell()));
+        let command = get_command(&args, Arc::new(default_user_shell()), true);
 
         assert_eq!(command[2], "echo hello");
         Ok(())
@@ -349,7 +346,7 @@ mod tests {
 
         assert_eq!(args.shell.as_deref(), Some("cmd"));
 
-        let command = get_command(&args, Arc::new(default_user_shell()));
+        let command = get_command(&args, Arc::new(default_user_shell()), true);
 
         assert_eq!(command[2], "echo hello");
         Ok(())

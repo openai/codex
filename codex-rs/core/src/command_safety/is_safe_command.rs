@@ -488,8 +488,15 @@ mod tests {
             return;
         }
 
+        // Use a path that definitely exists on standard Windows (Windows PowerShell)
+        // instead of PowerShell Core which might not be installed.
+        let pwsh_path = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe";
+        if !std::path::Path::new(pwsh_path).exists() {
+            return;
+        }
+
         assert!(is_known_safe_command(&vec_str(&[
-            r"C:\Program Files\PowerShell\7\pwsh.exe",
+            pwsh_path,
             "-Command",
             "Get-Location",
         ])));

@@ -2146,6 +2146,19 @@ interface:
     async fn non_git_repo_skills_search_does_not_walk_parents() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let outer_dir = tempfile::tempdir().expect("tempdir");
+
+        // If the temp dir is created inside an existing git repo (e.g. workspace), skip.
+        if std::process::Command::new("git")
+            .arg("-C")
+            .arg(outer_dir.path())
+            .arg("rev-parse")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            return;
+        }
+
         let nested_dir = outer_dir.path().join("nested/inner");
         fs::create_dir_all(&nested_dir).unwrap();
 
