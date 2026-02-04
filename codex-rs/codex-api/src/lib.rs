@@ -15,6 +15,10 @@ pub use codex_client::TransportError;
 
 pub use crate::auth::AuthProvider;
 pub use crate::common::CompactionInput;
+pub use crate::common::MemoryTrace;
+pub use crate::common::MemoryTraceMetadata;
+pub use crate::common::MemoryTraceSummarizeInput;
+pub use crate::common::MemoryTraceSummaryOutput;
 pub use crate::common::Prompt;
 pub use crate::common::ResponseAppendWsRequest;
 pub use crate::common::ResponseCreateWsRequest;
@@ -24,6 +28,7 @@ pub use crate::common::ResponsesApiRequest;
 pub use crate::common::create_text_param_for_request;
 pub use crate::endpoint::aggregate::AggregateStreamExt;
 pub use crate::endpoint::compact::CompactClient;
+pub use crate::endpoint::memories::MemoriesClient;
 pub use crate::endpoint::models::ModelsClient;
 pub use crate::endpoint::responses::ResponsesClient;
 pub use crate::endpoint::responses::ResponsesOptions;

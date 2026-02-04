@@ -3,11 +3,13 @@ use crate::LogEntry;
 use crate::LogQuery;
 use crate::LogRow;
 use crate::SortKey;
+use crate::ThreadMemory;
 use crate::ThreadMetadata;
 use crate::ThreadMetadataBuilder;
 use crate::ThreadsPage;
 use crate::apply_rollout_item;
 use crate::migrations::MIGRATOR;
+use crate::model::ThreadMemoryRow;
 use crate::model::ThreadRow;
 use crate::model::anchor_from_item;
 use crate::model::datetime_to_epoch_seconds;
@@ -35,7 +37,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::warn;
 
-pub const STATE_DB_FILENAME: &str = "state.sqlite";
+pub const STATE_DB_FILENAME: &str = "state";
+pub const STATE_DB_VERSION: u32 = 2;
 
 const METRIC_DB_INIT: &str = "codex.db.init";
 
@@ -56,7 +59,8 @@ impl StateRuntime {
         otel: Option<OtelManager>,
     ) -> anyhow::Result<Arc<Self>> {
         tokio::fs::create_dir_all(&codex_home).await?;
-        let state_path = codex_home.join(STATE_DB_FILENAME);
+        remove_legacy_state_files(&codex_home).await;
+        let state_path = state_db_path(codex_home.as_path());
         let existed = tokio::fs::try_exists(&state_path).await.unwrap_or(false);
         let pool = match open_sqlite(&state_path).await {
             Ok(db) => Arc::new(db),
@@ -149,6 +153,26 @@ ORDER BY position ASC
             });
         }
         Ok(Some(tools))
+    }
+
+    /// Get memory summaries for a thread, if present.
+    pub async fn get_thread_memory(
+        &self,
+        thread_id: ThreadId,
+    ) -> anyhow::Result<Option<ThreadMemory>> {
+        let row = sqlx::query(
+            r#"
+SELECT thread_id, trace_summary, memory_summary, updated_at
+FROM thread_memory
+WHERE thread_id = ?
+            "#,
+        )
+        .bind(thread_id.to_string())
+        .fetch_optional(self.pool.as_ref())
+        .await?;
+
+        row.map(|row| ThreadMemoryRow::try_from_row(&row).and_then(ThreadMemory::try_from))
+            .transpose()
     }
 
     /// Find a rollout path by thread id using the underlying database.
@@ -403,6 +427,83 @@ ON CONFLICT(id) DO UPDATE SET
         Ok(())
     }
 
+    /// Insert or update memory summaries for a thread.
+    ///
+    /// This method always advances `updated_at`, even if summaries are unchanged.
+    pub async fn upsert_thread_memory(
+        &self,
+        thread_id: ThreadId,
+        trace_summary: &str,
+        memory_summary: &str,
+    ) -> anyhow::Result<ThreadMemory> {
+        if self.get_thread(thread_id).await?.is_none() {
+            return Err(anyhow::anyhow!("thread not found: {thread_id}"));
+        }
+
+        let updated_at = Utc::now().timestamp();
+        sqlx::query(
+            r#"
+INSERT INTO thread_memory (
+    thread_id,
+    trace_summary,
+    memory_summary,
+    updated_at
+) VALUES (?, ?, ?, ?)
+ON CONFLICT(thread_id) DO UPDATE SET
+    trace_summary = excluded.trace_summary,
+    memory_summary = excluded.memory_summary,
+    updated_at = CASE
+        WHEN excluded.updated_at <= thread_memory.updated_at THEN thread_memory.updated_at + 1
+        ELSE excluded.updated_at
+    END
+            "#,
+        )
+        .bind(thread_id.to_string())
+        .bind(trace_summary)
+        .bind(memory_summary)
+        .bind(updated_at)
+        .execute(self.pool.as_ref())
+        .await?;
+
+        self.get_thread_memory(thread_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("failed to load upserted thread memory: {thread_id}"))
+    }
+
+    /// Get the last `n` memories for threads with an exact cwd match.
+    pub async fn get_last_n_thread_memories_for_cwd(
+        &self,
+        cwd: &Path,
+        n: usize,
+    ) -> anyhow::Result<Vec<ThreadMemory>> {
+        if n == 0 {
+            return Ok(Vec::new());
+        }
+
+        let rows = sqlx::query(
+            r#"
+SELECT
+    m.thread_id,
+    m.trace_summary,
+    m.memory_summary,
+    m.updated_at
+FROM thread_memory AS m
+INNER JOIN threads AS t ON t.id = m.thread_id
+WHERE t.cwd = ?
+ORDER BY m.updated_at DESC, m.thread_id DESC
+LIMIT ?
+            "#,
+        )
+        .bind(cwd.display().to_string())
+        .bind(n as i64)
+        .fetch_all(self.pool.as_ref())
+        .await?;
+
+        rows.into_iter()
+            .map(|row| ThreadMemoryRow::try_from_row(&row).and_then(ThreadMemory::try_from))
+            .collect()
+    }
+
     /// Persist dynamic tools for a thread if none have been stored yet.
     ///
     /// Dynamic tools are defined at thread start and should not change afterward.
@@ -419,6 +520,7 @@ ON CONFLICT(id) DO UPDATE SET
             return Ok(());
         }
         let thread_id = thread_id.to_string();
+        let mut tx = self.pool.begin().await?;
         for (idx, tool) in tools.iter().enumerate() {
             let position = i64::try_from(idx).unwrap_or(i64::MAX);
             let input_schema = serde_json::to_string(&tool.input_schema)?;
@@ -439,9 +541,10 @@ ON CONFLICT(thread_id, position) DO NOTHING
             .bind(tool.name.as_str())
             .bind(tool.description.as_str())
             .bind(input_schema)
-            .execute(self.pool.as_ref())
+            .execute(&mut *tx)
             .await?;
         }
+        tx.commit().await?;
         Ok(())
     }
 
@@ -622,6 +725,77 @@ async fn open_sqlite(path: &Path) -> anyhow::Result<SqlitePool> {
     Ok(pool)
 }
 
+pub fn state_db_filename() -> String {
+    format!("{STATE_DB_FILENAME}_{STATE_DB_VERSION}.sqlite")
+}
+
+pub fn state_db_path(codex_home: &Path) -> PathBuf {
+    codex_home.join(state_db_filename())
+}
+
+async fn remove_legacy_state_files(codex_home: &Path) {
+    let current_name = state_db_filename();
+    let mut entries = match tokio::fs::read_dir(codex_home).await {
+        Ok(entries) => entries,
+        Err(err) => {
+            warn!(
+                "failed to read codex_home for state db cleanup {}: {err}",
+                codex_home.display()
+            );
+            return;
+        }
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        if !entry
+            .file_type()
+            .await
+            .map(|file_type| file_type.is_file())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        if !should_remove_state_file(file_name.as_ref(), current_name.as_str()) {
+            continue;
+        }
+
+        let legacy_path = entry.path();
+        if let Err(err) = tokio::fs::remove_file(&legacy_path).await {
+            warn!(
+                "failed to remove legacy state db file {}: {err}",
+                legacy_path.display()
+            );
+        }
+    }
+}
+
+fn should_remove_state_file(file_name: &str, current_name: &str) -> bool {
+    let mut base_name = file_name;
+    for suffix in ["-wal", "-shm", "-journal"] {
+        if let Some(stripped) = file_name.strip_suffix(suffix) {
+            base_name = stripped;
+            break;
+        }
+    }
+    if base_name == current_name {
+        return false;
+    }
+    let unversioned_name = format!("{STATE_DB_FILENAME}.sqlite");
+    if base_name == unversioned_name {
+        return true;
+    }
+
+    let Some(version_with_extension) = base_name.strip_prefix(&format!("{STATE_DB_FILENAME}_"))
+    else {
+        return false;
+    };
+    let Some(version_suffix) = version_with_extension.strip_suffix(".sqlite") else {
+        return false;
+    };
+    !version_suffix.is_empty() && version_suffix.chars().all(|ch| ch.is_ascii_digit())
+}
+
 fn push_thread_filters<'a>(
     builder: &mut QueryBuilder<'a, Sqlite>,
     archived_only: bool,
@@ -689,4 +863,397 @@ fn push_thread_order_and_limit(
     builder.push(" DESC, id DESC");
     builder.push(" LIMIT ");
     builder.push_bind(limit as i64);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::STATE_DB_FILENAME;
+    use super::STATE_DB_VERSION;
+    use super::StateRuntime;
+    use super::ThreadMetadata;
+    use super::state_db_filename;
+    use chrono::DateTime;
+    use chrono::Utc;
+    use codex_protocol::ThreadId;
+    use codex_protocol::protocol::AskForApproval;
+    use codex_protocol::protocol::SandboxPolicy;
+    use pretty_assertions::assert_eq;
+    use sqlx::Row;
+    use std::path::Path;
+    use std::path::PathBuf;
+    use std::time::SystemTime;
+    use std::time::UNIX_EPOCH;
+    use uuid::Uuid;
+
+    fn unique_temp_dir() -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos());
+        std::env::temp_dir().join(format!("codex-state-runtime-test-{nanos}"))
+    }
+
+    #[tokio::test]
+    async fn init_removes_legacy_state_db_files() {
+        let codex_home = unique_temp_dir();
+        tokio::fs::create_dir_all(&codex_home)
+            .await
+            .expect("create codex_home");
+
+        let current_name = state_db_filename();
+        let previous_version = STATE_DB_VERSION.saturating_sub(1);
+        let unversioned_name = format!("{STATE_DB_FILENAME}.sqlite");
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            let path = codex_home.join(format!("{unversioned_name}{suffix}"));
+            tokio::fs::write(path, b"legacy")
+                .await
+                .expect("write legacy");
+            let old_version_path = codex_home.join(format!(
+                "{STATE_DB_FILENAME}_{previous_version}.sqlite{suffix}"
+            ));
+            tokio::fs::write(old_version_path, b"old_version")
+                .await
+                .expect("write old version");
+        }
+        let unrelated_path = codex_home.join("state.sqlite_backup");
+        tokio::fs::write(&unrelated_path, b"keep")
+            .await
+            .expect("write unrelated");
+        let numeric_path = codex_home.join("123");
+        tokio::fs::write(&numeric_path, b"keep")
+            .await
+            .expect("write numeric");
+
+        let _runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            let legacy_path = codex_home.join(format!("{unversioned_name}{suffix}"));
+            assert_eq!(
+                tokio::fs::try_exists(&legacy_path)
+                    .await
+                    .expect("check legacy path"),
+                false
+            );
+            let old_version_path = codex_home.join(format!(
+                "{STATE_DB_FILENAME}_{previous_version}.sqlite{suffix}"
+            ));
+            assert_eq!(
+                tokio::fs::try_exists(&old_version_path)
+                    .await
+                    .expect("check old version path"),
+                false
+            );
+        }
+        assert_eq!(
+            tokio::fs::try_exists(codex_home.join(current_name))
+                .await
+                .expect("check new db path"),
+            true
+        );
+        assert_eq!(
+            tokio::fs::try_exists(&unrelated_path)
+                .await
+                .expect("check unrelated path"),
+            true
+        );
+        assert_eq!(
+            tokio::fs::try_exists(&numeric_path)
+                .await
+                .expect("check numeric path"),
+            true
+        );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn upsert_and_get_thread_memory() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let metadata = test_thread_metadata(&codex_home, thread_id, codex_home.join("a"));
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("upsert thread");
+
+        assert_eq!(
+            runtime
+                .get_thread_memory(thread_id)
+                .await
+                .expect("get memory before insert"),
+            None
+        );
+
+        let inserted = runtime
+            .upsert_thread_memory(thread_id, "trace one", "memory one")
+            .await
+            .expect("upsert memory");
+        assert_eq!(inserted.thread_id, thread_id);
+        assert_eq!(inserted.trace_summary, "trace one");
+        assert_eq!(inserted.memory_summary, "memory one");
+
+        let updated = runtime
+            .upsert_thread_memory(thread_id, "trace two", "memory two")
+            .await
+            .expect("update memory");
+        assert_eq!(updated.thread_id, thread_id);
+        assert_eq!(updated.trace_summary, "trace two");
+        assert_eq!(updated.memory_summary, "memory two");
+        assert!(
+            updated.updated_at >= inserted.updated_at,
+            "updated_at should not move backward"
+        );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn get_last_n_thread_memories_for_cwd_matches_exactly() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let cwd_a = codex_home.join("workspace-a");
+        let cwd_b = codex_home.join("workspace-b");
+        let t1 = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let t2 = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let t3 = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        runtime
+            .upsert_thread(&test_thread_metadata(&codex_home, t1, cwd_a.clone()))
+            .await
+            .expect("upsert thread t1");
+        runtime
+            .upsert_thread(&test_thread_metadata(&codex_home, t2, cwd_a.clone()))
+            .await
+            .expect("upsert thread t2");
+        runtime
+            .upsert_thread(&test_thread_metadata(&codex_home, t3, cwd_b.clone()))
+            .await
+            .expect("upsert thread t3");
+
+        let first = runtime
+            .upsert_thread_memory(t1, "trace-1", "memory-1")
+            .await
+            .expect("upsert t1 memory");
+        runtime
+            .upsert_thread_memory(t2, "trace-2", "memory-2")
+            .await
+            .expect("upsert t2 memory");
+        runtime
+            .upsert_thread_memory(t3, "trace-3", "memory-3")
+            .await
+            .expect("upsert t3 memory");
+        // Ensure deterministic ordering even when updates happen in the same second.
+        runtime
+            .upsert_thread_memory(t1, "trace-1b", "memory-1b")
+            .await
+            .expect("upsert t1 memory again");
+
+        let cwd_a_memories = runtime
+            .get_last_n_thread_memories_for_cwd(cwd_a.as_path(), 2)
+            .await
+            .expect("list cwd a memories");
+        assert_eq!(cwd_a_memories.len(), 2);
+        assert_eq!(cwd_a_memories[0].thread_id, t1);
+        assert_eq!(cwd_a_memories[0].trace_summary, "trace-1b");
+        assert_eq!(cwd_a_memories[0].memory_summary, "memory-1b");
+        assert_eq!(cwd_a_memories[1].thread_id, t2);
+        assert!(cwd_a_memories[0].updated_at >= first.updated_at);
+
+        let cwd_b_memories = runtime
+            .get_last_n_thread_memories_for_cwd(cwd_b.as_path(), 10)
+            .await
+            .expect("list cwd b memories");
+        assert_eq!(cwd_b_memories.len(), 1);
+        assert_eq!(cwd_b_memories[0].thread_id, t3);
+
+        let none = runtime
+            .get_last_n_thread_memories_for_cwd(codex_home.join("missing").as_path(), 10)
+            .await
+            .expect("list missing cwd memories");
+        assert_eq!(none, Vec::new());
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn upsert_thread_memory_errors_for_unknown_thread() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let unknown_thread_id =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let err = runtime
+            .upsert_thread_memory(unknown_thread_id, "trace", "memory")
+            .await
+            .expect_err("unknown thread should fail");
+        assert!(
+            err.to_string().contains("thread not found"),
+            "error should mention missing thread: {err}"
+        );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn get_last_n_thread_memories_for_cwd_zero_returns_empty() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let cwd = codex_home.join("workspace");
+        runtime
+            .upsert_thread(&test_thread_metadata(&codex_home, thread_id, cwd.clone()))
+            .await
+            .expect("upsert thread");
+        runtime
+            .upsert_thread_memory(thread_id, "trace", "memory")
+            .await
+            .expect("upsert memory");
+
+        let memories = runtime
+            .get_last_n_thread_memories_for_cwd(cwd.as_path(), 0)
+            .await
+            .expect("query memories");
+        assert_eq!(memories, Vec::new());
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn get_last_n_thread_memories_for_cwd_does_not_prefix_match() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let cwd_exact = codex_home.join("workspace");
+        let cwd_prefix = codex_home.join("workspace-child");
+        let t_exact = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let t_prefix = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                t_exact,
+                cwd_exact.clone(),
+            ))
+            .await
+            .expect("upsert exact thread");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                t_prefix,
+                cwd_prefix.clone(),
+            ))
+            .await
+            .expect("upsert prefix thread");
+        runtime
+            .upsert_thread_memory(t_exact, "trace-exact", "memory-exact")
+            .await
+            .expect("upsert exact memory");
+        runtime
+            .upsert_thread_memory(t_prefix, "trace-prefix", "memory-prefix")
+            .await
+            .expect("upsert prefix memory");
+
+        let exact_only = runtime
+            .get_last_n_thread_memories_for_cwd(cwd_exact.as_path(), 10)
+            .await
+            .expect("query exact cwd");
+        assert_eq!(exact_only.len(), 1);
+        assert_eq!(exact_only[0].thread_id, t_exact);
+        assert_eq!(exact_only[0].memory_summary, "memory-exact");
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn deleting_thread_cascades_thread_memory() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let cwd = codex_home.join("workspace");
+        runtime
+            .upsert_thread(&test_thread_metadata(&codex_home, thread_id, cwd))
+            .await
+            .expect("upsert thread");
+        runtime
+            .upsert_thread_memory(thread_id, "trace", "memory")
+            .await
+            .expect("upsert memory");
+
+        let count_before =
+            sqlx::query("SELECT COUNT(*) AS count FROM thread_memory WHERE thread_id = ?")
+                .bind(thread_id.to_string())
+                .fetch_one(runtime.pool.as_ref())
+                .await
+                .expect("count before delete")
+                .try_get::<i64, _>("count")
+                .expect("count value");
+        assert_eq!(count_before, 1);
+
+        sqlx::query("DELETE FROM threads WHERE id = ?")
+            .bind(thread_id.to_string())
+            .execute(runtime.pool.as_ref())
+            .await
+            .expect("delete thread");
+
+        let count_after =
+            sqlx::query("SELECT COUNT(*) AS count FROM thread_memory WHERE thread_id = ?")
+                .bind(thread_id.to_string())
+                .fetch_one(runtime.pool.as_ref())
+                .await
+                .expect("count after delete")
+                .try_get::<i64, _>("count")
+                .expect("count value");
+        assert_eq!(count_after, 0);
+        assert_eq!(
+            runtime
+                .get_thread_memory(thread_id)
+                .await
+                .expect("get memory after delete"),
+            None
+        );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    fn test_thread_metadata(
+        codex_home: &Path,
+        thread_id: ThreadId,
+        cwd: PathBuf,
+    ) -> ThreadMetadata {
+        let now = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).expect("timestamp");
+        ThreadMetadata {
+            id: thread_id,
+            rollout_path: codex_home.join(format!("rollout-{thread_id}.jsonl")),
+            created_at: now,
+            updated_at: now,
+            source: "cli".to_string(),
+            model_provider: "test-provider".to_string(),
+            cwd,
+            title: String::new(),
+            sandbox_policy: crate::extract::enum_to_string(&SandboxPolicy::ReadOnly),
+            approval_mode: crate::extract::enum_to_string(&AskForApproval::OnRequest),
+            tokens_used: 0,
+            has_user_event: true,
+            archived_at: None,
+            git_sha: None,
+            git_branch: None,
+            git_origin_url: None,
+        }
+    }
 }

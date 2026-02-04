@@ -61,6 +61,7 @@ pub mod token_data;
 mod truncate;
 mod unified_exec;
 pub mod windows_sandbox;
+pub use client::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
 pub use model_provider_info::DEFAULT_LMSTUDIO_PORT;
 pub use model_provider_info::DEFAULT_OLLAMA_PORT;
 pub use model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
@@ -138,6 +139,7 @@ pub use exec_policy::check_execpolicy_for_warnings;
 pub use exec_policy::load_exec_policy;
 pub use safety::get_platform_sandbox;
 pub use tools::spec::parse_tool_input_schema;
+pub use turn_metadata::build_turn_metadata_header;
 // Re-export the protocol types from the standalone `codex-protocol` crate so existing
 // `codex_core::protocol::...` references continue to work across the workspace.
 pub use codex_protocol::protocol;
@@ -159,4 +161,5 @@ pub use codex_protocol::models::ResponseItem;
 pub use compact::content_items_to_text;
 pub use event_mapping::parse_turn_item;
 pub mod compact;
+pub mod memory_trace;
 pub mod otel_init;

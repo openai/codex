@@ -3,7 +3,9 @@ use codex_core::WireApi;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_protocol::user_input::UserInput;
-use core_test_support::load_sse_fixture_with_id;
+use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_response_created;
+use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
@@ -14,10 +16,6 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::body_string_contains;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
-
-fn sse_completed(id: &str) -> String {
-    load_sse_fixture_with_id("../fixtures/completed_template.json", id)
-}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn continue_after_stream_error() {
@@ -46,7 +44,13 @@ async fn continue_after_stream_error() {
 
     let ok = ResponseTemplate::new(200)
         .insert_header("content-type", "text/event-stream")
-        .set_body_raw(sse_completed("resp_ok2"), "text/event-stream");
+        .set_body_raw(
+            sse(vec![
+                ev_response_created("resp_ok2"),
+                ev_completed("resp_ok2"),
+            ]),
+            "text/event-stream",
+        );
 
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
