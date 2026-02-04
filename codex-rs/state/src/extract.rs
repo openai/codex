@@ -37,6 +37,9 @@ fn apply_session_meta_from_item(metadata: &mut ThreadMetadata, meta_line: &Sessi
     if let Some(provider) = meta_line.meta.model_provider.as_deref() {
         metadata.model_provider = provider.to_string();
     }
+    if !meta_line.meta.cli_version.is_empty() {
+        metadata.cli_version = meta_line.meta.cli_version.clone();
+    }
     if !meta_line.meta.cwd.as_os_str().is_empty() {
         metadata.cwd = meta_line.meta.cwd.clone();
     }
@@ -153,6 +156,7 @@ mod tests {
             source: "cli".to_string(),
             model_provider: "openai".to_string(),
             cwd: PathBuf::from("/tmp"),
+            cli_version: "0.0.0".to_string(),
             title: String::new(),
             sandbox_policy: "read-only".to_string(),
             approval_mode: "on-request".to_string(),

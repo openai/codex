@@ -99,6 +99,7 @@ SELECT
     source,
     model_provider,
     cwd,
+    cli_version,
     title,
     sandbox_policy,
     approval_mode,
@@ -197,6 +198,7 @@ SELECT
     source,
     model_provider,
     cwd,
+    cli_version,
     title,
     sandbox_policy,
     approval_mode,
@@ -351,6 +353,7 @@ INSERT INTO threads (
     source,
     model_provider,
     cwd,
+    cli_version,
     title,
     sandbox_policy,
     approval_mode,
@@ -361,7 +364,7 @@ INSERT INTO threads (
     git_sha,
     git_branch,
     git_origin_url
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
@@ -369,6 +372,7 @@ ON CONFLICT(id) DO UPDATE SET
     source = excluded.source,
     model_provider = excluded.model_provider,
     cwd = excluded.cwd,
+    cli_version = excluded.cli_version,
     title = excluded.title,
     sandbox_policy = excluded.sandbox_policy,
     approval_mode = excluded.approval_mode,
@@ -388,6 +392,7 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.source.as_str())
         .bind(metadata.model_provider.as_str())
         .bind(metadata.cwd.display().to_string())
+        .bind(metadata.cli_version.as_str())
         .bind(metadata.title.as_str())
         .bind(metadata.sandbox_policy.as_str())
         .bind(metadata.approval_mode.as_str())

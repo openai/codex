@@ -66,6 +66,8 @@ pub struct ThreadMetadata {
     pub model_provider: String,
     /// The working directory for the thread.
     pub cwd: PathBuf,
+    /// Version of the CLI that created the thread.
+    pub cli_version: String,
     /// A best-effort thread title.
     pub title: String,
     /// The sandbox policy (stringified enum).
@@ -103,6 +105,8 @@ pub struct ThreadMetadataBuilder {
     pub model_provider: Option<String>,
     /// The working directory for the thread.
     pub cwd: PathBuf,
+    /// Version of the CLI that created the thread.
+    pub cli_version: Option<String>,
     /// The sandbox policy.
     pub sandbox_policy: SandboxPolicy,
     /// The approval mode.
@@ -133,6 +137,7 @@ impl ThreadMetadataBuilder {
             source,
             model_provider: None,
             cwd: PathBuf::new(),
+            cli_version: None,
             sandbox_policy: SandboxPolicy::ReadOnly,
             approval_mode: AskForApproval::OnRequest,
             archived_at: None,
@@ -163,6 +168,7 @@ impl ThreadMetadataBuilder {
                 .clone()
                 .unwrap_or_else(|| default_provider.to_string()),
             cwd: self.cwd.clone(),
+            cli_version: self.cli_version.clone().unwrap_or_default(),
             title: String::new(),
             sandbox_policy,
             approval_mode,
@@ -200,6 +206,9 @@ impl ThreadMetadata {
         }
         if self.cwd != other.cwd {
             diffs.push("cwd");
+        }
+        if self.cli_version != other.cli_version {
+            diffs.push("cli_version");
         }
         if self.title != other.title {
             diffs.push("title");
@@ -245,6 +254,7 @@ pub(crate) struct ThreadRow {
     source: String,
     model_provider: String,
     cwd: String,
+    cli_version: String,
     title: String,
     sandbox_policy: String,
     approval_mode: String,
@@ -266,6 +276,7 @@ impl ThreadRow {
             source: row.try_get("source")?,
             model_provider: row.try_get("model_provider")?,
             cwd: row.try_get("cwd")?,
+            cli_version: row.try_get("cli_version")?,
             title: row.try_get("title")?,
             sandbox_policy: row.try_get("sandbox_policy")?,
             approval_mode: row.try_get("approval_mode")?,
@@ -291,6 +302,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             source,
             model_provider,
             cwd,
+            cli_version,
             title,
             sandbox_policy,
             approval_mode,
@@ -309,6 +321,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             source,
             model_provider,
             cwd: PathBuf::from(cwd),
+            cli_version,
             title,
             sandbox_policy,
             approval_mode,

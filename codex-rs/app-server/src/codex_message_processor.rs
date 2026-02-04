@@ -184,6 +184,7 @@ use codex_core::rollout_date_parts;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_core::skills::remote::download_remote_skill;
 use codex_core::skills::remote::list_remote_skills;
+use codex_core::state_db::StateDbHandle;
 use codex_core::state_db::get_state_db;
 use codex_core::token_data::parse_id_token;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
@@ -2234,23 +2235,44 @@ impl CodexMessageProcessor {
             }
         };
 
-        let rollout_path =
-            match find_thread_path_by_id_str(&self.config.codex_home, &thread_uuid.to_string())
-                .await
-            {
-                Ok(Some(path)) => Some(path),
-                Ok(None) => None,
-                Err(err) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("failed to locate thread id {thread_uuid}: {err}"),
-                    )
-                    .await;
-                    return;
-                }
-            };
+        let db_summary = read_summary_from_state_db_by_thread_id(&self.config, thread_uuid).await;
+        let mut rollout_path = db_summary.as_ref().map(|summary| summary.path.clone());
+        if rollout_path.is_none() || include_turns {
+            rollout_path =
+                match find_thread_path_by_id_str(&self.config.codex_home, &thread_uuid.to_string())
+                    .await
+                {
+                    Ok(Some(path)) => Some(path),
+                    Ok(None) => {
+                        if include_turns {
+                            None
+                        } else {
+                            rollout_path
+                        }
+                    }
+                    Err(err) => {
+                        self.send_invalid_request_error(
+                            request_id,
+                            format!("failed to locate thread id {thread_uuid}: {err}"),
+                        )
+                        .await;
+                        return;
+                    }
+                };
+        }
 
-        let mut thread = if let Some(rollout_path) = rollout_path.as_ref() {
+        if include_turns && rollout_path.is_none() && db_summary.is_some() {
+            self.send_internal_error(
+                request_id,
+                format!("failed to locate rollout for thread {thread_uuid}"),
+            )
+            .await;
+            return;
+        }
+
+        let mut thread = if let Some(summary) = db_summary {
+            summary_to_thread(summary)
+        } else if let Some(rollout_path) = rollout_path.as_ref() {
             let fallback_provider = self.config.model_provider_id.as_str();
             match read_summary_from_rollout(rollout_path, fallback_provider).await {
                 Ok(summary) => summary_to_thread(summary),
@@ -2556,8 +2578,8 @@ impl CodexMessageProcessor {
             developer_instructions,
         } = params;
 
-        let rollout_path = if let Some(path) = path {
-            path
+        let (rollout_path, source_thread_id) = if let Some(path) = path {
+            (path, None)
         } else {
             let existing_thread_id = match ThreadId::from_string(&thread_id) {
                 Ok(id) => id,
@@ -2578,7 +2600,7 @@ impl CodexMessageProcessor {
             )
             .await
             {
-                Ok(Some(p)) => p,
+                Ok(Some(p)) => (p, Some(existing_thread_id)),
                 Ok(None) => {
                     self.send_invalid_request_error(
                         request_id,
@@ -2598,14 +2620,9 @@ impl CodexMessageProcessor {
             }
         };
 
-        let history_cwd = match read_session_meta_line(&rollout_path).await {
-            Ok(meta_line) => Some(meta_line.meta.cwd),
-            Err(err) => {
-                let rollout_path = rollout_path.display();
-                warn!("failed to read session metadata from rollout {rollout_path}: {err}");
-                None
-            }
-        };
+        let history_cwd =
+            read_history_cwd_from_state_db(&self.config, source_thread_id, rollout_path.as_path())
+                .await;
 
         // Persist windows sandbox feature.
         let mut cli_overrides = cli_overrides.unwrap_or_default();
@@ -2754,6 +2771,15 @@ impl CodexMessageProcessor {
         request_id: RequestId,
         params: GetConversationSummaryParams,
     ) {
+        if let GetConversationSummaryParams::ThreadId { conversation_id } = &params
+            && let Some(summary) =
+                read_summary_from_state_db_by_thread_id(&self.config, conversation_id.clone()).await
+        {
+            let response = GetConversationSummaryResponse { summary };
+            self.outgoing.send_response(request_id, response).await;
+            return;
+        }
+
         let path = match params {
             GetConversationSummaryParams::RolloutPath { rollout_path } => {
                 if rollout_path.is_relative() {
@@ -2878,6 +2904,7 @@ impl CodexMessageProcessor {
         let fallback_provider = self.config.model_provider_id.clone();
         let (allowed_sources_vec, source_kind_filter) = compute_source_filters(source_kinds);
         let allowed_sources = allowed_sources_vec.as_slice();
+        let state_db_ctx = get_state_db(&self.config, None).await;
 
         while remaining > 0 {
             let page_size = remaining.min(THREAD_LIST_MAX_LIMIT);
@@ -2915,31 +2942,26 @@ impl CodexMessageProcessor {
                 })?
             };
 
-            let mut filtered = page
-                .items
-                .into_iter()
-                .filter_map(|it| {
-                    let updated_at = it.updated_at.clone();
-                    let session_meta_line = it.head.first().and_then(|first| {
-                        serde_json::from_value::<SessionMetaLine>(first.clone()).ok()
-                    })?;
-                    extract_conversation_summary(
-                        it.path,
-                        &it.head,
-                        &session_meta_line.meta,
-                        session_meta_line.git.as_ref(),
-                        fallback_provider.as_str(),
-                        updated_at,
-                    )
-                })
-                .filter(|summary| {
-                    source_kind_filter
-                        .as_ref()
-                        .is_none_or(|filter| source_kind_matches(&summary.source, filter))
-                })
-                .collect::<Vec<_>>();
-            if filtered.len() > remaining {
-                filtered.truncate(remaining);
+            let mut filtered = Vec::with_capacity(page.items.len());
+            for it in page.items {
+                let Some(summary) = summary_from_thread_list_item(
+                    it,
+                    fallback_provider.as_str(),
+                    state_db_ctx.as_ref(),
+                )
+                .await
+                else {
+                    continue;
+                };
+                if source_kind_filter
+                    .as_ref()
+                    .is_none_or(|filter| source_kind_matches(&summary.source, filter))
+                {
+                    filtered.push(summary);
+                    if filtered.len() >= remaining {
+                        break;
+                    }
+                }
             }
             items.extend(filtered);
             remaining = requested_page_size.saturating_sub(items.len());
@@ -3527,13 +3549,13 @@ impl CodexMessageProcessor {
         } = params;
 
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
-        let rollout_path = if let Some(path) = path {
-            path
+        let (rollout_path, source_thread_id) = if let Some(path) = path {
+            (path, None)
         } else if let Some(conversation_id) = conversation_id {
             match find_thread_path_by_id_str(&self.config.codex_home, &conversation_id.to_string())
                 .await
             {
-                Ok(Some(found_path)) => found_path,
+                Ok(Some(found_path)) => (found_path, Some(conversation_id)),
                 Ok(None) => {
                     self.send_invalid_request_error(
                         request_id,
@@ -3560,14 +3582,9 @@ impl CodexMessageProcessor {
             return;
         };
 
-        let history_cwd = match read_session_meta_line(&rollout_path).await {
-            Ok(meta_line) => Some(meta_line.meta.cwd),
-            Err(err) => {
-                let rollout_path = rollout_path.display();
-                warn!("failed to read session metadata from rollout {rollout_path}: {err}");
-                None
-            }
-        };
+        let history_cwd =
+            read_history_cwd_from_state_db(&self.config, source_thread_id, rollout_path.as_path())
+                .await;
 
         let (typesafe_overrides, request_overrides) = match overrides {
             Some(overrides) => {
@@ -5002,6 +5019,147 @@ async fn derive_config_for_cwd(
         .cloud_requirements(cloud_requirements.clone())
         .build()
         .await
+}
+
+async fn read_history_cwd_from_state_db(
+    config: &Config,
+    thread_id: Option<ThreadId>,
+    rollout_path: &Path,
+) -> Option<PathBuf> {
+    if let Some(state_db_ctx) = get_state_db(config, None).await
+        && let Some(thread_id) = thread_id
+        && let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await
+    {
+        return Some(metadata.cwd);
+    }
+
+    match read_session_meta_line(rollout_path).await {
+        Ok(meta_line) => Some(meta_line.meta.cwd),
+        Err(err) => {
+            let rollout_path = rollout_path.display();
+            warn!("failed to read session metadata from rollout {rollout_path}: {err}");
+            None
+        }
+    }
+}
+
+async fn read_summary_from_state_db_by_thread_id(
+    config: &Config,
+    thread_id: ThreadId,
+) -> Option<ConversationSummary> {
+    let state_db_ctx = get_state_db(config, None).await;
+    read_summary_from_state_db_context_by_thread_id(state_db_ctx.as_ref(), thread_id).await
+}
+
+async fn read_summary_from_state_db_context_by_thread_id(
+    state_db_ctx: Option<&StateDbHandle>,
+    thread_id: ThreadId,
+) -> Option<ConversationSummary> {
+    let Some(state_db_ctx) = state_db_ctx else {
+        return None;
+    };
+    let metadata = match state_db_ctx.get_thread(thread_id).await {
+        Ok(Some(metadata)) => metadata,
+        Ok(None) | Err(_) => return None,
+    };
+    Some(summary_from_state_db_metadata(
+        metadata.id,
+        metadata.rollout_path,
+        metadata.has_user_event,
+        metadata.title,
+        metadata
+            .created_at
+            .to_rfc3339_opts(SecondsFormat::Secs, true),
+        metadata
+            .updated_at
+            .to_rfc3339_opts(SecondsFormat::Secs, true),
+        metadata.model_provider,
+        metadata.cwd,
+        metadata.cli_version,
+        metadata.source,
+        metadata.git_sha,
+        metadata.git_branch,
+        metadata.git_origin_url,
+    ))
+}
+
+async fn summary_from_thread_list_item(
+    it: codex_core::ThreadItem,
+    fallback_provider: &str,
+    state_db_ctx: Option<&StateDbHandle>,
+) -> Option<ConversationSummary> {
+    let updated_at = it.updated_at.clone();
+    if let Some(session_meta_line) = it
+        .head
+        .first()
+        .and_then(|first| serde_json::from_value::<SessionMetaLine>(first.clone()).ok())
+    {
+        return extract_conversation_summary(
+            it.path,
+            &it.head,
+            &session_meta_line.meta,
+            session_meta_line.git.as_ref(),
+            fallback_provider,
+            updated_at,
+        );
+    }
+    let thread_id = thread_id_from_rollout_path(it.path.as_path())?;
+    read_summary_from_state_db_context_by_thread_id(state_db_ctx, thread_id).await
+}
+
+fn thread_id_from_rollout_path(path: &Path) -> Option<ThreadId> {
+    let file_name = path.file_name()?.to_str()?;
+    let stem = file_name.strip_suffix(".jsonl")?;
+    if stem.len() < 37 {
+        return None;
+    }
+    let uuid_start = stem.len().saturating_sub(36);
+    if !stem[..uuid_start].ends_with('-') {
+        return None;
+    }
+    ThreadId::from_string(&stem[uuid_start..]).ok()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn summary_from_state_db_metadata(
+    conversation_id: ThreadId,
+    path: PathBuf,
+    has_user_event: bool,
+    title: String,
+    timestamp: String,
+    updated_at: String,
+    model_provider: String,
+    cwd: PathBuf,
+    cli_version: String,
+    source: String,
+    git_sha: Option<String>,
+    git_branch: Option<String>,
+    git_origin_url: Option<String>,
+) -> ConversationSummary {
+    let preview = if has_user_event { title } else { String::new() };
+    let source = serde_json::from_value(serde_json::Value::String(source))
+        .unwrap_or(codex_protocol::protocol::SessionSource::Unknown);
+    let git_info = if git_sha.is_none() && git_branch.is_none() && git_origin_url.is_none() {
+        None
+    } else {
+        Some(ConversationGitInfo {
+            sha: git_sha,
+            branch: git_branch,
+            origin_url: git_origin_url,
+        })
+    };
+    ConversationSummary {
+        conversation_id,
+        path,
+        preview,
+        timestamp: Some(timestamp),
+        updated_at: Some(updated_at),
+        model_provider,
+        cwd,
+        cli_version,
+        source,
+        git_info,
+    }
 }
 
 pub(crate) async fn read_summary_from_rollout(

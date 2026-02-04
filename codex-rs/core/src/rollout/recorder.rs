@@ -31,7 +31,6 @@ use super::list::ThreadSortKey;
 use super::list::ThreadsPage;
 use super::list::get_threads;
 use super::list::get_threads_in_root;
-use super::list::read_head_for_summary;
 use super::metadata;
 use super::policy::is_persisted_response_item;
 use crate::config::Config;
@@ -183,9 +182,7 @@ impl RolloutRecorder {
         )
         .await
         {
-            let mut page: ThreadsPage = db_page.into();
-            populate_thread_heads(page.items.as_mut_slice()).await;
-            return Ok(page);
+            return Ok(db_page.into());
         }
         tracing::error!("Falling back on rollout system");
         state_db::record_discrepancy("list_threads_with_db_fallback", "falling_back");
@@ -231,9 +228,37 @@ impl RolloutRecorder {
         default_provider: &str,
         filter_cwd: Option<&Path>,
     ) -> std::io::Result<Option<PathBuf>> {
+        let state_db_ctx = state_db::open_if_present(codex_home, default_provider).await;
+        if state_db_ctx.is_some() {
+            let mut db_cursor = cursor.cloned();
+            loop {
+                let Some(db_page) = state_db::list_threads_db(
+                    state_db_ctx.as_deref(),
+                    codex_home,
+                    page_size,
+                    db_cursor.as_ref(),
+                    sort_key,
+                    allowed_sources,
+                    model_providers,
+                    false,
+                )
+                .await
+                else {
+                    break;
+                };
+                if let Some(path) = select_resume_path_from_db_page(&db_page, filter_cwd) {
+                    return Ok(Some(path));
+                }
+                db_cursor = db_page.next_anchor.map(Into::into);
+                if db_cursor.is_none() {
+                    break;
+                }
+            }
+        }
+
         let mut cursor = cursor.cloned();
         loop {
-            let page = Self::list_threads(
+            let page = get_threads(
                 codex_home,
                 page_size,
                 cursor.as_ref(),
@@ -671,20 +696,6 @@ impl From<codex_state::ThreadsPage> for ThreadsPage {
     }
 }
 
-async fn populate_thread_heads(items: &mut [ThreadItem]) {
-    for item in items {
-        item.head = read_head_for_summary(item.path.as_path())
-            .await
-            .unwrap_or_else(|err| {
-                warn!(
-                    "failed to read rollout head from state db path: {} ({err})",
-                    item.path.display()
-                );
-                Vec::new()
-            });
-    }
-}
-
 fn select_resume_path(page: &ThreadsPage, filter_cwd: Option<&Path>) -> Option<PathBuf> {
     match filter_cwd {
         Some(cwd) => page.items.iter().find_map(|item| {
@@ -698,17 +709,27 @@ fn select_resume_path(page: &ThreadsPage, filter_cwd: Option<&Path>) -> Option<P
     }
 }
 
+fn select_resume_path_from_db_page(
+    page: &codex_state::ThreadsPage,
+    filter_cwd: Option<&Path>,
+) -> Option<PathBuf> {
+    match filter_cwd {
+        Some(cwd) => page.items.iter().find_map(|item| {
+            if cwd_matches(item.cwd.as_path(), cwd) {
+                Some(item.rollout_path.clone())
+            } else {
+                None
+            }
+        }),
+        None => page.items.first().map(|item| item.rollout_path.clone()),
+    }
+}
+
 fn session_cwd_matches(head: &[serde_json::Value], cwd: &Path) -> bool {
     let Some(session_cwd) = extract_session_cwd(head) else {
         return false;
     };
-    if let (Ok(ca), Ok(cb)) = (
-        path_utils::normalize_for_path_comparison(&session_cwd),
-        path_utils::normalize_for_path_comparison(cwd),
-    ) {
-        return ca == cb;
-    }
-    session_cwd == cwd
+    cwd_matches(session_cwd.as_path(), cwd)
 }
 
 fn extract_session_cwd(head: &[serde_json::Value]) -> Option<PathBuf> {
@@ -716,4 +737,14 @@ fn extract_session_cwd(head: &[serde_json::Value]) -> Option<PathBuf> {
         let meta_line = serde_json::from_value::<SessionMetaLine>(value.clone()).ok()?;
         Some(meta_line.meta.cwd)
     })
+}
+
+fn cwd_matches(session_cwd: &Path, cwd: &Path) -> bool {
+    if let (Ok(ca), Ok(cb)) = (
+        path_utils::normalize_for_path_comparison(session_cwd),
+        path_utils::normalize_for_path_comparison(cwd),
+    ) {
+        return ca == cb;
+    }
+    session_cwd == cwd
 }
