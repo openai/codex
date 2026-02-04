@@ -76,8 +76,8 @@ pub struct ThreadMetadata {
     pub approval_mode: String,
     /// The last observed token usage.
     pub tokens_used: i64,
-    /// Whether the thread has observed a user message.
-    pub has_user_event: bool,
+    /// First user message observed for this thread, if any.
+    pub first_user_message: Option<String>,
     /// The archive timestamp, if the thread is archived.
     pub archived_at: Option<DateTime<Utc>>,
     /// The git commit SHA, if known.
@@ -173,7 +173,7 @@ impl ThreadMetadataBuilder {
             sandbox_policy,
             approval_mode,
             tokens_used: 0,
-            has_user_event: false,
+            first_user_message: None,
             archived_at: self.archived_at.map(canonicalize_datetime),
             git_sha: self.git_sha.clone(),
             git_branch: self.git_branch.clone(),
@@ -222,8 +222,8 @@ impl ThreadMetadata {
         if self.tokens_used != other.tokens_used {
             diffs.push("tokens_used");
         }
-        if self.has_user_event != other.has_user_event {
-            diffs.push("has_user_event");
+        if self.first_user_message != other.first_user_message {
+            diffs.push("first_user_message");
         }
         if self.archived_at != other.archived_at {
             diffs.push("archived_at");
@@ -259,7 +259,7 @@ pub(crate) struct ThreadRow {
     sandbox_policy: String,
     approval_mode: String,
     tokens_used: i64,
-    has_user_event: bool,
+    first_user_message: String,
     archived_at: Option<i64>,
     git_sha: Option<String>,
     git_branch: Option<String>,
@@ -281,7 +281,7 @@ impl ThreadRow {
             sandbox_policy: row.try_get("sandbox_policy")?,
             approval_mode: row.try_get("approval_mode")?,
             tokens_used: row.try_get("tokens_used")?,
-            has_user_event: row.try_get("has_user_event")?,
+            first_user_message: row.try_get("first_user_message")?,
             archived_at: row.try_get("archived_at")?,
             git_sha: row.try_get("git_sha")?,
             git_branch: row.try_get("git_branch")?,
@@ -307,7 +307,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             sandbox_policy,
             approval_mode,
             tokens_used,
-            has_user_event,
+            first_user_message,
             archived_at,
             git_sha,
             git_branch,
@@ -326,7 +326,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             sandbox_policy,
             approval_mode,
             tokens_used,
-            has_user_event,
+            first_user_message: (!first_user_message.is_empty()).then_some(first_user_message),
             archived_at: archived_at.map(epoch_seconds_to_datetime).transpose()?,
             git_sha,
             git_branch,

@@ -5077,8 +5077,7 @@ async fn read_summary_from_state_db_context_by_thread_id(
     Some(summary_from_state_db_metadata(
         metadata.id,
         metadata.rollout_path,
-        metadata.has_user_event,
-        metadata.title,
+        metadata.first_user_message,
         metadata
             .created_at
             .to_rfc3339_opts(SecondsFormat::Secs, true),
@@ -5100,23 +5099,46 @@ async fn summary_from_thread_list_item(
     fallback_provider: &str,
     state_db_ctx: Option<&StateDbHandle>,
 ) -> Option<ConversationSummary> {
-    let updated_at = it.updated_at.clone();
-    if let Some(session_meta_line) = it
-        .head
-        .first()
-        .and_then(|first| serde_json::from_value::<SessionMetaLine>(first.clone()).ok())
-    {
-        return extract_conversation_summary(
-            it.path,
-            &it.head,
-            &session_meta_line.meta,
-            session_meta_line.git.as_ref(),
-            fallback_provider,
+    if let Some(thread_id) = it.thread_id {
+        let timestamp = it.created_at.clone();
+        let updated_at = it.updated_at.clone().or_else(|| timestamp.clone());
+        let model_provider = it
+            .model_provider
+            .clone()
+            .unwrap_or_else(|| fallback_provider.to_string());
+        let cwd = it.cwd?;
+        let cli_version = it.cli_version.unwrap_or_default();
+        let source = it
+            .source
+            .unwrap_or(codex_protocol::protocol::SessionSource::Unknown);
+        return Some(ConversationSummary {
+            conversation_id: thread_id,
+            path: it.path,
+            preview: it.first_user_message.unwrap_or_default(),
+            timestamp,
             updated_at,
-        );
+            model_provider,
+            cwd,
+            cli_version,
+            source,
+            git_info: if it.git_sha.is_none()
+                && it.git_branch.is_none()
+                && it.git_origin_url.is_none()
+            {
+                None
+            } else {
+                Some(ConversationGitInfo {
+                    sha: it.git_sha,
+                    branch: it.git_branch,
+                    origin_url: it.git_origin_url,
+                })
+            },
+        });
     }
-    let thread_id = thread_id_from_rollout_path(it.path.as_path())?;
-    read_summary_from_state_db_context_by_thread_id(state_db_ctx, thread_id).await
+    if let Some(thread_id) = thread_id_from_rollout_path(it.path.as_path()) {
+        return read_summary_from_state_db_context_by_thread_id(state_db_ctx, thread_id).await;
+    }
+    None
 }
 
 fn thread_id_from_rollout_path(path: &Path) -> Option<ThreadId> {
@@ -5136,8 +5158,7 @@ fn thread_id_from_rollout_path(path: &Path) -> Option<ThreadId> {
 fn summary_from_state_db_metadata(
     conversation_id: ThreadId,
     path: PathBuf,
-    has_user_event: bool,
-    title: String,
+    first_user_message: Option<String>,
     timestamp: String,
     updated_at: String,
     model_provider: String,
@@ -5148,7 +5169,7 @@ fn summary_from_state_db_metadata(
     git_branch: Option<String>,
     git_origin_url: Option<String>,
 ) -> ConversationSummary {
-    let preview = if has_user_event { title } else { String::new() };
+    let preview = first_user_message.unwrap_or_default();
     let source = serde_json::from_value(serde_json::Value::String(source))
         .unwrap_or(codex_protocol::protocol::SessionSource::Unknown);
     let git_info = if git_sha.is_none() && git_branch.is_none() && git_origin_url.is_none() {

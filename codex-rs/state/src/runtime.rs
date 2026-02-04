@@ -104,7 +104,7 @@ SELECT
     sandbox_policy,
     approval_mode,
     tokens_used,
-    has_user_event,
+    first_user_message,
     archived_at,
     git_sha,
     git_branch,
@@ -203,7 +203,7 @@ SELECT
     sandbox_policy,
     approval_mode,
     tokens_used,
-    has_user_event,
+    first_user_message,
     archived_at,
     git_sha,
     git_branch,
@@ -358,7 +358,7 @@ INSERT INTO threads (
     sandbox_policy,
     approval_mode,
     tokens_used,
-    has_user_event,
+    first_user_message,
     archived,
     archived_at,
     git_sha,
@@ -377,7 +377,7 @@ ON CONFLICT(id) DO UPDATE SET
     sandbox_policy = excluded.sandbox_policy,
     approval_mode = excluded.approval_mode,
     tokens_used = excluded.tokens_used,
-    has_user_event = excluded.has_user_event,
+    first_user_message = excluded.first_user_message,
     archived = excluded.archived,
     archived_at = excluded.archived_at,
     git_sha = excluded.git_sha,
@@ -397,7 +397,7 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.sandbox_policy.as_str())
         .bind(metadata.approval_mode.as_str())
         .bind(metadata.tokens_used)
-        .bind(metadata.has_user_event)
+        .bind(metadata.first_user_message.as_deref().unwrap_or_default())
         .bind(metadata.archived_at.is_some())
         .bind(metadata.archived_at.map(datetime_to_epoch_seconds))
         .bind(metadata.git_sha.as_deref())
@@ -643,7 +643,7 @@ fn push_thread_filters<'a>(
     } else {
         builder.push(" AND archived = 0");
     }
-    builder.push(" AND has_user_event = 1");
+    builder.push(" AND first_user_message <> ''");
     if !allowed_sources.is_empty() {
         builder.push(" AND source IN (");
         let mut separated = builder.separated(", ");

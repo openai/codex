@@ -682,7 +682,18 @@ impl From<codex_state::ThreadsPage> for ThreadsPage {
             .into_iter()
             .map(|item| ThreadItem {
                 path: item.rollout_path,
-                head: Vec::new(),
+                thread_id: Some(item.id),
+                first_user_message: item.first_user_message,
+                cwd: Some(item.cwd),
+                git_branch: item.git_branch,
+                git_sha: item.git_sha,
+                git_origin_url: item.git_origin_url,
+                source: Some(
+                    serde_json::from_value(Value::String(item.source))
+                        .unwrap_or(SessionSource::Unknown),
+                ),
+                model_provider: Some(item.model_provider),
+                cli_version: Some(item.cli_version),
                 created_at: Some(item.created_at.to_rfc3339_opts(SecondsFormat::Secs, true)),
                 updated_at: Some(item.updated_at.to_rfc3339_opts(SecondsFormat::Secs, true)),
             })
@@ -699,7 +710,11 @@ impl From<codex_state::ThreadsPage> for ThreadsPage {
 fn select_resume_path(page: &ThreadsPage, filter_cwd: Option<&Path>) -> Option<PathBuf> {
     match filter_cwd {
         Some(cwd) => page.items.iter().find_map(|item| {
-            if session_cwd_matches(&item.head, cwd) {
+            if item
+                .cwd
+                .as_ref()
+                .is_some_and(|session_cwd| cwd_matches(session_cwd, cwd))
+            {
                 Some(item.path.clone())
             } else {
                 None
@@ -723,20 +738,6 @@ fn select_resume_path_from_db_page(
         }),
         None => page.items.first().map(|item| item.rollout_path.clone()),
     }
-}
-
-fn session_cwd_matches(head: &[serde_json::Value], cwd: &Path) -> bool {
-    let Some(session_cwd) = extract_session_cwd(head) else {
-        return false;
-    };
-    cwd_matches(session_cwd.as_path(), cwd)
-}
-
-fn extract_session_cwd(head: &[serde_json::Value]) -> Option<PathBuf> {
-    head.iter().find_map(|value| {
-        let meta_line = serde_json::from_value::<SessionMetaLine>(value.clone()).ok()?;
-        Some(meta_line.meta.cwd)
-    })
 }
 
 fn cwd_matches(session_cwd: &Path, cwd: &Path) -> bool {

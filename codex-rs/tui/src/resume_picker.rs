@@ -14,7 +14,6 @@ use codex_core::ThreadSortKey;
 use codex_core::ThreadsPage;
 use codex_core::find_thread_names_by_ids;
 use codex_core::path_utils;
-use codex_protocol::items::TurnItem;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -37,8 +36,6 @@ use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
 use codex_protocol::ThreadId;
-use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::SessionMetaLine;
 
 const PAGE_SIZE: usize = 25;
 const LOAD_NEAR_THRESHOLD: usize = 5;
@@ -766,47 +763,31 @@ fn rows_from_items(items: Vec<ThreadItem>) -> Vec<Row> {
 }
 
 fn head_to_row(item: &ThreadItem) -> Row {
-    let created_at = item
-        .created_at
-        .as_deref()
-        .and_then(parse_timestamp_str)
-        .or_else(|| item.head.first().and_then(extract_timestamp));
+    let created_at = item.created_at.as_deref().and_then(parse_timestamp_str);
     let updated_at = item
         .updated_at
         .as_deref()
         .and_then(parse_timestamp_str)
         .or(created_at);
 
-    let (cwd, git_branch, thread_id) = extract_session_meta_from_head(&item.head);
-    let preview = preview_from_head(&item.head)
-        .map(|s| s.trim().to_string())
+    let preview = item
+        .first_user_message
+        .as_deref()
+        .map(str::trim)
         .filter(|s| !s.is_empty())
+        .map(str::to_string)
         .unwrap_or_else(|| String::from("(no message yet)"));
 
     Row {
         path: item.path.clone(),
         preview,
-        thread_id,
+        thread_id: item.thread_id,
         thread_name: None,
         created_at,
         updated_at,
-        cwd,
-        git_branch,
+        cwd: item.cwd.clone(),
+        git_branch: item.git_branch.clone(),
     }
-}
-
-fn extract_session_meta_from_head(
-    head: &[serde_json::Value],
-) -> (Option<PathBuf>, Option<String>, Option<ThreadId>) {
-    for value in head {
-        if let Ok(meta_line) = serde_json::from_value::<SessionMetaLine>(value.clone()) {
-            let cwd = Some(meta_line.meta.cwd);
-            let git_branch = meta_line.git.and_then(|git| git.branch);
-            let thread_id = Some(meta_line.meta.id);
-            return (cwd, git_branch, thread_id);
-        }
-    }
-    (None, None, None)
 }
 
 fn paths_match(a: &Path, b: &Path) -> bool {
@@ -823,23 +804,6 @@ fn parse_timestamp_str(ts: &str) -> Option<DateTime<Utc>> {
     chrono::DateTime::parse_from_rfc3339(ts)
         .map(|dt| dt.with_timezone(&Utc))
         .ok()
-}
-
-fn extract_timestamp(value: &serde_json::Value) -> Option<DateTime<Utc>> {
-    value
-        .get("timestamp")
-        .and_then(|v| v.as_str())
-        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
-        .map(|dt| dt.with_timezone(&Utc))
-}
-
-fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {
-    head.iter()
-        .filter_map(|value| serde_json::from_value::<ResponseItem>(value.clone()).ok())
-        .find_map(|item| match codex_core::parse_turn_item(&item) {
-            Some(TurnItem::UserMessage(user)) => Some(user.message()),
-            _ => None,
-        })
 }
 
 fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
@@ -1200,24 +1164,18 @@ mod tests {
     use std::sync::Arc;
     use std::sync::Mutex;
 
-    fn head_with_ts_and_user_text(ts: &str, texts: &[&str]) -> Vec<serde_json::Value> {
-        vec![
-            json!({ "timestamp": ts }),
-            json!({
-                "type": "message",
-                "role": "user",
-                "content": texts
-                    .iter()
-                    .map(|t| json!({ "type": "input_text", "text": *t }))
-                    .collect::<Vec<_>>()
-            }),
-        ]
-    }
-
     fn make_item(path: &str, ts: &str, preview: &str) -> ThreadItem {
         ThreadItem {
             path: PathBuf::from(path),
-            head: head_with_ts_and_user_text(ts, &[preview]),
+            thread_id: None,
+            first_user_message: Some(preview.to_string()),
+            cwd: None,
+            git_branch: None,
+            git_sha: None,
+            git_origin_url: None,
+            source: None,
+            model_provider: None,
+            cli_version: None,
             created_at: Some(ts.to_string()),
             updated_at: Some(ts.to_string()),
         }
@@ -1243,39 +1201,23 @@ mod tests {
     }
 
     #[test]
-    fn preview_uses_first_message_input_text() {
-        let head = vec![
-            json!({ "timestamp": "2025-01-01T00:00:00Z" }),
-            json!({
-                "type": "message",
-                "role": "user",
-                "content": [
-                    { "type": "input_text", "text": "# AGENTS.md instructions for project\n\n<INSTRUCTIONS>\nhi\n</INSTRUCTIONS>" },
-                ]
-            }),
-            json!({
-                "type": "message",
-                "role": "user",
-                "content": [
-                    { "type": "input_text", "text": "<environment_context>...</environment_context>" },
-                ]
-            }),
-            json!({
-                "type": "message",
-                "role": "user",
-                "content": [
-                    { "type": "input_text", "text": "real question" },
-                    { "type": "input_image", "image_url": "ignored" }
-                ]
-            }),
-            json!({
-                "type": "message",
-                "role": "user",
-                "content": [ { "type": "input_text", "text": "later text" } ]
-            }),
-        ];
-        let preview = preview_from_head(&head);
-        assert_eq!(preview.as_deref(), Some("real question"));
+    fn head_to_row_uses_first_user_message() {
+        let item = ThreadItem {
+            path: PathBuf::from("/tmp/a.jsonl"),
+            thread_id: None,
+            first_user_message: Some("real question".to_string()),
+            cwd: None,
+            git_branch: None,
+            git_sha: None,
+            git_origin_url: None,
+            source: None,
+            model_provider: None,
+            cli_version: None,
+            created_at: Some("2025-01-01T00:00:00Z".into()),
+            updated_at: Some("2025-01-01T00:00:00Z".into()),
+        };
+        let row = head_to_row(&item);
+        assert_eq!(row.preview, "real question");
     }
 
     #[test]
@@ -1283,13 +1225,29 @@ mod tests {
         // Construct two items with different timestamps and real user text.
         let a = ThreadItem {
             path: PathBuf::from("/tmp/a.jsonl"),
-            head: head_with_ts_and_user_text("2025-01-01T00:00:00Z", &["A"]),
+            thread_id: None,
+            first_user_message: Some("A".to_string()),
+            cwd: None,
+            git_branch: None,
+            git_sha: None,
+            git_origin_url: None,
+            source: None,
+            model_provider: None,
+            cli_version: None,
             created_at: Some("2025-01-01T00:00:00Z".into()),
             updated_at: Some("2025-01-01T00:00:00Z".into()),
         };
         let b = ThreadItem {
             path: PathBuf::from("/tmp/b.jsonl"),
-            head: head_with_ts_and_user_text("2025-01-02T00:00:00Z", &["B"]),
+            thread_id: None,
+            first_user_message: Some("B".to_string()),
+            cwd: None,
+            git_branch: None,
+            git_sha: None,
+            git_origin_url: None,
+            source: None,
+            model_provider: None,
+            cli_version: None,
             created_at: Some("2025-01-02T00:00:00Z".into()),
             updated_at: Some("2025-01-02T00:00:00Z".into()),
         };
@@ -1302,10 +1260,17 @@ mod tests {
 
     #[test]
     fn row_uses_tail_timestamp_for_updated_at() {
-        let head = head_with_ts_and_user_text("2025-01-01T00:00:00Z", &["Hello"]);
         let item = ThreadItem {
             path: PathBuf::from("/tmp/a.jsonl"),
-            head,
+            thread_id: None,
+            first_user_message: Some("Hello".to_string()),
+            cwd: None,
+            git_branch: None,
+            git_sha: None,
+            git_origin_url: None,
+            source: None,
+            model_provider: None,
+            cli_version: None,
             created_at: Some("2025-01-01T00:00:00Z".into()),
             updated_at: Some("2025-01-01T01:00:00Z".into()),
         };
