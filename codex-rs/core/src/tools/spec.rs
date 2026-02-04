@@ -1687,6 +1687,22 @@ mod tests {
         assert_eq!(&tool_names, &expected_tools,);
     }
 
+    fn assert_default_model_tools(
+        model_slug: &str,
+        features: &Features,
+        web_search_mode: Option<WebSearchMode>,
+        shell_tool: &'static str,
+        expected_tail: &[&str],
+    ) {
+        let mut expected = if features.enabled(Feature::UnifiedExec) {
+            vec!["exec_command", "write_stdin"]
+        } else {
+            vec![shell_tool]
+        };
+        expected.extend(expected_tail);
+        assert_model_tools(model_slug, features, web_search_mode, &expected);
+    }
+
     #[test]
     fn web_search_mode_cached_sets_external_web_access_false() {
         let config = test_config();
@@ -1735,12 +1751,12 @@ mod tests {
     fn test_build_specs_gpt5_codex_default() {
         let mut features = Features::with_defaults();
         features.enable(Feature::CollaborationModes);
-        assert_model_tools(
+        assert_default_model_tools(
             "gpt-5-codex",
             &features,
             Some(WebSearchMode::Cached),
+            "shell_command",
             &[
-                "shell_command",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1757,12 +1773,12 @@ mod tests {
     fn test_build_specs_gpt51_codex_default() {
         let mut features = Features::with_defaults();
         features.enable(Feature::CollaborationModes);
-        assert_model_tools(
+        assert_default_model_tools(
             "gpt-5.1-codex",
             &features,
             Some(WebSearchMode::Cached),
+            "shell_command",
             &[
-                "shell_command",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1827,12 +1843,12 @@ mod tests {
     fn test_codex_mini_defaults() {
         let mut features = Features::with_defaults();
         features.enable(Feature::CollaborationModes);
-        assert_model_tools(
+        assert_default_model_tools(
             "codex-mini-latest",
             &features,
             Some(WebSearchMode::Cached),
+            "local_shell",
             &[
-                "local_shell",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1848,12 +1864,12 @@ mod tests {
     fn test_codex_5_1_mini_defaults() {
         let mut features = Features::with_defaults();
         features.enable(Feature::CollaborationModes);
-        assert_model_tools(
+        assert_default_model_tools(
             "gpt-5.1-codex-mini",
             &features,
             Some(WebSearchMode::Cached),
+            "shell_command",
             &[
-                "shell_command",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1870,12 +1886,12 @@ mod tests {
     fn test_gpt_5_defaults() {
         let mut features = Features::with_defaults();
         features.enable(Feature::CollaborationModes);
-        assert_model_tools(
+        assert_default_model_tools(
             "gpt-5",
             &features,
             Some(WebSearchMode::Cached),
+            "shell",
             &[
-                "shell",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1891,12 +1907,12 @@ mod tests {
     fn test_gpt_5_1_defaults() {
         let mut features = Features::with_defaults();
         features.enable(Feature::CollaborationModes);
-        assert_model_tools(
+        assert_default_model_tools(
             "gpt-5.1",
             &features,
             Some(WebSearchMode::Cached),
+            "shell_command",
             &[
-                "shell_command",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",

@@ -10,6 +10,7 @@ use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::TransportManager;
 use codex_core::WireApi;
+use codex_core::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::SessionSource;
@@ -17,6 +18,7 @@ use codex_otel::OtelManager;
 use codex_otel::metrics::MetricsClient;
 use codex_otel::metrics::MetricsConfig;
 use codex_protocol::ThreadId;
+use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ReasoningSummary;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::WebSocketConnectionConfig;
@@ -29,6 +31,7 @@ use core_test_support::skip_if_no_network;
 use futures::StreamExt;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -103,6 +106,72 @@ async fn responses_websocket_emits_websocket_telemetry_events() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_includes_timing_metrics_header_when_runtime_metrics_enabled() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![vec![
+        ev_response_created("resp-1"),
+        serde_json::json!({
+            "type": "responsesapi.websocket_timing",
+            "timing_metrics": {
+                "responses_duration_excl_engine_and_client_tool_time_ms": 120,
+                "engine_service_total_ms": 450
+            }
+        }),
+        ev_completed("resp-1"),
+    ]]])
+    .await;
+
+    let harness = websocket_harness_with_runtime_metrics(&server, true).await;
+    harness.otel_manager.reset_runtime_metrics();
+    let mut session = harness.client.new_session(None);
+    let prompt = prompt_with_input(vec![message_item("hello")]);
+
+    stream_until_complete(&mut session, &prompt).await;
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    let handshake = server.single_handshake();
+    assert_eq!(
+        handshake.header(X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER),
+        Some("true".to_string())
+    );
+
+    let summary = harness
+        .otel_manager
+        .runtime_metrics_summary()
+        .expect("runtime metrics summary");
+    assert_eq!(summary.responses_api_overhead_ms, 120);
+    assert_eq!(summary.responses_api_inference_time_ms, 450);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_omits_timing_metrics_header_when_runtime_metrics_disabled() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![vec![
+        ev_response_created("resp-1"),
+        ev_completed("resp-1"),
+    ]]])
+    .await;
+
+    let harness = websocket_harness_with_runtime_metrics(&server, false).await;
+    let mut session = harness.client.new_session(None);
+    let prompt = prompt_with_input(vec![message_item("hello")]);
+
+    stream_until_complete(&mut session, &prompt).await;
+
+    let handshake = server.single_handshake();
+    assert_eq!(
+        handshake.header(X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER),
+        None
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_websocket_emits_reasoning_included_event() {
     skip_if_no_network!();
 
@@ -133,6 +202,90 @@ async fn responses_websocket_emits_reasoning_included_event() {
     }
 
     assert!(saw_reasoning_included);
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_emits_rate_limit_events() {
+    skip_if_no_network!();
+
+    let rate_limit_event = json!({
+        "type": "codex.rate_limits",
+        "plan_type": "plus",
+        "rate_limits": {
+            "allowed": true,
+            "limit_reached": false,
+            "primary": {
+                "used_percent": 42,
+                "window_minutes": 60,
+                "reset_at": 1700000000
+            },
+            "secondary": null
+        },
+        "code_review_rate_limits": null,
+        "credits": {
+            "has_credits": true,
+            "unlimited": false,
+            "balance": "123"
+        },
+        "promo": null
+    });
+
+    let server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
+        requests: vec![vec![
+            rate_limit_event,
+            ev_response_created("resp-1"),
+            ev_completed("resp-1"),
+        ]],
+        response_headers: vec![
+            ("X-Models-Etag".to_string(), "etag-123".to_string()),
+            ("X-Reasoning-Included".to_string(), "true".to_string()),
+        ],
+    }])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    let mut session = harness.client.new_session(None);
+    let prompt = prompt_with_input(vec![message_item("hello")]);
+
+    let mut stream = session
+        .stream(&prompt)
+        .await
+        .expect("websocket stream failed");
+
+    let mut saw_rate_limits = None;
+    let mut saw_models_etag = None;
+    let mut saw_reasoning_included = false;
+
+    while let Some(event) = stream.next().await {
+        match event.expect("event") {
+            ResponseEvent::RateLimits(snapshot) => {
+                saw_rate_limits = Some(snapshot);
+            }
+            ResponseEvent::ModelsEtag(etag) => {
+                saw_models_etag = Some(etag);
+            }
+            ResponseEvent::ServerReasoningIncluded(true) => {
+                saw_reasoning_included = true;
+            }
+            ResponseEvent::Completed { .. } => break,
+            _ => {}
+        }
+    }
+
+    let rate_limits = saw_rate_limits.expect("missing rate limits");
+    let primary = rate_limits.primary.expect("missing primary window");
+    assert_eq!(primary.used_percent, 42.0);
+    assert_eq!(primary.window_minutes, Some(60));
+    assert_eq!(primary.resets_at, Some(1_700_000_000));
+    assert_eq!(rate_limits.plan_type, Some(PlanType::Plus));
+    let credits = rate_limits.credits.expect("missing credits");
+    assert!(credits.has_credits);
+    assert!(!credits.unlimited);
+    assert_eq!(credits.balance.as_deref(), Some("123"));
+    assert_eq!(saw_models_etag.as_deref(), Some("etag-123"));
+    assert!(saw_reasoning_included);
+
     server.shutdown().await;
 }
 
@@ -241,11 +394,21 @@ fn websocket_provider(server: &WebSocketTestServer) -> ModelProviderInfo {
 }
 
 async fn websocket_harness(server: &WebSocketTestServer) -> WebsocketTestHarness {
+    websocket_harness_with_runtime_metrics(server, false).await
+}
+
+async fn websocket_harness_with_runtime_metrics(
+    server: &WebSocketTestServer,
+    runtime_metrics_enabled: bool,
+) -> WebsocketTestHarness {
     let provider = websocket_provider(server);
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model = Some(MODEL.to_string());
     config.features.enable(Feature::ResponsesWebsockets);
+    if runtime_metrics_enabled {
+        config.features.enable(Feature::RuntimeMetrics);
+    }
     let config = Arc::new(config);
     let model_info = ModelsManager::construct_model_info_offline(MODEL, &config);
     let conversation_id = ThreadId::new();
