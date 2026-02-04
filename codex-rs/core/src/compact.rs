@@ -264,6 +264,25 @@ pub(crate) fn is_summary_message(message: &str) -> bool {
     message.starts_with(format!("{SUMMARY_PREFIX}\n").as_str())
 }
 
+pub(crate) fn refresh_compacted_developer_instructions(
+    mut compacted_history: Vec<ResponseItem>,
+    initial_context: &[ResponseItem],
+) -> Vec<ResponseItem> {
+    compacted_history
+        .retain(|item| !matches!(item, ResponseItem::Message { role, .. } if role == "developer"));
+
+    compacted_history.extend(
+        initial_context
+            .iter()
+            .filter(
+                |item| matches!(item, ResponseItem::Message { role, .. } if role == "developer"),
+            )
+            .cloned(),
+    );
+
+    compacted_history
+}
+
 pub(crate) fn build_compacted_history(
     initial_context: Vec<ResponseItem>,
     user_messages: &[String],
@@ -578,5 +597,100 @@ mod tests {
             found_marker,
             "expected compacted history to retain <turn_aborted> marker"
         );
+    }
+
+    #[test]
+    fn refresh_compacted_developer_instructions_replaces_developer_messages() {
+        let compacted_history = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "stale permissions".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "summary".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "stale personality".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ];
+        let initial_context = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "fresh permissions".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "<environment_context>cwd=/tmp</environment_context>".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "fresh personality".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ];
+
+        let refreshed =
+            refresh_compacted_developer_instructions(compacted_history, &initial_context);
+        let expected = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "summary".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "fresh permissions".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "fresh personality".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ];
+        assert_eq!(refreshed, expected);
     }
 }

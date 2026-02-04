@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::Prompt;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::compact::refresh_compacted_developer_instructions;
 use crate::context_manager::ContextManager;
 use crate::context_manager::is_codex_generated_item;
 use crate::error::Result as CodexResult;
@@ -80,6 +81,8 @@ async fn run_remote_compact_task_inner_impl(
         .client
         .compact_conversation_history(&prompt)
         .await?;
+    let initial_context = sess.build_initial_context(turn_context).await;
+    new_history = refresh_compacted_developer_instructions(new_history, &initial_context);
 
     if !ghost_snapshots.is_empty() {
         new_history.extend(ghost_snapshots);
