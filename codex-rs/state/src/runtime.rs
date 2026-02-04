@@ -750,6 +750,22 @@ fn push_thread_filters<'a>(
     }
 }
 
+fn push_thread_order_and_limit(
+    builder: &mut QueryBuilder<'_, Sqlite>,
+    sort_key: SortKey,
+    limit: usize,
+) {
+    let order_column = match sort_key {
+        SortKey::CreatedAt => "created_at",
+        SortKey::UpdatedAt => "updated_at",
+    };
+    builder.push(" ORDER BY ");
+    builder.push(order_column);
+    builder.push(" DESC, id DESC");
+    builder.push(" LIMIT ");
+    builder.push_bind(limit as i64);
+}
+
 #[cfg(test)]
 mod tests {
     use super::STATE_DB_FILENAME;
@@ -842,20 +858,4 @@ mod tests {
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
-}
-
-fn push_thread_order_and_limit(
-    builder: &mut QueryBuilder<'_, Sqlite>,
-    sort_key: SortKey,
-    limit: usize,
-) {
-    let order_column = match sort_key {
-        SortKey::CreatedAt => "created_at",
-        SortKey::UpdatedAt => "updated_at",
-    };
-    builder.push(" ORDER BY ");
-    builder.push(order_column);
-    builder.push(" DESC, id DESC");
-    builder.push(" LIMIT ");
-    builder.push_bind(limit as i64);
 }
