@@ -71,7 +71,7 @@ fn apply_event_msg(metadata: &mut ThreadMetadata, event: &EventMsg) {
 }
 
 fn apply_response_item(_metadata: &mut ThreadMetadata, _item: &ResponseItem) {
-    // TODO (jif)
+    // Title and has_user_event are derived from EventMsg::UserMessage only.
 }
 
 fn strip_user_message_prefix(text: &str) -> &str {
@@ -98,23 +98,23 @@ mod tests {
     use codex_protocol::ThreadId;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::RolloutItem;
-    use codex_protocol::protocol::USER_INSTRUCTIONS_OPEN_TAG;
+    use codex_protocol::protocol::USER_MESSAGE_BEGIN;
+    use codex_protocol::protocol::UserMessageEvent;
 
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
     use uuid::Uuid;
 
     #[test]
-    fn user_instructions_do_not_count_as_user_events() {
+    fn response_item_user_messages_do_not_set_title_or_has_user_event() {
         let mut metadata = metadata_for_test();
         let item = RolloutItem::ResponseItem(ResponseItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
-                text: format!(
-                    "# AGENTS.md instructions for /tmp\n\n{USER_INSTRUCTIONS_OPEN_TAG}test</user_instructions>"
-                ),
+                text: "hello from response item".to_string(),
             }],
             end_turn: None,
             phase: None,
@@ -127,23 +127,19 @@ mod tests {
     }
 
     #[test]
-    fn session_prefix_messages_do_not_count_as_user_events() {
+    fn event_msg_user_messages_set_title_and_has_user_event() {
         let mut metadata = metadata_for_test();
-        let item = RolloutItem::ResponseItem(ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "\n  <ENVIRONMENT_CONTEXT>{\"cwd\":\"/tmp\"}</ENVIRONMENT_CONTEXT>"
-                    .to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        });
+        let item = RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: format!("{USER_MESSAGE_BEGIN} actual user request"),
+            images: Some(vec![]),
+            local_images: vec![],
+            text_elements: vec![],
+        }));
 
         apply_rollout_item(&mut metadata, &item, "test-provider");
 
-        assert_eq!(metadata.has_user_event, false);
-        assert_eq!(metadata.title, "");
+        assert_eq!(metadata.has_user_event, true);
+        assert_eq!(metadata.title, "actual user request");
     }
 
     fn metadata_for_test() -> ThreadMetadata {
