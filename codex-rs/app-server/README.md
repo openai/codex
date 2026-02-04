@@ -147,7 +147,15 @@ Start a fresh thread when you need a new Codex conversation.
 { "method": "thread/started", "params": { "thread": { … } } }
 ```
 
-To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape matches `thread/start`, and no additional notifications are emitted. You can also pass the same configuration overrides supported by `thread/start`, such as `personality`:
+To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape matches `thread/start`, and no additional notifications are emitted.
+
+For response/default settings on resume (`model`, `modelProvider`, `cwd`, `approvalPolicy`, `sandbox`, `reasoningEffort`), values are resolved in this order:
+
+1. Explicit `thread/resume` params.
+2. The most recent recorded turn context in the resumed thread.
+3. Fallback to current config-derived defaults when no turn context exists (for example, older rollouts).
+
+You can also pass the same configuration overrides supported by `thread/start`, such as `personality`:
 
 ```json
 { "method": "thread/resume", "id": 11, "params": {

@@ -205,6 +205,7 @@ use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionMetaLine;
+use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_rmcp_client::perform_oauth_login_return_url;
@@ -2425,16 +2426,48 @@ impl CodexMessageProcessor {
             }
         };
 
+        let last_turn_context = last_turn_context_from_history(&thread_history);
+        let history_model_provider = history_model_provider(&thread_history);
+        let resolved_model = model.or_else(|| last_turn_context.map(|ctx| ctx.model.clone()));
+        let resolved_model_provider = model_provider.or(history_model_provider);
+        let resolved_cwd = cwd.or_else(|| {
+            last_turn_context.map(|ctx| ctx.cwd.as_os_str().to_string_lossy().into_owned())
+        });
+        let resolved_approval_policy =
+            approval_policy.or_else(|| last_turn_context.map(|ctx| ctx.approval_policy.into()));
+        let request_sandbox_is_none = sandbox.is_none();
+        let resolved_sandbox = sandbox.or_else(|| {
+            last_turn_context
+                .and_then(sandbox_mode_from_turn_context)
+                .map(Into::into)
+        });
+        let resolved_developer_instructions = developer_instructions
+            .or_else(|| last_turn_context.and_then(|ctx| ctx.developer_instructions.clone()));
+        let resolved_personality =
+            personality.or_else(|| last_turn_context.and_then(|ctx| ctx.personality.clone()));
+
+        let resume_context_overrides = last_turn_context.map(|ctx| {
+            (
+                ctx.effort,
+                ctx.summary,
+                if request_sandbox_is_none {
+                    Some(ctx.sandbox_policy.clone())
+                } else {
+                    None
+                },
+            )
+        });
+
         let history_cwd = thread_history.session_cwd();
         let typesafe_overrides = self.build_thread_config_overrides(
-            model,
-            model_provider,
-            cwd,
-            approval_policy,
-            sandbox,
+            resolved_model,
+            resolved_model_provider,
+            resolved_cwd,
+            resolved_approval_policy,
+            resolved_sandbox,
             base_instructions,
-            developer_instructions,
-            personality,
+            resolved_developer_instructions,
+            resolved_personality,
         );
 
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
@@ -2469,7 +2502,7 @@ impl CodexMessageProcessor {
             Ok(NewThread {
                 thread_id,
                 session_configured,
-                ..
+                thread,
             }) => {
                 let SessionConfiguredEvent {
                     rollout_path,
@@ -2496,6 +2529,34 @@ impl CodexMessageProcessor {
                     );
                 }
 
+                if let Some((effort, summary, sandbox_policy)) = resume_context_overrides {
+                    if let Err(err) = thread
+                        .submit(Op::OverrideTurnContext {
+                            cwd: None,
+                            approval_policy: None,
+                            sandbox_policy,
+                            windows_sandbox_level: None,
+                            model: None,
+                            effort: Some(effort),
+                            summary: Some(summary),
+                            collaboration_mode: None,
+                            personality: None,
+                        })
+                        .await
+                    {
+                        self.send_internal_error(
+                            request_id,
+                            format!(
+                                "failed to apply resume turn context for thread {thread_id}: {err}"
+                            ),
+                        )
+                        .await;
+                        return;
+                    }
+                }
+
+                let config_snapshot = thread.config_snapshot().await;
+
                 let mut thread = match read_summary_from_rollout(
                     rollout_path.as_path(),
                     fallback_model_provider.as_str(),
@@ -2521,12 +2582,12 @@ impl CodexMessageProcessor {
 
                 let response = ThreadResumeResponse {
                     thread,
-                    model: session_configured.model,
-                    model_provider: session_configured.model_provider_id,
-                    cwd: session_configured.cwd,
-                    approval_policy: session_configured.approval_policy.into(),
-                    sandbox: session_configured.sandbox_policy.into(),
-                    reasoning_effort: session_configured.reasoning_effort,
+                    model: config_snapshot.model,
+                    model_provider: config_snapshot.model_provider_id,
+                    cwd: config_snapshot.cwd,
+                    approval_policy: config_snapshot.approval_policy.into(),
+                    sandbox: config_snapshot.sandbox_policy.into(),
+                    reasoning_effort: config_snapshot.reasoning_effort,
                 };
 
                 self.outgoing.send_response(request_id, response).await;
@@ -5146,6 +5207,50 @@ fn map_git_info(git_info: &CoreGitInfo) -> ConversationGitInfo {
     }
 }
 
+fn last_turn_context_from_history(thread_history: &InitialHistory) -> Option<&TurnContextItem> {
+    history_rollout_items(thread_history)
+        .iter()
+        .rev()
+        .find_map(|item| match item {
+            RolloutItem::TurnContext(context) => Some(context),
+            _ => None,
+        })
+}
+
+fn history_model_provider(thread_history: &InitialHistory) -> Option<String> {
+    history_rollout_items(thread_history)
+        .iter()
+        .find_map(|item| match item {
+            RolloutItem::SessionMeta(meta) => meta.meta.model_provider.clone(),
+            _ => None,
+        })
+}
+
+fn history_rollout_items(thread_history: &InitialHistory) -> &[RolloutItem] {
+    match thread_history {
+        InitialHistory::New => &[],
+        InitialHistory::Resumed(resumed) => resumed.history.as_slice(),
+        InitialHistory::Forked(items) => items.as_slice(),
+    }
+}
+
+fn sandbox_mode_from_turn_context(
+    context: &TurnContextItem,
+) -> Option<codex_protocol::config_types::SandboxMode> {
+    match context.sandbox_policy {
+        codex_protocol::protocol::SandboxPolicy::DangerFullAccess => {
+            Some(codex_protocol::config_types::SandboxMode::DangerFullAccess)
+        }
+        codex_protocol::protocol::SandboxPolicy::ReadOnly => {
+            Some(codex_protocol::config_types::SandboxMode::ReadOnly)
+        }
+        codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. } => {
+            Some(codex_protocol::config_types::SandboxMode::WorkspaceWrite)
+        }
+        codex_protocol::protocol::SandboxPolicy::ExternalSandbox { .. } => None,
+    }
+}
+
 fn parse_datetime(timestamp: Option<&str>) -> Option<DateTime<Utc>> {
     timestamp.and_then(|ts| {
         chrono::DateTime::parse_from_rfc3339(ts)
@@ -5249,6 +5354,80 @@ mod tests {
             input_schema: json!({"properties": {}}),
         }];
         validate_dynamic_tools(&tools, &HashSet::new()).expect("valid schema");
+    }
+
+    #[test]
+    fn last_turn_context_from_history_uses_most_recent_turn_context() -> Result<()> {
+        let session_id = ThreadId::from_string("3f941c35-29b3-493b-b0a4-e25800d9aeb0")?;
+        let history = InitialHistory::Forked(vec![
+            RolloutItem::SessionMeta(SessionMetaLine {
+                meta: SessionMeta {
+                    id: session_id,
+                    model_provider: Some("provider-a".to_string()),
+                    ..Default::default()
+                },
+                git: None,
+            }),
+            RolloutItem::TurnContext(TurnContextItem {
+                cwd: PathBuf::from("/tmp/first"),
+                approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
+                sandbox_policy: codex_protocol::protocol::SandboxPolicy::ReadOnly,
+                model: "model-first".to_string(),
+                personality: None,
+                collaboration_mode: None,
+                effort: None,
+                summary: codex_protocol::config_types::ReasoningSummary::Auto,
+                user_instructions: None,
+                developer_instructions: None,
+                final_output_json_schema: None,
+                truncation_policy: None,
+            }),
+            RolloutItem::TurnContext(TurnContextItem {
+                cwd: PathBuf::from("/tmp/second"),
+                approval_policy: codex_protocol::protocol::AskForApproval::Never,
+                sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+                model: "model-second".to_string(),
+                personality: Some(Personality::Friendly),
+                collaboration_mode: None,
+                effort: Some(codex_protocol::openai_models::ReasoningEffort::High),
+                summary: codex_protocol::config_types::ReasoningSummary::Detailed,
+                user_instructions: None,
+                developer_instructions: Some("dev notes".to_string()),
+                final_output_json_schema: None,
+                truncation_policy: None,
+            }),
+        ]);
+
+        let context = last_turn_context_from_history(&history).expect("last turn context");
+        assert_eq!(context.model, "model-second");
+        assert_eq!(context.cwd, PathBuf::from("/tmp/second"));
+        assert_eq!(
+            history_model_provider(&history),
+            Some("provider-a".to_string())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sandbox_mode_from_turn_context_returns_none_for_external_sandbox() {
+        let context = TurnContextItem {
+            cwd: PathBuf::from("/tmp"),
+            approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
+            sandbox_policy: codex_protocol::protocol::SandboxPolicy::ExternalSandbox {
+                network_access: codex_protocol::protocol::NetworkAccess::Enabled,
+            },
+            model: "model".to_string(),
+            personality: None,
+            collaboration_mode: None,
+            effort: None,
+            summary: codex_protocol::config_types::ReasoningSummary::Auto,
+            user_instructions: None,
+            developer_instructions: None,
+            final_output_json_schema: None,
+            truncation_policy: None,
+        };
+
+        assert_eq!(sandbox_mode_from_turn_context(&context), None);
     }
 
     #[test]
