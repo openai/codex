@@ -196,7 +196,7 @@ mod windows_impl {
         codex_home: PathBuf,
         // Real user's CODEX_HOME for shared data (caps, config).
         real_codex_home: PathBuf,
-        cap_sid: String,
+        cap_sids: Vec<String>,
         request_file: Option<PathBuf>,
         command: Vec<String>,
         cwd: PathBuf,
@@ -239,14 +239,17 @@ mod windows_impl {
             anyhow::bail!("DangerFullAccess and ExternalSandbox are not supported for sandboxing")
         }
         let caps = load_or_create_cap_sids(codex_home)?;
-        let (psid_to_use, cap_sid_str) = match &policy {
+        let (psid_to_use, cap_sids) = match &policy {
             SandboxPolicy::ReadOnly => (
                 unsafe { convert_string_sid_to_sid(&caps.readonly).unwrap() },
-                caps.readonly.clone(),
+                vec![caps.readonly.clone()],
             ),
             SandboxPolicy::WorkspaceWrite { .. } => (
                 unsafe { convert_string_sid_to_sid(&caps.workspace).unwrap() },
-                caps.workspace.clone(),
+                vec![
+                    caps.workspace.clone(),
+                    crate::cap::workspace_cap_sid_for_cwd(codex_home, cwd)?,
+                ],
             ),
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
                 unreachable!("DangerFullAccess handled above")
@@ -294,7 +297,7 @@ mod windows_impl {
             sandbox_policy_cwd: sandbox_policy_cwd.to_path_buf(),
             codex_home: sandbox_base.clone(),
             real_codex_home: codex_home.to_path_buf(),
-            cap_sid: cap_sid_str.clone(),
+            cap_sids: cap_sids.clone(),
             request_file: Some(req_file.clone()),
             command: command.clone(),
             cwd: cwd.to_path_buf(),

@@ -11,6 +11,7 @@ use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::ThreadManager;
+use codex_core::TransportManager;
 use codex_core::WireApi;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::built_in_model_providers;
@@ -28,6 +29,7 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::WebSearchAction;
@@ -196,6 +198,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
             text: "resumed user message".to_string(),
         }],
         end_turn: None,
+        phase: None,
     };
     let prior_user_json = serde_json::to_value(&prior_user).unwrap();
     writeln!(
@@ -217,6 +220,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
             text: "resumed system instruction".to_string(),
         }],
         end_turn: None,
+        phase: None,
     };
     let prior_system_json = serde_json::to_value(&prior_system).unwrap();
     writeln!(
@@ -238,6 +242,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
             text: "resumed assistant message".to_string(),
         }],
         end_turn: None,
+        phase: Some(MessagePhase::Commentary),
     };
     let prior_item_json = serde_json::to_value(&prior_item).unwrap();
     writeln!(
@@ -257,31 +262,19 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
 
     // Configure Codex to resume from our file
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
-    let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home).await;
-    config.model_provider = model_provider;
-    // Also configure user instructions to ensure they are NOT delivered on resume.
-    config.user_instructions = Some("be nice".to_string());
-
-    let thread_manager = ThreadManager::with_models_provider_and_home(
-        CodexAuth::from_api_key("Test API Key"),
-        config.model_provider.clone(),
-        config.codex_home.clone(),
-    );
-    let auth_manager =
-        codex_core::AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-    let NewThread {
-        thread: codex,
-        session_configured,
-        ..
-    } = thread_manager
-        .resume_thread_from_rollout(config, session_path.clone(), auth_manager)
+    let codex_home = Arc::new(TempDir::new().unwrap());
+    let mut builder = test_codex()
+        .with_home(codex_home.clone())
+        .with_config(|config| {
+            // Ensure user instructions are NOT delivered on resume.
+            config.user_instructions = Some("be nice".to_string());
+        });
+    let test = builder
+        .resume(&server, codex_home, session_path.clone())
         .await
         .expect("resume conversation");
+    let codex = test.codex.clone();
+    let session_configured = test.session_configured;
 
     // 1) Assert initial_messages only includes existing EventMsg entries; response items are not converted
     let initial_msgs = session_configured
@@ -329,9 +322,28 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         .iter()
         .position(|(role, text)| role == "assistant" && text == "resumed assistant message")
         .expect("prior assistant message");
+    let prior_assistant = input
+        .iter()
+        .find(|item| {
+            item.get("role").and_then(|role| role.as_str()) == Some("assistant")
+                && item
+                    .get("content")
+                    .and_then(|content| content.as_array())
+                    .and_then(|content| content.first())
+                    .and_then(|entry| entry.get("text"))
+                    .and_then(|text| text.as_str())
+                    == Some("resumed assistant message")
+        })
+        .expect("resumed assistant message request item");
+    assert_eq!(
+        prior_assistant
+            .get("phase")
+            .and_then(|phase| phase.as_str()),
+        Some("commentary")
+    );
     let pos_permissions = messages
         .iter()
-        .position(|(role, text)| role == "developer" && text.contains("`approval_policy`"))
+        .position(|(role, text)| role == "developer" && text.contains("<permissions instructions>"))
         .expect("permissions message");
     let pos_user_instructions = messages
         .iter()
@@ -367,30 +379,13 @@ async fn includes_conversation_id_and_model_headers_in_request() {
 
     let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
 
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
-
-    // Init session
-    let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home).await;
-    config.model_provider = model_provider;
-
-    let thread_manager = ThreadManager::with_models_provider_and_home(
-        CodexAuth::from_api_key("Test API Key"),
-        config.model_provider.clone(),
-        config.codex_home.clone(),
-    );
-    let NewThread {
-        thread: codex,
-        thread_id: session_id,
-        session_configured: _,
-        ..
-    } = thread_manager
-        .start_thread(config)
+    let mut builder = test_codex().with_auth(CodexAuth::from_api_key("Test API Key"));
+    let test = builder
+        .build(&server)
         .await
         .expect("create new conversation");
+    let codex = test.codex.clone();
+    let session_id = test.session_configured.session_id;
 
     codex
         .submit(Op::UserInput {
@@ -425,26 +420,16 @@ async fn includes_base_instructions_override_in_request() {
     let server = MockServer::start().await;
     let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
 
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
-    let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home).await;
-
-    config.base_instructions = Some("test instructions".to_string());
-    config.model_provider = model_provider;
-
-    let thread_manager = ThreadManager::with_models_provider_and_home(
-        CodexAuth::from_api_key("Test API Key"),
-        config.model_provider.clone(),
-        config.codex_home.clone(),
-    );
-    let codex = thread_manager
-        .start_thread(config)
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::from_api_key("Test API Key"))
+        .with_config(|config| {
+            config.base_instructions = Some("test instructions".to_string());
+        });
+    let codex = builder
+        .build(&server)
         .await
         .expect("create new conversation")
-        .thread;
+        .codex;
 
     codex
         .submit(Op::UserInput {
@@ -479,29 +464,19 @@ async fn chatgpt_auth_sends_correct_request() {
 
     let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
 
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/api/codex", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
-
-    // Init session
-    let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home).await;
-    config.model_provider = model_provider;
-    let thread_manager = ThreadManager::with_models_provider_and_home(
-        create_dummy_codex_auth(),
-        config.model_provider.clone(),
-        config.codex_home.clone(),
-    );
-    let NewThread {
-        thread: codex,
-        thread_id,
-        session_configured: _,
-        ..
-    } = thread_manager
-        .start_thread(config)
+    let mut model_provider = built_in_model_providers()["openai"].clone();
+    model_provider.base_url = Some(format!("{}/api/codex", server.uri()));
+    let mut builder = test_codex()
+        .with_auth(create_dummy_codex_auth())
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+        });
+    let test = builder
+        .build(&server)
         .await
         .expect("create new conversation");
+    let codex = test.codex.clone();
+    let thread_id = test.session_configured.session_id;
 
     codex
         .submit(Op::UserInput {
@@ -617,26 +592,16 @@ async fn includes_user_instructions_message_in_request() {
 
     let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
 
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
-
-    let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home).await;
-    config.model_provider = model_provider;
-    config.user_instructions = Some("be nice".to_string());
-
-    let thread_manager = ThreadManager::with_models_provider_and_home(
-        CodexAuth::from_api_key("Test API Key"),
-        config.model_provider.clone(),
-        config.codex_home.clone(),
-    );
-    let codex = thread_manager
-        .start_thread(config)
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::from_api_key("Test API Key"))
+        .with_config(|config| {
+            config.user_instructions = Some("be nice".to_string());
+        });
+    let codex = builder
+        .build(&server)
         .await
         .expect("create new conversation")
-        .thread;
+        .codex;
 
     codex
         .submit(Op::UserInput {
@@ -689,12 +654,7 @@ async fn skills_append_to_instructions() {
 
     let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
 
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
-
-    let codex_home = TempDir::new().unwrap();
+    let codex_home = Arc::new(TempDir::new().unwrap());
     let skill_dir = codex_home.path().join("skills/demo");
     std::fs::create_dir_all(&skill_dir).expect("create skill dir");
     std::fs::write(
@@ -703,20 +663,18 @@ async fn skills_append_to_instructions() {
     )
     .expect("write skill");
 
-    let mut config = load_default_config_for_test(&codex_home).await;
-    config.model_provider = model_provider;
-    config.cwd = codex_home.path().to_path_buf();
-
-    let thread_manager = ThreadManager::with_models_provider_and_home(
-        CodexAuth::from_api_key("Test API Key"),
-        config.model_provider.clone(),
-        config.codex_home.clone(),
-    );
-    let codex = thread_manager
-        .start_thread(config)
+    let codex_home_path = codex_home.path().to_path_buf();
+    let mut builder = test_codex()
+        .with_home(codex_home.clone())
+        .with_auth(CodexAuth::from_api_key("Test API Key"))
+        .with_config(move |config| {
+            config.cwd = codex_home_path;
+        });
+    let codex = builder
+        .build(&server)
         .await
         .expect("create new conversation")
-        .thread;
+        .codex;
 
     codex
         .submit(Op::UserInput {
@@ -889,7 +847,7 @@ async fn user_turn_collaboration_mode_overrides_model_and_effort() -> anyhow::Re
         .await?;
 
     let collaboration_mode = CollaborationMode {
-        mode: ModeKind::Custom,
+        mode: ModeKind::Default,
         settings: Settings {
             model: "gpt-5.1".to_string(),
             reasoning_effort: Some(ReasoningEffort::High),
@@ -1131,28 +1089,17 @@ async fn includes_developer_instructions_message_in_request() {
     let server = MockServer::start().await;
 
     let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
-
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
-
-    let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home).await;
-    config.model_provider = model_provider;
-    config.user_instructions = Some("be nice".to_string());
-    config.developer_instructions = Some("be useful".to_string());
-
-    let thread_manager = ThreadManager::with_models_provider_and_home(
-        CodexAuth::from_api_key("Test API Key"),
-        config.model_provider.clone(),
-        config.codex_home.clone(),
-    );
-    let codex = thread_manager
-        .start_thread(config)
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::from_api_key("Test API Key"))
+        .with_config(|config| {
+            config.user_instructions = Some("be nice".to_string());
+            config.developer_instructions = Some("be useful".to_string());
+        });
+    let codex = builder
+        .build(&server)
         .await
         .expect("create new conversation")
-        .thread;
+        .codex;
 
     codex
         .submit(Op::UserInput {
@@ -1227,6 +1174,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         stream_max_retries: Some(0),
         stream_idle_timeout_ms: Some(5_000),
         requires_openai_auth: false,
+        supports_websockets: false,
     };
 
     let codex_home = TempDir::new().unwrap();
@@ -1263,8 +1211,9 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         summary,
         conversation_id,
         SessionSource::Exec,
+        TransportManager::new(),
     )
-    .new_session();
+    .new_session(None);
 
     let mut prompt = Prompt::default();
     prompt.input.push(ResponseItem::Reasoning {
@@ -1284,13 +1233,15 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
             text: "message".into(),
         }],
         end_turn: None,
+        phase: None,
     });
     prompt.input.push(ResponseItem::WebSearchCall {
         id: Some("web-search-id".into()),
         status: Some("completed".into()),
-        action: WebSearchAction::Search {
+        action: Some(WebSearchAction::Search {
             query: Some("weather".into()),
-        },
+            queries: None,
+        }),
     });
     prompt.input.push(ResponseItem::FunctionCall {
         id: Some("function-id".into()),
@@ -1390,20 +1341,16 @@ async fn token_count_includes_rate_limits_snapshot() {
     let mut provider = built_in_model_providers()["openai"].clone();
     provider.base_url = Some(format!("{}/v1", server.uri()));
 
-    let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home).await;
-    config.model_provider = provider;
-
-    let thread_manager = ThreadManager::with_models_provider_and_home(
-        CodexAuth::from_api_key("test"),
-        config.model_provider.clone(),
-        config.codex_home.clone(),
-    );
-    let codex = thread_manager
-        .start_thread(config)
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::from_api_key("test"))
+        .with_config(move |config| {
+            config.model_provider = provider;
+        });
+    let codex = builder
+        .build(&server)
         .await
         .expect("create conversation")
-        .thread;
+        .codex;
 
     codex
         .submit(Op::UserInput {
@@ -1750,23 +1697,20 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
         requires_openai_auth: false,
+        supports_websockets: false,
     };
 
     // Init session
-    let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home).await;
-    config.model_provider = provider;
-
-    let thread_manager = ThreadManager::with_models_provider_and_home(
-        create_dummy_codex_auth(),
-        config.model_provider.clone(),
-        config.codex_home.clone(),
-    );
-    let codex = thread_manager
-        .start_thread(config)
+    let mut builder = test_codex()
+        .with_auth(create_dummy_codex_auth())
+        .with_config(move |config| {
+            config.model_provider = provider;
+        });
+    let codex = builder
+        .build(&server)
         .await
         .expect("create new conversation")
-        .thread;
+        .codex;
 
     codex
         .submit(Op::UserInput {
@@ -1834,23 +1778,20 @@ async fn env_var_overrides_loaded_auth() {
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
         requires_openai_auth: false,
+        supports_websockets: false,
     };
 
     // Init session
-    let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home).await;
-    config.model_provider = provider;
-
-    let thread_manager = ThreadManager::with_models_provider_and_home(
-        create_dummy_codex_auth(),
-        config.model_provider.clone(),
-        config.codex_home.clone(),
-    );
-    let codex = thread_manager
-        .start_thread(config)
+    let mut builder = test_codex()
+        .with_auth(create_dummy_codex_auth())
+        .with_config(move |config| {
+            config.model_provider = provider;
+        });
+    let codex = builder
+        .build(&server)
         .await
         .expect("create new conversation")
-        .thread;
+        .codex;
 
     codex
         .submit(Op::UserInput {
@@ -1905,26 +1846,12 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
 
     let request_log = mount_sse_sequence(&server, vec![sse1.clone(), sse1.clone(), sse1]).await;
 
-    // Configure provider to point to mock server (Responses API) and use API key auth.
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
-
-    // Init session with isolated codex home.
-    let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home).await;
-    config.model_provider = model_provider;
-
-    let thread_manager = ThreadManager::with_models_provider_and_home(
-        CodexAuth::from_api_key("Test API Key"),
-        config.model_provider.clone(),
-        config.codex_home.clone(),
-    );
-    let NewThread { thread: codex, .. } = thread_manager
-        .start_thread(config)
+    let mut builder = test_codex().with_auth(CodexAuth::from_api_key("Test API Key"));
+    let codex = builder
+        .build(&server)
         .await
-        .expect("create new conversation");
+        .expect("create new conversation")
+        .codex;
 
     // Turn 1: user sends U1; wait for completion.
     codex

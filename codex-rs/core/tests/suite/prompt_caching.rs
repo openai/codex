@@ -350,6 +350,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
             cwd: None,
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: Some(new_policy.clone()),
+            windows_sandbox_level: None,
             model: Some("o3".to_string()),
             effort: Some(Some(ReasoningEffort::High)),
             summary: Some(ReasoningSummary::Detailed),
@@ -387,17 +388,14 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
     });
     let expected_permissions_msg = body1["input"][0].clone();
     let body1_input = body1["input"].as_array().expect("input array");
-    // After overriding the turn context, emit two updated permissions messages.
+    // After overriding the turn context, emit one updated permissions message.
     let expected_permissions_msg_2 = body2["input"][body1_input.len()].clone();
-    let expected_permissions_msg_3 = body2["input"][body1_input.len() + 1].clone();
     assert_ne!(
         expected_permissions_msg_2, expected_permissions_msg,
         "expected updated permissions message after override"
     );
-    assert_eq!(expected_permissions_msg_2, expected_permissions_msg_3);
     let mut expected_body2 = body1_input.to_vec();
     expected_body2.push(expected_permissions_msg_2);
-    expected_body2.push(expected_permissions_msg_3);
     expected_body2.push(expected_user_message_2);
     assert_eq!(body2["input"], serde_json::Value::Array(expected_body2));
 
@@ -414,7 +412,7 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
     let TestCodex { codex, .. } = test_codex().build(&server).await?;
 
     let collaboration_mode = CollaborationMode {
-        mode: ModeKind::Custom,
+        mode: ModeKind::Default,
         settings: Settings {
             model: "gpt-5.1".to_string(),
             reasoning_effort: Some(ReasoningEffort::High),
@@ -427,6 +425,7 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
             cwd: None,
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: None,
+            windows_sandbox_level: None,
             model: Some("gpt-5.1-codex".to_string()),
             effort: Some(Some(ReasoningEffort::Low)),
             summary: None,

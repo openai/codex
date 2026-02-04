@@ -14,30 +14,35 @@ use super::selection_popup_common::render_rows_single_line;
 use crate::key_hint;
 use crate::render::Insets;
 use crate::render::RectExt;
-use codex_core::skills::model::SkillMetadata;
+use crate::text_formatting::truncate_text;
+use codex_common::fuzzy_match::fuzzy_match;
 
-use crate::skills_helpers::match_skill;
-use crate::skills_helpers::skill_description;
-use crate::skills_helpers::skill_display_name;
-use crate::skills_helpers::truncated_skill_display_name;
+#[derive(Clone, Debug)]
+pub(crate) struct MentionItem {
+    pub(crate) display_name: String,
+    pub(crate) description: Option<String>,
+    pub(crate) insert_text: String,
+    pub(crate) search_terms: Vec<String>,
+    pub(crate) path: Option<String>,
+}
 
 pub(crate) struct SkillPopup {
     query: String,
-    skills: Vec<SkillMetadata>,
+    mentions: Vec<MentionItem>,
     state: ScrollState,
 }
 
 impl SkillPopup {
-    pub(crate) fn new(skills: Vec<SkillMetadata>) -> Self {
+    pub(crate) fn new(mentions: Vec<MentionItem>) -> Self {
         Self {
             query: String::new(),
-            skills,
+            mentions,
             state: ScrollState::new(),
         }
     }
 
-    pub(crate) fn set_skills(&mut self, skills: Vec<SkillMetadata>) {
-        self.skills = skills;
+    pub(crate) fn set_mentions(&mut self, mentions: Vec<MentionItem>) {
+        self.mentions = mentions;
         self.clamp_selection();
     }
 
@@ -64,11 +69,11 @@ impl SkillPopup {
         self.state.ensure_visible(len, MAX_POPUP_ROWS.min(len));
     }
 
-    pub(crate) fn selected_skill(&self) -> Option<&SkillMetadata> {
+    pub(crate) fn selected_mention(&self) -> Option<&MentionItem> {
         let matches = self.filtered_items();
         let idx = self.state.selected_idx?;
-        let skill_idx = matches.get(idx)?;
-        self.skills.get(*skill_idx)
+        let mention_idx = matches.get(idx)?;
+        self.mentions.get(*mention_idx)
     }
 
     fn clamp_selection(&mut self) {
@@ -88,14 +93,15 @@ impl SkillPopup {
         matches
             .into_iter()
             .map(|(idx, indices, _score)| {
-                let skill = &self.skills[idx];
-                let name = truncated_skill_display_name(skill);
-                let description = skill_description(skill).to_string();
+                let mention = &self.mentions[idx];
+                let name = truncate_text(&mention.display_name, 21);
+                let description = mention.description.clone().unwrap_or_default();
                 GenericDisplayRow {
                     name,
                     match_indices: indices,
                     display_shortcut: None,
-                    description: Some(description),
+                    description: Some(description).filter(|desc| !desc.is_empty()),
+                    is_disabled: false,
                     disabled_reason: None,
                     wrap_indent: None,
                 }
@@ -108,23 +114,48 @@ impl SkillPopup {
         let mut out: Vec<(usize, Option<Vec<usize>>, i32)> = Vec::new();
 
         if filter.is_empty() {
-            for (idx, _skill) in self.skills.iter().enumerate() {
+            for (idx, _mention) in self.mentions.iter().enumerate() {
                 out.push((idx, None, 0));
             }
             return out;
         }
 
-        for (idx, skill) in self.skills.iter().enumerate() {
-            let display_name = skill_display_name(skill);
-            if let Some((indices, score)) = match_skill(filter, display_name, &skill.name) {
+        for (idx, mention) in self.mentions.iter().enumerate() {
+            let mut best_match: Option<(Option<Vec<usize>>, i32)> = None;
+
+            if let Some((indices, score)) = fuzzy_match(&mention.display_name, filter) {
+                best_match = Some((Some(indices), score));
+            }
+
+            for term in &mention.search_terms {
+                if term == &mention.display_name {
+                    continue;
+                }
+
+                if let Some((_indices, score)) = fuzzy_match(term, filter) {
+                    match best_match.as_mut() {
+                        Some((best_indices, best_score)) => {
+                            if score > *best_score {
+                                *best_score = score;
+                                *best_indices = None;
+                            }
+                        }
+                        None => {
+                            best_match = Some((None, score));
+                        }
+                    }
+                }
+            }
+
+            if let Some((indices, score)) = best_match {
                 out.push((idx, indices, score));
             }
         }
 
         out.sort_by(|a, b| {
             a.2.cmp(&b.2).then_with(|| {
-                let an = skill_display_name(&self.skills[a.0]);
-                let bn = skill_display_name(&self.skills[b.0]);
+                let an = self.mentions[a.0].display_name.as_str();
+                let bn = self.mentions[b.0].display_name.as_str();
                 an.cmp(bn)
             })
         });
@@ -153,7 +184,7 @@ impl WidgetRef for SkillPopup {
             &rows,
             &self.state,
             MAX_POPUP_ROWS,
-            "no skills",
+            "no matches",
         );
         if let Some(hint_area) = hint_area {
             let hint_area = Rect {
@@ -171,7 +202,7 @@ fn skill_popup_hint_line() -> Line<'static> {
     Line::from(vec![
         "Press ".into(),
         key_hint::plain(KeyCode::Enter).into(),
-        " to select or ".into(),
+        " to insert or ".into(),
         key_hint::plain(KeyCode::Esc).into(),
         " to close".into(),
     ])

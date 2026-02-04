@@ -2,7 +2,9 @@ use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_fake_rollout_with_text_elements;
 use app_test_support::create_mock_responses_server_repeating_assistant;
+use app_test_support::rollout_path;
 use app_test_support::to_response;
+use chrono::Utc;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SessionSource;
@@ -22,12 +24,14 @@ use codex_protocol::user_input::TextElement;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
+use std::fs::FileTimes;
+use std::path::Path;
 use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-const DEFAULT_BASE_INSTRUCTIONS: &str = "You are Codex, based on GPT-5. You are running as a coding agent in the Codex CLI on a user's computer.";
+const CODEX_5_2_INSTRUCTIONS_TEMPLATE_DEFAULT: &str = "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
 
 #[tokio::test]
 async fn thread_resume_returns_original_thread() -> Result<()> {
@@ -148,6 +152,116 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_resume_without_overrides_does_not_change_updated_at_or_mtime() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    let rollout = setup_rollout_fixture(codex_home.path(), &server.uri())?;
+    let thread_id = rollout.conversation_id.clone();
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread_id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse { thread, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
+
+    assert_eq!(thread.updated_at, rollout.expected_updated_at);
+
+    let after_modified = std::fs::metadata(&rollout.rollout_file_path)?.modified()?;
+    assert_eq!(after_modified, rollout.before_modified);
+
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id,
+            input: vec![UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let after_turn_modified = std::fs::metadata(&rollout.rollout_file_path)?.modified()?;
+    assert!(after_turn_modified > rollout.before_modified);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_resume_with_overrides_defers_updated_at_until_turn_start() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    let rollout = setup_rollout_fixture(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: rollout.conversation_id.clone(),
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse { thread, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
+
+    assert_eq!(thread.updated_at, rollout.expected_updated_at);
+
+    let after_resume_modified = std::fs::metadata(&rollout.rollout_file_path)?.modified()?;
+    assert_eq!(after_resume_modified, rollout.before_modified);
+
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: rollout.conversation_id,
+            input: vec![UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let after_turn_modified = std::fs::metadata(&rollout.rollout_file_path)?.modified()?;
+    assert!(after_turn_modified > rollout.before_modified);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -224,6 +338,7 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
             text: history_text.to_string(),
         }],
         end_turn: None,
+        phase: None,
     }];
 
     // Resume with explicit history and override the model.
@@ -254,7 +369,7 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_resume_accepts_personality_override_v2() -> Result<()> {
+async fn thread_resume_accepts_personality_override() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -288,7 +403,7 @@ async fn thread_resume_accepts_personality_override_v2() -> Result<()> {
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: thread.id.clone(),
             model: Some("gpt-5.2-codex".to_string()),
-            personality: Some(Personality::Friendly),
+            personality: Some(Personality::Pragmatic),
             ..Default::default()
         })
         .await?;
@@ -324,14 +439,14 @@ async fn thread_resume_accepts_personality_override_v2() -> Result<()> {
     let request = response_mock.single_request();
     let developer_texts = request.message_input_texts("developer");
     assert!(
-        !developer_texts
+        developer_texts
             .iter()
             .any(|text| text.contains("<personality_spec>")),
-        "did not expect a personality update message in developer input, got {developer_texts:?}"
+        "expected a personality update message in developer input, got {developer_texts:?}"
     );
     let instructions_text = request.instructions_text();
     assert!(
-        instructions_text.contains(DEFAULT_BASE_INSTRUCTIONS),
+        instructions_text.contains(CODEX_5_2_INSTRUCTIONS_TEMPLATE_DEFAULT),
         "expected default base instructions from history, got {instructions_text:?}"
     );
 
@@ -345,7 +460,7 @@ fn create_config_toml(codex_home: &std::path::Path, server_uri: &str) -> std::io
         config_toml,
         format!(
             r#"
-model = "mock-model"
+model = "gpt-5.2-codex"
 approval_policy = "never"
 sandbox_mode = "read-only"
 
@@ -353,6 +468,7 @@ model_provider = "mock_provider"
 
 [features]
 remote_models = false
+personality = true
 
 [model_providers.mock_provider]
 name = "Mock provider for test"
@@ -363,4 +479,52 @@ stream_max_retries = 0
 "#
         ),
     )
+}
+
+fn set_rollout_mtime(path: &Path, updated_at_rfc3339: &str) -> Result<()> {
+    let parsed = chrono::DateTime::parse_from_rfc3339(updated_at_rfc3339)?.with_timezone(&Utc);
+    let times = FileTimes::new().set_modified(parsed.into());
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(path)?
+        .set_times(times)?;
+    Ok(())
+}
+
+struct RolloutFixture {
+    conversation_id: String,
+    rollout_file_path: PathBuf,
+    before_modified: std::time::SystemTime,
+    expected_updated_at: i64,
+}
+
+fn setup_rollout_fixture(codex_home: &Path, server_uri: &str) -> Result<RolloutFixture> {
+    create_config_toml(codex_home, server_uri)?;
+
+    let preview = "Saved user message";
+    let filename_ts = "2025-01-05T12-00-00";
+    let meta_rfc3339 = "2025-01-05T12:00:00Z";
+    let expected_updated_at_rfc3339 = "2025-01-07T00:00:00Z";
+    let conversation_id = create_fake_rollout_with_text_elements(
+        codex_home,
+        filename_ts,
+        meta_rfc3339,
+        preview,
+        Vec::new(),
+        Some("mock_provider"),
+        None,
+    )?;
+    let rollout_file_path = rollout_path(codex_home, filename_ts, &conversation_id);
+    set_rollout_mtime(rollout_file_path.as_path(), expected_updated_at_rfc3339)?;
+    let before_modified = std::fs::metadata(&rollout_file_path)?.modified()?;
+    let expected_updated_at = chrono::DateTime::parse_from_rfc3339(expected_updated_at_rfc3339)?
+        .with_timezone(&Utc)
+        .timestamp();
+
+    Ok(RolloutFixture {
+        conversation_id,
+        rollout_file_path,
+        before_modified,
+        expected_updated_at,
+    })
 }

@@ -2,9 +2,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::protocol::common::AuthMode;
+use codex_experimental_api_macros::ExperimentalApi;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
@@ -13,8 +15,13 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
+use codex_protocol::mcp::Resource as McpResource;
+use codex_protocol::mcp::ResourceTemplate as McpResourceTemplate;
+use codex_protocol::mcp::Tool as McpTool;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
@@ -26,10 +33,12 @@ use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
+use codex_protocol::protocol::SkillDependencies as CoreSkillDependencies;
 use codex_protocol::protocol::SkillErrorInfo as CoreSkillErrorInfo;
 use codex_protocol::protocol::SkillInterface as CoreSkillInterface;
 use codex_protocol::protocol::SkillMetadata as CoreSkillMetadata;
 use codex_protocol::protocol::SkillScope as CoreSkillScope;
+use codex_protocol::protocol::SkillToolDependency as CoreSkillToolDependency;
 use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
@@ -37,10 +46,6 @@ use codex_protocol::user_input::ByteRange as CoreByteRange;
 use codex_protocol::user_input::TextElement as CoreTextElement;
 use codex_protocol::user_input::UserInput as CoreUserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use mcp_types::ContentBlock as McpContentBlock;
-use mcp_types::Resource as McpResource;
-use mcp_types::ResourceTemplate as McpResourceTemplate;
-use mcp_types::Tool as McpTool;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -83,6 +88,10 @@ macro_rules! v2_enum_from_core {
 pub enum CodexErrorInfo {
     ContextWindowExceeded,
     UsageLimitExceeded,
+    ModelCap {
+        model: String,
+        reset_after_seconds: Option<u64>,
+    },
     HttpConnectionFailed {
         #[serde(rename = "httpStatusCode")]
         #[ts(rename = "httpStatusCode")]
@@ -119,6 +128,13 @@ impl From<CoreCodexErrorInfo> for CodexErrorInfo {
         match value {
             CoreCodexErrorInfo::ContextWindowExceeded => CodexErrorInfo::ContextWindowExceeded,
             CoreCodexErrorInfo::UsageLimitExceeded => CodexErrorInfo::UsageLimitExceeded,
+            CoreCodexErrorInfo::ModelCap {
+                model,
+                reset_after_seconds,
+            } => CodexErrorInfo::ModelCap {
+                model,
+                reset_after_seconds,
+            },
             CoreCodexErrorInfo::HttpConnectionFailed { http_status_code } => {
                 CodexErrorInfo::HttpConnectionFailed { http_status_code }
             }
@@ -325,6 +341,15 @@ pub struct ToolsV2 {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct DynamicToolSpec {
+    pub name: String,
+    pub description: String,
+    pub input_schema: JsonValue,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
 pub struct ProfileV2 {
@@ -455,6 +480,7 @@ pub struct ConfigReadParams {
     /// Optional working directory to resolve project config layers. If specified,
     /// return the effective config as seen from that directory (i.e., including any
     /// project layers between `cwd` and the project/repo root).
+    #[ts(optional = nullable)]
     pub cwd: Option<String>,
 }
 
@@ -474,6 +500,14 @@ pub struct ConfigReadResponse {
 pub struct ConfigRequirements {
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxMode>>,
+    pub enforce_residency: Option<ResidencyRequirement>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export_to = "v2/")]
+pub enum ResidencyRequirement {
+    Us,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -492,7 +526,9 @@ pub struct ConfigValueWriteParams {
     pub value: JsonValue,
     pub merge_strategy: MergeStrategy,
     /// Path to the config file to write; defaults to the user's `config.toml` when omitted.
+    #[ts(optional = nullable)]
     pub file_path: Option<String>,
+    #[ts(optional = nullable)]
     pub expected_version: Option<String>,
 }
 
@@ -502,7 +538,9 @@ pub struct ConfigValueWriteParams {
 pub struct ConfigBatchWriteParams {
     pub edits: Vec<ConfigEdit>,
     /// Path to the config file to write; defaults to the user's `config.toml` when omitted.
+    #[ts(optional = nullable)]
     pub file_path: Option<String>,
+    #[ts(optional = nullable)]
     pub expected_version: Option<String>,
 }
 
@@ -812,6 +850,24 @@ pub enum LoginAccountParams {
     #[serde(rename = "chatgpt")]
     #[ts(rename = "chatgpt")]
     Chatgpt,
+    /// [UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.
+    /// The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.
+    #[serde(rename = "chatgptAuthTokens")]
+    #[ts(rename = "chatgptAuthTokens")]
+    ChatgptAuthTokens {
+        /// ID token (JWT) supplied by the client.
+        ///
+        /// This token is used for identity and account metadata (email, plan type,
+        /// workspace id).
+        #[serde(rename = "idToken")]
+        #[ts(rename = "idToken")]
+        id_token: String,
+        /// Access token (JWT) supplied by the client.
+        /// This token is used for backend API requests.
+        #[serde(rename = "accessToken")]
+        #[ts(rename = "accessToken")]
+        access_token: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -831,6 +887,9 @@ pub enum LoginAccountResponse {
         /// URL the client should open in a browser to initiate the OAuth flow.
         auth_url: String,
     },
+    #[serde(rename = "chatgptAuthTokens", rename_all = "camelCase")]
+    #[ts(rename = "chatgptAuthTokens", rename_all = "camelCase")]
+    ChatgptAuthTokens {},
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -861,6 +920,38 @@ pub struct CancelLoginAccountResponse {
 #[ts(export_to = "v2/")]
 pub struct LogoutAccountResponse {}
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ChatgptAuthTokensRefreshReason {
+    /// Codex attempted a backend request and received `401 Unauthorized`.
+    Unauthorized,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ChatgptAuthTokensRefreshParams {
+    pub reason: ChatgptAuthTokensRefreshReason,
+    /// Workspace/account identifier that Codex was previously using.
+    ///
+    /// Clients that manage multiple accounts/workspaces can use this as a hint
+    /// to refresh the token for the correct workspace.
+    ///
+    /// This may be `null` when the prior ID token did not include a workspace
+    /// identifier (`chatgpt_account_id`) or when the token could not be parsed.
+    #[ts(optional = nullable)]
+    pub previous_account_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ChatgptAuthTokensRefreshResponse {
+    pub id_token: String,
+    pub access_token: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -872,6 +963,11 @@ pub struct GetAccountRateLimitsResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct GetAccountParams {
+    /// When `true`, requests a proactive token refresh before returning.
+    ///
+    /// In managed auth mode this triggers the normal refresh-token flow. In
+    /// external auth mode this flag is ignored. Clients should refresh tokens
+    /// themselves and call `account/login/start` with `chatgptAuthTokens`.
     #[serde(default)]
     pub refresh_token: bool,
 }
@@ -889,8 +985,10 @@ pub struct GetAccountResponse {
 #[ts(export_to = "v2/")]
 pub struct ModelListParams {
     /// Opaque pagination cursor returned by a previous call.
+    #[ts(optional = nullable)]
     pub cursor: Option<String>,
     /// Optional page size; defaults to a reasonable server-side value.
+    #[ts(optional = nullable)]
     pub limit: Option<u32>,
 }
 
@@ -900,10 +998,15 @@ pub struct ModelListParams {
 pub struct Model {
     pub id: String,
     pub model: String,
+    pub upgrade: Option<String>,
     pub display_name: String,
     pub description: String,
     pub supported_reasoning_efforts: Vec<ReasoningEffortOption>,
     pub default_reasoning_effort: ReasoningEffort,
+    #[serde(default = "default_input_modalities")]
+    pub input_modalities: Vec<InputModality>,
+    #[serde(default)]
+    pub supports_personality: bool,
     // Only one model should be marked as default.
     pub is_default: bool,
 }
@@ -937,7 +1040,7 @@ pub struct CollaborationModeListParams {}
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct CollaborationModeListResponse {
-    pub data: Vec<CollaborationMode>,
+    pub data: Vec<CollaborationModeMask>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -945,8 +1048,10 @@ pub struct CollaborationModeListResponse {
 #[ts(export_to = "v2/")]
 pub struct ListMcpServerStatusParams {
     /// Opaque pagination cursor returned by a previous call.
+    #[ts(optional = nullable)]
     pub cursor: Option<String>,
     /// Optional page size; defaults to a server-defined value.
+    #[ts(optional = nullable)]
     pub limit: Option<u32>,
 }
 
@@ -976,8 +1081,10 @@ pub struct ListMcpServerStatusResponse {
 #[ts(export_to = "v2/")]
 pub struct AppsListParams {
     /// Opaque pagination cursor returned by a previous call.
+    #[ts(optional = nullable)]
     pub cursor: Option<String>,
     /// Optional page size; defaults to a reasonable server-side value.
+    #[ts(optional = nullable)]
     pub limit: Option<u32>,
 }
 
@@ -989,6 +1096,8 @@ pub struct AppInfo {
     pub name: String,
     pub description: Option<String>,
     pub logo_url: Option<String>,
+    pub logo_url_dark: Option<String>,
+    pub distribution_channel: Option<String>,
     pub install_url: Option<String>,
     #[serde(default)]
     pub is_accessible: bool,
@@ -1020,10 +1129,10 @@ pub struct McpServerRefreshResponse {}
 pub struct McpServerOauthLoginParams {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[ts(optional = nullable)]
     pub scopes: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[ts(optional = nullable)]
     pub timeout_secs: Option<i64>,
 }
 
@@ -1039,7 +1148,9 @@ pub struct McpServerOauthLoginResponse {
 #[ts(export_to = "v2/")]
 pub struct FeedbackUploadParams {
     pub classification: String,
+    #[ts(optional = nullable)]
     pub reason: Option<String>,
+    #[ts(optional = nullable)]
     pub thread_id: Option<String>,
     pub include_logs: bool,
 }
@@ -1057,8 +1168,11 @@ pub struct FeedbackUploadResponse {
 pub struct CommandExecParams {
     pub command: Vec<String>,
     #[ts(type = "number | null")]
+    #[ts(optional = nullable)]
     pub timeout_ms: Option<i64>,
+    #[ts(optional = nullable)]
     pub cwd: Option<PathBuf>,
+    #[ts(optional = nullable)]
     pub sandbox_policy: Option<SandboxPolicy>,
 }
 
@@ -1073,26 +1187,63 @@ pub struct CommandExecResponse {
 
 // === Threads, Turns, and Items ===
 // Thread APIs
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
+#[derive(
+    Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS, ExperimentalApi,
+)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadStartParams {
+    #[ts(optional = nullable)]
     pub model: Option<String>,
+    #[ts(optional = nullable)]
     pub model_provider: Option<String>,
+    #[ts(optional = nullable)]
     pub cwd: Option<String>,
+    #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,
+    #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
+    #[ts(optional = nullable)]
     pub config: Option<HashMap<String, JsonValue>>,
+    #[ts(optional = nullable)]
     pub base_instructions: Option<String>,
+    #[ts(optional = nullable)]
     pub developer_instructions: Option<String>,
+    #[ts(optional = nullable)]
     pub personality: Option<Personality>,
+    #[ts(optional = nullable)]
     pub ephemeral: Option<bool>,
+    #[experimental("thread/start.dynamicTools")]
+    #[ts(optional = nullable)]
+    pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
+    /// Test-only experimental field used to validate experimental gating and
+    /// schema filtering behavior in a stable way.
+    #[experimental("thread/start.mockExperimentalField")]
+    #[ts(optional = nullable)]
+    pub mock_experimental_field: Option<String>,
     /// If true, opt into emitting raw response items on the event stream.
     ///
     /// This is for internal use only (e.g. Codex Cloud).
     /// (TODO): Figure out a better way to categorize internal / experimental events & protocols.
     #[serde(default)]
     pub experimental_raw_events: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MockExperimentalMethodParams {
+    /// Test-only payload field.
+    #[ts(optional = nullable)]
+    pub value: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MockExperimentalMethodResponse {
+    /// Echoes the input `value`.
+    pub echoed: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1126,21 +1277,32 @@ pub struct ThreadResumeParams {
     /// [UNSTABLE] FOR CODEX CLOUD - DO NOT USE.
     /// If specified, the thread will be resumed with the provided history
     /// instead of loaded from disk.
+    #[ts(optional = nullable)]
     pub history: Option<Vec<ResponseItem>>,
 
     /// [UNSTABLE] Specify the rollout path to resume from.
     /// If specified, the thread_id param will be ignored.
+    #[ts(optional = nullable)]
     pub path: Option<PathBuf>,
 
     /// Configuration overrides for the resumed thread, if any.
+    #[ts(optional = nullable)]
     pub model: Option<String>,
+    #[ts(optional = nullable)]
     pub model_provider: Option<String>,
+    #[ts(optional = nullable)]
     pub cwd: Option<String>,
+    #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,
+    #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
+    #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
+    #[ts(optional = nullable)]
     pub base_instructions: Option<String>,
+    #[ts(optional = nullable)]
     pub developer_instructions: Option<String>,
+    #[ts(optional = nullable)]
     pub personality: Option<Personality>,
 }
 
@@ -1172,16 +1334,25 @@ pub struct ThreadForkParams {
 
     /// [UNSTABLE] Specify the rollout path to fork from.
     /// If specified, the thread_id param will be ignored.
+    #[ts(optional = nullable)]
     pub path: Option<PathBuf>,
 
     /// Configuration overrides for the forked thread, if any.
+    #[ts(optional = nullable)]
     pub model: Option<String>,
+    #[ts(optional = nullable)]
     pub model_provider: Option<String>,
+    #[ts(optional = nullable)]
     pub cwd: Option<String>,
+    #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,
+    #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
+    #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
+    #[ts(optional = nullable)]
     pub base_instructions: Option<String>,
+    #[ts(optional = nullable)]
     pub developer_instructions: Option<String>,
 }
 
@@ -1213,6 +1384,45 @@ pub struct ThreadArchiveResponse {}
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ThreadSetNameParams {
+    pub thread_id: String,
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadUnarchiveParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSetNameResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadUnarchiveResponse {
+    pub thread: Thread,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadCompactStartParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadCompactStartResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ThreadRollbackParams {
     pub thread_id: String,
     /// The number of turns to drop from the end of the thread. Must be >= 1.
@@ -1239,17 +1449,44 @@ pub struct ThreadRollbackResponse {
 #[ts(export_to = "v2/")]
 pub struct ThreadListParams {
     /// Opaque pagination cursor returned by a previous call.
+    #[ts(optional = nullable)]
     pub cursor: Option<String>,
     /// Optional page size; defaults to a reasonable server-side value.
+    #[ts(optional = nullable)]
     pub limit: Option<u32>,
     /// Optional sort key; defaults to created_at.
+    #[ts(optional = nullable)]
     pub sort_key: Option<ThreadSortKey>,
     /// Optional provider filter; when set, only sessions recorded under these
     /// providers are returned. When present but empty, includes all providers.
+    #[ts(optional = nullable)]
     pub model_providers: Option<Vec<String>>,
+    /// Optional source filter; when set, only sessions from these source kinds
+    /// are returned. When omitted or empty, defaults to interactive sources.
+    #[ts(optional = nullable)]
+    pub source_kinds: Option<Vec<ThreadSourceKind>>,
     /// Optional archived filter; when set to true, only archived threads are returned.
     /// If false or null, only non-archived threads are returned.
+    #[ts(optional = nullable)]
     pub archived: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum ThreadSourceKind {
+    Cli,
+    #[serde(rename = "vscode")]
+    #[ts(rename = "vscode")]
+    VsCode,
+    Exec,
+    AppServer,
+    SubAgent,
+    SubAgentReview,
+    SubAgentCompact,
+    SubAgentThreadSpawn,
+    SubAgentOther,
+    Unknown,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, JsonSchema, TS)]
@@ -1275,8 +1512,10 @@ pub struct ThreadListResponse {
 #[ts(export_to = "v2/")]
 pub struct ThreadLoadedListParams {
     /// Opaque pagination cursor returned by a previous call.
+    #[ts(optional = nullable)]
     pub cursor: Option<String>,
     /// Optional page size; defaults to no limit.
+    #[ts(optional = nullable)]
     pub limit: Option<u32>,
 }
 
@@ -1328,6 +1567,44 @@ pub struct SkillsListResponse {
     pub data: Vec<SkillsListEntry>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillsRemoteReadParams {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RemoteSkillSummary {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillsRemoteReadResponse {
+    pub data: Vec<RemoteSkillSummary>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillsRemoteWriteParams {
+    pub hazelnut_id: String,
+    pub is_preload: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillsRemoteWriteResponse {
+    pub id: String,
+    pub name: String,
+    pub path: PathBuf,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
@@ -1347,11 +1624,14 @@ pub struct SkillMetadata {
     pub description: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    /// Legacy short_description from SKILL.md. Prefer SKILL.toml interface.short_description.
+    /// Legacy short_description from SKILL.md. Prefer SKILL.json interface.short_description.
     pub short_description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub interface: Option<SkillInterface>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub dependencies: Option<SkillDependencies>,
     pub path: PathBuf,
     pub scope: SkillScope,
     pub enabled: bool,
@@ -1373,6 +1653,35 @@ pub struct SkillInterface {
     pub brand_color: Option<String>,
     #[ts(optional)]
     pub default_prompt: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillDependencies {
+    pub tools: Vec<SkillToolDependency>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillToolDependency {
+    #[serde(rename = "type")]
+    #[ts(rename = "type")]
+    pub r#type: String,
+    pub value: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub transport: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub url: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1414,6 +1723,7 @@ impl From<CoreSkillMetadata> for SkillMetadata {
             description: value.description,
             short_description: value.short_description,
             interface: value.interface.map(SkillInterface::from),
+            dependencies: value.dependencies.map(SkillDependencies::from),
             path: value.path,
             scope: value.scope.into(),
             enabled: true,
@@ -1430,6 +1740,31 @@ impl From<CoreSkillInterface> for SkillInterface {
             default_prompt: value.default_prompt,
             icon_small: value.icon_small,
             icon_large: value.icon_large,
+        }
+    }
+}
+
+impl From<CoreSkillDependencies> for SkillDependencies {
+    fn from(value: CoreSkillDependencies) -> Self {
+        Self {
+            tools: value
+                .tools
+                .into_iter()
+                .map(SkillToolDependency::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<CoreSkillToolDependency> for SkillToolDependency {
+    fn from(value: CoreSkillToolDependency) -> Self {
+        Self {
+            r#type: value.r#type,
+            value: value.value,
+            description: value.description,
+            transport: value.transport,
+            command: value.command,
+            url: value.url,
         }
     }
 }
@@ -1606,24 +1941,33 @@ pub struct TurnStartParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
     /// Override the working directory for this turn and subsequent turns.
+    #[ts(optional = nullable)]
     pub cwd: Option<PathBuf>,
     /// Override the approval policy for this turn and subsequent turns.
+    #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,
     /// Override the sandbox policy for this turn and subsequent turns.
+    #[ts(optional = nullable)]
     pub sandbox_policy: Option<SandboxPolicy>,
     /// Override the model for this turn and subsequent turns.
+    #[ts(optional = nullable)]
     pub model: Option<String>,
     /// Override the reasoning effort for this turn and subsequent turns.
+    #[ts(optional = nullable)]
     pub effort: Option<ReasoningEffort>,
     /// Override the reasoning summary for this turn and subsequent turns.
+    #[ts(optional = nullable)]
     pub summary: Option<ReasoningSummary>,
     /// Override the personality for this turn and subsequent turns.
+    #[ts(optional = nullable)]
     pub personality: Option<Personality>,
     /// Optional JSON Schema used to constrain the final assistant message for this turn.
+    #[ts(optional = nullable)]
     pub output_schema: Option<JsonValue>,
 
     /// EXPERIMENTAL - set a pre-set collaboration mode.
     /// Takes precedence over model, reasoning_effort, and developer instructions if set.
+    #[ts(optional = nullable)]
     pub collaboration_mode: Option<CollaborationMode>,
 }
 
@@ -1637,6 +1981,7 @@ pub struct ReviewStartParams {
     /// Where to run the review: inline (default) on the current thread or
     /// detached on a new thread (returned in `reviewThreadId`).
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub delivery: Option<ReviewDelivery>,
 }
 
@@ -1789,6 +2134,10 @@ pub enum UserInput {
         name: String,
         path: PathBuf,
     },
+    Mention {
+        name: String,
+        path: String,
+    },
 }
 
 impl UserInput {
@@ -1804,6 +2153,7 @@ impl UserInput {
             UserInput::Image { url } => CoreUserInput::Image { image_url: url },
             UserInput::LocalImage { path } => CoreUserInput::LocalImage { path },
             UserInput::Skill { name, path } => CoreUserInput::Skill { name, path },
+            UserInput::Mention { name, path } => CoreUserInput::Mention { name, path },
         }
     }
 }
@@ -1821,6 +2171,7 @@ impl From<CoreUserInput> for UserInput {
             CoreUserInput::Image { image_url } => UserInput::Image { url: image_url },
             CoreUserInput::LocalImage { path } => UserInput::LocalImage { path },
             CoreUserInput::Skill { name, path } => UserInput::Skill { name, path },
+            CoreUserInput::Mention { name, path } => UserInput::Mention { name, path },
             _ => unreachable!("unsupported user input variant"),
         }
     }
@@ -1837,6 +2188,11 @@ pub enum ThreadItem {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     AgentMessage { id: String, text: String },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    /// EXPERIMENTAL - proposed plan item content. The completed plan item is
+    /// authoritative and may not match the concatenation of `PlanDelta` text.
+    Plan { id: String, text: String },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     Reasoning {
@@ -1911,7 +2267,11 @@ pub enum ThreadItem {
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    WebSearch { id: String, query: String },
+    WebSearch {
+        id: String,
+        query: String,
+        action: Option<WebSearchAction>,
+    },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     ImageView { id: String, path: String },
@@ -1921,6 +2281,46 @@ pub enum ThreadItem {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     ExitedReviewMode { id: String, review: String },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    ContextCompaction { id: String },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type", rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum WebSearchAction {
+    Search {
+        query: Option<String>,
+        queries: Option<Vec<String>>,
+    },
+    OpenPage {
+        url: Option<String>,
+    },
+    FindInPage {
+        url: Option<String>,
+        pattern: Option<String>,
+    },
+    #[serde(other)]
+    Other,
+}
+
+impl From<codex_protocol::models::WebSearchAction> for WebSearchAction {
+    fn from(value: codex_protocol::models::WebSearchAction) -> Self {
+        match value {
+            codex_protocol::models::WebSearchAction::Search { query, queries } => {
+                WebSearchAction::Search { query, queries }
+            }
+            codex_protocol::models::WebSearchAction::OpenPage { url } => {
+                WebSearchAction::OpenPage { url }
+            }
+            codex_protocol::models::WebSearchAction::FindInPage { url, pattern } => {
+                WebSearchAction::FindInPage { url, pattern }
+            }
+            codex_protocol::models::WebSearchAction::Other => WebSearchAction::Other,
+        }
+    }
 }
 
 impl From<CoreTurnItem> for ThreadItem {
@@ -1940,6 +2340,10 @@ impl From<CoreTurnItem> for ThreadItem {
                     .collect::<String>();
                 ThreadItem::AgentMessage { id: agent.id, text }
             }
+            CoreTurnItem::Plan(plan) => ThreadItem::Plan {
+                id: plan.id,
+                text: plan.text,
+            },
             CoreTurnItem::Reasoning(reasoning) => ThreadItem::Reasoning {
                 id: reasoning.id,
                 summary: reasoning.summary_text,
@@ -1948,7 +2352,11 @@ impl From<CoreTurnItem> for ThreadItem {
             CoreTurnItem::WebSearch(search) => ThreadItem::WebSearch {
                 id: search.id,
                 query: search.query,
+                action: Some(WebSearchAction::from(search.action)),
             },
+            CoreTurnItem::ContextCompaction(compaction) => {
+                ThreadItem::ContextCompaction { id: compaction.id }
+            }
         }
     }
 }
@@ -2075,7 +2483,12 @@ impl From<CoreAgentStatus> for CollabAgentState {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct McpToolCallResult {
-    pub content: Vec<McpContentBlock>,
+    // NOTE: `rmcp::model::Content` (and its `RawContent` variants) would be a more precise Rust
+    // representation of MCP content blocks. We intentionally use `serde_json::Value` here because
+    // this crate exports JSON schema + TS types (`schemars`/`ts-rs`), and the rmcp model types
+    // aren't set up to be schema/TS friendly (and would introduce heavier coupling to rmcp's Rust
+    // representations). Using `JsonValue` keeps the payload wire-shaped and easy to export.
+    pub content: Vec<JsonValue>,
     pub structured_content: Option<JsonValue>,
 }
 
@@ -2093,6 +2506,16 @@ pub struct McpToolCallError {
 #[ts(export_to = "v2/")]
 pub struct ThreadStartedNotification {
     pub thread: Thread,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadNameUpdatedNotification {
+    pub thread_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub thread_name: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -2218,6 +2641,18 @@ pub struct AgentMessageDeltaNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+/// EXPERIMENTAL - proposed plan streaming deltas for plan items. Clients should
+/// not assume concatenated deltas match the completed plan item content.
+pub struct PlanDeltaNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub delta: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ReasoningSummaryTextDeltaNotification {
     pub thread_id: String,
     pub turn_id: String,
@@ -2311,6 +2746,7 @@ pub struct WindowsWorldWritableWarningNotification {
     pub failed_scan: bool,
 }
 
+/// Deprecated: Use `ContextCompaction` item type instead.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -2327,20 +2763,22 @@ pub struct CommandExecutionRequestApprovalParams {
     pub turn_id: String,
     pub item_id: String,
     /// Optional explanatory reason (e.g. request for network access).
+    #[ts(optional = nullable)]
     pub reason: Option<String>,
     /// The command to be executed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[ts(optional = nullable)]
     pub command: Option<String>,
     /// The command's working directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[ts(optional = nullable)]
     pub cwd: Option<PathBuf>,
     /// Best-effort parsed command actions for friendly display.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[ts(optional = nullable)]
     pub command_actions: Option<Vec<CommandAction>>,
     /// Optional proposed execpolicy amendment to allow similar commands without prompting.
+    #[ts(optional = nullable)]
     pub proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
 }
 
@@ -2359,9 +2797,11 @@ pub struct FileChangeRequestApprovalParams {
     pub turn_id: String,
     pub item_id: String,
     /// Optional explanatory reason (e.g. request for extra write access).
+    #[ts(optional = nullable)]
     pub reason: Option<String>,
     /// [UNSTABLE] When set, the agent is asking the user to allow writes under this root
     /// for the remainder of the session (unclear if this is honored today).
+    #[ts(optional = nullable)]
     pub grant_root: Option<PathBuf>,
 }
 
@@ -2369,6 +2809,25 @@ pub struct FileChangeRequestApprovalParams {
 #[ts(export_to = "v2/")]
 pub struct FileChangeRequestApprovalResponse {
     pub decision: FileChangeApprovalDecision,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct DynamicToolCallParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub call_id: String,
+    pub tool: String,
+    pub arguments: JsonValue,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct DynamicToolCallResponse {
+    pub output: String,
+    pub success: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -2383,11 +2842,15 @@ pub struct ToolRequestUserInputOption {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-/// EXPERIMENTAL. Represents one request_user_input question and its optional options.
+/// EXPERIMENTAL. Represents one request_user_input question and its required options.
 pub struct ToolRequestUserInputQuestion {
     pub id: String,
     pub header: String,
     pub question: String,
+    #[serde(default)]
+    pub is_other: bool,
+    #[serde(default)]
+    pub is_secret: bool,
     pub options: Option<Vec<ToolRequestUserInputOption>>,
 }
 
@@ -2552,6 +3015,7 @@ mod tests {
     use codex_protocol::items::TurnItem;
     use codex_protocol::items::UserMessageItem;
     use codex_protocol::items::WebSearchItem;
+    use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
     use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
     use codex_protocol::user_input::UserInput as CoreUserInput;
     use pretty_assertions::assert_eq;
@@ -2595,6 +3059,10 @@ mod tests {
                     name: "skill-creator".to_string(),
                     path: PathBuf::from("/repo/.codex/skills/skill-creator/SKILL.md"),
                 },
+                CoreUserInput::Mention {
+                    name: "Demo App".to_string(),
+                    path: "app://demo-app".to_string(),
+                },
             ],
         });
 
@@ -2616,6 +3084,10 @@ mod tests {
                     UserInput::Skill {
                         name: "skill-creator".to_string(),
                         path: PathBuf::from("/repo/.codex/skills/skill-creator/SKILL.md"),
+                    },
+                    UserInput::Mention {
+                        name: "Demo App".to_string(),
+                        path: "app://demo-app".to_string(),
                     },
                 ],
             }
@@ -2659,6 +3131,10 @@ mod tests {
         let search_item = TurnItem::WebSearch(WebSearchItem {
             id: "search-1".to_string(),
             query: "docs".to_string(),
+            action: CoreWebSearchAction::Search {
+                query: Some("docs".to_string()),
+                queries: None,
+            },
         });
 
         assert_eq!(
@@ -2666,6 +3142,10 @@ mod tests {
             ThreadItem::WebSearch {
                 id: "search-1".to_string(),
                 query: "docs".to_string(),
+                action: Some(WebSearchAction::Search {
+                    query: Some("docs".to_string()),
+                    queries: None,
+                }),
             }
         );
     }

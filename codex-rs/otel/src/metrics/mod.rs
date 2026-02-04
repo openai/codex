@@ -1,6 +1,8 @@
 mod client;
 mod config;
 mod error;
+pub(crate) mod names;
+pub(crate) mod runtime_metrics;
 pub(crate) mod timer;
 pub(crate) mod validation;
 
@@ -17,6 +19,6 @@ pub(crate) fn install_global(metrics: MetricsClient) {
     let _ = GLOBAL_METRICS.set(metrics);
 }
 
-pub(crate) fn global() -> Option<MetricsClient> {
+pub fn global() -> Option<MetricsClient> {
     GLOBAL_METRICS.get().cloned()
 }

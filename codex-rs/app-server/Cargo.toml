@@ -17,7 +17,9 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+async-trait = { workspace = true }
 codex-arg0 = { workspace = true }
+codex-cloud-requirements = { workspace = true }
 codex-common = { workspace = true, features = ["cli"] }
 codex-core = { workspace = true }
 codex-backend-client = { workspace = true }
@@ -33,7 +35,6 @@ codex-utils-json-to-toml = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-mcp-types = { workspace = true }
 tempfile = { workspace = true }
 time = { workspace = true }
 toml = { workspace = true }
@@ -56,8 +57,8 @@ axum = { workspace = true, default-features = false, features = [
     "tokio",
 ] }
 base64 = { workspace = true }
+codex-execpolicy = { workspace = true }
 core_test_support = { workspace = true }
-mcp-types = { workspace = true }
 os_info = { workspace = true }
 pretty_assertions = { workspace = true }
 rmcp = { workspace = true, default-features = false, features = [

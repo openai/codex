@@ -1,8 +1,4 @@
-use codex_core::CodexAuth;
-use codex_core::ModelProviderInfo;
 use codex_core::NewThread;
-use codex_core::ThreadManager;
-use codex_core::built_in_model_providers;
 use codex_core::parse_turn_item;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -10,10 +6,9 @@ use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
 use codex_protocol::items::TurnItem;
 use codex_protocol::user_input::UserInput;
-use core_test_support::load_default_config_for_test;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
-use tempfile::TempDir;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -44,25 +39,11 @@ async fn fork_thread_twice_drops_to_first_message() {
         .mount(&server)
         .await;
 
-    // Configure Codex to use the mock server.
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
-
-    let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home).await;
-    config.model_provider = model_provider.clone();
-    let config_for_fork = config.clone();
-
-    let thread_manager = ThreadManager::with_models_provider(
-        CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-    );
-    let NewThread { thread: codex, .. } = thread_manager
-        .start_thread(config)
-        .await
-        .expect("create conversation");
+    let mut builder = test_codex();
+    let test = builder.build(&server).await.expect("create conversation");
+    let codex = test.codex.clone();
+    let thread_manager = test.thread_manager.clone();
+    let config_for_fork = test.config.clone();
 
     // Send three user messages; wait for three completed turns.
     for text in ["first", "second", "third"] {

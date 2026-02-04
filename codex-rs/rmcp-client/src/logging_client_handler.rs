@@ -9,7 +9,6 @@ use rmcp::model::CreateElicitationResult;
 use rmcp::model::LoggingLevel;
 use rmcp::model::LoggingMessageNotificationParam;
 use rmcp::model::ProgressNotificationParam;
-use rmcp::model::RequestId;
 use rmcp::model::ResourceUpdatedNotificationParam;
 use rmcp::service::NotificationContext;
 use rmcp::service::RequestContext;
@@ -41,11 +40,7 @@ impl ClientHandler for LoggingClientHandler {
         request: CreateElicitationRequestParam,
         context: RequestContext<RoleClient>,
     ) -> Result<CreateElicitationResult, rmcp::ErrorData> {
-        let id = match context.id {
-            RequestId::String(id) => mcp_types::RequestId::String(id.to_string()),
-            RequestId::Number(id) => mcp_types::RequestId::Integer(id),
-        };
-        (self.send_elicitation)(id, request)
+        (self.send_elicitation)(context.id, request)
             .await
             .map_err(|err| rmcp::ErrorData::internal_error(err.to_string(), None))
     }

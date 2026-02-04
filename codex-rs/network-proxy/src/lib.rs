@@ -9,6 +9,7 @@ mod proxy;
 mod reasons;
 mod responses;
 mod runtime;
+mod socks5;
 mod state;
 mod upstream;
 
@@ -16,6 +17,7 @@ use anyhow::Result;
 pub use network_policy::NetworkDecision;
 pub use network_policy::NetworkPolicyDecider;
 pub use network_policy::NetworkPolicyRequest;
+pub use network_policy::NetworkPolicyRequestArgs;
 pub use network_policy::NetworkProtocol;
 pub use proxy::Args;
 pub use proxy::NetworkProxy;

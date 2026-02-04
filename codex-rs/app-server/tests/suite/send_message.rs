@@ -11,6 +11,7 @@ use codex_app_server_protocol::NewConversationResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserMessageResponse;
+use codex_execpolicy::Policy;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
@@ -358,6 +359,8 @@ fn assert_permissions_message(item: &ResponseItem) {
             let expected = DeveloperInstructions::from_policy(
                 &SandboxPolicy::DangerFullAccess,
                 AskForApproval::Never,
+                &Policy::empty(),
+                false,
                 &PathBuf::from("/tmp"),
             )
             .into_text();

@@ -17,6 +17,8 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 codex-git = { workspace = true }
+urlencoding = { workspace = true }
 
 [dev-dependencies]
+pretty_assertions = { workspace = true }
 tempfile = { workspace = true }

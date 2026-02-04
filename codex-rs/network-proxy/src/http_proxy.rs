@@ -2,6 +2,7 @@ use crate::config::NetworkMode;
 use crate::network_policy::NetworkDecision;
 use crate::network_policy::NetworkPolicyDecider;
 use crate::network_policy::NetworkPolicyRequest;
+use crate::network_policy::NetworkPolicyRequestArgs;
 use crate::network_policy::NetworkProtocol;
 use crate::network_policy::evaluate_host_policy;
 use crate::policy::normalize_host;
@@ -12,6 +13,7 @@ use crate::responses::blocked_header_value;
 use crate::responses::json_response;
 use crate::runtime::unix_socket_permissions_supported;
 use crate::state::BlockedRequest;
+use crate::state::BlockedRequestArgs;
 use crate::state::NetworkProxyState;
 use crate::upstream::UpstreamClient;
 use crate::upstream::proxy_for_connect;
@@ -146,27 +148,27 @@ async fn http_connect_accept(
         .await);
     }
 
-    let request = NetworkPolicyRequest::new(
-        NetworkProtocol::HttpsConnect,
-        host.clone(),
-        authority.port,
-        client.clone(),
-        Some("CONNECT".to_string()),
-        None,
-        None,
-    );
+    let request = NetworkPolicyRequest::new(NetworkPolicyRequestArgs {
+        protocol: NetworkProtocol::HttpsConnect,
+        host: host.clone(),
+        port: authority.port,
+        client_addr: client.clone(),
+        method: Some("CONNECT".to_string()),
+        command: None,
+        exec_policy_hint: None,
+    });
 
     match evaluate_host_policy(&app_state, policy_decider.as_ref(), &request).await {
         Ok(NetworkDecision::Deny { reason }) => {
             let _ = app_state
-                .record_blocked(BlockedRequest::new(
-                    host.clone(),
-                    reason.clone(),
-                    client.clone(),
-                    Some("CONNECT".to_string()),
-                    None,
-                    "http-connect".to_string(),
-                ))
+                .record_blocked(BlockedRequest::new(BlockedRequestArgs {
+                    host: host.clone(),
+                    reason: reason.clone(),
+                    client: client.clone(),
+                    method: Some("CONNECT".to_string()),
+                    mode: None,
+                    protocol: "http-connect".to_string(),
+                }))
                 .await;
             let client = client.as_deref().unwrap_or_default();
             warn!("CONNECT blocked (client={client}, host={host}, reason={reason})");
@@ -189,14 +191,14 @@ async fn http_connect_accept(
 
     if mode == NetworkMode::Limited {
         let _ = app_state
-            .record_blocked(BlockedRequest::new(
-                host.clone(),
-                REASON_METHOD_NOT_ALLOWED.to_string(),
-                client.clone(),
-                Some("CONNECT".to_string()),
-                Some(NetworkMode::Limited),
-                "http-connect".to_string(),
-            ))
+            .record_blocked(BlockedRequest::new(BlockedRequestArgs {
+                host: host.clone(),
+                reason: REASON_METHOD_NOT_ALLOWED.to_string(),
+                client: client.clone(),
+                method: Some("CONNECT".to_string()),
+                mode: Some(NetworkMode::Limited),
+                protocol: "http-connect".to_string(),
+            }))
             .await;
         let client = client.as_deref().unwrap_or_default();
         warn!("CONNECT blocked by method policy (client={client}, host={host}, mode=limited)");
@@ -425,27 +427,27 @@ async fn http_plain_proxy(
         .await);
     }
 
-    let request = NetworkPolicyRequest::new(
-        NetworkProtocol::Http,
-        host.clone(),
+    let request = NetworkPolicyRequest::new(NetworkPolicyRequestArgs {
+        protocol: NetworkProtocol::Http,
+        host: host.clone(),
         port,
-        client.clone(),
-        Some(req.method().as_str().to_string()),
-        None,
-        None,
-    );
+        client_addr: client.clone(),
+        method: Some(req.method().as_str().to_string()),
+        command: None,
+        exec_policy_hint: None,
+    });
 
     match evaluate_host_policy(&app_state, policy_decider.as_ref(), &request).await {
         Ok(NetworkDecision::Deny { reason }) => {
             let _ = app_state
-                .record_blocked(BlockedRequest::new(
-                    host.clone(),
-                    reason.clone(),
-                    client.clone(),
-                    Some(req.method().as_str().to_string()),
-                    None,
-                    "http".to_string(),
-                ))
+                .record_blocked(BlockedRequest::new(BlockedRequestArgs {
+                    host: host.clone(),
+                    reason: reason.clone(),
+                    client: client.clone(),
+                    method: Some(req.method().as_str().to_string()),
+                    mode: None,
+                    protocol: "http".to_string(),
+                }))
                 .await;
             let client = client.as_deref().unwrap_or_default();
             warn!("request blocked (client={client}, host={host}, reason={reason})");
@@ -460,14 +462,14 @@ async fn http_plain_proxy(
 
     if !method_allowed {
         let _ = app_state
-            .record_blocked(BlockedRequest::new(
-                host.clone(),
-                REASON_METHOD_NOT_ALLOWED.to_string(),
-                client.clone(),
-                Some(req.method().as_str().to_string()),
-                Some(NetworkMode::Limited),
-                "http".to_string(),
-            ))
+            .record_blocked(BlockedRequest::new(BlockedRequestArgs {
+                host: host.clone(),
+                reason: REASON_METHOD_NOT_ALLOWED.to_string(),
+                client: client.clone(),
+                method: Some(req.method().as_str().to_string()),
+                mode: Some(NetworkMode::Limited),
+                protocol: "http".to_string(),
+            }))
             .await;
         let client = client.as_deref().unwrap_or_default();
         let method = req.method();
@@ -565,14 +567,14 @@ async fn proxy_disabled_response(
     protocol: &str,
 ) -> Response {
     let _ = app_state
-        .record_blocked(BlockedRequest::new(
+        .record_blocked(BlockedRequest::new(BlockedRequestArgs {
             host,
-            REASON_PROXY_DISABLED.to_string(),
+            reason: REASON_PROXY_DISABLED.to_string(),
             client,
             method,
-            None,
-            protocol.to_string(),
-        ))
+            mode: None,
+            protocol: protocol.to_string(),
+        }))
         .await;
     text_response(StatusCode::SERVICE_UNAVAILABLE, "proxy disabled")
 }

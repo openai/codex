@@ -1,8 +1,11 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+use codex_cloud_requirements::cloud_requirements_loader;
 use codex_common::CliConfigOverrides;
+use codex_core::AuthManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
+use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::config_loader::LoaderOverrides;
 use std::io::ErrorKind;
@@ -10,6 +13,7 @@ use std::io::Result as IoResult;
 use std::path::PathBuf;
 
 use crate::message_processor::MessageProcessor;
+use crate::message_processor::MessageProcessorArgs;
 use crate::outgoing_message::OutgoingMessage;
 use crate::outgoing_message::OutgoingMessageSender;
 use codex_app_server_protocol::ConfigLayerSource;
@@ -40,7 +44,9 @@ use tracing_subscriber::util::SubscriberInitExt;
 mod bespoke_event_handling;
 mod codex_message_processor;
 mod config_api;
+mod dynamic_tools;
 mod error_code;
+mod filters;
 mod fuzzy_file_search;
 mod message_processor;
 mod models;
@@ -133,7 +139,7 @@ fn project_config_warning(config: &Config) -> Option<ConfigWarningNotification> 
                     .disabled_reason
                     .as_ref()
                     .map(ToString::to_string)
-                    .unwrap_or_else(|| "Config folder disabled.".to_string()),
+                    .unwrap_or_else(|| "config.toml is disabled.".to_string()),
             ));
         }
     }
@@ -142,7 +148,11 @@ fn project_config_warning(config: &Config) -> Option<ConfigWarningNotification> 
         return None;
     }
 
-    let mut message = "The following config folders are disabled:\n".to_string();
+    let mut message = concat!(
+        "Project config.toml files are disabled in the following folders. ",
+        "Settings in those files are ignored, but skills and exec policies still load.\n",
+    )
+    .to_string();
     for (index, (folder, reason)) in disabled_folders.iter().enumerate() {
         let display_index = index + 1;
         message.push_str(&format!("    {display_index}. {folder}\n"));
@@ -198,11 +208,49 @@ pub async fn run_main(
             format!("error parsing -c overrides: {e}"),
         )
     })?;
+    let cloud_requirements = match ConfigBuilder::default()
+        .cli_overrides(cli_kv_overrides.clone())
+        .loader_overrides(loader_overrides.clone())
+        .build()
+        .await
+    {
+        Ok(config) => {
+            let effective_toml = config.config_layer_stack.effective_config();
+            match effective_toml.try_into() {
+                Ok(config_toml) => {
+                    if let Err(err) = codex_core::personality_migration::maybe_migrate_personality(
+                        &config.codex_home,
+                        &config_toml,
+                    )
+                    .await
+                    {
+                        warn!(error = %err, "Failed to run personality migration");
+                    }
+                }
+                Err(err) => {
+                    warn!(error = %err, "Failed to deserialize config for personality migration");
+                }
+            }
+
+            let auth_manager = AuthManager::shared(
+                config.codex_home.clone(),
+                false,
+                config.cli_auth_credentials_store_mode,
+            );
+            cloud_requirements_loader(auth_manager, config.chatgpt_base_url)
+        }
+        Err(err) => {
+            warn!(error = %err, "Failed to preload config for cloud requirements");
+            // TODO(gt): Make cloud requirements preload failures blocking once we can fail-closed.
+            CloudRequirementsLoader::default()
+        }
+    };
     let loader_overrides_for_config_api = loader_overrides.clone();
     let mut config_warnings = Vec::new();
     let config = match ConfigBuilder::default()
         .cli_overrides(cli_kv_overrides.clone())
         .loader_overrides(loader_overrides)
+        .cloud_requirements(cloud_requirements.clone())
         .build()
         .await
     {
@@ -284,15 +332,16 @@ pub async fn run_main(
         let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
         let cli_overrides: Vec<(String, TomlValue)> = cli_kv_overrides.clone();
         let loader_overrides = loader_overrides_for_config_api;
-        let mut processor = MessageProcessor::new(
-            outgoing_message_sender,
+        let mut processor = MessageProcessor::new(MessageProcessorArgs {
+            outgoing: outgoing_message_sender,
             codex_linux_sandbox_exe,
-            std::sync::Arc::new(config),
+            config: std::sync::Arc::new(config),
             cli_overrides,
             loader_overrides,
-            feedback.clone(),
+            cloud_requirements: cloud_requirements.clone(),
+            feedback: feedback.clone(),
             config_warnings,
-        );
+        });
         let mut thread_created_rx = processor.thread_created_receiver();
         async move {
             let mut listen_for_threads = true;
@@ -306,7 +355,7 @@ pub async fn run_main(
                             JSONRPCMessage::Request(r) => processor.process_request(r).await,
                             JSONRPCMessage::Response(r) => processor.process_response(r).await,
                             JSONRPCMessage::Notification(n) => processor.process_notification(n).await,
-                            JSONRPCMessage::Error(e) => processor.process_error(e),
+                            JSONRPCMessage::Error(e) => processor.process_error(e).await,
                         }
                     }
                     created = thread_created_rx.recv(), if listen_for_threads => {

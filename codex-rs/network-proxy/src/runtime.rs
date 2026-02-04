@@ -73,15 +73,25 @@ pub struct BlockedRequest {
     pub timestamp: i64,
 }
 
+pub struct BlockedRequestArgs {
+    pub host: String,
+    pub reason: String,
+    pub client: Option<String>,
+    pub method: Option<String>,
+    pub mode: Option<NetworkMode>,
+    pub protocol: String,
+}
+
 impl BlockedRequest {
-    pub fn new(
-        host: String,
-        reason: String,
-        client: Option<String>,
-        method: Option<String>,
-        mode: Option<NetworkMode>,
-        protocol: String,
-    ) -> Self {
+    pub fn new(args: BlockedRequestArgs) -> Self {
+        let BlockedRequestArgs {
+            host,
+            reason,
+            client,
+            method,
+            mode,
+            protocol,
+        } = args;
         Self {
             host,
             reason,

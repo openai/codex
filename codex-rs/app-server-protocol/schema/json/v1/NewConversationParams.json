@@ -1,0 +1,125 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "AskForApproval": {
+      "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Codex.",
+      "oneOf": [
+        {
+          "description": "Under this policy, only \"known safe\" commands—as determined by `is_safe_command()`—that **only read files** are auto‑approved. Everything else will ask the user to approve.",
+          "enum": [
+            "untrusted"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "*All* commands are auto‑approved, but they are expected to run inside a sandbox where network access is disabled and writes are confined to a specific set of paths. If the command fails, it will be escalated to the user to approve execution without a sandbox.",
+          "enum": [
+            "on-failure"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The model decides when to ask the user for approval.",
+          "enum": [
+            "on-request"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Never ask the user to approve commands. Failures are immediately returned to the model, and never escalated to the user for approval.",
+          "enum": [
+            "never"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "SandboxMode": {
+      "enum": [
+        "read-only",
+        "workspace-write",
+        "danger-full-access"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "approvalPolicy": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/AskForApproval"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "baseInstructions": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "compactPrompt": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "config": {
+      "additionalProperties": true,
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "cwd": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "developerInstructions": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "includeApplyPatchTool": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "model": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "modelProvider": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "profile": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "sandbox": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/SandboxMode"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "title": "NewConversationParams",
+  "type": "object"
+}

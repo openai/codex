@@ -1,4 +1,5 @@
 use crate::auth::AuthProvider;
+use crate::auth::add_auth_headers_to_header_map;
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::common::ResponsesWsRequest;
@@ -6,11 +7,11 @@ use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::sse::responses::ResponsesStreamEvent;
 use crate::sse::responses::process_responses_event;
+use crate::telemetry::WebsocketTelemetry;
 use codex_client::TransportError;
 use futures::SinkExt;
 use futures::StreamExt;
 use http::HeaderMap;
-use http::HeaderValue;
 use serde_json::Value;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -18,6 +19,7 @@ use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
+use tokio::time::Instant;
 use tokio_tungstenite::MaybeTlsStream;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Error as WsError;
@@ -38,14 +40,21 @@ pub struct ResponsesWebsocketConnection {
     // TODO (pakrym): is this the right place for timeout?
     idle_timeout: Duration,
     server_reasoning_included: bool,
+    telemetry: Option<Arc<dyn WebsocketTelemetry>>,
 }
 
 impl ResponsesWebsocketConnection {
-    fn new(stream: WsStream, idle_timeout: Duration, server_reasoning_included: bool) -> Self {
+    fn new(
+        stream: WsStream,
+        idle_timeout: Duration,
+        server_reasoning_included: bool,
+        telemetry: Option<Arc<dyn WebsocketTelemetry>>,
+    ) -> Self {
         Self {
             stream: Arc::new(Mutex::new(Some(stream))),
             idle_timeout,
             server_reasoning_included,
+            telemetry,
         }
     }
 
@@ -62,6 +71,7 @@ impl ResponsesWebsocketConnection {
         let stream = Arc::clone(&self.stream);
         let idle_timeout = self.idle_timeout;
         let server_reasoning_included = self.server_reasoning_included;
+        let telemetry = self.telemetry.clone();
         let request_body = serde_json::to_value(&request).map_err(|err| {
             ApiError::Stream(format!("failed to encode websocket request: {err}"))
         })?;
@@ -87,6 +97,7 @@ impl ResponsesWebsocketConnection {
                 tx_event.clone(),
                 request_body,
                 idle_timeout,
+                telemetry,
             )
             .await
             {
@@ -114,6 +125,7 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
         &self,
         extra_headers: HeaderMap,
         turn_state: Option<Arc<OnceLock<String>>>,
+        telemetry: Option<Arc<dyn WebsocketTelemetry>>,
     ) -> Result<ResponsesWebsocketConnection, ApiError> {
         let ws_url = self
             .provider
@@ -122,7 +134,7 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
 
         let mut headers = self.provider.headers.clone();
         headers.extend(extra_headers);
-        apply_auth_headers(&mut headers, &self.auth);
+        add_auth_headers_to_header_map(&self.auth, &mut headers);
 
         let (stream, server_reasoning_included) =
             connect_websocket(ws_url, headers, turn_state).await?;
@@ -130,21 +142,8 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
             stream,
             self.provider.stream_idle_timeout,
             server_reasoning_included,
+            telemetry,
         ))
-    }
-}
-
-// TODO (pakrym): share with /auth
-fn apply_auth_headers(headers: &mut HeaderMap, auth: &impl AuthProvider) {
-    if let Some(token) = auth.bearer_token()
-        && let Ok(header) = HeaderValue::from_str(&format!("Bearer {token}"))
-    {
-        let _ = headers.insert(http::header::AUTHORIZATION, header);
-    }
-    if let Some(account_id) = auth.account_id()
-        && let Ok(header) = HeaderValue::from_str(&account_id)
-    {
-        let _ = headers.insert("ChatGPT-Account-ID", header);
     }
 }
 
@@ -218,6 +217,7 @@ async fn run_websocket_response_stream(
     tx_event: mpsc::Sender<std::result::Result<ResponseEvent, ApiError>>,
     request_body: Value,
     idle_timeout: Duration,
+    telemetry: Option<Arc<dyn WebsocketTelemetry>>,
 ) -> Result<(), ApiError> {
     let request_text = match serde_json::to_string(&request_body) {
         Ok(text) => text,
@@ -228,16 +228,26 @@ async fn run_websocket_response_stream(
         }
     };
 
-    if let Err(err) = ws_stream.send(Message::Text(request_text.into())).await {
-        return Err(ApiError::Stream(format!(
-            "failed to send websocket request: {err}"
-        )));
+    let request_start = Instant::now();
+    let result = ws_stream
+        .send(Message::Text(request_text.into()))
+        .await
+        .map_err(|err| ApiError::Stream(format!("failed to send websocket request: {err}")));
+
+    if let Some(t) = telemetry.as_ref() {
+        t.on_ws_request(request_start.elapsed(), result.as_ref().err());
     }
 
+    result?;
+
     loop {
+        let poll_start = Instant::now();
         let response = tokio::time::timeout(idle_timeout, ws_stream.next())
             .await
             .map_err(|_| ApiError::Stream("idle timeout waiting for websocket".into()));
+        if let Some(t) = telemetry.as_ref() {
+            t.on_ws_event(&response, poll_start.elapsed());
+        }
         let message = match response {
             Ok(Some(Ok(msg))) => msg,
             Ok(Some(Err(err))) => {
