@@ -204,6 +204,9 @@ impl ModelClient {
     pub async fn summarize_memory_traces(
         &self,
         traces: Vec<ApiMemoryTrace>,
+        model_info: &ModelInfo,
+        effort: Option<ReasoningEffortConfig>,
+        otel_manager: &OtelManager,
     ) -> Result<Vec<ApiMemoryTraceSummaryOutput>> {
         if traces.is_empty() {
             return Ok(Vec::new());
@@ -220,14 +223,14 @@ impl ModelClient {
             .to_api_provider(auth.as_ref().map(CodexAuth::internal_auth_mode))?;
         let api_auth = auth_provider_from_auth(auth, &self.state.provider)?;
         let transport = ReqwestTransport::new(build_reqwest_client());
-        let request_telemetry = self.build_request_telemetry();
+        let request_telemetry = Self::build_request_telemetry(otel_manager);
         let client = ApiMemoriesClient::new(transport, api_provider, api_auth)
             .with_telemetry(Some(request_telemetry));
 
         let payload = ApiMemoryTraceSummarizeInput {
-            model: self.state.model_info.slug.clone(),
+            model: model_info.slug.clone(),
             traces,
-            reasoning: self.state.effort.map(|effort| Reasoning {
+            reasoning: effort.map(|effort| Reasoning {
                 effort: Some(effort),
                 summary: None,
             }),

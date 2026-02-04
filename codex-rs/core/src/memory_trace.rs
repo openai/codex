@@ -6,6 +6,9 @@ use crate::error::CodexErr;
 use crate::error::Result;
 use codex_api::MemoryTrace as ApiMemoryTrace;
 use codex_api::MemoryTraceMetadata as ApiMemoryTraceMetadata;
+use codex_otel::OtelManager;
+use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use serde_json::Map;
 use serde_json::Value;
 
@@ -30,6 +33,9 @@ struct PreparedTrace {
 pub async fn build_memories_from_trace_files(
     client: &ModelClient,
     trace_paths: &[PathBuf],
+    model_info: &ModelInfo,
+    effort: Option<ReasoningEffortConfig>,
+    otel_manager: &OtelManager,
 ) -> Result<Vec<BuiltTraceMemory>> {
     if trace_paths.is_empty() {
         return Ok(Vec::new());
@@ -41,7 +47,9 @@ pub async fn build_memories_from_trace_files(
     }
 
     let traces = prepared.iter().map(|trace| trace.payload.clone()).collect();
-    let output = client.summarize_memory_traces(traces).await?;
+    let output = client
+        .summarize_memory_traces(traces, model_info, effort, otel_manager)
+        .await?;
     if output.len() != prepared.len() {
         return Err(CodexErr::InvalidRequest(format!(
             "unexpected memory summarize output length: expected {}, got {}",
