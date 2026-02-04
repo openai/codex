@@ -44,6 +44,7 @@ use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::TurnContextItem;
 use codex_state::ThreadMetadataBuilder;
 
 /// Records all [`ResponseItem`]s for a session and flushes them to disk after
@@ -458,6 +459,24 @@ impl RolloutRecorder {
             history: items,
             rollout_path: path.to_path_buf(),
         }))
+    }
+
+    pub async fn read_latest_turn_context(path: &Path) -> std::io::Result<Option<TurnContextItem>> {
+        let text = tokio::fs::read_to_string(path).await?;
+        for line in text.lines().rev() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let rollout_line = match serde_json::from_str::<RolloutLine>(trimmed) {
+                Ok(rollout_line) => rollout_line,
+                Err(_) => continue,
+            };
+            if let RolloutItem::TurnContext(turn_context) = rollout_line.item {
+                return Ok(Some(turn_context));
+            }
+        }
+        Ok(None)
     }
 
     pub async fn shutdown(&self) -> std::io::Result<()> {

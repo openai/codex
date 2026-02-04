@@ -17,6 +17,7 @@ use time::macros::format_description;
 use uuid::Uuid;
 
 use crate::rollout::INTERACTIVE_SESSION_SOURCES;
+use crate::rollout::RolloutRecorder;
 use crate::rollout::list::Cursor;
 use crate::rollout::list::ThreadItem;
 use crate::rollout::list::ThreadSortKey;
@@ -239,6 +240,121 @@ fn write_session_file_with_meta_payload(
     let times = FileTimes::new().set_modified(dt.into());
     file.set_times(times)?;
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn read_latest_turn_context_returns_last_turn_context_item() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let rollout_path = temp_dir.path().join("rollout.jsonl");
+
+    let first_turn_context = codex_protocol::protocol::TurnContextItem {
+        cwd: temp_dir.path().join("first"),
+        approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
+        sandbox_policy: codex_protocol::protocol::SandboxPolicy::ReadOnly,
+        model: "older-model".to_string(),
+        personality: None,
+        collaboration_mode: None,
+        effort: Some(codex_protocol::openai_models::ReasoningEffort::Low),
+        summary: codex_protocol::config_types::ReasoningSummary::Auto,
+        user_instructions: None,
+        developer_instructions: None,
+        final_output_json_schema: None,
+        truncation_policy: None,
+    };
+    let latest_turn_context = codex_protocol::protocol::TurnContextItem {
+        cwd: temp_dir.path().join("latest"),
+        approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
+        sandbox_policy: codex_protocol::protocol::SandboxPolicy::ReadOnly,
+        model: "latest-model".to_string(),
+        personality: None,
+        collaboration_mode: None,
+        effort: Some(codex_protocol::openai_models::ReasoningEffort::High),
+        summary: codex_protocol::config_types::ReasoningSummary::Detailed,
+        user_instructions: None,
+        developer_instructions: None,
+        final_output_json_schema: None,
+        truncation_policy: None,
+    };
+
+    let lines = vec![
+        RolloutLine {
+            timestamp: "t0".to_string(),
+            item: RolloutItem::TurnContext(first_turn_context),
+        },
+        RolloutLine {
+            timestamp: "t1".to_string(),
+            item: RolloutItem::ResponseItem(ResponseItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "hello".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            }),
+        },
+        RolloutLine {
+            timestamp: "t2".to_string(),
+            item: RolloutItem::TurnContext(latest_turn_context.clone()),
+        },
+    ];
+    let mut text = String::new();
+    for line in lines {
+        text.push_str(&serde_json::to_string(&line)?);
+        text.push('\n');
+    }
+    std::fs::write(&rollout_path, text)?;
+
+    let latest = RolloutRecorder::read_latest_turn_context(&rollout_path)
+        .await?
+        .expect("latest turn context");
+    assert_eq!(
+        serde_json::to_value(&latest)?,
+        serde_json::to_value(&latest_turn_context)?
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn read_latest_turn_context_skips_invalid_json_lines() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let rollout_path = temp_dir.path().join("rollout.jsonl");
+
+    let latest_turn_context = codex_protocol::protocol::TurnContextItem {
+        cwd: temp_dir.path().join("latest"),
+        approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
+        sandbox_policy: codex_protocol::protocol::SandboxPolicy::ReadOnly,
+        model: "latest-model".to_string(),
+        personality: None,
+        collaboration_mode: None,
+        effort: Some(codex_protocol::openai_models::ReasoningEffort::High),
+        summary: codex_protocol::config_types::ReasoningSummary::Detailed,
+        user_instructions: None,
+        developer_instructions: None,
+        final_output_json_schema: None,
+        truncation_policy: None,
+    };
+
+    let latest_line = RolloutLine {
+        timestamp: "t1".to_string(),
+        item: RolloutItem::TurnContext(latest_turn_context.clone()),
+    };
+    std::fs::write(
+        &rollout_path,
+        format!(
+            "{{not-valid-json}}\n{}\n",
+            serde_json::to_string(&latest_line)?
+        ),
+    )?;
+
+    let latest = RolloutRecorder::read_latest_turn_context(&rollout_path)
+        .await?
+        .expect("latest turn context");
+    assert_eq!(
+        serde_json::to_value(&latest)?,
+        serde_json::to_value(&latest_turn_context)?
+    );
     Ok(())
 }
 

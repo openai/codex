@@ -37,8 +37,7 @@ use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::TurnContextItem;
 use codex_state::log_db;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use cwd_prompt::CwdPromptAction;
@@ -655,7 +654,7 @@ async fn run_ratatui_app(
         None => None,
     };
 
-    let config = match &session_selection {
+    let mut config = match &session_selection {
         resume_picker::SessionSelection::Resume(_) | resume_picker::SessionSelection::Fork(_) => {
             load_config_or_exit_with_fallback_cwd(
                 cli_kv_overrides.clone(),
@@ -667,6 +666,8 @@ async fn run_ratatui_app(
         }
         _ => config,
     };
+    maybe_apply_resume_turn_context_settings(&mut config, &session_selection, cli.model.is_some())
+        .await;
     let active_profile = config.active_profile.clone();
     let should_show_trust_screen = should_show_trust_screen(&config);
 
@@ -708,7 +709,7 @@ pub(crate) async fn read_session_cwd(path: &Path) -> Option<PathBuf> {
     // mutating the SessionMeta line when the session cwd changes, but the rollout
     // is an append-only JSONL log and rewriting the head would be error-prone.
     // When rollouts move to SQLite, we can drop this scan.
-    if let Some(cwd) = parse_latest_turn_context_cwd(path).await {
+    if let Some(cwd) = read_latest_turn_context(path).await.map(|ctx| ctx.cwd) {
         return Some(cwd);
     }
     match read_session_meta_line(path).await {
@@ -725,21 +726,41 @@ pub(crate) async fn read_session_cwd(path: &Path) -> Option<PathBuf> {
     }
 }
 
-async fn parse_latest_turn_context_cwd(path: &Path) -> Option<PathBuf> {
-    let text = tokio::fs::read_to_string(path).await.ok()?;
-    for line in text.lines().rev() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
+async fn maybe_apply_resume_turn_context_settings(
+    config: &mut Config,
+    session_selection: &resume_picker::SessionSelection,
+    cli_model_override: bool,
+) {
+    if cli_model_override {
+        return;
+    }
+    let rollout_path = match session_selection {
+        resume_picker::SessionSelection::Resume(path)
+        | resume_picker::SessionSelection::Fork(path) => path,
+        resume_picker::SessionSelection::StartFresh | resume_picker::SessionSelection::Exit => {
+            return;
         }
-        let Ok(rollout_line) = serde_json::from_str::<RolloutLine>(trimmed) else {
-            continue;
-        };
-        if let RolloutItem::TurnContext(item) = rollout_line.item {
-            return Some(item.cwd);
+    };
+    if let Some(turn_context) = read_latest_turn_context(rollout_path).await {
+        config.model = Some(turn_context.model);
+        config.model_reasoning_effort = turn_context.effort;
+        config.model_reasoning_summary = turn_context.summary;
+    }
+}
+
+async fn read_latest_turn_context(path: &Path) -> Option<TurnContextItem> {
+    match RolloutRecorder::read_latest_turn_context(path).await {
+        Ok(turn_context) => turn_context,
+        Err(err) => {
+            let rollout_path = path.display().to_string();
+            tracing::warn!(
+                %rollout_path,
+                %err,
+                "Failed to read latest turn context from rollout"
+            );
+            None
         }
     }
-    None
 }
 
 pub(crate) fn cwds_differ(current_cwd: &Path, session_cwd: &Path) -> bool {
@@ -1017,6 +1038,154 @@ mod tests {
             final_output_json_schema: None,
             truncation_policy: None,
         }
+    }
+
+    #[tokio::test]
+    async fn resume_rehydrates_model_effort_and_summary_from_latest_turn_context()
+    -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let mut config = build_config(&temp_dir).await?;
+        config.model = Some("current-model".to_string());
+        config.model_reasoning_effort = None;
+
+        let first_cwd = temp_dir.path().join("first");
+        let latest_cwd = temp_dir.path().join("latest");
+        std::fs::create_dir_all(&first_cwd)?;
+        std::fs::create_dir_all(&latest_cwd)?;
+
+        let rollout_path = temp_dir.path().join("rollout.jsonl");
+        let mut first_context = build_turn_context(&config, first_cwd);
+        first_context.model = "older-model".to_string();
+        first_context.effort = Some(codex_protocol::openai_models::ReasoningEffort::Low);
+        first_context.summary = codex_protocol::config_types::ReasoningSummary::Auto;
+        let mut latest_context = build_turn_context(&config, latest_cwd);
+        latest_context.model = "latest-model".to_string();
+        latest_context.effort = Some(codex_protocol::openai_models::ReasoningEffort::High);
+        latest_context.summary = codex_protocol::config_types::ReasoningSummary::Detailed;
+        let lines = vec![
+            RolloutLine {
+                timestamp: "t0".to_string(),
+                item: RolloutItem::TurnContext(first_context),
+            },
+            RolloutLine {
+                timestamp: "t1".to_string(),
+                item: RolloutItem::TurnContext(latest_context),
+            },
+        ];
+        let mut text = String::new();
+        for line in lines {
+            text.push_str(&serde_json::to_string(&line).expect("serialize rollout"));
+            text.push('\n');
+        }
+        std::fs::write(&rollout_path, text)?;
+
+        maybe_apply_resume_turn_context_settings(
+            &mut config,
+            &resume_picker::SessionSelection::Resume(rollout_path),
+            false,
+        )
+        .await;
+
+        assert_eq!(config.model.as_deref(), Some("latest-model"));
+        assert_eq!(
+            config.model_reasoning_effort,
+            Some(codex_protocol::openai_models::ReasoningEffort::High)
+        );
+        assert_eq!(
+            config.model_reasoning_summary,
+            codex_protocol::config_types::ReasoningSummary::Detailed
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn resume_does_not_rehydrate_model_when_cli_model_override_present() -> std::io::Result<()>
+    {
+        let temp_dir = TempDir::new()?;
+        let mut config = build_config(&temp_dir).await?;
+        config.model = Some("cli-model".to_string());
+        config.model_reasoning_effort =
+            Some(codex_protocol::openai_models::ReasoningEffort::Medium);
+
+        let latest_cwd = temp_dir.path().join("latest");
+        std::fs::create_dir_all(&latest_cwd)?;
+        let rollout_path = temp_dir.path().join("rollout.jsonl");
+        let mut latest_context = build_turn_context(&config, latest_cwd);
+        latest_context.model = "history-model".to_string();
+        latest_context.effort = Some(codex_protocol::openai_models::ReasoningEffort::Low);
+        latest_context.summary = codex_protocol::config_types::ReasoningSummary::Concise;
+        let line = RolloutLine {
+            timestamp: "t0".to_string(),
+            item: RolloutItem::TurnContext(latest_context),
+        };
+        std::fs::write(
+            &rollout_path,
+            format!(
+                "{}\n",
+                serde_json::to_string(&line).expect("serialize rollout")
+            ),
+        )?;
+
+        maybe_apply_resume_turn_context_settings(
+            &mut config,
+            &resume_picker::SessionSelection::Resume(rollout_path),
+            true,
+        )
+        .await;
+
+        assert_eq!(config.model.as_deref(), Some("cli-model"));
+        assert_eq!(
+            config.model_reasoning_effort,
+            Some(codex_protocol::openai_models::ReasoningEffort::Medium)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fork_rehydrates_model_effort_and_summary_from_latest_turn_context()
+    -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let mut config = build_config(&temp_dir).await?;
+        config.model = Some("current-model".to_string());
+        config.model_reasoning_effort = Some(codex_protocol::openai_models::ReasoningEffort::Low);
+        config.model_reasoning_summary = codex_protocol::config_types::ReasoningSummary::Concise;
+
+        let latest_cwd = temp_dir.path().join("latest");
+        std::fs::create_dir_all(&latest_cwd)?;
+        let rollout_path = temp_dir.path().join("rollout.jsonl");
+        let mut latest_context = build_turn_context(&config, latest_cwd);
+        latest_context.model = "forked-history-model".to_string();
+        latest_context.effort = Some(codex_protocol::openai_models::ReasoningEffort::High);
+        latest_context.summary = codex_protocol::config_types::ReasoningSummary::Detailed;
+        let line = RolloutLine {
+            timestamp: "t0".to_string(),
+            item: RolloutItem::TurnContext(latest_context),
+        };
+        std::fs::write(
+            &rollout_path,
+            format!(
+                "{}\n",
+                serde_json::to_string(&line).expect("serialize rollout")
+            ),
+        )?;
+
+        maybe_apply_resume_turn_context_settings(
+            &mut config,
+            &resume_picker::SessionSelection::Fork(rollout_path),
+            false,
+        )
+        .await;
+
+        assert_eq!(config.model.as_deref(), Some("forked-history-model"));
+        assert_eq!(
+            config.model_reasoning_effort,
+            Some(codex_protocol::openai_models::ReasoningEffort::High)
+        );
+        assert_eq!(
+            config.model_reasoning_summary,
+            codex_protocol::config_types::ReasoningSummary::Detailed
+        );
+        Ok(())
     }
 
     #[tokio::test]
