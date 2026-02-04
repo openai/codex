@@ -34,6 +34,7 @@ use toml::Value as TomlValue;
 pub use cloud_requirements::CloudRequirementsLoader;
 pub use config_requirements::ConfigRequirements;
 pub use config_requirements::ConfigRequirementsToml;
+pub use config_requirements::ConstrainedWithSource;
 pub use config_requirements::McpServerIdentity;
 pub use config_requirements::McpServerRequirement;
 pub use config_requirements::RequirementSource;
