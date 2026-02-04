@@ -696,7 +696,7 @@ async fn build_thread_item(
         && !summary
             .source
             .as_ref()
-            .is_some_and(|source| allowed_sources.contains(&source))
+            .is_some_and(|source| allowed_sources.contains(source))
     {
         return None;
     }
