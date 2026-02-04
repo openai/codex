@@ -67,6 +67,7 @@ const DENY_ACCESS: i32 = 3;
 mod read_acl_mutex;
 mod sandbox_users;
 use read_acl_mutex::acquire_read_acl_mutex;
+use read_acl_mutex::acquire_setup_refresh_mutex;
 use read_acl_mutex::read_acl_mutex_exists;
 use sandbox_users::provision_sandbox_users;
 use sandbox_users::resolve_sandbox_users_group_sid;
@@ -437,9 +438,19 @@ fn real_main() -> Result<()> {
 }
 
 fn run_setup(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<()> {
-    match payload.mode {
-        SetupMode::ReadAclsOnly => run_read_acl_only(payload, log),
-        SetupMode::Full => run_setup_full(payload, log, sbx_dir),
+    if payload.refresh_only {
+        match acquire_setup_refresh_mutex()? {
+            Some(_guard) => run_read_acl_only(payload, log),
+            None => {
+                log_line(log, "Another setup refresh is already in progress; skipping.")?;
+                Ok(())
+            }
+        }
+    } else {
+        match payload.mode {
+            SetupMode::ReadAclsOnly => run_read_acl_only(payload, log),
+            SetupMode::Full => run_setup_full(payload, log, sbx_dir),
+        }
     }
 }
 

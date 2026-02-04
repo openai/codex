@@ -321,16 +321,7 @@ unsafe fn enable_single_privilege(h_token: HANDLE, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// # Safety
-/// Caller must close the returned token handle.
-pub unsafe fn create_readonly_token_with_cap(
-    psid_capability: *mut c_void,
-) -> Result<(HANDLE, *mut c_void)> {
-    let base = get_current_token_for_restriction()?;
-    let res = create_readonly_token_with_caps_from_base(&[psid_capability]);
-    CloseHandle(base);
-    res.map(|h| (h, psid_capability))
-}
+
 
 pub unsafe fn create_readonly_token_with_caps_from_base(
     psid_capabilities: &[*mut c_void],
