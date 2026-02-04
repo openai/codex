@@ -190,10 +190,12 @@ client_request_definitions! {
     },
     ThreadResume => "thread/resume" {
         params: v2::ThreadResumeParams,
+        inspect_params: true,
         response: v2::ThreadResumeResponse,
     },
     ThreadFork => "thread/fork" {
         params: v2::ThreadForkParams,
+        inspect_params: true,
         response: v2::ThreadForkResponse,
     },
     ThreadArchive => "thread/archive" {
@@ -226,6 +228,7 @@ client_request_definitions! {
     },
     SkillsList => "skills/list" {
         params: v2::SkillsListParams,
+        inspect_params: true,
         response: v2::SkillsListResponse,
     },
     AppsList => "app/list" {
@@ -238,6 +241,7 @@ client_request_definitions! {
     },
     TurnStart => "turn/start" {
         params: v2::TurnStartParams,
+        inspect_params: true,
         response: v2::TurnStartResponse,
     },
     TurnInterrupt => "turn/interrupt" {

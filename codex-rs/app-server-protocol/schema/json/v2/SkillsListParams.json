@@ -1,16 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "properties": {
-    "additionalSkillsRoots": {
-      "description": "Experimental: additional skill roots to scan alongside the defaults derived from cwds.",
-      "items": {
-        "type": "string"
-      },
-      "type": [
-        "array",
-        "null"
-      ]
-    },
     "cwds": {
       "description": "When empty, defaults to the current session working directory.",
       "items": {

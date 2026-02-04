@@ -13940,16 +13940,6 @@
       "SkillsListParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
-          "additionalSkillsRoots": {
-            "description": "Experimental: additional skill roots to scan alongside the defaults derived from cwds.",
-            "items": {
-              "type": "string"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
           "cwds": {
             "description": "When empty, defaults to the current session working directory.",
             "items": {
@@ -14266,16 +14256,6 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "There are two ways to fork a thread: 1. By thread_id: load the thread from disk by thread_id and fork it into a new thread. 2. By path: load the thread from disk by path and fork it into a new thread.\n\nIf using path, the thread_id param will be ignored.\n\nPrefer using thread_id whenever possible.",
         "properties": {
-          "additionalSkillsRoots": {
-            "description": "Experimental: additional skill roots to scan for this and subsequent turns.",
-            "items": {
-              "type": "string"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
           "approvalPolicy": {
             "anyOf": [
               {
@@ -15054,16 +15034,6 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "There are three ways to resume a thread: 1. By thread_id: load the thread from disk by thread_id and resume it. 2. By history: instantiate the thread from memory and resume it. 3. By path: load the thread from disk by path and resume it.\n\nThe precedence is: history > path > thread_id. If using history or path, the thread_id param will be ignored.\n\nPrefer using thread_id whenever possible.",
         "properties": {
-          "additionalSkillsRoots": {
-            "description": "Experimental: additional skill roots to scan for this and subsequent turns.",
-            "items": {
-              "type": "string"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
           "approvalPolicy": {
             "anyOf": [
               {
@@ -15287,16 +15257,6 @@
       "ThreadStartParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
-          "additionalSkillsRoots": {
-            "description": "Experimental: additional skill roots to scan for this and subsequent turns.",
-            "items": {
-              "type": "string"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
           "approvalPolicy": {
             "anyOf": [
               {
@@ -15856,16 +15816,6 @@
       "TurnStartParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
-          "additionalSkillsRoots": {
-            "description": "Experimental: additional skill roots to scan for this and subsequent turns.",
-            "items": {
-              "type": "string"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
           "approvalPolicy": {
             "anyOf": [
               {

@@ -775,16 +775,6 @@
   },
   "description": "There are three ways to resume a thread: 1. By thread_id: load the thread from disk by thread_id and resume it. 2. By history: instantiate the thread from memory and resume it. 3. By path: load the thread from disk by path and resume it.\n\nThe precedence is: history > path > thread_id. If using history or path, the thread_id param will be ignored.\n\nPrefer using thread_id whenever possible.",
   "properties": {
-    "additionalSkillsRoots": {
-      "description": "Experimental: additional skill roots to scan for this and subsequent turns.",
-      "items": {
-        "type": "string"
-      },
-      "type": [
-        "array",
-        "null"
-      ]
-    },
     "approvalPolicy": {
       "anyOf": [
         {

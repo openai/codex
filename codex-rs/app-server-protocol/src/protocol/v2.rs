@@ -1181,6 +1181,7 @@ pub struct ThreadStartParams {
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
     /// Experimental: additional skill roots to scan for this and subsequent turns.
+    #[experimental("thread/start.additionalSkillsRoots")]
     #[ts(optional = nullable)]
     pub additional_skills_roots: Option<Vec<PathBuf>>,
     pub personality: Option<Personality>,
@@ -1228,7 +1229,9 @@ pub struct ThreadStartResponse {
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[derive(
+    Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
+)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 /// There are three ways to resume a thread:
@@ -1262,6 +1265,7 @@ pub struct ThreadResumeParams {
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
     /// Experimental: additional skill roots to scan for this and subsequent turns.
+    #[experimental("thread/resume.additionalSkillsRoots")]
     #[ts(optional = nullable)]
     pub additional_skills_roots: Option<Vec<PathBuf>>,
     pub personality: Option<Personality>,
@@ -1280,7 +1284,9 @@ pub struct ThreadResumeResponse {
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[derive(
+    Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
+)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 /// There are two ways to fork a thread:
@@ -1307,6 +1313,7 @@ pub struct ThreadForkParams {
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
     /// Experimental: additional skill roots to scan for this and subsequent turns.
+    #[experimental("thread/fork.additionalSkillsRoots")]
     #[ts(optional = nullable)]
     pub additional_skills_roots: Option<Vec<PathBuf>>,
 }
@@ -1482,7 +1489,7 @@ pub struct ThreadReadResponse {
     pub thread: Thread,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct SkillsListParams {
@@ -1491,6 +1498,7 @@ pub struct SkillsListParams {
     pub cwds: Vec<PathBuf>,
 
     /// Experimental: additional skill roots to scan alongside the defaults derived from cwds.
+    #[experimental("skills/list.additionalSkillsRoots")]
     #[ts(optional = nullable)]
     pub additional_skills_roots: Option<Vec<PathBuf>>,
 
@@ -1835,13 +1843,16 @@ pub enum TurnStatus {
 }
 
 // Turn APIs
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[derive(
+    Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
+)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct TurnStartParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
     /// Experimental: additional skill roots to scan for this and subsequent turns.
+    #[experimental("turn/start.additionalSkillsRoots")]
     #[ts(optional = nullable)]
     pub additional_skills_roots: Option<Vec<PathBuf>>,
     /// Override the working directory for this turn and subsequent turns.
