@@ -147,7 +147,7 @@ fn create_config_toml(codex_home: &Path, server_uri: String) -> std::io::Result<
             r#"
 model = "mock-model"
 approval_policy = "never"
-sandbox_mode = "read-only"
+sandbox_mode = "danger-full-access"
 
 model_provider = "mock_provider"
 
