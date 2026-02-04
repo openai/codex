@@ -34,6 +34,7 @@ use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::terminal;
 use crate::transport_manager::TransportManager;
 use crate::truncate::TruncationPolicy;
+use crate::turn_metadata::build_turn_metadata_header;
 use crate::user_notification::UserNotifier;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
@@ -80,6 +81,7 @@ use rmcp::model::RequestId;
 use serde_json;
 use serde_json::Value;
 use tokio::sync::Mutex;
+use tokio::sync::OnceCell;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -90,6 +92,7 @@ use tracing::field;
 use tracing::info;
 use tracing::info_span;
 use tracing::instrument;
+use tracing::trace;
 use tracing::trace_span;
 use tracing::warn;
 
@@ -501,6 +504,7 @@ pub(crate) struct TurnContext {
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
     pub(crate) truncation_policy: TruncationPolicy,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
+    turn_metadata_header: OnceCell<Option<String>>,
 }
 impl TurnContext {
     pub(crate) fn resolve_path(&self, path: Option<String>) -> PathBuf {
@@ -513,6 +517,38 @@ impl TurnContext {
         self.compact_prompt
             .as_deref()
             .unwrap_or(compact::SUMMARIZATION_PROMPT)
+    }
+
+    async fn build_turn_metadata_header(&self) -> Option<String> {
+        self.turn_metadata_header
+            .get_or_init(|| async { build_turn_metadata_header(self.cwd.as_path()).await })
+            .await
+            .clone()
+    }
+
+    pub async fn resolve_turn_metadata_header(&self) -> Option<String> {
+        const TURN_METADATA_HEADER_TIMEOUT_MS: u64 = 250;
+        match tokio::time::timeout(
+            std::time::Duration::from_millis(TURN_METADATA_HEADER_TIMEOUT_MS),
+            self.build_turn_metadata_header(),
+        )
+        .await
+        {
+            Ok(header) => header,
+            Err(_) => {
+                warn!("timed out after 250ms while building turn metadata header");
+                self.turn_metadata_header.get().cloned().flatten()
+            }
+        }
+    }
+
+    pub fn spawn_turn_metadata_header_task(self: &Arc<Self>) {
+        let context = Arc::clone(self);
+        tokio::spawn(async move {
+            trace!("Spawning turn metadata calculation task");
+            context.build_turn_metadata_header().await;
+            trace!("Turn metadata calculation task completed");
+        });
     }
 }
 
@@ -682,10 +718,11 @@ impl Session {
             web_search_mode: per_turn_config.web_search_mode,
         });
 
+        let cwd = session_configuration.cwd.clone();
         TurnContext {
             sub_id,
             client,
-            cwd: session_configuration.cwd.clone(),
+            cwd,
             developer_instructions: session_configuration.developer_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
@@ -702,6 +739,7 @@ impl Session {
             tool_call_gate: Arc::new(ReadinessFlag::new()),
             truncation_policy: model_info.truncation_policy.into(),
             dynamic_tools: session_configuration.dynamic_tools.clone(),
+            turn_metadata_header: OnceCell::new(),
         }
     }
 
@@ -1246,10 +1284,13 @@ impl Session {
             sub_id,
             self.services.transport_manager.clone(),
         );
+
         if let Some(final_schema) = final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
         }
-        Arc::new(turn_context)
+        let turn_context = Arc::new(turn_context);
+        turn_context.spawn_turn_metadata_header_task();
+        turn_context
     }
 
     pub(crate) async fn new_default_turn(&self) -> Arc<TurnContext> {
@@ -3274,6 +3315,7 @@ async fn spawn_review_thread(
         tool_call_gate: Arc::new(ReadinessFlag::new()),
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         truncation_policy: model_info.truncation_policy.into(),
+        turn_metadata_header: parent_turn_context.turn_metadata_header.clone(),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -3478,9 +3520,8 @@ pub(crate) async fn run_turn(
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
 
-    let mut client_session = turn_context
-        .client
-        .new_session(Some(turn_context.cwd.clone()));
+    let turn_metadata_header = turn_context.resolve_turn_metadata_header().await;
+    let mut client_session = turn_context.client.new_session(turn_metadata_header);
 
     loop {
         // Note that pending_input would be something like a message the user

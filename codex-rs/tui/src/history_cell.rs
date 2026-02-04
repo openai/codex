@@ -2213,6 +2213,14 @@ fn runtime_metrics_label(summary: RuntimeMetricsSummary) -> Option<String> {
             summary.websocket_events.count
         ));
     }
+    if summary.responses_api_overhead_ms > 0 {
+        let duration = format_duration_ms(summary.responses_api_overhead_ms);
+        parts.push(format!("Responses API overhead: {duration}"));
+    }
+    if summary.responses_api_inference_time_ms > 0 {
+        let duration = format_duration_ms(summary.responses_api_inference_time_ms);
+        parts.push(format!("Responses API inference: {duration}"));
+    }
     if parts.is_empty() {
         None
     } else {
@@ -2381,9 +2389,11 @@ mod tests {
                 count: 4,
                 duration_ms: 1_200,
             },
+            responses_api_overhead_ms: 650,
+            responses_api_inference_time_ms: 1_940,
         };
         let cell = FinalMessageSeparator::new(Some(12), Some(summary));
-        let rendered = render_lines(&cell.display_lines(200));
+        let rendered = render_lines(&cell.display_lines(300));
 
         assert_eq!(rendered.len(), 1);
         assert!(!rendered[0].contains("Worked for"));
@@ -2392,6 +2402,8 @@ mod tests {
         assert!(rendered[0].contains("WebSocket: 1 events send (700ms)"));
         assert!(rendered[0].contains("Streams: 6 events (900ms)"));
         assert!(rendered[0].contains("4 events received (1.2s)"));
+        assert!(rendered[0].contains("Responses API overhead: 650ms"));
+        assert!(rendered[0].contains("Responses API inference: 1.9s"));
     }
 
     #[test]
