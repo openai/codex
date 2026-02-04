@@ -274,6 +274,12 @@ impl DeveloperInstructions {
         Self { text }
     }
 
+    pub fn model_switch_message(model_instructions: String) -> Self {
+        DeveloperInstructions::new(format!(
+            "<model_switch>\nThe user was previously using a different model. Please continue the conversation according to the following instructions:\n\n{model_instructions}\n</model_switch>"
+        ))
+    }
+
     pub fn personality_spec_message(spec: String) -> Self {
         let message = format!(
             "<personality_spec> The user has requested a new communication style. Future messages should adhere to the following personality: \n{spec} </personality_spec>"

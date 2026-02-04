@@ -1500,7 +1500,7 @@ impl Session {
             return None;
         }
 
-        Some(DeveloperInstructions::new(model_instructions).into())
+        Some(DeveloperInstructions::model_switch_message(model_instructions).into())
     }
 
     fn build_settings_update_items(
@@ -5891,10 +5891,13 @@ mod tests {
             id: None,
             role: "developer".to_string(),
             content: vec![ContentItem::InputText {
-                text: next_context
-                    .client
-                    .get_model_info()
-                    .get_model_instructions(next_context.personality),
+                text: DeveloperInstructions::model_switch_message(
+                    next_context
+                        .client
+                        .get_model_info()
+                        .get_model_instructions(next_context.personality),
+                )
+                .into_text(),
             }],
             end_turn: None,
             phase: None,
