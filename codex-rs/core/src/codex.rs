@@ -3496,15 +3496,6 @@ pub(crate) async fn run_turn(
         if !pending_response_items.is_empty() {
             sess.record_conversation_items(&turn_context, &pending_response_items)
                 .await;
-            for item in &pending_response_items {
-                if let Some(turn_item) = parse_turn_item(item)
-                    && matches!(turn_item, TurnItem::UserMessage(_))
-                {
-                    sess.emit_turn_item_started(&turn_context, &turn_item).await;
-                    sess.emit_turn_item_completed(&turn_context, turn_item)
-                        .await;
-                }
-            }
         }
 
         // Construct the input that we will send to the model.
