@@ -20,6 +20,7 @@ use ts_rs::TS;
 pub enum TurnItem {
     UserMessage(UserMessageItem),
     AgentMessage(AgentMessageItem),
+    Plan(PlanItem),
     Reasoning(ReasoningItem),
     WebSearch(WebSearchItem),
     ContextCompaction(ContextCompactionItem),
@@ -42,6 +43,12 @@ pub enum AgentMessageContent {
 pub struct AgentMessageItem {
     pub id: String,
     pub content: Vec<AgentMessageContent>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+pub struct PlanItem {
+    pub id: String,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -218,6 +225,7 @@ impl TurnItem {
         match self {
             TurnItem::UserMessage(item) => item.id.clone(),
             TurnItem::AgentMessage(item) => item.id.clone(),
+            TurnItem::Plan(item) => item.id.clone(),
             TurnItem::Reasoning(item) => item.id.clone(),
             TurnItem::WebSearch(item) => item.id.clone(),
             TurnItem::ContextCompaction(item) => item.id.clone(),
@@ -228,6 +236,7 @@ impl TurnItem {
         match self {
             TurnItem::UserMessage(item) => vec![item.as_legacy_event()],
             TurnItem::AgentMessage(item) => item.as_legacy_events(),
+            TurnItem::Plan(_) => Vec::new(),
             TurnItem::WebSearch(item) => vec![item.as_legacy_event()],
             TurnItem::Reasoning(item) => item.as_legacy_events(show_raw_agent_reasoning),
             TurnItem::ContextCompaction(item) => vec![item.as_legacy_event()],

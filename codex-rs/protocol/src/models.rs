@@ -2,8 +2,6 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use codex_utils_image::load_and_resize_to_fit;
-use mcp_types::CallToolResult;
-use mcp_types::ContentBlock;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -23,6 +21,8 @@ use codex_execpolicy::Policy;
 use codex_git::GhostCommit;
 use codex_utils_image::error::ImageProcessingError;
 use schemars::JsonSchema;
+
+use crate::mcp::CallToolResult;
 
 /// Controls whether a command should use the session sandbox or bypass it.
 #[derive(
@@ -72,6 +72,13 @@ pub enum ContentItem {
     OutputText { text: String },
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum MessagePhase {
+    Commentary,
+    FinalAnswer,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseItem {
@@ -85,6 +92,11 @@ pub enum ResponseItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         end_turn: Option<bool>,
+        // Optional output-message phase (for example: "commentary", "final_answer").
+        // Do not use directly; availability can vary by provider and model.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        phase: Option<MessagePhase>,
     },
     Reasoning {
         #[serde(default, skip_serializing)]
@@ -97,7 +109,7 @@ pub enum ResponseItem {
         encrypted_content: Option<String>,
     },
     LocalShellCall {
-        /// Set when using the chat completions API.
+        /// Legacy id field retained for compatibility with older payloads.
         #[serde(default, skip_serializing)]
         #[ts(skip)]
         id: Option<String>,
@@ -113,8 +125,7 @@ pub enum ResponseItem {
         name: String,
         // The Responses API returns the function call arguments as a *string* that contains
         // JSON, not as an already‑parsed object. We keep it as a raw string here and let
-        // Session::handle_function_call parse it into a Value. This exactly matches the
-        // Chat Completions + Responses API behavior.
+        // Session::handle_function_call parse it into a Value.
         arguments: String,
         call_id: String,
     },
@@ -233,10 +244,13 @@ impl DeveloperInstructions {
                 if !request_rule_enabled {
                     APPROVAL_POLICY_ON_REQUEST.to_string()
                 } else {
-                    let command_prefixes = format_allow_prefixes(exec_policy);
+                    let command_prefixes =
+                        format_allow_prefixes(exec_policy.get_allowed_prefixes());
                     match command_prefixes {
                         Some(prefixes) => {
-                            format!("{APPROVAL_POLICY_ON_REQUEST_RULE}\n{prefixes}")
+                            format!(
+                                "{APPROVAL_POLICY_ON_REQUEST_RULE}\n## Approved command prefixes\nThe following prefix rules have already been approved: {prefixes}"
+                            )
                         }
                         None => APPROVAL_POLICY_ON_REQUEST_RULE.to_string(),
                     }
@@ -371,20 +385,51 @@ impl DeveloperInstructions {
     }
 }
 
-pub fn render_command_prefix_list<I, P>(prefixes: I) -> Option<String>
-where
-    I: IntoIterator<Item = P>,
-    P: AsRef<[String]>,
-{
-    let lines = prefixes
-        .into_iter()
-        .map(|prefix| format!("- {}", render_command_prefix(prefix.as_ref())))
-        .collect::<Vec<_>>();
-    if lines.is_empty() {
-        return None;
+const MAX_RENDERED_PREFIXES: usize = 100;
+const MAX_ALLOW_PREFIX_TEXT_BYTES: usize = 5000;
+const TRUNCATED_MARKER: &str = "...\n[Some commands were truncated]";
+
+pub fn format_allow_prefixes(prefixes: Vec<Vec<String>>) -> Option<String> {
+    let mut truncated = false;
+    if prefixes.len() > MAX_RENDERED_PREFIXES {
+        truncated = true;
     }
 
-    Some(lines.join("\n"))
+    let mut prefixes = prefixes;
+    prefixes.sort_by(|a, b| {
+        a.len()
+            .cmp(&b.len())
+            .then_with(|| prefix_combined_str_len(a).cmp(&prefix_combined_str_len(b)))
+            .then_with(|| a.cmp(b))
+    });
+
+    let full_text = prefixes
+        .into_iter()
+        .take(MAX_RENDERED_PREFIXES)
+        .map(|prefix| format!("- {}", render_command_prefix(&prefix)))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // truncate to last UTF8 char
+    let mut output = full_text;
+    let byte_idx = output
+        .char_indices()
+        .nth(MAX_ALLOW_PREFIX_TEXT_BYTES)
+        .map(|(i, _)| i);
+    if let Some(byte_idx) = byte_idx {
+        truncated = true;
+        output = output[..byte_idx].to_string();
+    }
+
+    if truncated {
+        Some(format!("{output}{TRUNCATED_MARKER}"))
+    } else {
+        Some(output)
+    }
+}
+
+fn prefix_combined_str_len(prefix: &[String]) -> usize {
+    prefix.iter().map(String::len).sum()
 }
 
 fn render_command_prefix(prefix: &[String]) -> String {
@@ -396,12 +441,6 @@ fn render_command_prefix(prefix: &[String]) -> String {
     format!("[{tokens}]")
 }
 
-fn format_allow_prefixes(exec_policy: &Policy) -> Option<String> {
-    let prefixes = exec_policy.get_allowed_prefixes();
-    let lines = render_command_prefix_list(prefixes)?;
-    Some(format!("Approved command prefixes:\n{lines}"))
-}
-
 impl From<DeveloperInstructions> for ResponseItem {
     fn from(di: DeveloperInstructions) -> Self {
         ResponseItem::Message {
@@ -411,6 +450,7 @@ impl From<DeveloperInstructions> for ResponseItem {
                 text: di.into_text(),
             }],
             end_turn: None,
+            phase: None,
         }
     }
 }
@@ -568,6 +608,7 @@ impl From<ResponseInputItem> for ResponseItem {
                 content,
                 id: None,
                 end_turn: None,
+                phase: None,
             },
             ResponseInputItem::FunctionCallOutput { call_id, output } => {
                 Self::FunctionCallOutput { call_id, output }
@@ -620,6 +661,9 @@ pub enum WebSearchAction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         query: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        queries: Option<Vec<String>>,
     },
     OpenPage {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -741,8 +785,7 @@ pub enum FunctionCallOutputContentItem {
 /// `content` preserves the historical plain-string payload so downstream
 /// integrations (tests, logging, etc.) can keep treating tool output as
 /// `String`. When an MCP server returns richer data we additionally populate
-/// `content_items` with the structured form that the Responses/Chat
-/// Completions APIs understand.
+/// `content_items` with the structured form that the Responses API understands.
 #[derive(Debug, Default, Clone, PartialEq, JsonSchema, TS)]
 pub struct FunctionCallOutputPayload {
     pub content: String,
@@ -802,6 +845,7 @@ impl From<&CallToolResult> for FunctionCallOutputPayload {
             content,
             structured_content,
             is_error,
+            meta: _,
         } = call_tool_result;
 
         let is_success = is_error != &Some(true);
@@ -838,7 +882,7 @@ impl From<&CallToolResult> for FunctionCallOutputPayload {
             }
         };
 
-        let content_items = convert_content_blocks_to_items(content);
+        let content_items = convert_mcp_content_to_items(content);
 
         FunctionCallOutputPayload {
             content: serialized_content,
@@ -848,32 +892,45 @@ impl From<&CallToolResult> for FunctionCallOutputPayload {
     }
 }
 
-fn convert_content_blocks_to_items(
-    blocks: &[ContentBlock],
+fn convert_mcp_content_to_items(
+    contents: &[serde_json::Value],
 ) -> Option<Vec<FunctionCallOutputContentItem>> {
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "type")]
+    enum McpContent {
+        #[serde(rename = "text")]
+        Text { text: String },
+        #[serde(rename = "image")]
+        Image {
+            data: String,
+            #[serde(rename = "mimeType", alias = "mime_type")]
+            mime_type: Option<String>,
+        },
+        #[serde(other)]
+        Unknown,
+    }
+
     let mut saw_image = false;
-    let mut items = Vec::with_capacity(blocks.len());
-    tracing::warn!("Blocks: {:?}", blocks);
-    for block in blocks {
-        match block {
-            ContentBlock::TextContent(text) => {
-                items.push(FunctionCallOutputContentItem::InputText {
-                    text: text.text.clone(),
-                });
-            }
-            ContentBlock::ImageContent(image) => {
+    let mut items = Vec::with_capacity(contents.len());
+
+    for content in contents {
+        let item = match serde_json::from_value::<McpContent>(content.clone()) {
+            Ok(McpContent::Text { text }) => FunctionCallOutputContentItem::InputText { text },
+            Ok(McpContent::Image { data, mime_type }) => {
                 saw_image = true;
-                // Just in case the content doesn't include a data URL, add it.
-                let image_url = if image.data.starts_with("data:") {
-                    image.data.clone()
+                let image_url = if data.starts_with("data:") {
+                    data
                 } else {
-                    format!("data:{};base64,{}", image.mime_type, image.data)
+                    let mime_type = mime_type.unwrap_or_else(|| "application/octet-stream".into());
+                    format!("data:{mime_type};base64,{data}")
                 };
-                items.push(FunctionCallOutputContentItem::InputImage { image_url });
+                FunctionCallOutputContentItem::InputImage { image_url }
             }
-            // TODO: render audio, resource, and embedded resource content to the model.
-            _ => return None,
-        }
+            Ok(McpContent::Unknown) | Err(_) => FunctionCallOutputContentItem::InputText {
+                text: serde_json::to_string(content).unwrap_or_else(|_| "<content>".to_string()),
+            },
+        };
+        items.push(item);
     }
 
     if saw_image { Some(items) } else { None }
@@ -905,11 +962,53 @@ mod tests {
     use crate::protocol::AskForApproval;
     use anyhow::Result;
     use codex_execpolicy::Policy;
-    use mcp_types::ImageContent;
-    use mcp_types::TextContent;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
     use tempfile::tempdir;
+
+    #[test]
+    fn convert_mcp_content_to_items_preserves_data_urls() {
+        let contents = vec![serde_json::json!({
+            "type": "image",
+            "data": "data:image/png;base64,Zm9v",
+            "mimeType": "image/png",
+        })];
+
+        let items = convert_mcp_content_to_items(&contents).expect("expected image items");
+        assert_eq!(
+            items,
+            vec![FunctionCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,Zm9v".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn convert_mcp_content_to_items_builds_data_urls_when_missing_prefix() {
+        let contents = vec![serde_json::json!({
+            "type": "image",
+            "data": "Zm9v",
+            "mimeType": "image/png",
+        })];
+
+        let items = convert_mcp_content_to_items(&contents).expect("expected image items");
+        assert_eq!(
+            items,
+            vec![FunctionCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,Zm9v".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn convert_mcp_content_to_items_returns_none_without_images() {
+        let contents = vec![serde_json::json!({
+            "type": "text",
+            "text": "hello",
+        })];
+
+        assert_eq!(convert_mcp_content_to_items(&contents), None);
+    }
 
     #[test]
     fn converts_sandbox_mode_into_developer_instructions() {
@@ -998,6 +1097,62 @@ mod tests {
     }
 
     #[test]
+    fn render_command_prefix_list_sorts_by_len_then_total_len_then_alphabetical() {
+        let prefixes = vec![
+            vec!["b".to_string(), "zz".to_string()],
+            vec!["aa".to_string()],
+            vec!["b".to_string()],
+            vec!["a".to_string(), "b".to_string(), "c".to_string()],
+            vec!["a".to_string()],
+            vec!["b".to_string(), "a".to_string()],
+        ];
+
+        let output = format_allow_prefixes(prefixes).expect("rendered list");
+        assert_eq!(
+            output,
+            r#"- ["a"]
+- ["b"]
+- ["aa"]
+- ["b", "a"]
+- ["b", "zz"]
+- ["a", "b", "c"]"#
+                .to_string(),
+        );
+    }
+
+    #[test]
+    fn render_command_prefix_list_limits_output_to_max_prefixes() {
+        let prefixes = (0..(MAX_RENDERED_PREFIXES + 5))
+            .map(|i| vec![format!("{i:03}")])
+            .collect::<Vec<_>>();
+
+        let output = format_allow_prefixes(prefixes).expect("rendered list");
+        assert_eq!(output.ends_with(TRUNCATED_MARKER), true);
+        eprintln!("output: {output}");
+        assert_eq!(output.lines().count(), MAX_RENDERED_PREFIXES + 1);
+    }
+
+    #[test]
+    fn format_allow_prefixes_limits_output() {
+        let mut exec_policy = Policy::empty();
+        for i in 0..200 {
+            exec_policy
+                .add_prefix_rule(
+                    &[format!("tool-{i:03}"), "x".repeat(500)],
+                    codex_execpolicy::Decision::Allow,
+                )
+                .expect("add rule");
+        }
+
+        let output =
+            format_allow_prefixes(exec_policy.get_allowed_prefixes()).expect("formatted prefixes");
+        assert!(
+            output.len() <= MAX_ALLOW_PREFIX_TEXT_BYTES + TRUNCATED_MARKER.len(),
+            "output length exceeds expected limit: {output}",
+        );
+    }
+
+    #[test]
     fn serializes_success_as_plain_string() -> Result<()> {
         let item = ResponseInputItem::FunctionCallOutput {
             call_id: "call1".into(),
@@ -1037,20 +1192,12 @@ mod tests {
     fn serializes_image_outputs_as_array() -> Result<()> {
         let call_tool_result = CallToolResult {
             content: vec![
-                ContentBlock::TextContent(TextContent {
-                    annotations: None,
-                    text: "caption".into(),
-                    r#type: "text".into(),
-                }),
-                ContentBlock::ImageContent(ImageContent {
-                    annotations: None,
-                    data: "BASE64".into(),
-                    mime_type: "image/png".into(),
-                    r#type: "image".into(),
-                }),
+                serde_json::json!({"type":"text","text":"caption"}),
+                serde_json::json!({"type":"image","data":"BASE64","mimeType":"image/png"}),
             ],
-            is_error: None,
             structured_content: None,
+            is_error: Some(false),
+            meta: None,
         };
 
         let payload = FunctionCallOutputPayload::from(&call_tool_result);
@@ -1078,6 +1225,33 @@ mod tests {
 
         let output = v.get("output").expect("output field");
         assert!(output.is_array(), "expected array output");
+
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_existing_image_data_urls() -> Result<()> {
+        let call_tool_result = CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "image",
+                "data": "data:image/png;base64,BASE64",
+                "mimeType": "image/png"
+            })],
+            structured_content: None,
+            is_error: Some(false),
+            meta: None,
+        };
+
+        let payload = FunctionCallOutputPayload::from(&call_tool_result);
+        let Some(items) = payload.content_items else {
+            panic!("expected content items");
+        };
+        assert_eq!(
+            items,
+            vec![FunctionCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,BASE64".into(),
+            }]
+        );
 
         Ok(())
     }
@@ -1132,12 +1306,14 @@ mod tests {
                     "status": "completed",
                     "action": {
                         "type": "search",
-                        "query": "weather seattle"
+                        "query": "weather seattle",
+                        "queries": ["weather seattle", "seattle weather now"]
                     }
                 }"#,
                 None,
                 Some(WebSearchAction::Search {
                     query: Some("weather seattle".into()),
+                    queries: Some(vec!["weather seattle".into(), "seattle weather now".into()]),
                 }),
                 Some("completed".into()),
                 true,

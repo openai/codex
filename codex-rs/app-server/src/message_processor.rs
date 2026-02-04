@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use crate::codex_message_processor::CodexMessageProcessor;
+use crate::codex_message_processor::CodexMessageProcessorArgs;
 use crate::config_api::ConfigApi;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::OutgoingMessageSender;
@@ -15,6 +18,7 @@ use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWarningNotification;
+use codex_app_server_protocol::ExperimentalApi;
 use codex_app_server_protocol::InitializeResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -24,6 +28,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
+use codex_app_server_protocol::experimental_required_message;
 use codex_core::AuthManager;
 use codex_core::ThreadManager;
 use codex_core::auth::ExternalAuthRefreshContext;
@@ -31,10 +36,12 @@ use codex_core::auth::ExternalAuthRefreshReason;
 use codex_core::auth::ExternalAuthRefresher;
 use codex_core::auth::ExternalAuthTokens;
 use codex_core::config::Config;
+use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::default_client::SetOriginatorError;
 use codex_core::default_client::USER_AGENT_SUFFIX;
 use codex_core::default_client::get_codex_user_agent;
+use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::default_client::set_default_originator;
 use codex_feedback::CodexFeedback;
 use codex_protocol::ThreadId;
@@ -102,23 +109,39 @@ pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     codex_message_processor: CodexMessageProcessor,
     config_api: ConfigApi,
+    config: Arc<Config>,
     initialized: bool,
+    experimental_api_enabled: Arc<AtomicBool>,
     config_warnings: Vec<ConfigWarningNotification>,
+}
+
+pub(crate) struct MessageProcessorArgs {
+    pub(crate) outgoing: OutgoingMessageSender,
+    pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
+    pub(crate) config: Arc<Config>,
+    pub(crate) cli_overrides: Vec<(String, TomlValue)>,
+    pub(crate) loader_overrides: LoaderOverrides,
+    pub(crate) cloud_requirements: CloudRequirementsLoader,
+    pub(crate) feedback: CodexFeedback,
+    pub(crate) config_warnings: Vec<ConfigWarningNotification>,
 }
 
 impl MessageProcessor {
     /// Create a new `MessageProcessor`, retaining a handle to the outgoing
     /// `Sender` so handlers can enqueue messages to be written to stdout.
-    pub(crate) fn new(
-        outgoing: OutgoingMessageSender,
-        codex_linux_sandbox_exe: Option<PathBuf>,
-        config: Arc<Config>,
-        cli_overrides: Vec<(String, TomlValue)>,
-        loader_overrides: LoaderOverrides,
-        feedback: CodexFeedback,
-        config_warnings: Vec<ConfigWarningNotification>,
-    ) -> Self {
+    pub(crate) fn new(args: MessageProcessorArgs) -> Self {
+        let MessageProcessorArgs {
+            outgoing,
+            codex_linux_sandbox_exe,
+            config,
+            cli_overrides,
+            loader_overrides,
+            cloud_requirements,
+            feedback,
+            config_warnings,
+        } = args;
         let outgoing = Arc::new(outgoing);
+        let experimental_api_enabled = Arc::new(AtomicBool::new(false));
         let auth_manager = AuthManager::shared(
             config.codex_home.clone(),
             false,
@@ -133,22 +156,30 @@ impl MessageProcessor {
             auth_manager.clone(),
             SessionSource::VSCode,
         ));
-        let codex_message_processor = CodexMessageProcessor::new(
+        let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
             auth_manager,
             thread_manager,
-            outgoing.clone(),
+            outgoing: outgoing.clone(),
             codex_linux_sandbox_exe,
-            Arc::clone(&config),
-            cli_overrides.clone(),
+            config: Arc::clone(&config),
+            cli_overrides: cli_overrides.clone(),
+            cloud_requirements: cloud_requirements.clone(),
             feedback,
+        });
+        let config_api = ConfigApi::new(
+            config.codex_home.clone(),
+            cli_overrides,
+            loader_overrides,
+            cloud_requirements,
         );
-        let config_api = ConfigApi::new(config.codex_home.clone(), cli_overrides, loader_overrides);
 
         Self {
             outgoing,
             codex_message_processor,
             config_api,
+            config,
             initialized: false,
+            experimental_api_enabled,
             config_warnings,
         }
     }
@@ -194,6 +225,12 @@ impl MessageProcessor {
                     self.outgoing.send_error(request_id, error).await;
                     return;
                 } else {
+                    let experimental_api_enabled = params
+                        .capabilities
+                        .as_ref()
+                        .is_some_and(|cap| cap.experimental_api);
+                    self.experimental_api_enabled
+                        .store(experimental_api_enabled, Ordering::Relaxed);
                     let ClientInfo {
                         name,
                         title: _title,
@@ -220,6 +257,7 @@ impl MessageProcessor {
                             }
                         }
                     }
+                    set_default_client_residency_requirement(self.config.enforce_residency.value());
                     let user_agent_suffix = format!("{name}; {version}");
                     if let Ok(mut suffix) = USER_AGENT_SUFFIX.lock() {
                         *suffix = Some(user_agent_suffix);
@@ -254,6 +292,18 @@ impl MessageProcessor {
                     return;
                 }
             }
+        }
+
+        if let Some(reason) = codex_request.experimental_reason()
+            && !self.experimental_api_enabled.load(Ordering::Relaxed)
+        {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: experimental_required_message(reason),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
         }
 
         match codex_request {

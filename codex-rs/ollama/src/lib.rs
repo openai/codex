@@ -5,7 +5,6 @@ mod url;
 
 pub use client::OllamaClient;
 use codex_core::ModelProviderInfo;
-use codex_core::WireApi;
 use codex_core::config::Config;
 pub use pull::CliProgressReporter;
 pub use pull::PullEvent;
@@ -15,11 +14,6 @@ use semver::Version;
 
 /// Default OSS model to use when `--oss` is passed without an explicit `-m`.
 pub const DEFAULT_OSS_MODEL: &str = "gpt-oss:20b";
-
-pub struct WireApiDetection {
-    pub wire_api: WireApi,
-    pub version: Option<Version>,
-}
 
 /// Prepare the local OSS environment when `--oss` is selected.
 ///
@@ -58,60 +52,46 @@ fn min_responses_version() -> Version {
     Version::new(0, 13, 4)
 }
 
-fn wire_api_for_version(version: &Version) -> WireApi {
-    if *version == Version::new(0, 0, 0) || *version >= min_responses_version() {
-        WireApi::Responses
-    } else {
-        WireApi::Chat
-    }
+fn supports_responses(version: &Version) -> bool {
+    *version == Version::new(0, 0, 0) || *version >= min_responses_version()
 }
 
-/// Detect which wire API the running Ollama server supports based on its version.
-/// Returns `Ok(None)` when the version endpoint is missing or unparsable; callers
-/// should keep the configured default in that case.
-pub async fn detect_wire_api(
-    provider: &ModelProviderInfo,
-) -> std::io::Result<Option<WireApiDetection>> {
+/// Ensure the running Ollama server is new enough to support the Responses API.
+///
+/// Returns `Ok(())` when the version endpoint is missing or unparsable.
+pub async fn ensure_responses_supported(provider: &ModelProviderInfo) -> std::io::Result<()> {
     let client = crate::OllamaClient::try_from_provider(provider).await?;
     let Some(version) = client.fetch_version().await? else {
-        return Ok(None);
+        return Ok(());
     };
 
-    let wire_api = wire_api_for_version(&version);
+    if supports_responses(&version) {
+        return Ok(());
+    }
 
-    Ok(Some(WireApiDetection {
-        wire_api,
-        version: Some(version),
-    }))
+    let min = min_responses_version();
+    Err(std::io::Error::other(format!(
+        "Ollama {version} is too old. Codex requires Ollama {min} or newer."
+    )))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pretty_assertions::assert_eq;
 
     #[test]
-    fn test_wire_api_for_version_dev_zero_keeps_responses() {
-        assert_eq!(
-            wire_api_for_version(&Version::new(0, 0, 0)),
-            WireApi::Responses
-        );
+    fn supports_responses_for_dev_zero() {
+        assert!(supports_responses(&Version::new(0, 0, 0)));
     }
 
     #[test]
-    fn test_wire_api_for_version_before_cutoff_is_chat() {
-        assert_eq!(wire_api_for_version(&Version::new(0, 13, 3)), WireApi::Chat);
+    fn does_not_support_responses_before_cutoff() {
+        assert!(!supports_responses(&Version::new(0, 13, 3)));
     }
 
     #[test]
-    fn test_wire_api_for_version_at_or_after_cutoff_is_responses() {
-        assert_eq!(
-            wire_api_for_version(&Version::new(0, 13, 4)),
-            WireApi::Responses
-        );
-        assert_eq!(
-            wire_api_for_version(&Version::new(0, 14, 0)),
-            WireApi::Responses
-        );
+    fn supports_responses_at_or_after_cutoff() {
+        assert!(supports_responses(&Version::new(0, 13, 4)));
+        assert!(supports_responses(&Version::new(0, 14, 0)));
     }
 }

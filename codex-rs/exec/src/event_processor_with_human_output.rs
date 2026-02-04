@@ -20,6 +20,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::FileChange;
+use codex_core::protocol::ItemCompletedEvent;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
@@ -33,6 +34,7 @@ use codex_core::protocol::TurnDiffEvent;
 use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_core::web_search::web_search_detail;
+use codex_protocol::items::TurnItem;
 use codex_protocol::num_format::format_with_separators;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
@@ -73,6 +75,7 @@ pub(crate) struct EventProcessorWithHumanOutput {
     last_message_path: Option<PathBuf>,
     last_total_token_usage: Option<codex_core::protocol::TokenUsageInfo>,
     final_message: Option<String>,
+    last_proposed_plan: Option<String>,
 }
 
 impl EventProcessorWithHumanOutput {
@@ -99,6 +102,7 @@ impl EventProcessorWithHumanOutput {
                 last_message_path,
                 last_total_token_usage: None,
                 final_message: None,
+                last_proposed_plan: None,
             }
         } else {
             Self {
@@ -116,6 +120,7 @@ impl EventProcessorWithHumanOutput {
                 last_message_path,
                 last_total_token_usage: None,
                 final_message: None,
+                last_proposed_plan: None,
             }
         }
     }
@@ -260,12 +265,14 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 );
             }
             EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message }) => {
-                let last_message = last_agent_message.as_deref();
+                let last_message = last_agent_message
+                    .as_deref()
+                    .or(self.last_proposed_plan.as_deref());
                 if let Some(output_file) = self.last_message_path.as_deref() {
                     handle_last_message(last_message, output_file);
                 }
 
-                self.final_message = last_agent_message;
+                self.final_message = last_agent_message.or_else(|| self.last_proposed_plan.clone());
 
                 return CodexStatus::InitiateShutdown;
             }
@@ -296,6 +303,12 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     "codex".style(self.italic).style(self.magenta),
                     message,
                 );
+            }
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::Plan(item),
+                ..
+            }) => {
+                self.last_proposed_plan = Some(item.text);
             }
             EventMsg::ExecCommandBegin(ExecCommandBeginEvent { command, cwd, .. }) => {
                 eprint!(
@@ -362,7 +375,8 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 ts_msg!(self, "{}", title.style(title_style));
 
                 if let Ok(res) = result {
-                    let val: serde_json::Value = res.into();
+                    let val = serde_json::to_value(res)
+                        .unwrap_or_else(|_| serde_json::Value::String("<result>".to_string()));
                     let pretty =
                         serde_json::to_string_pretty(&val).unwrap_or_else(|_| val.to_string());
 
@@ -579,17 +593,20 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     view.path.display()
                 );
             }
-            EventMsg::TurnAborted(abort_reason) => match abort_reason.reason {
-                TurnAbortReason::Interrupted => {
-                    ts_msg!(self, "task interrupted");
+            EventMsg::TurnAborted(abort_reason) => {
+                match abort_reason.reason {
+                    TurnAbortReason::Interrupted => {
+                        ts_msg!(self, "task interrupted");
+                    }
+                    TurnAbortReason::Replaced => {
+                        ts_msg!(self, "task aborted: replaced by a new task");
+                    }
+                    TurnAbortReason::ReviewEnded => {
+                        ts_msg!(self, "task aborted: review ended");
+                    }
                 }
-                TurnAbortReason::Replaced => {
-                    ts_msg!(self, "task aborted: replaced by a new task");
-                }
-                TurnAbortReason::ReviewEnded => {
-                    ts_msg!(self, "task aborted: review ended");
-                }
-            },
+                return CodexStatus::InitiateShutdown;
+            }
             EventMsg::ContextCompacted(_) => {
                 ts_msg!(self, "context compacted");
             }
@@ -759,6 +776,8 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::McpListToolsResponse(_)
             | EventMsg::ListCustomPromptsResponse(_)
             | EventMsg::ListSkillsResponse(_)
+            | EventMsg::ListRemoteSkillsResponse(_)
+            | EventMsg::RemoteSkillDownloaded(_)
             | EventMsg::RawResponseItem(_)
             | EventMsg::UserMessage(_)
             | EventMsg::EnteredReviewMode(_)
@@ -769,6 +788,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::ItemStarted(_)
             | EventMsg::ItemCompleted(_)
             | EventMsg::AgentMessageContentDelta(_)
+            | EventMsg::PlanDelta(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
             | EventMsg::SkillsUpdateAvailable

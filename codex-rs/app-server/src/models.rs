@@ -22,12 +22,14 @@ fn model_from_preset(preset: ModelPreset) -> Model {
     Model {
         id: preset.id.to_string(),
         model: preset.model.to_string(),
+        upgrade: preset.upgrade.map(|upgrade| upgrade.id),
         display_name: preset.display_name.to_string(),
         description: preset.description.to_string(),
         supported_reasoning_efforts: reasoning_efforts_from_preset(
             preset.supported_reasoning_efforts,
         ),
         default_reasoning_effort: preset.default_reasoning_effort,
+        input_modalities: preset.input_modalities,
         supports_personality: preset.supports_personality,
         is_default: preset.is_default,
     }

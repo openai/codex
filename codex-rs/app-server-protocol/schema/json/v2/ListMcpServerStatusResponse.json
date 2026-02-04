@@ -1,0 +1,191 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "McpAuthStatus": {
+      "enum": [
+        "unsupported",
+        "notLoggedIn",
+        "bearerToken",
+        "oAuth"
+      ],
+      "type": "string"
+    },
+    "McpServerStatus": {
+      "properties": {
+        "authStatus": {
+          "$ref": "#/definitions/McpAuthStatus"
+        },
+        "name": {
+          "type": "string"
+        },
+        "resourceTemplates": {
+          "items": {
+            "$ref": "#/definitions/ResourceTemplate"
+          },
+          "type": "array"
+        },
+        "resources": {
+          "items": {
+            "$ref": "#/definitions/Resource"
+          },
+          "type": "array"
+        },
+        "tools": {
+          "additionalProperties": {
+            "$ref": "#/definitions/Tool"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "authStatus",
+        "name",
+        "resourceTemplates",
+        "resources",
+        "tools"
+      ],
+      "type": "object"
+    },
+    "Resource": {
+      "description": "A known resource that the server is capable of reading.",
+      "properties": {
+        "_meta": true,
+        "annotations": true,
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icons": {
+          "items": true,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "mimeType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "size": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "uri"
+      ],
+      "type": "object"
+    },
+    "ResourceTemplate": {
+      "description": "A template description for resources available on the server.",
+      "properties": {
+        "annotations": true,
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mimeType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uriTemplate": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "uriTemplate"
+      ],
+      "type": "object"
+    },
+    "Tool": {
+      "description": "Definition for a tool the client can call.",
+      "properties": {
+        "_meta": true,
+        "annotations": true,
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icons": {
+          "items": true,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "inputSchema": true,
+        "name": {
+          "type": "string"
+        },
+        "outputSchema": true,
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "inputSchema",
+        "name"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "data": {
+      "items": {
+        "$ref": "#/definitions/McpServerStatus"
+      },
+      "type": "array"
+    },
+    "nextCursor": {
+      "description": "Opaque cursor to pass to the next call to continue after the last item. If None, there are no more items to return.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "data"
+  ],
+  "title": "ListMcpServerStatusResponse",
+  "type": "object"
+}

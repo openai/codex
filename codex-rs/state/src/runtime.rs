@@ -16,7 +16,11 @@ use chrono::DateTime;
 use chrono::Utc;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::protocol::RolloutItem;
+use log::LevelFilter;
+use serde_json::Value;
+use sqlx::ConnectOptions;
 use sqlx::QueryBuilder;
 use sqlx::Row;
 use sqlx::Sqlite;
@@ -113,6 +117,38 @@ WHERE id = ?
         .await?;
         row.map(|row| ThreadRow::try_from_row(&row).and_then(ThreadMetadata::try_from))
             .transpose()
+    }
+
+    /// Get dynamic tools for a thread, if present.
+    pub async fn get_dynamic_tools(
+        &self,
+        thread_id: ThreadId,
+    ) -> anyhow::Result<Option<Vec<DynamicToolSpec>>> {
+        let rows = sqlx::query(
+            r#"
+SELECT name, description, input_schema
+FROM thread_dynamic_tools
+WHERE thread_id = ?
+ORDER BY position ASC
+            "#,
+        )
+        .bind(thread_id.to_string())
+        .fetch_all(self.pool.as_ref())
+        .await?;
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        let mut tools = Vec::with_capacity(rows.len());
+        for row in rows {
+            let input_schema: String = row.try_get("input_schema")?;
+            let input_schema = serde_json::from_str::<Value>(input_schema.as_str())?;
+            tools.push(DynamicToolSpec {
+                name: row.try_get("name")?,
+                description: row.try_get("description")?,
+                input_schema,
+            });
+        }
+        Ok(Some(tools))
     }
 
     /// Find a rollout path by thread id using the underlying database.
@@ -404,6 +440,50 @@ ON CONFLICT(id) DO UPDATE SET
         Ok(())
     }
 
+    /// Persist dynamic tools for a thread if none have been stored yet.
+    ///
+    /// Dynamic tools are defined at thread start and should not change afterward.
+    /// This only writes the first time we see tools for a given thread.
+    pub async fn persist_dynamic_tools(
+        &self,
+        thread_id: ThreadId,
+        tools: Option<&[DynamicToolSpec]>,
+    ) -> anyhow::Result<()> {
+        let Some(tools) = tools else {
+            return Ok(());
+        };
+        if tools.is_empty() {
+            return Ok(());
+        }
+        let thread_id = thread_id.to_string();
+        let mut tx = self.pool.begin().await?;
+        for (idx, tool) in tools.iter().enumerate() {
+            let position = i64::try_from(idx).unwrap_or(i64::MAX);
+            let input_schema = serde_json::to_string(&tool.input_schema)?;
+            sqlx::query(
+                r#"
+INSERT INTO thread_dynamic_tools (
+    thread_id,
+    position,
+    name,
+    description,
+    input_schema
+) VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(thread_id, position) DO NOTHING
+                "#,
+            )
+            .bind(thread_id.as_str())
+            .bind(position)
+            .bind(tool.name.as_str())
+            .bind(tool.description.as_str())
+            .bind(input_schema)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     /// Apply rollout items incrementally using the underlying database.
     pub async fn apply_rollout_items(
         &self,
@@ -425,9 +505,22 @@ ON CONFLICT(id) DO UPDATE SET
         if let Some(updated_at) = file_modified_time_utc(builder.rollout_path.as_path()).await {
             metadata.updated_at = updated_at;
         }
+        // Keep the thread upsert before dynamic tools to satisfy the foreign key constraint:
+        // thread_dynamic_tools.thread_id -> threads.id.
         if let Err(err) = self.upsert_thread(&metadata).await {
             if let Some(otel) = otel {
                 otel.counter(DB_ERROR_METRIC, 1, &[("stage", "apply_rollout_items")]);
+            }
+            return Err(err);
+        }
+        let dynamic_tools = extract_dynamic_tools(items);
+        if let Some(dynamic_tools) = dynamic_tools
+            && let Err(err) = self
+                .persist_dynamic_tools(builder.id, dynamic_tools.as_deref())
+                .await
+        {
+            if let Some(otel) = otel {
+                otel.counter(DB_ERROR_METRIC, 1, &[("stage", "persist_dynamic_tools")]);
             }
             return Err(err);
         }
@@ -494,26 +587,62 @@ fn push_log_filters<'a>(builder: &mut QueryBuilder<'a, Sqlite>, query: &'a LogQu
     if let Some(to_ts) = query.to_ts {
         builder.push(" AND ts <= ").push_bind(to_ts);
     }
-    if let Some(module_like) = query.module_like.as_ref() {
-        builder
-            .push(" AND module_path LIKE '%' || ")
-            .push_bind(module_like.as_str())
-            .push(" || '%'");
-    }
-    if let Some(file_like) = query.file_like.as_ref() {
-        builder
-            .push(" AND file LIKE '%' || ")
-            .push_bind(file_like.as_str())
-            .push(" || '%'");
-    }
-    if let Some(thread_id) = query.thread_id.as_ref() {
-        builder
-            .push(" AND thread_id = ")
-            .push_bind(thread_id.as_str());
+    push_like_filters(builder, "module_path", &query.module_like);
+    push_like_filters(builder, "file", &query.file_like);
+    let has_thread_filter = !query.thread_ids.is_empty() || query.include_threadless;
+    if has_thread_filter {
+        builder.push(" AND (");
+        let mut needs_or = false;
+        for thread_id in &query.thread_ids {
+            if needs_or {
+                builder.push(" OR ");
+            }
+            builder.push("thread_id = ").push_bind(thread_id.as_str());
+            needs_or = true;
+        }
+        if query.include_threadless {
+            if needs_or {
+                builder.push(" OR ");
+            }
+            builder.push("thread_id IS NULL");
+        }
+        builder.push(")");
     }
     if let Some(after_id) = query.after_id {
         builder.push(" AND id > ").push_bind(after_id);
     }
+}
+
+fn push_like_filters<'a>(
+    builder: &mut QueryBuilder<'a, Sqlite>,
+    column: &str,
+    filters: &'a [String],
+) {
+    if filters.is_empty() {
+        return;
+    }
+    builder.push(" AND (");
+    for (idx, filter) in filters.iter().enumerate() {
+        if idx > 0 {
+            builder.push(" OR ");
+        }
+        builder
+            .push(column)
+            .push(" LIKE '%' || ")
+            .push_bind(filter.as_str())
+            .push(" || '%'");
+    }
+    builder.push(")");
+}
+
+fn extract_dynamic_tools(items: &[RolloutItem]) -> Option<Option<Vec<DynamicToolSpec>>> {
+    items.iter().find_map(|item| match item {
+        RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.dynamic_tools.clone()),
+        RolloutItem::ResponseItem(_)
+        | RolloutItem::Compacted(_)
+        | RolloutItem::TurnContext(_)
+        | RolloutItem::EventMsg(_) => None,
+    })
 }
 
 async fn open_sqlite(path: &Path) -> anyhow::Result<SqlitePool> {
@@ -522,7 +651,8 @@ async fn open_sqlite(path: &Path) -> anyhow::Result<SqlitePool> {
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
         .synchronous(SqliteSynchronous::Normal)
-        .busy_timeout(Duration::from_secs(5));
+        .busy_timeout(Duration::from_secs(5))
+        .log_statements(LevelFilter::Off);
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
         .connect_with(options)

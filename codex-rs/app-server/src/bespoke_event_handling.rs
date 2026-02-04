@@ -44,6 +44,7 @@ use codex_app_server_protocol::McpToolCallResult;
 use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind as V2PatchChangeKind;
+use codex_app_server_protocol::PlanDeltaNotification;
 use codex_app_server_protocol::RawResponseItemCompletedNotification;
 use codex_app_server_protocol::ReasoningSummaryPartAddedNotification;
 use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
@@ -118,6 +119,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         msg,
     } = event;
     match msg {
+        EventMsg::TurnStarted(_) => {}
         EventMsg::TurnComplete(_ev) => {
             handle_turn_complete(
                 conversation_id,
@@ -593,14 +595,27 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::AgentMessageContentDelta(event) => {
+            let codex_protocol::protocol::AgentMessageContentDeltaEvent { item_id, delta, .. } =
+                event;
             let notification = AgentMessageDeltaNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item_id,
+                delta,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::AgentMessageDelta(notification))
+                .await;
+        }
+        EventMsg::PlanDelta(event) => {
+            let notification = PlanDeltaNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
                 item_id: event.item_id,
                 delta: event.delta,
             };
             outgoing
-                .send_server_notification(ServerNotification::AgentMessageDelta(notification))
+                .send_server_notification(ServerNotification::PlanDelta(notification))
                 .await;
         }
         EventMsg::ContextCompacted(..) => {
@@ -1160,6 +1175,7 @@ async fn handle_turn_plan_update(
     api_version: ApiVersion,
     outgoing: &OutgoingMessageSender,
 ) {
+    // `update_plan` is a todo/checklist tool; it is not related to plan-mode updates
     if let ApiVersion::V2 = api_version {
         let notification = TurnPlanUpdatedNotification {
             thread_id: conversation_id.to_string(),
@@ -1825,12 +1841,11 @@ mod tests {
     use codex_core::protocol::RateLimitWindow;
     use codex_core::protocol::TokenUsage;
     use codex_core::protocol::TokenUsageInfo;
+    use codex_protocol::mcp::CallToolResult;
     use codex_protocol::plan_tool::PlanItemArg;
     use codex_protocol::plan_tool::StepStatus;
-    use mcp_types::CallToolResult;
-    use mcp_types::ContentBlock;
-    use mcp_types::TextContent;
     use pretty_assertions::assert_eq;
+    use rmcp::model::Content;
     use serde_json::Value as JsonValue;
     use std::collections::HashMap;
     use std::time::Duration;
@@ -2358,15 +2373,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_construct_mcp_tool_call_end_notification_success() {
-        let content = vec![ContentBlock::TextContent(TextContent {
-            annotations: None,
-            text: "{\"resources\":[]}".to_string(),
-            r#type: "text".to_string(),
-        })];
+        let content = vec![
+            serde_json::to_value(Content::text("{\"resources\":[]}"))
+                .expect("content should serialize"),
+        ];
         let result = CallToolResult {
             content: content.clone(),
             is_error: Some(false),
             structured_content: None,
+            meta: None,
         };
 
         let end_event = McpToolCallEndEvent {

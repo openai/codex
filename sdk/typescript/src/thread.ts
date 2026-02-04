@@ -37,7 +37,7 @@ export type UserInput =
 
 export type Input = string | UserInput[];
 
-/** Respesent a thread of conversation with the agent. One thread can have multiple consecutive turns. */
+/** Represent a thread of conversation with the agent. One thread can have multiple consecutive turns. */
 export class Thread {
   private _exec: CodexExec;
   private _options: CodexOptions;

@@ -159,7 +159,7 @@ pub fn write_chatgpt_auth(
     let last_refresh = fixture.last_refresh.unwrap_or_else(|| Some(Utc::now()));
 
     let auth = AuthDotJson {
-        auth_mode: Some(AuthMode::ChatGPT),
+        auth_mode: Some(AuthMode::Chatgpt),
         openai_api_key: None,
         tokens: Some(tokens),
         last_refresh,
