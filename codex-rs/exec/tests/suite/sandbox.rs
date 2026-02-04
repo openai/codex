@@ -64,7 +64,7 @@ async fn spawn_command_under_sandbox(
 /// (for example on kernels or container profiles where Landlock is not
 /// enforced).
 async fn linux_sandbox_test_env() -> Option<HashMap<String, String>> {
-    let command_cwd = std::env::current_dir().expect("should be able to get current dir");
+    let command_cwd = std::env::current_dir()?;
     let sandbox_cwd = command_cwd.clone();
     let policy = SandboxPolicy::ReadOnly;
 
