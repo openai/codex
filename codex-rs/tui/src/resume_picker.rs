@@ -86,6 +86,7 @@ struct PageLoadRequest {
     request_token: usize,
     search_token: Option<usize>,
     default_provider: String,
+    sort_key: ThreadSortKey,
 }
 
 type PageLoader = Arc<dyn Fn(PageLoadRequest) + Send + Sync>;
@@ -160,7 +161,7 @@ async fn run_session_picker(
                 &request.codex_home,
                 PAGE_SIZE,
                 request.cursor.as_ref(),
-                resume_picker_sort_key(),
+                request.sort_key,
                 INTERACTIVE_SESSION_SOURCES,
                 Some(provider_filter.as_slice()),
                 request.default_provider.as_str(),
@@ -223,8 +224,11 @@ async fn run_session_picker(
     Ok(SessionSelection::StartFresh)
 }
 
-fn resume_picker_sort_key() -> ThreadSortKey {
-    ThreadSortKey::UpdatedAt
+fn sort_key_label(sort_key: ThreadSortKey) -> &'static str {
+    match sort_key {
+        ThreadSortKey::CreatedAt => "Creation",
+        ThreadSortKey::UpdatedAt => "Last updated",
+    }
 }
 
 /// RAII guard that ensures we leave the alt-screen on scope exit.
@@ -264,6 +268,7 @@ struct PickerState {
     show_all: bool,
     filter_cwd: Option<PathBuf>,
     action: SessionPickerAction,
+    sort_key: ThreadSortKey,
     thread_name_cache: HashMap<ThreadId, Option<String>>,
 }
 
@@ -380,6 +385,7 @@ impl PickerState {
             show_all,
             filter_cwd,
             action,
+            sort_key: ThreadSortKey::CreatedAt,
             thread_name_cache: HashMap::new(),
         }
     }
@@ -436,6 +442,10 @@ impl PickerState {
                     self.request_frame();
                 }
             }
+            KeyCode::Tab => {
+                self.toggle_sort_key();
+                self.request_frame();
+            }
             KeyCode::Backspace => {
                 let mut new_query = self.query.clone();
                 new_query.pop();
@@ -463,13 +473,21 @@ impl PickerState {
         self.all_rows.clear();
         self.filtered_rows.clear();
         self.seen_paths.clear();
-        self.search_state = SearchState::Idle;
         self.selected = 0;
+
+        let search_token = if self.query.is_empty() {
+            self.search_state = SearchState::Idle;
+            None
+        } else {
+            let token = self.allocate_search_token();
+            self.search_state = SearchState::Active { token };
+            Some(token)
+        };
 
         let request_token = self.allocate_request_token();
         self.pagination.loading = LoadingState::Pending(PendingLoad {
             request_token,
-            search_token: None,
+            search_token,
         });
         self.request_frame();
 
@@ -477,8 +495,9 @@ impl PickerState {
             codex_home: self.codex_home.clone(),
             cursor: None,
             request_token,
-            search_token: None,
+            search_token,
             default_provider: self.default_provider.clone(),
+            sort_key: self.sort_key,
         });
     }
 
@@ -749,6 +768,7 @@ impl PickerState {
             request_token,
             search_token,
             default_provider: self.default_provider.clone(),
+            sort_key: self.sort_key,
         });
     }
 
@@ -762,6 +782,14 @@ impl PickerState {
         let token = self.next_search_token;
         self.next_search_token = self.next_search_token.wrapping_add(1);
         token
+    }
+
+    fn toggle_sort_key(&mut self) {
+        self.sort_key = match self.sort_key {
+            ThreadSortKey::CreatedAt => ThreadSortKey::UpdatedAt,
+            ThreadSortKey::UpdatedAt => ThreadSortKey::CreatedAt,
+        };
+        self.start_initial_load();
     }
 }
 
@@ -861,7 +889,15 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         .areas(area);
 
         // Header
-        frame.render_widget_ref(Line::from(vec![state.action.title().bold().cyan()]), header);
+        let header_line: Line = vec![
+            state.action.title().bold().cyan(),
+            "  ".into(),
+            "Sort:".dim(),
+            " ".into(),
+            sort_key_label(state.sort_key).magenta(),
+        ]
+        .into();
+        frame.render_widget_ref(header_line, header);
 
         // Search line
         let q = if state.query.is_empty() {
@@ -888,6 +924,9 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
             "    ".dim(),
             key_hint::ctrl(KeyCode::Char('c')).into(),
             " to quit ".dim(),
+            "    ".dim(),
+            key_hint::plain(KeyCode::Tab).into(),
+            " to toggle sort ".dim(),
             "    ".dim(),
             key_hint::plain(KeyCode::Up).into(),
             "/".dim(),
@@ -1337,7 +1376,7 @@ mod tests {
             tempdir.path(),
             PAGE_SIZE,
             None,
-            resume_picker_sort_key(),
+            ThreadSortKey::UpdatedAt,
             INTERACTIVE_SESSION_SOURCES,
             Some(&[String::from("openai")]),
             "openai",
@@ -1667,7 +1706,13 @@ mod tests {
             .areas(area);
 
             frame.render_widget_ref(
-                Line::from(vec!["Resume a previous session".bold().cyan()]),
+                Line::from(vec![
+                    "Resume a previous session".bold().cyan(),
+                    "  ".into(),
+                    "Sort:".dim(),
+                    " ".into(),
+                    "Creation".magenta(),
+                ]),
                 header,
             );
 
@@ -1685,6 +1730,9 @@ mod tests {
                 "    ".dim(),
                 key_hint::ctrl(KeyCode::Char('c')).into(),
                 " to quit ".dim(),
+                "    ".dim(),
+                key_hint::plain(KeyCode::Tab).into(),
+                " to toggle sort ".dim(),
             ]
             .into();
             frame.render_widget_ref(hint_line, hint);
@@ -1892,6 +1940,41 @@ mod tests {
         let guard = recorded_requests.lock().unwrap();
         assert_eq!(guard.len(), 1);
         assert!(guard[0].search_token.is_none());
+    }
+
+    #[tokio::test]
+    async fn toggle_sort_key_reloads_with_new_sort() {
+        let recorded_requests: Arc<Mutex<Vec<PageLoadRequest>>> = Arc::new(Mutex::new(Vec::new()));
+        let request_sink = recorded_requests.clone();
+        let loader: PageLoader = Arc::new(move |req: PageLoadRequest| {
+            request_sink.lock().unwrap().push(req);
+        });
+
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+            true,
+            None,
+            SessionPickerAction::Resume,
+        );
+
+        state.start_initial_load();
+        {
+            let guard = recorded_requests.lock().unwrap();
+            assert_eq!(guard.len(), 1);
+            assert_eq!(guard[0].sort_key, ThreadSortKey::CreatedAt);
+        }
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .await
+            .unwrap();
+
+        let guard = recorded_requests.lock().unwrap();
+        assert_eq!(guard.len(), 2);
+        assert_eq!(guard[1].sort_key, ThreadSortKey::UpdatedAt);
     }
 
     #[tokio::test]
