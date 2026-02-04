@@ -1,13 +1,10 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::RwLock;
 
 use crate::api_bridge::CoreAuthProvider;
 use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::map_api_error;
 use crate::auth::UnauthorizedRecovery;
-use crate::turn_metadata::build_turn_metadata_header;
 use codex_api::CompactClient as ApiCompactClient;
 use codex_api::CompactionInput as ApiCompactionInput;
 use codex_api::Prompt as ApiPrompt;
@@ -73,12 +70,6 @@ pub const WEB_SEARCH_ELIGIBLE_HEADER: &str = "x-oai-web-search-eligible";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 pub const X_CODEX_TURN_METADATA_HEADER: &str = "x-codex-turn-metadata";
 
-#[derive(Debug, Default)]
-struct TurnMetadataCache {
-    cwd: Option<PathBuf>,
-    header: Option<HeaderValue>,
-}
-
 #[derive(Debug)]
 struct ModelClientState {
     config: Arc<Config>,
@@ -91,7 +82,6 @@ struct ModelClientState {
     summary: ReasoningSummaryConfig,
     session_source: SessionSource,
     transport_manager: TransportManager,
-    turn_metadata_cache: Arc<RwLock<TurnMetadataCache>>,
 }
 
 #[derive(Debug, Clone)]
@@ -104,6 +94,7 @@ pub struct ModelClientSession {
     connection: Option<ApiWebSocketConnection>,
     websocket_last_items: Vec<ResponseItem>,
     transport_manager: TransportManager,
+    turn_metadata_header: Option<String>,
     /// Turn state for sticky routing.
     ///
     /// This is an `OnceLock` that stores the turn state value received from the server
@@ -143,51 +134,18 @@ impl ModelClient {
                 summary,
                 session_source,
                 transport_manager,
-                turn_metadata_cache: Arc::new(RwLock::new(TurnMetadataCache::default())),
             }),
         }
     }
 
-    pub fn new_session(&self, turn_metadata_cwd: Option<PathBuf>) -> ModelClientSession {
-        self.prewarm_turn_metadata_header(turn_metadata_cwd);
+    pub fn new_session(&self, turn_metadata_header: Option<String>) -> ModelClientSession {
         ModelClientSession {
             state: Arc::clone(&self.state),
             connection: None,
             websocket_last_items: Vec::new(),
             transport_manager: self.state.transport_manager.clone(),
+            turn_metadata_header,
             turn_state: Arc::new(OnceLock::new()),
-        }
-    }
-
-    /// Refresh turn metadata in the background and update a cached header that request
-    /// builders can read without blocking.
-    fn prewarm_turn_metadata_header(&self, turn_metadata_cwd: Option<PathBuf>) {
-        let turn_metadata_cwd =
-            turn_metadata_cwd.map(|cwd| std::fs::canonicalize(&cwd).unwrap_or(cwd));
-
-        if let Ok(mut cache) = self.state.turn_metadata_cache.write()
-            && cache.cwd != turn_metadata_cwd
-        {
-            cache.cwd = turn_metadata_cwd.clone();
-            cache.header = None;
-        }
-
-        let Some(cwd) = turn_metadata_cwd else {
-            return;
-        };
-        let turn_metadata_cache = Arc::clone(&self.state.turn_metadata_cache);
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let _task = handle.spawn(async move {
-                let header = build_turn_metadata_header(cwd.as_path())
-                    .await
-                    .and_then(|value| HeaderValue::from_str(value.as_str()).ok());
-
-                if let Ok(mut cache) = turn_metadata_cache.write()
-                    && cache.cwd.as_ref() == Some(&cwd)
-                {
-                    cache.header = header;
-                }
-            });
         }
     }
 }
@@ -298,14 +256,6 @@ impl ModelClient {
 }
 
 impl ModelClientSession {
-    fn turn_metadata_header(&self) -> Option<HeaderValue> {
-        self.state
-            .turn_metadata_cache
-            .try_read()
-            .ok()
-            .and_then(|cache| cache.header.clone())
-    }
-
     /// Streams a single model turn using the configured Responses transport.
     pub async fn stream(&mut self, prompt: &Prompt) -> Result<ResponseStream> {
         let wire_api = self.state.provider.wire_api;
@@ -362,7 +312,10 @@ impl ModelClientSession {
         prompt: &Prompt,
         compression: Compression,
     ) -> ApiResponsesOptions {
-        let turn_metadata_header = self.turn_metadata_header();
+        let turn_metadata_header = self
+            .turn_metadata_header
+            .as_deref()
+            .and_then(|value| HeaderValue::from_str(value).ok());
         let model_info = &self.state.model_info;
 
         let default_reasoning_effort = model_info.default_reasoning_level;

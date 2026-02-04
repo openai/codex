@@ -452,16 +452,16 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
         session_source.clone(),
     );
 
-    let client = ModelClient::new(
+    let client_without_metadata = ModelClient::new(
         Arc::clone(&config),
         None,
-        model_info,
-        otel_manager,
-        provider,
+        model_info.clone(),
+        otel_manager.clone(),
+        provider.clone(),
         effort,
         summary,
         conversation_id,
-        session_source,
+        session_source.clone(),
         TransportManager::new(),
     );
 
@@ -480,7 +480,7 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
     }];
 
     let first_request = responses::mount_sse_once(&server, response_body.clone()).await;
-    let mut first_session = client.new_session(Some(cwd.to_path_buf()));
+    let mut first_session = client_without_metadata.new_session(None);
     let mut first_stream = first_session
         .stream(&prompt)
         .await
@@ -539,56 +539,58 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
         .trim()
         .to_string();
 
-    let repo_root = std::fs::canonicalize(cwd)
-        .unwrap_or_else(|_| cwd.to_path_buf())
-        .to_string_lossy()
-        .into_owned();
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        let request_recorder = responses::mount_sse_once(&server, response_body.clone()).await;
-        let mut session = client.new_session(Some(cwd.to_path_buf()));
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        let mut stream = session.stream(&prompt).await.expect("stream post-git turn");
-        while let Some(event) = stream.next().await {
-            if matches!(event, Ok(ResponseEvent::Completed { .. })) {
-                break;
-            }
-        }
+    let client_with_metadata = ModelClient::new(
+        Arc::clone(&config),
+        None,
+        model_info,
+        otel_manager,
+        provider,
+        effort,
+        summary,
+        conversation_id,
+        session_source,
+        TransportManager::new(),
+    );
+    let turn_metadata_header = codex_core::build_turn_metadata_header(cwd)
+        .await
+        .expect("metadata should be present for git workspace");
 
-        let maybe_header = request_recorder
-            .single_request()
-            .header("x-codex-turn-metadata");
-        if let Some(header_value) = maybe_header {
-            let parsed: serde_json::Value = serde_json::from_str(&header_value)
-                .expect("x-codex-turn-metadata should be valid JSON");
-            let workspace = parsed
-                .get("workspaces")
-                .and_then(serde_json::Value::as_object)
-                .and_then(|workspaces| workspaces.get(&repo_root))
-                .expect("metadata should include cwd repo root workspace entry");
-
-            assert_eq!(
-                workspace
-                    .get("latest_git_commit_hash")
-                    .and_then(serde_json::Value::as_str),
-                Some(expected_head.as_str())
-            );
-            assert_eq!(
-                workspace
-                    .get("associated_remote_urls")
-                    .and_then(serde_json::Value::as_object)
-                    .and_then(|remotes| remotes.get("origin"))
-                    .and_then(serde_json::Value::as_str),
-                Some(expected_origin.as_str())
-            );
-            return;
-        }
-
-        if tokio::time::Instant::now() >= deadline {
+    let request_recorder = responses::mount_sse_once(&server, response_body).await;
+    let mut session = client_with_metadata.new_session(Some(turn_metadata_header));
+    let mut stream = session.stream(&prompt).await.expect("stream post-git turn");
+    while let Some(event) = stream.next().await {
+        if matches!(event, Ok(ResponseEvent::Completed { .. })) {
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
 
-    panic!("x-codex-turn-metadata was never observed within 5s after git setup");
+    let header_value = request_recorder
+        .single_request()
+        .header("x-codex-turn-metadata")
+        .expect("x-codex-turn-metadata should be present");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&header_value).expect("x-codex-turn-metadata should be valid JSON");
+    let workspace = parsed
+        .get("workspaces")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|workspaces| {
+            assert_eq!(workspaces.len(), 1, "expected exactly one workspace entry");
+            workspaces.values().next()
+        })
+        .expect("metadata should include a workspace entry");
+
+    assert_eq!(
+        workspace
+            .get("latest_git_commit_hash")
+            .and_then(serde_json::Value::as_str),
+        Some(expected_head.as_str())
+    );
+    assert_eq!(
+        workspace
+            .get("associated_remote_urls")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|remotes| remotes.get("origin"))
+            .and_then(serde_json::Value::as_str),
+        Some(expected_origin.as_str())
+    );
 }

@@ -138,6 +138,7 @@ pub use exec_policy::check_execpolicy_for_warnings;
 pub use exec_policy::load_exec_policy;
 pub use safety::get_platform_sandbox;
 pub use tools::spec::parse_tool_input_schema;
+pub use turn_metadata::build_turn_metadata_header;
 // Re-export the protocol types from the standalone `codex-protocol` crate so existing
 // `codex_core::protocol::...` references continue to work across the workspace.
 pub use codex_protocol::protocol;

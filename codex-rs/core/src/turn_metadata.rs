@@ -20,7 +20,7 @@ struct TurnMetadata {
     workspaces: BTreeMap<String, TurnMetadataWorkspace>,
 }
 
-pub(crate) async fn build_turn_metadata_header(cwd: &Path) -> Option<String> {
+pub async fn build_turn_metadata_header(cwd: &Path) -> Option<String> {
     let repo_root = get_git_repo_root(cwd)?;
 
     let (latest_git_commit_hash, associated_remote_urls) = tokio::join!(
