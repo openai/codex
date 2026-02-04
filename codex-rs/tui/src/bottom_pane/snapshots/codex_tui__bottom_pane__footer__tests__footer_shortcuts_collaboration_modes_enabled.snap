@@ -10,3 +10,5 @@ expression: terminal.backend()
 "  ⌥ + , reasoning down                       ⌥ + . reasoning up                 "
 "  shift + tab to change mode                                                    "
 "  ctrl + t to view transcript                                                   "
+"                                                                                "
+"  [tui.keymap] customize shortcuts in ~/.codex/config.toml                      "
