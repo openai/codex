@@ -131,8 +131,12 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    let expected_tools_names = vec![
-        "shell_command",
+    let mut expected_tools_names = if cfg!(windows) {
+        vec!["shell_command"]
+    } else {
+        vec!["exec_command", "write_stdin"]
+    };
+    expected_tools_names.extend([
         "list_mcp_resources",
         "list_mcp_resource_templates",
         "read_mcp_resource",
@@ -141,7 +145,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         "apply_patch",
         "web_search",
         "view_image",
-    ];
+    ]);
     let body0 = req1.single_request().body_json();
 
     let expected_instructions = if expected_tools_names.contains(&"apply_patch") {

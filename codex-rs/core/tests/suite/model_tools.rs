@@ -52,6 +52,16 @@ async fn collect_tool_identifiers_for_model(model: &str) -> Vec<String> {
     tool_identifiers(&body)
 }
 
+fn expected_default_tools(shell_tool: &str, tail: &[&str]) -> Vec<String> {
+    let mut tools = if cfg!(windows) {
+        vec![shell_tool.to_string()]
+    } else {
+        vec!["exec_command".to_string(), "write_stdin".to_string()]
+    };
+    tools.extend(tail.iter().map(|tool| (*tool).to_string()));
+    tools
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn model_selects_expected_tools() {
     skip_if_no_network!();
@@ -60,83 +70,93 @@ async fn model_selects_expected_tools() {
     let codex_tools = collect_tool_identifiers_for_model("codex-mini-latest").await;
     assert_eq!(
         codex_tools,
-        vec![
-            "local_shell".to_string(),
-            "list_mcp_resources".to_string(),
-            "list_mcp_resource_templates".to_string(),
-            "read_mcp_resource".to_string(),
-            "update_plan".to_string(),
-            "request_user_input".to_string(),
-            "web_search".to_string(),
-            "view_image".to_string()
-        ],
+        expected_default_tools(
+            "local_shell",
+            &[
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "request_user_input",
+                "web_search",
+                "view_image",
+            ],
+        ),
         "codex-mini-latest should expose the local shell tool",
     );
 
     let gpt5_codex_tools = collect_tool_identifiers_for_model("gpt-5-codex").await;
     assert_eq!(
         gpt5_codex_tools,
-        vec![
-            "shell_command".to_string(),
-            "list_mcp_resources".to_string(),
-            "list_mcp_resource_templates".to_string(),
-            "read_mcp_resource".to_string(),
-            "update_plan".to_string(),
-            "request_user_input".to_string(),
-            "apply_patch".to_string(),
-            "web_search".to_string(),
-            "view_image".to_string()
-        ],
+        expected_default_tools(
+            "shell_command",
+            &[
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "request_user_input",
+                "apply_patch",
+                "web_search",
+                "view_image",
+            ],
+        ),
         "gpt-5-codex should expose the apply_patch tool",
     );
 
     let gpt51_codex_tools = collect_tool_identifiers_for_model("gpt-5.1-codex").await;
     assert_eq!(
         gpt51_codex_tools,
-        vec![
-            "shell_command".to_string(),
-            "list_mcp_resources".to_string(),
-            "list_mcp_resource_templates".to_string(),
-            "read_mcp_resource".to_string(),
-            "update_plan".to_string(),
-            "request_user_input".to_string(),
-            "apply_patch".to_string(),
-            "web_search".to_string(),
-            "view_image".to_string()
-        ],
+        expected_default_tools(
+            "shell_command",
+            &[
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "request_user_input",
+                "apply_patch",
+                "web_search",
+                "view_image",
+            ],
+        ),
         "gpt-5.1-codex should expose the apply_patch tool",
     );
 
     let gpt5_tools = collect_tool_identifiers_for_model("gpt-5").await;
     assert_eq!(
         gpt5_tools,
-        vec![
-            "shell".to_string(),
-            "list_mcp_resources".to_string(),
-            "list_mcp_resource_templates".to_string(),
-            "read_mcp_resource".to_string(),
-            "update_plan".to_string(),
-            "request_user_input".to_string(),
-            "web_search".to_string(),
-            "view_image".to_string()
-        ],
+        expected_default_tools(
+            "shell",
+            &[
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "request_user_input",
+                "web_search",
+                "view_image",
+            ],
+        ),
         "gpt-5 should expose the apply_patch tool",
     );
 
     let gpt51_tools = collect_tool_identifiers_for_model("gpt-5.1").await;
     assert_eq!(
         gpt51_tools,
-        vec![
-            "shell_command".to_string(),
-            "list_mcp_resources".to_string(),
-            "list_mcp_resource_templates".to_string(),
-            "read_mcp_resource".to_string(),
-            "update_plan".to_string(),
-            "request_user_input".to_string(),
-            "apply_patch".to_string(),
-            "web_search".to_string(),
-            "view_image".to_string()
-        ],
+        expected_default_tools(
+            "shell_command",
+            &[
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "request_user_input",
+                "apply_patch",
+                "web_search",
+                "view_image",
+            ],
+        ),
         "gpt-5.1 should expose the apply_patch tool",
     );
     let exp_tools = collect_tool_identifiers_for_model("exp-5.1").await;
