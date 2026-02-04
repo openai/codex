@@ -29,7 +29,7 @@
     },
     "Personality": {
       "enum": [
-        "none",
+        "disabled",
         "friendly",
         "pragmatic"
       ],
