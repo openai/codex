@@ -115,7 +115,16 @@ fn select_identity(policy: &SandboxPolicy, codex_home: &Path) -> Result<Option<S
     } else {
         users.online
     };
-    let password = decode_password(&chosen)?;
+    let password = match decode_password(&chosen) {
+        Ok(p) => p,
+        Err(err) => {
+            debug_log(
+                &format!("sandbox password decryption failed: {err}; triggering re-setup"),
+                Some(codex_home),
+            );
+            return Ok(None);
+        }
+    };
     Ok(Some(SandboxIdentity {
         username: chosen.username.clone(),
         password,

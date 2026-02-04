@@ -321,6 +321,10 @@ impl TurnDiffTracker {
         let left_text = left_text_owned.as_deref();
         let right_text = right_text_owned.as_deref();
 
+        if left_text == right_text && baseline_mode == current_mode {
+            return aggregated;
+        }
+
         let can_text_diff = matches!(
             (left_text, right_text, is_add, is_delete),
             (Some(_), Some(_), _, _) | (_, Some(_), true, _) | (Some(_), _, _, true)
