@@ -409,13 +409,13 @@ impl ModelClientSession {
         ResponsesWsRequest::ResponseCreate(payload)
     }
 
-    async fn ensure_websocket_connection(
+    async fn websocket_connection(
         &mut self,
         otel_manager: &OtelManager,
         api_provider: codex_api::Provider,
         api_auth: CoreAuthProvider,
         options: &ApiResponsesOptions,
-    ) -> std::result::Result<(), ApiError> {
+    ) -> std::result::Result<&ApiWebSocketConnection, ApiError> {
         let needs_new = match self.connection.as_ref() {
             Some(conn) => conn.is_closed().await,
             None => true,
@@ -442,7 +442,9 @@ impl ModelClientSession {
             self.connection = Some(new_conn);
         }
 
-        Ok(())
+        self.connection.as_ref().ok_or(ApiError::Stream(
+            "websocket connection is unavailable".to_string(),
+        ))
     }
 
     fn responses_request_compression(&self, auth: Option<&crate::auth::CodexAuth>) -> Compression {
@@ -576,8 +578,8 @@ impl ModelClientSession {
             );
             let request = self.prepare_websocket_request(&model_info.slug, &api_prompt, &options);
 
-            match self
-                .ensure_websocket_connection(
+            let connection = match self
+                .websocket_connection(
                     otel_manager,
                     api_provider.clone(),
                     api_auth.clone(),
@@ -585,7 +587,7 @@ impl ModelClientSession {
                 )
                 .await
             {
-                Ok(()) => {}
+                Ok(connection) => connection,
                 Err(ApiError::Transport(
                     unauthorized_transport @ TransportError::Http { status, .. },
                 )) if status == StatusCode::UNAUTHORIZED => {
@@ -593,13 +595,7 @@ impl ModelClientSession {
                     continue;
                 }
                 Err(err) => return Err(map_api_error(err)),
-            }
-
-            let connection = self.connection.as_ref().ok_or_else(|| {
-                map_api_error(ApiError::Stream(
-                    "websocket connection is unavailable".to_string(),
-                ))
-            })?;
+            };
 
             let stream_result = connection
                 .stream_request(request)
