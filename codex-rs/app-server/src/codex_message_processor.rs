@@ -2777,7 +2777,7 @@ impl CodexMessageProcessor {
     ) {
         if let GetConversationSummaryParams::ThreadId { conversation_id } = &params
             && let Some(summary) =
-                read_summary_from_state_db_by_thread_id(&self.config, conversation_id.clone()).await
+                read_summary_from_state_db_by_thread_id(&self.config, *conversation_id).await
         {
             let response = GetConversationSummaryResponse { summary };
             self.outgoing.send_response(request_id, response).await;
@@ -5068,9 +5068,8 @@ async fn read_summary_from_state_db_context_by_thread_id(
     state_db_ctx: Option<&StateDbHandle>,
     thread_id: ThreadId,
 ) -> Option<ConversationSummary> {
-    let Some(state_db_ctx) = state_db_ctx else {
-        return None;
-    };
+    let state_db_ctx = state_db_ctx?;
+
     let metadata = match state_db_ctx.get_thread(thread_id).await {
         Ok(Some(metadata)) => metadata,
         Ok(None) | Err(_) => return None,
