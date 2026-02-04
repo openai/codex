@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Result;
-use codex_core::FileWatcherEvent;
 use codex_core::config::ProjectConfig;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
@@ -15,7 +14,7 @@ use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::user_input::UserInput;
-use core_test_support::load_sse_fixture_with_id;
+use core_test_support::responses;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::start_mock_server;
@@ -23,10 +22,6 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use tokio::time::timeout;
-
-fn sse_completed(id: &str) -> String {
-    load_sse_fixture_with_id("../fixtures/completed_template.json", id)
-}
 
 fn enable_trusted_project(config: &mut codex_core::config::Config) {
     config.active_project = ProjectConfig {
@@ -88,7 +83,10 @@ async fn live_skills_reload_refreshes_skill_cache_after_skill_change() -> Result
     let server = start_mock_server().await;
     let responses = mount_sse_sequence(
         &server,
-        vec![sse_completed("resp-1"), sse_completed("resp-2")],
+        vec![
+            responses::sse(vec![responses::ev_completed("resp-1")]),
+            responses::sse(vec![responses::ev_completed("resp-2")]),
+        ],
     )
     .await;
 
@@ -116,41 +114,23 @@ async fn live_skills_reload_refreshes_skill_cache_after_skill_change() -> Result
         "expected initial skill body in request"
     );
 
-    let mut rx = test.thread_manager.subscribe_file_watcher();
     write_skill(test.codex_home_path(), "demo", "demo skill", skill_v2);
 
-    let changed_paths = timeout(Duration::from_secs(5), async move {
+    let saw_skills_update = timeout(Duration::from_secs(5), async {
         loop {
-            match rx.recv().await {
-                Ok(FileWatcherEvent::SkillsChanged { paths }) => break paths,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                    panic!("file watcher channel closed unexpectedly")
+            match test.codex.next_event().await {
+                Ok(event) => {
+                    if matches!(event.msg, EventMsg::SkillsUpdateAvailable) {
+                        break;
+                    }
                 }
+                Err(err) => panic!("event stream ended unexpectedly: {err}"),
             }
         }
     })
     .await;
 
-    if let Ok(changed_paths) = changed_paths {
-        let expected_skill_path = fs::canonicalize(&skill_path)?;
-        let expected_skill_dir = expected_skill_path
-            .parent()
-            .expect("skill path should have a parent directory");
-        let saw_expected_path = changed_paths
-            .iter()
-            .filter_map(|path| fs::canonicalize(path).ok())
-            .any(|path| {
-                path == expected_skill_path
-                    || path == expected_skill_dir
-                    || path.starts_with(expected_skill_dir)
-                    || expected_skill_path.starts_with(&path)
-            });
-        assert!(
-            saw_expected_path,
-            "expected changed watcher path to include {expected_skill_path:?} or {expected_skill_dir:?}, got {changed_paths:?}"
-        );
-    } else {
+    if saw_skills_update.is_err() {
         // Some environments do not reliably surface file watcher events for
         // skill changes. Clear the cache explicitly so we can still validate
         // that the updated skill body is injected on the next turn.

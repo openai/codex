@@ -148,31 +148,6 @@ pub async fn read_project_docs(config: &Config) -> std::io::Result<Option<String
 /// directory (inclusive). Symlinks are allowed. When `project_doc_max_bytes`
 /// is zero, returns an empty list.
 pub fn discover_project_doc_paths(config: &Config) -> std::io::Result<Vec<PathBuf>> {
-    let search_dirs = project_doc_search_dirs(config)?;
-    let mut found: Vec<PathBuf> = Vec::new();
-    let candidate_filenames = candidate_filenames(config);
-    for d in search_dirs {
-        for name in &candidate_filenames {
-            let candidate = d.join(name);
-            match std::fs::symlink_metadata(&candidate) {
-                Ok(md) => {
-                    let ft = md.file_type();
-                    // Allow regular files and symlinks; opening will later fail for dangling links.
-                    if ft.is_file() || ft.is_symlink() {
-                        found.push(candidate);
-                        break;
-                    }
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(e) => return Err(e),
-            }
-        }
-    }
-
-    Ok(found)
-}
-
-pub(crate) fn project_doc_search_dirs(config: &Config) -> std::io::Result<Vec<PathBuf>> {
     let mut dir = config.cwd.clone();
     if let Ok(canon) = normalize_path(&dir) {
         dir = canon;
@@ -217,7 +192,27 @@ pub(crate) fn project_doc_search_dirs(config: &Config) -> std::io::Result<Vec<Pa
         vec![config.cwd.clone()]
     };
 
-    Ok(search_dirs)
+    let mut found: Vec<PathBuf> = Vec::new();
+    let candidate_filenames = candidate_filenames(config);
+    for d in search_dirs {
+        for name in &candidate_filenames {
+            let candidate = d.join(name);
+            match std::fs::symlink_metadata(&candidate) {
+                Ok(md) => {
+                    let ft = md.file_type();
+                    // Allow regular files and symlinks; opening will later fail for dangling links.
+                    if ft.is_file() || ft.is_symlink() {
+                        found.push(candidate);
+                        break;
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    Ok(found)
 }
 
 fn candidate_filenames<'a>(config: &'a Config) -> Vec<&'a str> {

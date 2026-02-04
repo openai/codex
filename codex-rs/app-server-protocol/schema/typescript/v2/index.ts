@@ -117,7 +117,6 @@ export type { SkillsConfigWriteResponse } from "./SkillsConfigWriteResponse";
 export type { SkillsListEntry } from "./SkillsListEntry";
 export type { SkillsListParams } from "./SkillsListParams";
 export type { SkillsListResponse } from "./SkillsListResponse";
-export type { SkillsListUpdatedNotification } from "./SkillsListUpdatedNotification";
 export type { SkillsRemoteReadParams } from "./SkillsRemoteReadParams";
 export type { SkillsRemoteReadResponse } from "./SkillsRemoteReadResponse";
 export type { SkillsRemoteWriteParams } from "./SkillsRemoteWriteParams";

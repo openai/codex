@@ -130,7 +130,6 @@ impl FileWatcher {
     }
 
     pub(crate) fn register_config(&self, config: &Config) {
-        self.register_skills_root(config.codex_home.join("skills"));
         let roots =
             skill_roots_from_layer_stack_with_agents(&config.config_layer_stack, &config.cwd);
         for root in roots {
@@ -273,10 +272,21 @@ fn nearest_existing_ancestor(path: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use notify::EventKind;
     use pretty_assertions::assert_eq;
+    use tempfile::tempdir;
+    use tokio::time::timeout;
 
     fn path(name: &str) -> PathBuf {
         PathBuf::from(name)
+    }
+
+    fn notify_event(paths: Vec<PathBuf>) -> Event {
+        let mut event = Event::new(EventKind::Any);
+        for path in paths {
+            event = event.add_path(path);
+        }
+        event
     }
 
     #[test]
@@ -312,5 +322,107 @@ mod tests {
             .take_pending(start)
             .expect("shutdown flush emits pending paths");
         assert_eq!(flushed, vec![path("b")]);
+    }
+
+    #[test]
+    fn classify_event_filters_to_skills_roots() {
+        let root = path("/tmp/skills");
+        let state = RwLock::new(WatchState {
+            skills_roots: HashSet::from([root.clone()]),
+        });
+        let event = notify_event(vec![
+            root.join("demo/SKILL.md"),
+            path("/tmp/other/not-a-skill.txt"),
+        ]);
+
+        let classified = classify_event(&event, &state);
+        assert_eq!(classified, vec![root.join("demo/SKILL.md")]);
+    }
+
+    #[test]
+    fn classify_event_supports_multiple_roots_without_prefix_false_positives() {
+        let root_a = path("/tmp/skills");
+        let root_b = path("/tmp/workspace/.codex/skills");
+        let state = RwLock::new(WatchState {
+            skills_roots: HashSet::from([root_a.clone(), root_b.clone()]),
+        });
+        let event = notify_event(vec![
+            root_a.join("alpha/SKILL.md"),
+            path("/tmp/skills-extra/not-under-skills.txt"),
+            root_b.join("beta/SKILL.md"),
+        ]);
+
+        let classified = classify_event(&event, &state);
+        assert_eq!(
+            classified,
+            vec![root_a.join("alpha/SKILL.md"), root_b.join("beta/SKILL.md")]
+        );
+    }
+
+    #[test]
+    fn nearest_existing_ancestor_returns_closest_existing_path() {
+        let dir = tempdir().expect("tempdir");
+        let existing = dir.path().join("existing");
+        std::fs::create_dir_all(&existing).expect("create existing dir");
+
+        let nested_missing = existing.join("deep/path/SKILL.md");
+        let ancestor = nearest_existing_ancestor(&nested_missing);
+        assert_eq!(ancestor, Some(existing));
+    }
+
+    #[test]
+    fn register_skills_root_dedupes_state_entries() {
+        let watcher = FileWatcher::noop();
+        let root = path("/tmp/skills");
+        watcher.register_skills_root(root.clone());
+        watcher.register_skills_root(root);
+        watcher.register_skills_root(path("/tmp/other-skills"));
+
+        let state = watcher.state.read().expect("state lock");
+        assert_eq!(state.skills_roots.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn spawn_event_loop_flushes_pending_changes_on_shutdown() {
+        let watcher = FileWatcher::noop();
+        let root = path("/tmp/skills");
+        {
+            let mut state = watcher.state.write().expect("state lock");
+            state.skills_roots.insert(root.clone());
+        }
+
+        let (raw_tx, raw_rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = broadcast::channel(8);
+        watcher.spawn_event_loop(raw_rx, Arc::clone(&watcher.state), tx);
+
+        raw_tx
+            .send(Ok(notify_event(vec![root.join("a/SKILL.md")])))
+            .expect("send first event");
+        let first = timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("first watcher event")
+            .expect("broadcast recv first");
+        assert_eq!(
+            first,
+            FileWatcherEvent::SkillsChanged {
+                paths: vec![root.join("a/SKILL.md")]
+            }
+        );
+
+        raw_tx
+            .send(Ok(notify_event(vec![root.join("b/SKILL.md")])))
+            .expect("send second event");
+        drop(raw_tx);
+
+        let second = timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("second watcher event")
+            .expect("broadcast recv second");
+        assert_eq!(
+            second,
+            FileWatcherEvent::SkillsChanged {
+                paths: vec![root.join("b/SKILL.md")]
+            }
+        );
     }
 }

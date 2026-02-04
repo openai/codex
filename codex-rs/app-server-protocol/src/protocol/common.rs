@@ -712,7 +712,6 @@ server_notification_definitions! {
     ContextCompacted => "thread/compacted" (v2::ContextCompactedNotification),
     DeprecationNotice => "deprecationNotice" (v2::DeprecationNoticeNotification),
     ConfigWarning => "configWarning" (v2::ConfigWarningNotification),
-    SkillsListUpdated => "skills/list/updated" (v2::SkillsListUpdatedNotification),
 
     /// Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.
     WindowsWorldWritableWarning => "windows/worldWritableWarning" (v2::WindowsWorldWritableWarningNotification),

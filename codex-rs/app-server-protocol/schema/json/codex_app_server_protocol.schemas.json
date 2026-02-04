@@ -8090,26 +8090,6 @@
           "type": "object"
         },
         {
-          "properties": {
-            "method": {
-              "enum": [
-                "skills/list/updated"
-              ],
-              "title": "Skills/list/updatedNotificationMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/SkillsListUpdatedNotification"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "title": "Skills/list/updatedNotification",
-          "type": "object"
-        },
-        {
           "description": "Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.",
           "properties": {
             "method": {
@@ -13580,11 +13560,6 @@
           "data"
         ],
         "title": "SkillsListResponse",
-        "type": "object"
-      },
-      "SkillsListUpdatedNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "title": "SkillsListUpdatedNotification",
         "type": "object"
       },
       "SkillsRemoteReadParams": {
