@@ -19,12 +19,10 @@ use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
-use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_models_once;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
-use core_test_support::responses::sse;
+use core_test_support::responses::sse_completed;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
@@ -41,10 +39,6 @@ use wiremock::MockServer;
 const LOCAL_FRIENDLY_TEMPLATE: &str =
     "You optimize for team morale and being a supportive teammate as much as code quality.";
 const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
-
-fn sse_completed(id: &str) -> String {
-    sse(vec![ev_response_created(id), ev_completed(id)])
-}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn personality_does_not_mutate_base_instructions_without_template() {
