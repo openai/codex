@@ -25,6 +25,7 @@ pub use model::Anchor;
 pub use model::BackfillStats;
 pub use model::ExtractionOutcome;
 pub use model::SortKey;
+pub use model::ThreadMemory;
 pub use model::ThreadMetadata;
 pub use model::ThreadMetadataBuilder;
 pub use model::ThreadsPage;
