@@ -213,9 +213,10 @@ impl FileWatcher {
         let Some(inner) = &self.inner else {
             return;
         };
-        let Some(watch_path) = nearest_existing_ancestor(&path) else {
+        if !path.exists() {
             return;
-        };
+        }
+        let watch_path = path;
         let mut guard = match inner.lock() {
             Ok(guard) => guard,
             Err(err) => err.into_inner(),
@@ -259,22 +260,11 @@ fn is_skills_path(path: &Path, roots: &HashSet<PathBuf>) -> bool {
     roots.iter().any(|root| path.starts_with(root))
 }
 
-fn nearest_existing_ancestor(path: &Path) -> Option<PathBuf> {
-    let mut cursor = path;
-    loop {
-        if cursor.exists() {
-            return Some(cursor.to_path_buf());
-        }
-        cursor = cursor.parent()?;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use notify::EventKind;
     use pretty_assertions::assert_eq;
-    use tempfile::tempdir;
     use tokio::time::timeout;
 
     fn path(name: &str) -> PathBuf {
@@ -357,17 +347,6 @@ mod tests {
             classified,
             vec![root_a.join("alpha/SKILL.md"), root_b.join("beta/SKILL.md")]
         );
-    }
-
-    #[test]
-    fn nearest_existing_ancestor_returns_closest_existing_path() {
-        let dir = tempdir().expect("tempdir");
-        let existing = dir.path().join("existing");
-        std::fs::create_dir_all(&existing).expect("create existing dir");
-
-        let nested_missing = existing.join("deep/path/SKILL.md");
-        let ancestor = nearest_existing_ancestor(&nested_missing);
-        assert_eq!(ancestor, Some(existing));
     }
 
     #[test]
