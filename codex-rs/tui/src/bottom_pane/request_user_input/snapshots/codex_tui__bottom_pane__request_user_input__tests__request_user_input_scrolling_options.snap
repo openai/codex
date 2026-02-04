@@ -2,13 +2,14 @@
 source: tui/src/bottom_pane/request_user_input/mod.rs
 expression: "render_snapshot(&overlay, area)"
 ---
-Question 1/1                                                        
-Next Step                                                           
-What would you like to do next?                                     
-( ) Discuss a code change (Recommended)  Walk through a plan and    
-                                         edit code together.        
-( ) Run tests                            Pick a crate and run its   
-                                         tests.                     
-( ) Review a diff                        Summarize or review current
-Notes: Add notes (optional)                                         
-Option 4 of 5 | ↑/↓ scroll | enter next question | esc interrupt
+                                                                                                                        
+  Question 1/1 (1 unanswered)                                                                                           
+  What would you like to do next?                                                                                       
+                                                                                                                        
+    1. Discuss a code change (Recommended)  Walk through a plan and edit code together.                                 
+    2. Run tests                            Pick a crate and run its tests.                                             
+    3. Review a diff                        Summarize or review current changes.                                        
+  › 4. Refactor                             Tighten structure and remove dead code.                                     
+    5. Ship it                              Finalize and open a PR.                                                     
+                                                                                                                        
+  tab to add notes | enter to submit answer | esc to interrupt

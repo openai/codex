@@ -6,6 +6,8 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::fmt;
 
+use super::requirements_exec_policy::RequirementsExecPolicy;
+use super::requirements_exec_policy::RequirementsExecPolicyToml;
 use crate::config::Constrained;
 use crate::config::ConstraintError;
 
@@ -13,6 +15,7 @@ use crate::config::ConstraintError;
 pub enum RequirementSource {
     Unknown,
     MdmManagedPreferences { domain: String, key: String },
+    CloudRequirements,
     SystemRequirementsToml { file: AbsolutePathBuf },
     LegacyManagedConfigTomlFromFile { file: AbsolutePathBuf },
     LegacyManagedConfigTomlFromMdm,
@@ -24,6 +27,9 @@ impl fmt::Display for RequirementSource {
             RequirementSource::Unknown => write!(f, "<unspecified>"),
             RequirementSource::MdmManagedPreferences { domain, key } => {
                 write!(f, "MDM {domain}:{key}")
+            }
+            RequirementSource::CloudRequirements => {
+                write!(f, "cloud requirements")
             }
             RequirementSource::SystemRequirementsToml { file } => {
                 write!(f, "{}", file.as_path().display())
@@ -38,21 +44,57 @@ impl fmt::Display for RequirementSource {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConstrainedWithSource<T> {
+    pub value: Constrained<T>,
+    pub source: Option<RequirementSource>,
+}
+
+impl<T> ConstrainedWithSource<T> {
+    pub fn new(value: Constrained<T>, source: Option<RequirementSource>) -> Self {
+        Self { value, source }
+    }
+}
+
+impl<T> std::ops::Deref for ConstrainedWithSource<T> {
+    type Target = Constrained<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
+impl<T> std::ops::DerefMut for ConstrainedWithSource<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.value
+    }
+}
+
 /// Normalized version of [`ConfigRequirementsToml`] after deserialization and
 /// normalization.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfigRequirements {
-    pub approval_policy: Constrained<AskForApproval>,
-    pub sandbox_policy: Constrained<SandboxPolicy>,
+    pub approval_policy: ConstrainedWithSource<AskForApproval>,
+    pub sandbox_policy: ConstrainedWithSource<SandboxPolicy>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
+    pub(crate) exec_policy: Option<Sourced<RequirementsExecPolicy>>,
+    pub enforce_residency: ConstrainedWithSource<Option<ResidencyRequirement>>,
 }
 
 impl Default for ConfigRequirements {
     fn default() -> Self {
         Self {
-            approval_policy: Constrained::allow_any_from_default(),
-            sandbox_policy: Constrained::allow_any(SandboxPolicy::ReadOnly),
+            approval_policy: ConstrainedWithSource::new(
+                Constrained::allow_any_from_default(),
+                None,
+            ),
+            sandbox_policy: ConstrainedWithSource::new(
+                Constrained::allow_any(SandboxPolicy::ReadOnly),
+                None,
+            ),
             mcp_servers: None,
+            exec_policy: None,
+            enforce_residency: ConstrainedWithSource::new(Constrained::allow_any(None), None),
         }
     }
 }
@@ -75,6 +117,8 @@ pub struct ConfigRequirementsToml {
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxModeRequirement>>,
     pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
+    pub rules: Option<RequirementsExecPolicyToml>,
+    pub enforce_residency: Option<ResidencyRequirement>,
 }
 
 /// Value paired with the requirement source it came from, for better error
@@ -104,6 +148,8 @@ pub struct ConfigRequirementsWithSources {
     pub allowed_approval_policies: Option<Sourced<Vec<AskForApproval>>>,
     pub allowed_sandbox_modes: Option<Sourced<Vec<SandboxModeRequirement>>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
+    pub rules: Option<Sourced<RequirementsExecPolicyToml>>,
+    pub enforce_residency: Option<Sourced<ResidencyRequirement>>,
 }
 
 impl ConfigRequirementsWithSources {
@@ -135,6 +181,8 @@ impl ConfigRequirementsWithSources {
                 allowed_approval_policies,
                 allowed_sandbox_modes,
                 mcp_servers,
+                rules,
+                enforce_residency,
             }
         );
     }
@@ -144,11 +192,15 @@ impl ConfigRequirementsWithSources {
             allowed_approval_policies,
             allowed_sandbox_modes,
             mcp_servers,
+            rules,
+            enforce_residency,
         } = self;
         ConfigRequirementsToml {
             allowed_approval_policies: allowed_approval_policies.map(|sourced| sourced.value),
             allowed_sandbox_modes: allowed_sandbox_modes.map(|sourced| sourced.value),
             mcp_servers: mcp_servers.map(|sourced| sourced.value),
+            rules: rules.map(|sourced| sourced.value),
+            enforce_residency: enforce_residency.map(|sourced| sourced.value),
         }
     }
 }
@@ -180,11 +232,19 @@ impl From<SandboxMode> for SandboxModeRequirement {
     }
 }
 
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ResidencyRequirement {
+    Us,
+}
+
 impl ConfigRequirementsToml {
     pub fn is_empty(&self) -> bool {
         self.allowed_approval_policies.is_none()
             && self.allowed_sandbox_modes.is_none()
             && self.mcp_servers.is_none()
+            && self.rules.is_none()
+            && self.enforce_residency.is_none()
     }
 }
 
@@ -196,9 +256,11 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             allowed_approval_policies,
             allowed_sandbox_modes,
             mcp_servers,
+            rules,
+            enforce_residency,
         } = toml;
 
-        let approval_policy: Constrained<AskForApproval> = match allowed_approval_policies {
+        let approval_policy = match allowed_approval_policies {
             Some(Sourced {
                 value: policies,
                 source: requirement_source,
@@ -207,7 +269,8 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                     return Err(ConstraintError::empty_field("allowed_approval_policies"));
                 };
 
-                Constrained::new(initial_value, move |candidate| {
+                let requirement_source_for_error = requirement_source.clone();
+                let constrained = Constrained::new(initial_value, move |candidate| {
                     if policies.contains(candidate) {
                         Ok(())
                     } else {
@@ -215,12 +278,13 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                             field_name: "approval_policy",
                             candidate: format!("{candidate:?}"),
                             allowed: format!("{policies:?}"),
-                            requirement_source: requirement_source.clone(),
+                            requirement_source: requirement_source_for_error.clone(),
                         })
                     }
-                })?
+                })?;
+                ConstrainedWithSource::new(constrained, Some(requirement_source))
             }
-            None => Constrained::allow_any_from_default(),
+            None => ConstrainedWithSource::new(Constrained::allow_any_from_default(), None),
         };
 
         // TODO(gt): `ConfigRequirementsToml` should let the author specify the
@@ -231,7 +295,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
         // additional parameters. Ultimately, we should expand the config
         // format to allow specifying those parameters.
         let default_sandbox_policy = SandboxPolicy::ReadOnly;
-        let sandbox_policy: Constrained<SandboxPolicy> = match allowed_sandbox_modes {
+        let sandbox_policy = match allowed_sandbox_modes {
             Some(Sourced {
                 value: modes,
                 source: requirement_source,
@@ -245,7 +309,8 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                     });
                 };
 
-                Constrained::new(default_sandbox_policy, move |candidate| {
+                let requirement_source_for_error = requirement_source.clone();
+                let constrained = Constrained::new(default_sandbox_policy, move |candidate| {
                     let mode = match candidate {
                         SandboxPolicy::ReadOnly => SandboxModeRequirement::ReadOnly,
                         SandboxPolicy::WorkspaceWrite { .. } => {
@@ -263,17 +328,58 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                             field_name: "sandbox_mode",
                             candidate: format!("{mode:?}"),
                             allowed: format!("{modes:?}"),
-                            requirement_source: requirement_source.clone(),
+                            requirement_source: requirement_source_for_error.clone(),
                         })
                     }
-                })?
+                })?;
+                ConstrainedWithSource::new(constrained, Some(requirement_source))
             }
-            None => Constrained::allow_any(default_sandbox_policy),
+            None => {
+                ConstrainedWithSource::new(Constrained::allow_any(default_sandbox_policy), None)
+            }
+        };
+        let exec_policy = match rules {
+            Some(Sourced { value, source }) => {
+                let policy = value.to_requirements_policy().map_err(|err| {
+                    ConstraintError::ExecPolicyParse {
+                        requirement_source: source.clone(),
+                        reason: err.to_string(),
+                    }
+                })?;
+                Some(Sourced::new(policy, source))
+            }
+            None => None,
+        };
+
+        let enforce_residency = match enforce_residency {
+            Some(Sourced {
+                value: residency,
+                source: requirement_source,
+            }) => {
+                let required = Some(residency);
+                let requirement_source_for_error = requirement_source.clone();
+                let constrained = Constrained::new(required, move |candidate| {
+                    if candidate == &required {
+                        Ok(())
+                    } else {
+                        Err(ConstraintError::InvalidValue {
+                            field_name: "enforce_residency",
+                            candidate: format!("{candidate:?}"),
+                            allowed: format!("{required:?}"),
+                            requirement_source: requirement_source_for_error.clone(),
+                        })
+                    }
+                })?;
+                ConstrainedWithSource::new(constrained, Some(requirement_source))
+            }
+            None => ConstrainedWithSource::new(Constrained::allow_any(None), None),
         };
         Ok(ConfigRequirements {
             approval_policy,
             sandbox_policy,
             mcp_servers,
+            exec_policy,
+            enforce_residency,
         })
     }
 }
@@ -282,16 +388,25 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
 mod tests {
     use super::*;
     use anyhow::Result;
+    use codex_execpolicy::Decision;
+    use codex_execpolicy::Evaluation;
+    use codex_execpolicy::RuleMatch;
     use codex_protocol::protocol::NetworkAccess;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use toml::from_str;
+
+    fn tokens(cmd: &[&str]) -> Vec<String> {
+        cmd.iter().map(std::string::ToString::to_string).collect()
+    }
 
     fn with_unknown_source(toml: ConfigRequirementsToml) -> ConfigRequirementsWithSources {
         let ConfigRequirementsToml {
             allowed_approval_policies,
             allowed_sandbox_modes,
             mcp_servers,
+            rules,
+            enforce_residency,
         } = toml;
         ConfigRequirementsWithSources {
             allowed_approval_policies: allowed_approval_policies
@@ -299,6 +414,9 @@ mod tests {
             allowed_sandbox_modes: allowed_sandbox_modes
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             mcp_servers: mcp_servers.map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            rules: rules.map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            enforce_residency: enforce_residency
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
         }
     }
 
@@ -312,6 +430,8 @@ mod tests {
             SandboxModeRequirement::WorkspaceWrite,
             SandboxModeRequirement::DangerFullAccess,
         ];
+        let enforce_residency = ResidencyRequirement::Us;
+        let enforce_source = source.clone();
 
         // Intentionally constructed without `..Default::default()` so adding a new field to
         // `ConfigRequirementsToml` forces this test to be updated.
@@ -319,6 +439,8 @@ mod tests {
             allowed_approval_policies: Some(allowed_approval_policies.clone()),
             allowed_sandbox_modes: Some(allowed_sandbox_modes.clone()),
             mcp_servers: None,
+            rules: None,
+            enforce_residency: Some(enforce_residency),
         };
 
         target.merge_unset_fields(source.clone(), other);
@@ -332,6 +454,8 @@ mod tests {
                 )),
                 allowed_sandbox_modes: Some(Sourced::new(allowed_sandbox_modes, source)),
                 mcp_servers: None,
+                rules: None,
+                enforce_residency: Some(Sourced::new(enforce_residency, enforce_source)),
             }
         );
     }
@@ -360,6 +484,8 @@ mod tests {
                 )),
                 allowed_sandbox_modes: None,
                 mcp_servers: None,
+                rules: None,
+                enforce_residency: None,
             }
         );
         Ok(())
@@ -396,6 +522,8 @@ mod tests {
                 )),
                 allowed_sandbox_modes: None,
                 mcp_servers: None,
+                rules: None,
+                enforce_residency: None,
             }
         );
         Ok(())
@@ -444,6 +572,61 @@ mod tests {
                 requirement_source: source_location,
             })
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn constraint_error_includes_cloud_requirements_source() -> Result<()> {
+        let source: ConfigRequirementsToml = from_str(
+            r#"
+                allowed_approval_policies = ["on-request"]
+            "#,
+        )?;
+
+        let source_location = RequirementSource::CloudRequirements;
+
+        let mut target = ConfigRequirementsWithSources::default();
+        target.merge_unset_fields(source_location.clone(), source);
+        let requirements = ConfigRequirements::try_from(target)?;
+
+        assert_eq!(
+            requirements.approval_policy.can_set(&AskForApproval::Never),
+            Err(ConstraintError::InvalidValue {
+                field_name: "approval_policy",
+                candidate: "Never".into(),
+                allowed: "[OnRequest]".into(),
+                requirement_source: source_location,
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn constrained_fields_store_requirement_source() -> Result<()> {
+        let source: ConfigRequirementsToml = from_str(
+            r#"
+                allowed_approval_policies = ["on-request"]
+                allowed_sandbox_modes = ["read-only"]
+                enforce_residency = "us"
+            "#,
+        )?;
+
+        let source_location = RequirementSource::CloudRequirements;
+        let mut target = ConfigRequirementsWithSources::default();
+        target.merge_unset_fields(source_location.clone(), source);
+        let requirements = ConfigRequirements::try_from(target)?;
+
+        assert_eq!(
+            requirements.approval_policy.source,
+            Some(source_location.clone())
+        );
+        assert_eq!(
+            requirements.sandbox_policy.source,
+            Some(source_location.clone())
+        );
+        assert_eq!(requirements.enforce_residency.source, Some(source_location));
 
         Ok(())
     }
@@ -593,6 +776,66 @@ mod tests {
                 RequirementSource::Unknown,
             ))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_exec_policy_requirements() -> Result<()> {
+        let toml_str = r#"
+            [rules]
+            prefix_rules = [
+                { pattern = [{ token = "rm" }], decision = "forbidden" },
+            ]
+        "#;
+        let config: ConfigRequirementsToml = from_str(toml_str)?;
+        let requirements: ConfigRequirements = with_unknown_source(config).try_into()?;
+        let policy = requirements.exec_policy.expect("exec policy").value;
+
+        assert_eq!(
+            policy.as_ref().check(&tokens(&["rm", "-rf"]), &|_| {
+                panic!("rule should match so heuristic should not be called");
+            }),
+            Evaluation {
+                decision: Decision::Forbidden,
+                matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                    matched_prefix: tokens(&["rm"]),
+                    decision: Decision::Forbidden,
+                    justification: None,
+                }],
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn exec_policy_error_includes_requirement_source() -> Result<()> {
+        let toml_str = r#"
+            [rules]
+            prefix_rules = [
+                { pattern = [{ token = "rm" }] },
+            ]
+        "#;
+        let config: ConfigRequirementsToml = from_str(toml_str)?;
+        let requirements_toml_file =
+            AbsolutePathBuf::from_absolute_path("/etc/codex/requirements.toml")?;
+        let source_location = RequirementSource::SystemRequirementsToml {
+            file: requirements_toml_file,
+        };
+
+        let mut requirements_with_sources = ConfigRequirementsWithSources::default();
+        requirements_with_sources.merge_unset_fields(source_location.clone(), config);
+        let err = ConfigRequirements::try_from(requirements_with_sources)
+            .expect_err("invalid exec policy");
+
+        assert_eq!(
+            err,
+            ConstraintError::ExecPolicyParse {
+                requirement_source: source_location,
+                reason: "rules prefix_rule at index 0 is missing a decision".to_string(),
+            }
+        );
+
         Ok(())
     }
 }

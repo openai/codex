@@ -1,6 +1,7 @@
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
@@ -19,6 +20,8 @@ use tokio::fs;
 use tokio::process::Command;
 use tokio::sync::watch;
 use tokio::time::timeout;
+use tracing::Instrument;
+use tracing::info_span;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShellSnapshot {
@@ -26,7 +29,7 @@ pub struct ShellSnapshot {
 }
 
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
-const SNAPSHOT_RETENTION: Duration = Duration::from_secs(60 * 60 * 24 * 7); // 7 days retention.
+const SNAPSHOT_RETENTION: Duration = Duration::from_secs(60 * 60 * 24 * 3); // 3 days retention.
 const SNAPSHOT_DIR: &str = "shell_snapshots";
 const EXCLUDED_EXPORT_VARS: &[&str] = &["PWD", "OLDPWD"];
 
@@ -42,17 +45,21 @@ impl ShellSnapshot {
 
         let snapshot_shell = shell.clone();
         let snapshot_session_id = session_id;
-        tokio::spawn(async move {
-            let timer = otel_manager.start_timer("codex.shell_snapshot.duration_ms", &[]);
-            let snapshot =
-                ShellSnapshot::try_new(&codex_home, snapshot_session_id, &snapshot_shell)
-                    .await
-                    .map(Arc::new);
-            let success = if snapshot.is_some() { "true" } else { "false" };
-            let _ = timer.map(|timer| timer.record(&[("success", success)]));
-            otel_manager.counter("codex.shell_snapshot", 1, &[("success", success)]);
-            let _ = shell_snapshot_tx.send(snapshot);
-        });
+        let snapshot_span = info_span!("shell_snapshot", thread_id = %snapshot_session_id);
+        tokio::spawn(
+            async move {
+                let timer = otel_manager.start_timer("codex.shell_snapshot.duration_ms", &[]);
+                let snapshot =
+                    ShellSnapshot::try_new(&codex_home, snapshot_session_id, &snapshot_shell)
+                        .await
+                        .map(Arc::new);
+                let success = if snapshot.is_some() { "true" } else { "false" };
+                let _ = timer.map(|timer| timer.record(&[("success", success)]));
+                otel_manager.counter("codex.shell_snapshot", 1, &[("success", success)]);
+                let _ = shell_snapshot_tx.send(snapshot);
+            }
+            .instrument(snapshot_span),
+        );
     }
 
     async fn try_new(codex_home: &Path, session_id: ThreadId, shell: &Shell) -> Option<Self> {
@@ -181,6 +188,7 @@ async fn run_script_with_timeout(
     // returns a ref of handler.
     let mut handler = Command::new(&args[0]);
     handler.args(&args[1..]);
+    handler.stdin(Stdio::null());
     #[cfg(unix)]
     unsafe {
         handler.pre_exec(|| {
@@ -464,14 +472,68 @@ mod tests {
     use pretty_assertions::assert_eq;
     #[cfg(unix)]
     use std::os::unix::ffi::OsStrExt;
-    #[cfg(target_os = "linux")]
-    use std::os::unix::fs::PermissionsExt;
     #[cfg(unix)]
     use std::process::Command;
     #[cfg(target_os = "linux")]
     use std::process::Command as StdCommand;
 
     use tempfile::tempdir;
+
+    #[cfg(unix)]
+    struct BlockingStdinPipe {
+        original: i32,
+        write_end: i32,
+    }
+
+    #[cfg(unix)]
+    impl BlockingStdinPipe {
+        fn install() -> Result<Self> {
+            let mut fds = [0i32; 2];
+            if unsafe { libc::pipe(fds.as_mut_ptr()) } == -1 {
+                return Err(std::io::Error::last_os_error()).context("create stdin pipe");
+            }
+
+            let original = unsafe { libc::dup(libc::STDIN_FILENO) };
+            if original == -1 {
+                let err = std::io::Error::last_os_error();
+                unsafe {
+                    libc::close(fds[0]);
+                    libc::close(fds[1]);
+                }
+                return Err(err).context("dup stdin");
+            }
+
+            if unsafe { libc::dup2(fds[0], libc::STDIN_FILENO) } == -1 {
+                let err = std::io::Error::last_os_error();
+                unsafe {
+                    libc::close(fds[0]);
+                    libc::close(fds[1]);
+                    libc::close(original);
+                }
+                return Err(err).context("replace stdin");
+            }
+
+            unsafe {
+                libc::close(fds[0]);
+            }
+
+            Ok(Self {
+                original,
+                write_end: fds[1],
+            })
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for BlockingStdinPipe {
+        fn drop(&mut self) {
+            unsafe {
+                libc::dup2(self.original, libc::STDIN_FILENO);
+                libc::close(self.original);
+                libc::close(self.write_end);
+            }
+        }
+    }
 
     #[cfg(not(target_os = "windows"))]
     fn assert_posix_snapshot_sections(snapshot: &str) {
@@ -553,6 +615,38 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn snapshot_shell_does_not_inherit_stdin() -> Result<()> {
+        let _stdin_guard = BlockingStdinPipe::install()?;
+
+        let dir = tempdir()?;
+        let home = dir.path();
+        fs::write(home.join(".bashrc"), "read -r ignored\n").await?;
+
+        let shell = Shell {
+            shell_type: ShellType::Bash,
+            shell_path: PathBuf::from("/bin/bash"),
+            shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
+        };
+
+        let home_display = home.display();
+        let script = format!(
+            "HOME=\"{home_display}\"; export HOME; {}",
+            bash_snapshot_script()
+        );
+        let output = run_script_with_timeout(&shell, &script, Duration::from_millis(500), true)
+            .await
+            .context("run snapshot command")?;
+
+        assert!(
+            output.contains("# Snapshot file"),
+            "expected snapshot marker in output; output={output:?}"
+        );
+
+        Ok(())
+    }
+
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn timed_out_snapshot_shell_is_terminated() -> Result<()> {
@@ -562,27 +656,16 @@ mod tests {
         use tokio::time::sleep;
 
         let dir = tempdir()?;
-        let shell_path = dir.path().join("hanging-shell.sh");
         let pid_path = dir.path().join("pid");
-
-        let script = format!(
-            "#!/bin/sh\n\
-             echo $$ > {}\n\
-             sleep 30\n",
-            pid_path.display()
-        );
-        fs::write(&shell_path, script).await?;
-        let mut permissions = std::fs::metadata(&shell_path)?.permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&shell_path, permissions)?;
+        let script = format!("echo $$ > \"{}\"; sleep 30", pid_path.display());
 
         let shell = Shell {
             shell_type: ShellType::Sh,
-            shell_path,
+            shell_path: PathBuf::from("/bin/sh"),
             shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
         };
 
-        let err = run_script_with_timeout(&shell, "ignored", Duration::from_millis(500), true)
+        let err = run_script_with_timeout(&shell, &script, Duration::from_secs(1), true)
             .await
             .expect_err("snapshot shell should time out");
         assert!(

@@ -1,4 +1,5 @@
 use crate::types::CodeTaskDetailsResponse;
+use crate::types::ConfigFileResponse;
 use crate::types::CreditStatusDetails;
 use crate::types::PaginatedListTaskListItem;
 use crate::types::RateLimitStatusPayload;
@@ -244,6 +245,20 @@ impl Client {
         self.decode_json::<TurnAttemptsSiblingTurnsResponse>(&url, &ct, &body)
     }
 
+    /// Fetch the managed requirements file from codex-backend.
+    ///
+    /// `GET /api/codex/config/requirements` (Codex API style) or
+    /// `GET /wham/config/requirements` (ChatGPT backend-api style).
+    pub async fn get_config_requirements_file(&self) -> Result<ConfigFileResponse> {
+        let url = match self.path_style {
+            PathStyle::CodexApi => format!("{}/api/codex/config/requirements", self.base_url),
+            PathStyle::ChatGptApi => format!("{}/wham/config/requirements", self.base_url),
+        };
+        let req = self.http.get(&url).headers(self.headers());
+        let (body, ct) = self.exec_request(req, "GET", &url).await?;
+        self.decode_json::<ConfigFileResponse>(&url, &ct, &body)
+    }
+
     /// Create a new task (user turn) by POSTing to the appropriate backend path
     /// based on `path_style`. Returns the created task id.
     pub async fn create_task(&self, request_body: serde_json::Value) -> Result<String> {
@@ -336,6 +351,7 @@ impl Client {
     fn map_plan_type(plan_type: crate::types::PlanType) -> AccountPlanType {
         match plan_type {
             crate::types::PlanType::Free => AccountPlanType::Free,
+            crate::types::PlanType::Go => AccountPlanType::Go,
             crate::types::PlanType::Plus => AccountPlanType::Plus,
             crate::types::PlanType::Pro => AccountPlanType::Pro,
             crate::types::PlanType::Team => AccountPlanType::Team,
@@ -343,7 +359,6 @@ impl Client {
             crate::types::PlanType::Enterprise => AccountPlanType::Enterprise,
             crate::types::PlanType::Edu | crate::types::PlanType::Education => AccountPlanType::Edu,
             crate::types::PlanType::Guest
-            | crate::types::PlanType::Go
             | crate::types::PlanType::FreeWorkspace
             | crate::types::PlanType::Quorum
             | crate::types::PlanType::K12 => AccountPlanType::Unknown,

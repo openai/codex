@@ -48,6 +48,49 @@ The solution is to detect paste-like _bursts_ and buffer them into a single expl
   history navigation, etc).
 - After handling the key, `sync_popups()` runs so popup visibility/filters stay consistent with the
   latest text + cursor.
+- When a slash command name is completed and the user types a space, the `/command` token is
+  promoted into a text element so it renders distinctly and edits atomically.
+
+### History navigation (↑/↓)
+
+Up/Down recall is handled by `ChatComposerHistory` and merges two sources:
+
+- **Persistent history** (cross-session, fetched from `~/.codex/history.jsonl`): text-only. It
+  does **not** carry text element ranges or local image attachments, so recalling one of these
+  entries only restores the text.
+- **Local history** (current session): stores the full submission payload, including text
+  elements and local image paths. Recalling a local entry rehydrates placeholders and attachments.
+
+This distinction keeps the on-disk history backward compatible and avoids persisting attachments,
+while still providing a richer recall experience for in-session edits.
+
+## Config gating for reuse
+
+`ChatComposer` now supports feature gating via `ChatComposerConfig`
+(`codex-rs/tui/src/bottom_pane/chat_composer.rs`). The default config preserves current chat
+behavior.
+
+Flags:
+
+- `popups_enabled`
+- `slash_commands_enabled`
+- `image_paste_enabled`
+
+Key effects when disabled:
+
+- When `popups_enabled` is `false`, `sync_popups()` forces `ActivePopup::None`.
+- When `slash_commands_enabled` is `false`, the composer does not treat `/...` input as commands.
+- When `slash_commands_enabled` is `false`, the composer does not expand custom prompts in
+  `prepare_submission_text`.
+- When `slash_commands_enabled` is `false`, slash-context paste-burst exceptions are disabled.
+- When `image_paste_enabled` is `false`, file-path paste image attachment is skipped.
+- `ChatWidget` may toggle `image_paste_enabled` at runtime based on the selected model's
+  `input_modalities`; attach and submit paths also re-check support and emit a warning instead of
+  dropping the draft.
+
+Built-in slash command availability is centralized in
+`codex-rs/tui/src/bottom_pane/slash_commands.rs` and reused by both the composer and the command
+popup so gating stays in sync.
 
 ## Submission flow (Enter/Tab)
 
@@ -66,6 +109,9 @@ There are multiple submission paths, but they share the same core rules:
 4. Prunes attachments so only placeholders that survive expansion are sent.
 5. Clears pending pastes on success and suppresses submission if the final text is empty and there
    are no attachments.
+
+The same preparation path is reused for slash commands with arguments (for example `/plan` and
+`/review`) so pasted content and text elements are preserved when extracting args.
 
 ### Numeric auto-submit path
 
@@ -209,6 +255,11 @@ Non-char input must not leak burst state across unrelated actions:
   inserting, deleting, flushing a burst, applying a paste placeholder, etc.
 - Shortcut overlay toggling via `?` is gated on `!is_in_paste_burst()` so pastes cannot flip UI
   modes while streaming.
+- Mention popup selection has two payloads: visible `$name` text and hidden
+  `mention_paths[name] -> canonical target` linkage. The generic
+  `set_text_content` path intentionally clears linkage for fresh drafts; restore
+  paths that rehydrate blocked/interrupted submissions must use the
+  mention-preserving setter so retry keeps the originally selected target.
 
 ## Tests that pin behavior
 

@@ -25,6 +25,7 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationPolicyConfig;
+use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_assistant_message;
@@ -76,10 +77,11 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         shell_type: ConfigShellToolType::UnifiedExec,
         visibility: ModelVisibility::List,
         supported_in_api: true,
+        input_modalities: default_input_modalities(),
         priority: 1,
         upgrade: None,
         base_instructions: "base instructions".to_string(),
-        model_instructions_template: None,
+        model_messages: None,
         supports_reasoning_summaries: false,
         support_verbosity: false,
         default_verbosity: None,
@@ -138,6 +140,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
             cwd: None,
             approval_policy: None,
             sandbox_policy: None,
+            windows_sandbox_level: None,
             model: Some(REMOTE_MODEL_SLUG.to_string()),
             effort: None,
             summary: None,
@@ -312,10 +315,11 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         shell_type: ConfigShellToolType::ShellCommand,
         visibility: ModelVisibility::List,
         supported_in_api: true,
+        input_modalities: default_input_modalities(),
         priority: 1,
         upgrade: None,
         base_instructions: remote_base.to_string(),
-        model_instructions_template: None,
+        model_messages: None,
         supports_reasoning_summaries: false,
         support_verbosity: false,
         default_verbosity: None,
@@ -367,6 +371,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
             cwd: None,
             approval_policy: None,
             sandbox_policy: None,
+            windows_sandbox_level: None,
             model: Some(model.to_string()),
             effort: None,
             summary: None,
@@ -785,10 +790,11 @@ fn test_remote_model_with_policy(
         shell_type: ConfigShellToolType::ShellCommand,
         visibility,
         supported_in_api: true,
+        input_modalities: default_input_modalities(),
         priority,
         upgrade: None,
         base_instructions: "base instructions".to_string(),
-        model_instructions_template: None,
+        model_messages: None,
         supports_reasoning_summaries: false,
         support_verbosity: false,
         default_verbosity: None,

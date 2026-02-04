@@ -2,6 +2,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use strum_macros::Display;
+use strum_macros::EnumIter;
 use ts_rs::TS;
 
 use crate::openai_models::ReasoningEffort;
@@ -66,6 +67,18 @@ pub enum SandboxMode {
 }
 
 #[derive(
+    Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Display, JsonSchema, TS,
+)]
+#[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
+pub enum WindowsSandboxLevel {
+    #[default]
+    Disabled,
+    RestrictedToken,
+    Elevated,
+}
+
+#[derive(
     Debug,
     Serialize,
     Deserialize,
@@ -78,6 +91,7 @@ pub enum SandboxMode {
     TS,
     PartialOrd,
     Ord,
+    EnumIter,
 )]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
@@ -92,8 +106,8 @@ pub enum Personality {
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum WebSearchMode {
-    #[default]
     Disabled,
+    #[default]
     Cached,
     Live,
 }
@@ -152,14 +166,30 @@ pub enum AltScreenMode {
 }
 
 /// Initial collaboration mode to use when the TUI starts.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash, JsonSchema, TS)]
+#[derive(
+    Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash, JsonSchema, TS, Default,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ModeKind {
     Plan,
-    Code,
+    #[default]
+    #[serde(
+        alias = "code",
+        alias = "pair_programming",
+        alias = "execute",
+        alias = "custom"
+    )]
+    Default,
+    #[doc(hidden)]
+    #[serde(skip_serializing, skip_deserializing)]
+    #[schemars(skip)]
+    #[ts(skip)]
     PairProgramming,
+    #[doc(hidden)]
+    #[serde(skip_serializing, skip_deserializing)]
+    #[schemars(skip)]
+    #[ts(skip)]
     Execute,
-    Custom,
 }
 
 /// Collaboration mode for a Codex session.
@@ -188,26 +218,46 @@ impl CollaborationMode {
     ///
     /// - `model`: `Some(s)` to update the model, `None` to keep the current model
     /// - `effort`: `Some(Some(e))` to set effort to `e`, `Some(None)` to clear effort, `None` to keep current effort
-    /// - `developer_instructions`: `Some(s)` to update developer instructions, `None` to keep current
+    /// - `developer_instructions`: `Some(Some(s))` to set instructions, `Some(None)` to clear them, `None` to keep current
     ///
     /// Returns a new `CollaborationMode` with updated values, preserving the mode.
     pub fn with_updates(
         &self,
         model: Option<String>,
         effort: Option<Option<ReasoningEffort>>,
-        developer_instructions: Option<String>,
+        developer_instructions: Option<Option<String>>,
     ) -> Self {
         let settings = self.settings_ref();
         let updated_settings = Settings {
             model: model.unwrap_or_else(|| settings.model.clone()),
             reasoning_effort: effort.unwrap_or(settings.reasoning_effort),
             developer_instructions: developer_instructions
-                .or_else(|| settings.developer_instructions.clone()),
+                .unwrap_or_else(|| settings.developer_instructions.clone()),
         };
 
         CollaborationMode {
             mode: self.mode,
             settings: updated_settings,
+        }
+    }
+
+    /// Applies a mask to this collaboration mode, returning a new collaboration mode
+    /// with the mask values applied. Fields in the mask that are `Some` will override
+    /// the corresponding fields, while `None` values will preserve the original values.
+    ///
+    /// The `name` field in the mask is ignored as it's metadata for the mask itself.
+    pub fn apply_mask(&self, mask: &CollaborationModeMask) -> Self {
+        let settings = self.settings_ref();
+        CollaborationMode {
+            mode: mask.mode.unwrap_or(self.mode),
+            settings: Settings {
+                model: mask.model.clone().unwrap_or_else(|| settings.model.clone()),
+                reasoning_effort: mask.reasoning_effort.unwrap_or(settings.reasoning_effort),
+                developer_instructions: mask
+                    .developer_instructions
+                    .clone()
+                    .unwrap_or_else(|| settings.developer_instructions.clone()),
+            },
         }
     }
 }
@@ -218,4 +268,59 @@ pub struct Settings {
     pub model: String,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub developer_instructions: Option<String>,
+}
+
+/// A mask for collaboration mode settings, allowing partial updates.
+/// All fields except `name` are optional, enabling selective updates.
+#[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, JsonSchema, TS)]
+pub struct CollaborationModeMask {
+    pub name: String,
+    pub mode: Option<ModeKind>,
+    pub model: Option<String>,
+    pub reasoning_effort: Option<Option<ReasoningEffort>>,
+    pub developer_instructions: Option<Option<String>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn apply_mask_can_clear_optional_fields() {
+        let mode = CollaborationMode {
+            mode: ModeKind::Default,
+            settings: Settings {
+                model: "gpt-5.2-codex".to_string(),
+                reasoning_effort: Some(ReasoningEffort::High),
+                developer_instructions: Some("stay focused".to_string()),
+            },
+        };
+        let mask = CollaborationModeMask {
+            name: "Clear".to_string(),
+            mode: None,
+            model: None,
+            reasoning_effort: Some(None),
+            developer_instructions: Some(None),
+        };
+
+        let expected = CollaborationMode {
+            mode: ModeKind::Default,
+            settings: Settings {
+                model: "gpt-5.2-codex".to_string(),
+                reasoning_effort: None,
+                developer_instructions: None,
+            },
+        };
+        assert_eq!(expected, mode.apply_mask(&mask));
+    }
+
+    #[test]
+    fn mode_kind_deserializes_alias_values_to_default() {
+        for alias in ["code", "pair_programming", "execute", "custom"] {
+            let json = format!("\"{alias}\"");
+            let mode: ModeKind = serde_json::from_str(&json).expect("deserialize mode");
+            assert_eq!(ModeKind::Default, mode);
+        }
+    }
 }

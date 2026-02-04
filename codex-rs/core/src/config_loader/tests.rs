@@ -4,11 +4,15 @@ use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigBuilder;
 use crate::config::ConfigOverrides;
 use crate::config::ConfigToml;
+use crate::config::ConstraintError;
 use crate::config::ProjectConfig;
+use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigLoadError;
 use crate::config_loader::ConfigRequirements;
+use crate::config_loader::ConfigRequirementsToml;
 use crate::config_loader::config_requirements::ConfigRequirementsWithSources;
+use crate::config_loader::config_requirements::RequirementSource;
 use crate::config_loader::fingerprint::version_for_toml;
 use crate::config_loader::load_requirements_toml;
 use codex_protocol::config_types::TrustLevel;
@@ -65,6 +69,7 @@ async fn returns_config_error_for_invalid_user_config_toml() {
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
     )
     .await
     .expect_err("expected error");
@@ -94,6 +99,7 @@ async fn returns_config_error_for_invalid_managed_config_toml() {
         Some(cwd),
         &[] as &[(String, TomlValue)],
         overrides,
+        CloudRequirementsLoader::default(),
     )
     .await
     .expect_err("expected error");
@@ -182,6 +188,7 @@ extra = true
         Some(cwd),
         &[] as &[(String, TomlValue)],
         overrides,
+        CloudRequirementsLoader::default(),
     )
     .await
     .expect("load config");
@@ -218,6 +225,7 @@ async fn returns_empty_when_all_layers_missing() {
         Some(cwd),
         &[] as &[(String, TomlValue)],
         overrides,
+        CloudRequirementsLoader::default(),
     )
     .await
     .expect("load layers");
@@ -315,6 +323,7 @@ flag = false
         Some(cwd),
         &[] as &[(String, TomlValue)],
         overrides,
+        CloudRequirementsLoader::default(),
     )
     .await
     .expect("load config");
@@ -354,6 +363,7 @@ allowed_sandbox_modes = ["read-only"]
                 ),
             ),
         },
+        CloudRequirementsLoader::default(),
     )
     .await?;
 
@@ -414,6 +424,7 @@ allowed_approval_policies = ["never"]
                 ),
             ),
         },
+        CloudRequirementsLoader::default(),
     )
     .await?;
 
@@ -440,6 +451,7 @@ async fn load_requirements_toml_produces_expected_constraints() -> anyhow::Resul
         &requirements_file,
         r#"
 allowed_approval_policies = ["never", "on-request"]
+enforce_residency = "us"
 "#,
     )
     .await?;
@@ -454,7 +466,6 @@ allowed_approval_policies = ["never", "on-request"]
             .cloned(),
         Some(vec![AskForApproval::Never, AskForApproval::OnRequest])
     );
-
     let config_requirements: ConfigRequirements = config_requirements_toml.try_into()?;
     assert_eq!(
         config_requirements.approval_policy.value(),
@@ -469,6 +480,99 @@ allowed_approval_policies = ["never", "on-request"]
             .can_set(&AskForApproval::OnFailure)
             .is_err()
     );
+    assert_eq!(
+        config_requirements.enforce_residency.value(),
+        Some(crate::config_loader::ResidencyRequirement::Us)
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cloud_requirements_are_not_overwritten_by_system_requirements() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let requirements_file = tmp.path().join("requirements.toml");
+    tokio::fs::write(
+        &requirements_file,
+        r#"
+allowed_approval_policies = ["on-request"]
+"#,
+    )
+    .await?;
+
+    let mut config_requirements_toml = ConfigRequirementsWithSources::default();
+    config_requirements_toml.merge_unset_fields(
+        RequirementSource::CloudRequirements,
+        ConfigRequirementsToml {
+            allowed_approval_policies: Some(vec![AskForApproval::Never]),
+            allowed_sandbox_modes: None,
+            mcp_servers: None,
+            rules: None,
+            enforce_residency: None,
+        },
+    );
+    load_requirements_toml(&mut config_requirements_toml, &requirements_file).await?;
+
+    assert_eq!(
+        config_requirements_toml
+            .allowed_approval_policies
+            .as_ref()
+            .map(|sourced| sourced.value.clone()),
+        Some(vec![AskForApproval::Never])
+    );
+    assert_eq!(
+        config_requirements_toml
+            .allowed_approval_policies
+            .as_ref()
+            .map(|sourced| sourced.source.clone()),
+        Some(RequirementSource::CloudRequirements)
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    let cwd = AbsolutePathBuf::from_absolute_path(tmp.path())?;
+
+    let requirements = ConfigRequirementsToml {
+        allowed_approval_policies: Some(vec![AskForApproval::Never]),
+        allowed_sandbox_modes: None,
+        mcp_servers: None,
+        rules: None,
+        enforce_residency: None,
+    };
+    let expected = requirements.clone();
+    let cloud_requirements = CloudRequirementsLoader::new(async move { Some(requirements) });
+
+    let layers = load_config_layers_state(
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        cloud_requirements,
+    )
+    .await?;
+
+    assert_eq!(
+        layers.requirements_toml().allowed_approval_policies,
+        expected.allowed_approval_policies
+    );
+    assert_eq!(
+        layers
+            .requirements()
+            .approval_policy
+            .can_set(&AskForApproval::OnRequest),
+        Err(ConstraintError::InvalidValue {
+            field_name: "approval_policy",
+            candidate: "OnRequest".into(),
+            allowed: "[Never]".into(),
+            requirement_source: RequirementSource::CloudRequirements,
+        })
+    );
+
     Ok(())
 }
 
@@ -501,6 +605,7 @@ async fn project_layers_prefer_closest_cwd() -> std::io::Result<()> {
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
     )
     .await?;
 
@@ -632,6 +737,7 @@ async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> s
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
     )
     .await?;
 
@@ -650,6 +756,103 @@ async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> s
             disabled_reason: None,
         }],
         project_layers
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn codex_home_is_not_loaded_as_project_layer_from_home_dir() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let home_dir = tmp.path().join("home");
+    let codex_home = home_dir.join(".codex");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(codex_home.join(CONFIG_TOML_FILE), "foo = \"user\"\n").await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(&home_dir)?;
+    let layers = load_config_layers_state(
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+    )
+    .await?;
+
+    let project_layers: Vec<_> = layers
+        .get_layers(
+            super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
+            true,
+        )
+        .into_iter()
+        .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
+        .collect();
+    let expected: Vec<&ConfigLayerEntry> = Vec::new();
+    assert_eq!(expected, project_layers);
+    assert_eq!(
+        layers.effective_config().get("foo"),
+        Some(&TomlValue::String("user".to_string()))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn codex_home_within_project_tree_is_not_double_loaded() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    let project_dot_codex = project_root.join(".codex");
+    let nested_dot_codex = nested.join(".codex");
+
+    tokio::fs::create_dir_all(&nested_dot_codex).await?;
+    tokio::fs::create_dir_all(project_root.join(".git")).await?;
+    tokio::fs::write(nested_dot_codex.join(CONFIG_TOML_FILE), "foo = \"child\"\n").await?;
+
+    tokio::fs::create_dir_all(&project_dot_codex).await?;
+    make_config_for_test(&project_dot_codex, &project_root, TrustLevel::Trusted, None).await?;
+    let user_config_path = project_dot_codex.join(CONFIG_TOML_FILE);
+    let user_config_contents = tokio::fs::read_to_string(&user_config_path).await?;
+    tokio::fs::write(
+        &user_config_path,
+        format!("foo = \"user\"\n{user_config_contents}"),
+    )
+    .await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
+    let layers = load_config_layers_state(
+        &project_dot_codex,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+    )
+    .await?;
+
+    let project_layers: Vec<_> = layers
+        .get_layers(
+            super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
+            true,
+        )
+        .into_iter()
+        .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
+        .collect();
+
+    let child_config: TomlValue = toml::from_str("foo = \"child\"\n").expect("parse child config");
+    assert_eq!(
+        vec![&ConfigLayerEntry {
+            name: super::ConfigLayerSource::Project {
+                dot_codex_folder: AbsolutePathBuf::from_absolute_path(&nested_dot_codex)?,
+            },
+            config: child_config.clone(),
+            version: version_for_toml(&child_config),
+            disabled_reason: None,
+        }],
+        project_layers
+    );
+    assert_eq!(
+        layers.effective_config().get("foo"),
+        Some(&TomlValue::String("child".to_string()))
     );
 
     Ok(())
@@ -691,6 +894,7 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
         Some(cwd.clone()),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
     )
     .await?;
     let project_layers_untrusted: Vec<_> = layers_untrusted
@@ -728,6 +932,7 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
     )
     .await?;
     let project_layers_unknown: Vec<_> = layers_unknown
@@ -788,6 +993,7 @@ async fn invalid_project_config_ignored_when_untrusted_or_unknown() -> std::io::
             Some(cwd.clone()),
             &[] as &[(String, TomlValue)],
             LoaderOverrides::default(),
+            CloudRequirementsLoader::default(),
         )
         .await?;
         let project_layers: Vec<_> = layers
@@ -843,6 +1049,7 @@ async fn cli_overrides_with_relative_paths_do_not_break_trust_check() -> std::io
         Some(cwd),
         &cli_overrides,
         LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
     )
     .await?;
 
@@ -884,6 +1091,7 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
     )
     .await?;
 
@@ -910,4 +1118,326 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
     assert_eq!(foo, "child");
 
     Ok(())
+}
+
+mod requirements_exec_policy_tests {
+    use super::super::config_requirements::ConfigRequirementsWithSources;
+    use super::super::requirements_exec_policy::RequirementsExecPolicyDecisionToml;
+    use super::super::requirements_exec_policy::RequirementsExecPolicyParseError;
+    use super::super::requirements_exec_policy::RequirementsExecPolicyPatternTokenToml;
+    use super::super::requirements_exec_policy::RequirementsExecPolicyPrefixRuleToml;
+    use super::super::requirements_exec_policy::RequirementsExecPolicyToml;
+    use crate::config_loader::ConfigLayerEntry;
+    use crate::config_loader::ConfigLayerStack;
+    use crate::config_loader::ConfigRequirements;
+    use crate::config_loader::ConfigRequirementsToml;
+    use crate::config_loader::RequirementSource;
+    use crate::exec_policy::load_exec_policy;
+    use codex_app_server_protocol::ConfigLayerSource;
+    use codex_execpolicy::Decision;
+    use codex_execpolicy::Evaluation;
+    use codex_execpolicy::RuleMatch;
+    use codex_utils_absolute_path::AbsolutePathBuf;
+    use pretty_assertions::assert_eq;
+    use std::path::Path;
+    use tempfile::tempdir;
+    use toml::Value as TomlValue;
+    use toml::from_str;
+
+    fn tokens(cmd: &[&str]) -> Vec<String> {
+        cmd.iter().map(std::string::ToString::to_string).collect()
+    }
+
+    fn panic_if_called(_: &[String]) -> Decision {
+        panic!("rule should match so heuristic should not be called");
+    }
+
+    fn config_stack_for_dot_codex_folder_with_requirements(
+        dot_codex_folder: &Path,
+        requirements: ConfigRequirements,
+    ) -> ConfigLayerStack {
+        let dot_codex_folder = AbsolutePathBuf::from_absolute_path(dot_codex_folder)
+            .expect("absolute dot_codex_folder");
+        let layer = ConfigLayerEntry::new(
+            ConfigLayerSource::Project { dot_codex_folder },
+            TomlValue::Table(Default::default()),
+        );
+        ConfigLayerStack::new(vec![layer], requirements, ConfigRequirementsToml::default())
+            .expect("ConfigLayerStack")
+    }
+
+    fn requirements_from_toml(toml_str: &str) -> ConfigRequirements {
+        let config: ConfigRequirementsToml = from_str(toml_str).expect("parse requirements toml");
+        let mut with_sources = ConfigRequirementsWithSources::default();
+        with_sources.merge_unset_fields(RequirementSource::Unknown, config);
+        ConfigRequirements::try_from(with_sources).expect("requirements")
+    }
+
+    #[test]
+    fn parses_single_prefix_rule_from_raw_toml() -> anyhow::Result<()> {
+        let toml_str = r#"
+prefix_rules = [
+    { pattern = [{ token = "rm" }], decision = "forbidden" },
+]
+"#;
+
+        let parsed: RequirementsExecPolicyToml = from_str(toml_str)?;
+
+        assert_eq!(
+            parsed,
+            RequirementsExecPolicyToml {
+                prefix_rules: vec![RequirementsExecPolicyPrefixRuleToml {
+                    pattern: vec![RequirementsExecPolicyPatternTokenToml {
+                        token: Some("rm".to_string()),
+                        any_of: None,
+                    }],
+                    decision: Some(RequirementsExecPolicyDecisionToml::Forbidden),
+                    justification: None,
+                }],
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn parses_multiple_prefix_rules_from_raw_toml() -> anyhow::Result<()> {
+        let toml_str = r#"
+prefix_rules = [
+    { pattern = [{ token = "rm" }], decision = "forbidden" },
+    { pattern = [{ token = "git" }, { any_of = ["push", "commit"] }], decision = "prompt", justification = "review changes before push or commit" },
+]
+"#;
+
+        let parsed: RequirementsExecPolicyToml = from_str(toml_str)?;
+
+        assert_eq!(
+            parsed,
+            RequirementsExecPolicyToml {
+                prefix_rules: vec![
+                    RequirementsExecPolicyPrefixRuleToml {
+                        pattern: vec![RequirementsExecPolicyPatternTokenToml {
+                            token: Some("rm".to_string()),
+                            any_of: None,
+                        }],
+                        decision: Some(RequirementsExecPolicyDecisionToml::Forbidden),
+                        justification: None,
+                    },
+                    RequirementsExecPolicyPrefixRuleToml {
+                        pattern: vec![
+                            RequirementsExecPolicyPatternTokenToml {
+                                token: Some("git".to_string()),
+                                any_of: None,
+                            },
+                            RequirementsExecPolicyPatternTokenToml {
+                                token: None,
+                                any_of: Some(vec!["push".to_string(), "commit".to_string()]),
+                            },
+                        ],
+                        decision: Some(RequirementsExecPolicyDecisionToml::Prompt),
+                        justification: Some("review changes before push or commit".to_string()),
+                    },
+                ],
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn converts_rules_toml_into_internal_policy_representation() -> anyhow::Result<()> {
+        let toml_str = r#"
+prefix_rules = [
+    { pattern = [{ token = "rm" }], decision = "forbidden" },
+]
+"#;
+
+        let parsed: RequirementsExecPolicyToml = from_str(toml_str)?;
+        let policy = parsed.to_policy()?;
+
+        assert_eq!(
+            policy.check(&tokens(&["rm", "-rf", "/tmp"]), &panic_if_called),
+            Evaluation {
+                decision: Decision::Forbidden,
+                matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                    matched_prefix: tokens(&["rm"]),
+                    decision: Decision::Forbidden,
+                    justification: None,
+                }],
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn head_any_of_expands_into_multiple_program_rules() -> anyhow::Result<()> {
+        let toml_str = r#"
+prefix_rules = [
+    { pattern = [{ any_of = ["git", "hg"] }, { token = "status" }], decision = "prompt" },
+]
+"#;
+        let parsed: RequirementsExecPolicyToml = from_str(toml_str)?;
+        let policy = parsed.to_policy()?;
+
+        assert_eq!(
+            policy.check(&tokens(&["git", "status"]), &panic_if_called),
+            Evaluation {
+                decision: Decision::Prompt,
+                matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                    matched_prefix: tokens(&["git", "status"]),
+                    decision: Decision::Prompt,
+                    justification: None,
+                }],
+            }
+        );
+        assert_eq!(
+            policy.check(&tokens(&["hg", "status"]), &panic_if_called),
+            Evaluation {
+                decision: Decision::Prompt,
+                matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                    matched_prefix: tokens(&["hg", "status"]),
+                    decision: Decision::Prompt,
+                    justification: None,
+                }],
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn missing_decision_is_rejected() -> anyhow::Result<()> {
+        let toml_str = r#"
+prefix_rules = [
+    { pattern = [{ token = "rm" }] },
+]
+"#;
+
+        let parsed: RequirementsExecPolicyToml = from_str(toml_str)?;
+        let err = parsed.to_policy().expect_err("missing decision");
+
+        assert!(matches!(
+            err,
+            RequirementsExecPolicyParseError::MissingDecision { rule_index: 0 }
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn allow_decision_is_rejected() -> anyhow::Result<()> {
+        let toml_str = r#"
+prefix_rules = [
+    { pattern = [{ token = "rm" }], decision = "allow" },
+]
+"#;
+
+        let parsed: RequirementsExecPolicyToml = from_str(toml_str)?;
+        let err = parsed.to_policy().expect_err("allow decision not allowed");
+
+        assert!(matches!(
+            err,
+            RequirementsExecPolicyParseError::AllowDecisionNotAllowed { rule_index: 0 }
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn empty_prefix_rules_is_rejected() -> anyhow::Result<()> {
+        let toml_str = r#"
+prefix_rules = []
+"#;
+
+        let parsed: RequirementsExecPolicyToml = from_str(toml_str)?;
+        let err = parsed.to_policy().expect_err("empty prefix rules");
+
+        assert!(matches!(
+            err,
+            RequirementsExecPolicyParseError::EmptyPrefixRules
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn loads_requirements_exec_policy_without_rules_files() -> anyhow::Result<()> {
+        let temp_dir = tempdir()?;
+        let requirements = requirements_from_toml(
+            r#"
+                [rules]
+                prefix_rules = [
+                    { pattern = [{ token = "rm" }], decision = "forbidden" },
+                ]
+            "#,
+        );
+        let config_stack =
+            config_stack_for_dot_codex_folder_with_requirements(temp_dir.path(), requirements);
+
+        let policy = load_exec_policy(&config_stack).await?;
+
+        assert_eq!(
+            policy.check_multiple([vec!["rm".to_string()]].iter(), &panic_if_called),
+            Evaluation {
+                decision: Decision::Forbidden,
+                matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                    matched_prefix: vec!["rm".to_string()],
+                    decision: Decision::Forbidden,
+                    justification: None,
+                }],
+            }
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn merges_requirements_exec_policy_with_file_rules() -> anyhow::Result<()> {
+        let temp_dir = tempdir()?;
+        let policy_dir = temp_dir.path().join("rules");
+        std::fs::create_dir_all(&policy_dir)?;
+        std::fs::write(
+            policy_dir.join("deny.rules"),
+            r#"prefix_rule(pattern=["rm"], decision="forbidden")"#,
+        )?;
+
+        let requirements = requirements_from_toml(
+            r#"
+                [rules]
+                prefix_rules = [
+                    { pattern = [{ token = "git" }, { token = "push" }], decision = "prompt" },
+                ]
+            "#,
+        );
+        let config_stack =
+            config_stack_for_dot_codex_folder_with_requirements(temp_dir.path(), requirements);
+
+        let policy = load_exec_policy(&config_stack).await?;
+
+        assert_eq!(
+            policy.check_multiple([vec!["rm".to_string()]].iter(), &panic_if_called),
+            Evaluation {
+                decision: Decision::Forbidden,
+                matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                    matched_prefix: vec!["rm".to_string()],
+                    decision: Decision::Forbidden,
+                    justification: None,
+                }],
+            }
+        );
+        assert_eq!(
+            policy.check_multiple(
+                [vec!["git".to_string(), "push".to_string()]].iter(),
+                &panic_if_called
+            ),
+            Evaluation {
+                decision: Decision::Prompt,
+                matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                    matched_prefix: vec!["git".to_string(), "push".to_string()],
+                    decision: Decision::Prompt,
+                    justification: None,
+                }],
+            }
+        );
+
+        Ok(())
+    }
 }

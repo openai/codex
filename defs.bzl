@@ -1,7 +1,7 @@
 load("@crates//:data.bzl", "DEP_DATA")
 load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_platform//platform_data:defs.bzl", "platform_data")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_proc_macro", "rust_test")
 load("@rules_rust//cargo/private:cargo_build_script_wrapper.bzl", "cargo_build_script")
 
 PLATFORMS = [
@@ -34,8 +34,11 @@ def codex_rust_crate(
         crate_features = [],
         crate_srcs = None,
         crate_edition = None,
+        proc_macro = False,
         build_script_data = [],
         compile_data = [],
+        lib_data_extra = [],
+        rustc_env = {},
         deps_extra = [],
         integration_deps_extra = [],
         integration_compile_data_extra = [],
@@ -61,8 +64,11 @@ def codex_rust_crate(
         crate_srcs: Optional explicit srcs; defaults to `src/**/*.rs`.
         crate_edition: Rust edition override, if not default.
             You probably don't want this, it's only here for a single caller.
+        proc_macro: Whether this crate builds a proc-macro library.
         build_script_data: Data files exposed to the build script at runtime.
         compile_data: Non-Rust compile-time data for the library target.
+        lib_data_extra: Extra runtime data for the library target.
+        rustc_env: Extra rustc_env entries to merge with defaults.
         deps_extra: Extra normal deps beyond @crates resolution.
             Typically only needed when features add additional deps.
         integration_deps_extra: Extra deps for integration tests only.
@@ -85,7 +91,7 @@ def codex_rust_crate(
 
     rustc_env = {
         "BAZEL_PACKAGE": native.package_name(),
-    }
+    } | rustc_env
 
     binaries = DEP_DATA.get(native.package_name())["binaries"]
 
@@ -105,13 +111,15 @@ def codex_rust_crate(
         deps = deps + [name + "-build-script"]
 
     if lib_srcs:
-        rust_library(
+        lib_rule = rust_proc_macro if proc_macro else rust_library
+        lib_rule(
             name = name,
             crate_name = crate_name,
             crate_features = crate_features,
             deps = deps,
             proc_macro_deps = proc_macro_deps,
             compile_data = compile_data,
+            data = lib_data_extra,
             srcs = lib_srcs,
             edition = crate_edition,
             rustc_env = rustc_env,
@@ -138,7 +146,7 @@ def codex_rust_crate(
     for binary, main in binaries.items():
         #binary = binary.replace("-", "_")
         sanitized_binaries.append(binary)
-        cargo_env["CARGO_BIN_EXE_" + binary] = "$(rootpath :%s)" % binary
+        cargo_env["CARGO_BIN_EXE_" + binary] = "$(rlocationpath :%s)" % binary
 
         rust_binary(
             name = binary,
@@ -154,7 +162,7 @@ def codex_rust_crate(
     for binary_label in extra_binaries:
         sanitized_binaries.append(binary_label)
         binary = Label(binary_label).name
-        cargo_env["CARGO_BIN_EXE_" + binary] = "$(rootpath %s)" % binary_label
+        cargo_env["CARGO_BIN_EXE_" + binary] = "$(rlocationpath %s)" % binary_label
 
     for test in native.glob(["tests/*.rs"], allow_empty = True):
         test_name = name + "-" + test.removeprefix("tests/").removesuffix(".rs").replace("/", "-")

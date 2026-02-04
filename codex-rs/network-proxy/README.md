@@ -3,6 +3,7 @@
 `codex-network-proxy` is Codex's local network policy enforcement proxy. It runs:
 
 - an HTTP proxy (default `127.0.0.1:3128`)
+- an optional SOCKS5 proxy (default `127.0.0.1:8081`, disabled by default)
 - an admin HTTP API (default `127.0.0.1:8080`)
 
 It enforces an allow/deny policy and a "limited" mode intended for read-only network access.
@@ -20,6 +21,10 @@ Example config:
 enabled = true
 proxy_url = "http://127.0.0.1:3128"
 admin_url = "http://127.0.0.1:8080"
+# Optional SOCKS5 listener (disabled by default).
+enable_socks5 = false
+socks_url = "http://127.0.0.1:8081"
+enable_socks5_udp = false
 # When `enabled` is false, the proxy no-ops and does not bind listeners.
 # When true, respect HTTP(S)_PROXY/ALL_PROXY for upstream requests (HTTP(S) proxies only),
 # including CONNECT tunnels in full mode.
@@ -28,7 +33,7 @@ allow_upstream_proxy = false
 # If you want to expose these listeners beyond localhost, you must opt in explicitly.
 dangerously_allow_non_loopback_proxy = false
 dangerously_allow_non_loopback_admin = false
-mode = "limited" # or "full"
+mode = "full" # default when unset; use "limited" for read-only mode
 
 [network_proxy.policy]
 # Hosts must match the allowlist (unless denied).
@@ -60,6 +65,12 @@ export HTTP_PROXY="http://127.0.0.1:3128"
 export HTTPS_PROXY="http://127.0.0.1:3128"
 ```
 
+For SOCKS5 traffic (when `enable_socks5 = true`):
+
+```bash
+export ALL_PROXY="socks5h://127.0.0.1:8081"
+```
+
 ### 4) Understand blocks / debugging
 
 When a request is blocked, the proxy responds with `403` and includes:
@@ -70,8 +81,8 @@ When a request is blocked, the proxy responds with `403` and includes:
   - `blocked-by-method-policy`
   - `blocked-by-policy`
 
-In "limited" mode, only `GET`, `HEAD`, and `OPTIONS` are allowed for plain HTTP. HTTPS `CONNECT`
-remains a transparent tunnel, so limited-mode method enforcement does not apply to HTTPS.
+In "limited" mode, only `GET`, `HEAD`, and `OPTIONS` are allowed. HTTPS `CONNECT` and SOCKS5 are
+blocked because they would bypass method enforcement.
 
 ## Library API
 

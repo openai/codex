@@ -19,4 +19,4 @@ expression: term.backend().vt100().screen().contents()
 
 › Ask Codex to do anything
 
-  100% context left · ? for shortcuts
+  ? for shortcuts                                            100% context left
