@@ -536,7 +536,7 @@ impl TurnContext {
         {
             Ok(header) => header,
             Err(_) => {
-                warn!("timed out after 500ms while building turn metadata header");
+                warn!("timed out after 250ms while building turn metadata header");
                 self.turn_metadata_header.get().cloned().flatten()
             }
         }
