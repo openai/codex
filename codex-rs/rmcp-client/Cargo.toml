@@ -18,6 +18,7 @@ codex-protocol = { workspace = true }
 codex-utils-home-dir = { workspace = true }
 futures = { workspace = true, default-features = false, features = ["std"] }
 keyring = { workspace = true, features = ["crypto-rust"] }
+libc = { workspace = true }
 oauth2 = "5"
 reqwest = { version = "0.12", default-features = false, features = [
     "json",

@@ -2003,6 +2003,7 @@ dependencies = [
  "codex-utils-home-dir",
  "futures",
  "keyring",
+ "libc",
  "oauth2",
  "pretty_assertions",
  "reqwest",

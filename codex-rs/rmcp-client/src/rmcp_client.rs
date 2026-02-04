@@ -59,8 +59,28 @@ use crate::utils::build_default_headers;
 use crate::utils::create_env_for_mcp_server;
 use crate::utils::run_with_timeout;
 
+
+#[derive(Debug)]
+struct ProcessGroupGuard {
+    #[cfg(unix)]
+    pgid: Option<u32>,
+}
+
+impl Drop for ProcessGroupGuard {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Some(pgid) = self.pgid {
+            unsafe {
+                // Kill the process group. -pgid.
+                // SIGKILL = 9.
+                libc::kill(-(pgid as i32), libc::SIGKILL);
+            }
+        }
+    }
+}
+
 enum PendingTransport {
-    ChildProcess(TokioChildProcess),
+    ChildProcess(TokioChildProcess, ProcessGroupGuard),
     StreamableHttp {
         transport: StreamableHttpClientTransport<reqwest::Client>,
     },
@@ -77,6 +97,7 @@ enum ClientState {
     Ready {
         service: Arc<RunningService<RoleClient, LoggingClientHandler>>,
         oauth: Option<OAuthPersistor>,
+        _process_guard: Option<ProcessGroupGuard>,
     },
 }
 
@@ -122,6 +143,13 @@ impl RmcpClient {
         let resolved_program = program_resolver::resolve(program, &envs)?;
 
         let mut command = Command::new(resolved_program);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+
         command
             .kill_on_drop(true)
             .stdin(Stdio::piped())
@@ -136,6 +164,11 @@ impl RmcpClient {
         let (transport, stderr) = TokioChildProcess::builder(command)
             .stderr(Stdio::piped())
             .spawn()?;
+
+        let guard = ProcessGroupGuard {
+            #[cfg(unix)]
+            pgid: transport.id(),
+        };
 
         if let Some(stderr) = stderr {
             tokio::spawn(async move {
@@ -157,7 +190,7 @@ impl RmcpClient {
 
         Ok(Self {
             state: Mutex::new(ClientState::Connecting {
-                transport: Some(PendingTransport::ChildProcess(transport)),
+                transport: Some(PendingTransport::ChildProcess(transport, guard)),
             }),
         })
     }
@@ -226,16 +259,18 @@ impl RmcpClient {
     ) -> Result<InitializeResult> {
         let client_handler = LoggingClientHandler::new(params.clone(), send_elicitation);
 
-        let (transport, oauth_persistor) = {
+        let (transport, oauth_persistor, process_guard) = {
             let mut guard = self.state.lock().await;
             match &mut *guard {
                 ClientState::Connecting { transport } => match transport.take() {
-                    Some(PendingTransport::ChildProcess(transport)) => (
+                    Some(PendingTransport::ChildProcess(transport, process_guard)) => (
                         service::serve_client(client_handler.clone(), transport).boxed(),
                         None,
+                        Some(process_guard),
                     ),
                     Some(PendingTransport::StreamableHttp { transport }) => (
                         service::serve_client(client_handler.clone(), transport).boxed(),
+                        None,
                         None,
                     ),
                     Some(PendingTransport::StreamableHttpWithOAuth {
@@ -244,6 +279,7 @@ impl RmcpClient {
                     }) => (
                         service::serve_client(client_handler.clone(), transport).boxed(),
                         Some(oauth_persistor),
+                        None,
                     ),
                     None => return Err(anyhow!("client already initializing")),
                 },
@@ -272,6 +308,7 @@ impl RmcpClient {
             *guard = ClientState::Ready {
                 service: Arc::new(service),
                 oauth: oauth_persistor.clone(),
+                _process_guard: process_guard,
             };
         }
 
@@ -313,8 +350,8 @@ impl RmcpClient {
             .map(|tool| {
                 let meta = tool.meta.as_ref();
                 let connector_id = Self::meta_string(meta, "connector_id");
-                let connector_name = Self::meta_string(meta, "connector_name")
-                    .or_else(|| Self::meta_string(meta, "connector_display_name"));
+                let connector_name = Self::meta_string(meta, "connector_display_name")
+                    .or_else(|| Self::meta_string(meta, "connector_name"));
                 Ok(ToolWithConnectorId {
                     tool,
                     connector_id,
@@ -449,6 +486,7 @@ impl RmcpClient {
             ClientState::Ready {
                 oauth: Some(runtime),
                 service: _,
+                ..
             } => Some(runtime.clone()),
             _ => None,
         }

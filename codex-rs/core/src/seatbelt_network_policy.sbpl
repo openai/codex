@@ -13,12 +13,10 @@
     ; Communicate with the security server for TLS certificate information.
     (global-name "com.apple.SecurityServer")
     (global-name "com.apple.networkd")
+    (global-name "com.apple.dnssd.service")
+    (global-name "com.apple.mDNSResponder")
     (global-name "com.apple.ocspd")
     (global-name "com.apple.trustd.agent")
-
-    ; Read network configuration.
-    (global-name "com.apple.SystemConfiguration.DNSConfiguration")
-    (global-name "com.apple.SystemConfiguration.configd")
 )
 
 (allow sysctl-read

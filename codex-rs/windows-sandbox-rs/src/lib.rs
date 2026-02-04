@@ -104,6 +104,10 @@ pub use setup_error::SetupErrorReport;
 #[cfg(target_os = "windows")]
 pub use setup_error::SetupFailure;
 #[cfg(target_os = "windows")]
+pub use token::authenticated_users_sid;
+#[cfg(target_os = "windows")]
+pub use token::builtin_users_sid;
+#[cfg(target_os = "windows")]
 pub use token::convert_string_sid_to_sid;
 #[cfg(target_os = "windows")]
 pub use token::create_readonly_token_with_cap_from;
@@ -113,6 +117,8 @@ pub use token::create_readonly_token_with_caps_from;
 pub use token::create_workspace_write_token_with_caps_from;
 #[cfg(target_os = "windows")]
 pub use token::get_current_token_for_restriction;
+#[cfg(target_os = "windows")]
+pub use token::world_sid;
 #[cfg(target_os = "windows")]
 pub use windows_impl::run_windows_sandbox_capture;
 #[cfg(target_os = "windows")]

@@ -466,11 +466,11 @@ fn run_read_acl_only(payload: &Payload, log: &mut File) -> Result<()> {
     let sandbox_group_sid = resolve_sandbox_users_group_sid()?;
     let sandbox_group_psid = sid_bytes_to_psid(&sandbox_group_sid)?;
     let mut refresh_errors: Vec<String> = Vec::new();
-    let users_sid = resolve_sid("Users")?;
+    let users_sid = unsafe { codex_windows_sandbox::builtin_users_sid()? };
     let users_psid = sid_bytes_to_psid(&users_sid)?;
-    let auth_sid = resolve_sid("Authenticated Users")?;
+    let auth_sid = unsafe { codex_windows_sandbox::authenticated_users_sid()? };
     let auth_psid = sid_bytes_to_psid(&auth_sid)?;
-    let everyone_sid = resolve_sid("Everyone")?;
+    let everyone_sid = unsafe { codex_windows_sandbox::world_sid()? };
     let everyone_psid = sid_bytes_to_psid(&everyone_sid)?;
     let rx_psids = vec![users_psid, auth_psid, everyone_psid];
     let subjects = ReadAclSubjects {
@@ -721,7 +721,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
                     }
                 }
 
-                let res = unsafe { ensure_allow_write_aces(&root, &psids) };
+                let res = unsafe { ensure_allow_write_aces(&root, &psids, true) };
 
                 for psid in psids {
                     unsafe {
