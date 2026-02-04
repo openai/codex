@@ -211,12 +211,12 @@ fn run_bwrap_in_child_capture_stderr(argv: Vec<String>) -> String {
     if pid == 0 {
         // Child: redirect stderr to the pipe, then run bubblewrap.
         unsafe {
-            libc::close(read_fd);
+            close_fd_or_panic(read_fd, "close read end in bubblewrap child");
             if libc::dup2(write_fd, libc::STDERR_FILENO) < 0 {
                 let err = std::io::Error::last_os_error();
                 panic!("failed to redirect stderr for bubblewrap: {err}");
             }
-            libc::close(write_fd);
+            close_fd_or_panic(write_fd, "close write end in bubblewrap child");
         }
 
         let exit_code = run_vendored_bwrap_main(&argv);
@@ -224,9 +224,7 @@ fn run_bwrap_in_child_capture_stderr(argv: Vec<String>) -> String {
     }
 
     // Parent: close the write end and read stderr while the child runs.
-    unsafe {
-        libc::close(write_fd);
-    }
+    close_fd_or_panic(write_fd, "close write end in bubblewrap parent");
 
     // SAFETY: `read_fd` is a valid owned fd in the parent.
     let mut read_file = unsafe { File::from_raw_fd(read_fd) };
@@ -244,6 +242,19 @@ fn run_bwrap_in_child_capture_stderr(argv: Vec<String>) -> String {
     }
 
     String::from_utf8_lossy(&stderr_bytes).into_owned()
+}
+
+/// Close an owned file descriptor and panic with context on failure.
+///
+/// We use explicit close() checks here (instead of ignoring return codes)
+/// because this code runs in low-level sandbox setup paths where fd leaks or
+/// close errors can mask the root cause of later failures.
+fn close_fd_or_panic(fd: libc::c_int, context: &str) {
+    let close_res = unsafe { libc::close(fd) };
+    if close_res < 0 {
+        let err = std::io::Error::last_os_error();
+        panic!("{context}: {err}");
+    }
 }
 
 fn is_proc_mount_failure(stderr: &str) -> bool {
