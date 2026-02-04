@@ -2,15 +2,10 @@
 
 use codex_core::features::Feature;
 use codex_protocol::config_types::WebSearchMode;
-use core_test_support::load_sse_fixture_with_id;
 use core_test_support::responses;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
-
-fn sse_completed(id: &str) -> String {
-    load_sse_fixture_with_id("../fixtures/completed_template.json", id)
-}
 
 #[allow(clippy::expect_used)]
 fn tool_identifiers(body: &serde_json::Value) -> Vec<String> {
@@ -31,7 +26,10 @@ fn tool_identifiers(body: &serde_json::Value) -> Vec<String> {
 #[allow(clippy::expect_used)]
 async fn collect_tool_identifiers_for_model(model: &str) -> Vec<String> {
     let server = start_mock_server().await;
-    let sse = sse_completed(model);
+    let sse = responses::sse(vec![
+        responses::ev_response_created(model),
+        responses::ev_completed(model),
+    ]);
     let resp_mock = responses::mount_sse_once(&server, sse).await;
 
     let mut builder = test_codex()

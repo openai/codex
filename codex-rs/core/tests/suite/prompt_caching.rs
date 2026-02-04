@@ -18,8 +18,10 @@ use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use core_test_support::load_sse_fixture_with_id;
+use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
@@ -44,11 +46,6 @@ fn default_env_context_str(cwd: &str, shell: &Shell) -> String {
   <shell>{shell_name}</shell>
 </environment_context>"#
     )
-}
-
-/// Build minimal SSE stream with completed marker using the JSON fixture.
-fn sse_completed(id: &str) -> String {
-    load_sse_fixture_with_id("../fixtures/completed_template.json", id)
 }
 
 fn assert_tool_names(body: &serde_json::Value, expected_names: &[&str]) {
@@ -79,8 +76,16 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
     use pretty_assertions::assert_eq;
 
     let server = start_mock_server().await;
-    let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
-    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
+    let req1 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let req2 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+    )
+    .await;
 
     let TestCodex {
         codex,
@@ -172,8 +177,16 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
     use pretty_assertions::assert_eq;
 
     let server = start_mock_server().await;
-    let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
-    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
+    let req1 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let req2 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+    )
+    .await;
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
@@ -238,8 +251,16 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
     use pretty_assertions::assert_eq;
 
     let server = start_mock_server().await;
-    let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
-    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
+    let req1 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let req2 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+    )
+    .await;
 
     let TestCodex { codex, config, .. } = test_codex()
         .with_config(|config| {
@@ -315,8 +336,16 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
     use pretty_assertions::assert_eq;
 
     let server = start_mock_server().await;
-    let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
-    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
+    let req1 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let req2 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+    )
+    .await;
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
@@ -407,7 +436,11 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let req = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let req = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
 
     let TestCodex { codex, .. } = test_codex().build(&server).await?;
 
@@ -542,8 +575,16 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
     use pretty_assertions::assert_eq;
 
     let server = start_mock_server().await;
-    let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
-    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
+    let req1 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let req2 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+    )
+    .await;
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
@@ -646,8 +687,16 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
     use pretty_assertions::assert_eq;
 
     let server = start_mock_server().await;
-    let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
-    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
+    let req1 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let req2 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+    )
+    .await;
 
     let TestCodex {
         codex,
@@ -747,8 +796,16 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
 
     let server = start_mock_server().await;
 
-    let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
-    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
+    let req1 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let req2 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+    )
+    .await;
     let TestCodex {
         codex,
         config,
