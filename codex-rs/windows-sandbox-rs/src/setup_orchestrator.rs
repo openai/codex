@@ -62,6 +62,12 @@ pub fn run_setup_refresh(
     env_map: &HashMap<String, String>,
     codex_home: &Path,
 ) -> Result<()> {
+    // Prevent concurrent refresh calls from colliding.
+    // If a refresh is already in progress, this call can safely skip.
+    let _guard = match crate::read_acl_mutex::acquire_setup_refresh_mutex()? {
+        Some(guard) => guard,
+        None => return Ok(()),
+    };
     // Skip in danger-full-access.
     if matches!(
         policy,
@@ -456,6 +462,12 @@ pub fn run_elevated_setup(
     read_roots_override: Option<Vec<PathBuf>>,
     write_roots_override: Option<Vec<PathBuf>>,
 ) -> Result<()> {
+    // Elevated setup also needs the refresh lock to prevent concurrent refresh
+    // processes from interfering with its more critical work.
+    let _guard = match crate::read_acl_mutex::acquire_setup_refresh_mutex()? {
+        Some(guard) => guard,
+        None => return Ok(()), // Skip if something else is already initializing.
+    };
     // Ensure the shared sandbox directory exists before we send it to the elevated helper.
     let sbx_dir = sandbox_dir(codex_home);
     std::fs::create_dir_all(&sbx_dir).map_err(|err| {
