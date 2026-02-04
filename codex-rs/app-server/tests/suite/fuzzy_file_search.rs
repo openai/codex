@@ -11,6 +11,7 @@ use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const SHORT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+const STOP_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_millis(250);
 const SESSION_UPDATED_METHOD: &str = "fuzzyFileSearch/sessionUpdated";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -83,8 +84,28 @@ async fn assert_update_request_fails_for_missing_session(
 async fn assert_no_session_updates_for(
     mcp: &mut McpProcess,
     session_id: &str,
+    grace_period: std::time::Duration,
     duration: std::time::Duration,
 ) -> Result<()> {
+    let grace_deadline = tokio::time::Instant::now() + grace_period;
+    loop {
+        let now = tokio::time::Instant::now();
+        if now >= grace_deadline {
+            break;
+        }
+        let remaining = grace_deadline - now;
+        match timeout(
+            remaining,
+            mcp.read_stream_until_notification_message(SESSION_UPDATED_METHOD),
+        )
+        .await
+        {
+            Err(_) => break,
+            Ok(Err(err)) => return Err(err),
+            Ok(Ok(_)) => {}
+        }
+    }
+
     let deadline = tokio::time::Instant::now() + duration;
     loop {
         let now = tokio::time::Instant::now();
@@ -373,7 +394,8 @@ async fn test_fuzzy_file_search_session_stops_sending_updates_after_stop() -> Re
 
     mcp.stop_fuzzy_file_search_session(session_id).await?;
 
-    assert_no_session_updates_for(&mut mcp, session_id, SHORT_READ_TIMEOUT).await?;
+    assert_no_session_updates_for(&mut mcp, session_id, STOP_GRACE_PERIOD, SHORT_READ_TIMEOUT)
+        .await?;
 
     Ok(())
 }

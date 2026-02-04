@@ -190,13 +190,8 @@ impl SessionReporterImpl {
                 files,
             },
         );
-        let shared = self.shared.clone();
+        let outgoing = self.shared.outgoing.clone();
         self.shared.runtime.spawn(async move {
-            if shared.canceled.load(Ordering::Relaxed) {
-                return;
-            }
-
-            let outgoing = shared.outgoing.clone();
             outgoing.send_server_notification(notification).await;
         });
     }
