@@ -362,6 +362,9 @@ impl PasteBurst {
                 self.active = true;
                 self.buffer.push(held);
                 self.buffer.push('\n');
+                // Keep the timeout clock based on the most recent input so the burst does not
+                // flush prematurely if the next pasted char arrives after a slow gap.
+                self.last_plain_char_time = Some(now);
                 self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
                 true
             } else {
@@ -553,6 +556,37 @@ mod tests {
         assert!(matches!(
             burst.flush_if_due(t2),
             FlushResult::Paste(ref s) if s == "ab"
+        ));
+    }
+
+    #[test]
+    fn enter_promotes_pending_first_char_updates_timeout_timestamp() {
+        let mut burst = PasteBurst::default();
+        let t0 = Instant::now();
+        assert!(matches!(
+            burst.on_plain_char('h', t0),
+            CharDecision::RetainFirstChar
+        ));
+
+        let t1 = t0 + PASTE_BURST_CHAR_INTERVAL;
+        assert!(burst.append_newline_if_active(t1));
+        assert!(burst.is_active());
+
+        // If the timeout clock is not updated at the Enter, a UI tick here could flush the buffer
+        // based on the original first-char timestamp and split a key-event paste stream.
+        let t2 = t1 + PASTE_BURST_ACTIVE_IDLE_TIMEOUT - Duration::from_millis(1);
+        assert!(matches!(burst.flush_if_due(t2), FlushResult::None));
+
+        assert!(matches!(
+            burst.on_plain_char('i', t2),
+            CharDecision::BufferAppend
+        ));
+        burst.append_char_to_buffer('i', t2);
+
+        let t3 = t2 + PasteBurst::recommended_active_flush_delay() + Duration::from_millis(1);
+        assert!(matches!(
+            burst.flush_if_due(t3),
+            FlushResult::Paste(ref s) if s == "h\ni"
         ));
     }
 
