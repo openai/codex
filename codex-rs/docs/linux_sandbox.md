@@ -48,8 +48,9 @@ To reduce symlink and path-creation attacks inside writable roots:
   `--unshare-pid`.
 - In the bubblewrap pipeline, it mounts a fresh `/proc` via `--proc /proc` by
   default.
-- In restrictive container environments, you can skip the `/proc` mount with
-  the helper flag `--no-proc` while still keeping PID isolation enabled.
+- In restrictive container environments, the helper preflights `/proc` mount
+  support and retries internally with `--no-proc` on the known mount-failure
+  pattern. You can also force this path explicitly with `--no-proc`.
 - Network restrictions are enforced with seccomp when network access is
   disabled.
 
@@ -58,3 +59,5 @@ To reduce symlink and path-creation attacks inside writable roots:
 - The CLI still exposes legacy names such as `codex debug landlock`.
 - Landlock remains the default filesystem enforcement pipeline when
   `features.use_linux_sandbox_bwrap` is not enabled.
+- When `features.use_linux_sandbox_bwrap` is enabled, bubblewrap errors do not
+  fall back to legacy Landlock.
