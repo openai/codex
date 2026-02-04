@@ -56,21 +56,13 @@ async fn run_cmd_output(
     writable_roots: &[PathBuf],
     timeout_ms: u64,
 ) -> codex_core::exec::ExecToolCallOutput {
-    run_cmd_result(cmd, writable_roots, timeout_ms)
+    run_cmd_result_with_writable_roots(cmd, writable_roots, timeout_ms, false)
         .await
-        .expect("sandboxed command should succeed")
-}
-
-async fn run_cmd_result(
-    cmd: &[&str],
-    writable_roots: &[PathBuf],
-    timeout_ms: u64,
-) -> Result<codex_core::exec::ExecToolCallOutput> {
-    run_cmd_result_with_bwrap(cmd, writable_roots, timeout_ms, false).await
+        .expect("sandboxed command should execute")
 }
 
 #[expect(clippy::expect_used)]
-async fn run_cmd_result_with_bwrap(
+async fn run_cmd_result_with_writable_roots(
     cmd: &[&str],
     writable_roots: &[PathBuf],
     timeout_ms: u64,
@@ -120,7 +112,14 @@ fn is_bwrap_unavailable_output(output: &codex_core::exec::ExecToolCallOutput) ->
 }
 
 async fn should_skip_bwrap_tests() -> bool {
-    match run_cmd_result_with_bwrap(&["bash", "-lc", "true"], &[], NETWORK_TIMEOUT_MS, true).await {
+    match run_cmd_result_with_writable_roots(
+        &["bash", "-lc", "true"],
+        &[],
+        NETWORK_TIMEOUT_MS,
+        true,
+    )
+    .await
+    {
         Ok(output) => is_bwrap_unavailable_output(&output),
         Err(CodexErr::Sandbox(SandboxErr::Denied { output })) => {
             is_bwrap_unavailable_output(&output)
@@ -314,7 +313,7 @@ async fn sandbox_blocks_git_and_codex_writes_inside_writable_root() {
     let codex_target = dot_codex.join("config.toml");
 
     let git_output = expect_denied(
-        run_cmd_result_with_bwrap(
+        run_cmd_result_with_writable_roots(
             &[
                 "bash",
                 "-lc",
@@ -329,7 +328,7 @@ async fn sandbox_blocks_git_and_codex_writes_inside_writable_root() {
     );
 
     let codex_output = expect_denied(
-        run_cmd_result_with_bwrap(
+        run_cmd_result_with_writable_roots(
             &[
                 "bash",
                 "-lc",
@@ -365,7 +364,7 @@ async fn sandbox_blocks_codex_symlink_replacement_attack() {
     let codex_target = dot_codex.join("config.toml");
 
     let codex_output = expect_denied(
-        run_cmd_result_with_bwrap(
+        run_cmd_result_with_writable_roots(
             &[
                 "bash",
                 "-lc",

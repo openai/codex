@@ -344,17 +344,26 @@ mod tests {
             Path::new("/"),
             BwrapOptions { mount_proc: true },
         );
-        let command_separator_index = argv
-            .iter()
-            .position(|arg| arg == "--")
-            .expect("expected command separator in bubblewrap argv");
-        let argv0_flag_index = argv
-            .iter()
-            .position(|arg| arg == "--argv0")
-            .expect("expected --argv0 in bubblewrap argv");
-
-        assert_eq!(argv[0], "bwrap");
-        assert_eq!(argv[argv0_flag_index + 1], "codex-linux-sandbox");
-        assert_eq!(argv0_flag_index < command_separator_index, true);
+        assert_eq!(
+            argv,
+            vec![
+                "bwrap".to_string(),
+                "--new-session".to_string(),
+                "--die-with-parent".to_string(),
+                "--ro-bind".to_string(),
+                "/".to_string(),
+                "/".to_string(),
+                "--dev-bind".to_string(),
+                "/dev/null".to_string(),
+                "/dev/null".to_string(),
+                "--unshare-pid".to_string(),
+                "--proc".to_string(),
+                "/proc".to_string(),
+                "--argv0".to_string(),
+                "codex-linux-sandbox".to_string(),
+                "--".to_string(),
+                "/bin/true".to_string(),
+            ]
+        );
     }
 }

@@ -12,6 +12,8 @@ In the codex-rs folder where the rust code lives:
 - Always inline format! args when possible per https://rust-lang.github.io/rust-clippy/master/index.html#uninlined_format_args
 - Use method references over closures when possible per https://rust-lang.github.io/rust-clippy/master/index.html#redundant_closure_for_method_calls
 - When possible, make `match` statements exhaustive and avoid wildcard arms.
+- Name helpers by actual behavior, not by optional implementation details behind flags.
+- For wrappers around third-party `main`/`exec*` flows, docstrings must match real control flow and return semantics; do not claim non-returning behavior unless guaranteed.
 - When writing tests, prefer comparing the equality of entire objects over fields one by one.
 - When making a change that adds or changes an API, ensure that the documentation in the `docs/` folder is up to date if applicable.
 - If you change `ConfigToml` or nested config types, run `just write-config-schema` to update `codex-rs/core/config.schema.json`.
@@ -78,6 +80,8 @@ If you don’t have the tool:
 
 - Tests should use pretty_assertions::assert_eq for clearer diffs. Import this at the top of the test module if it isn't already.
 - Prefer deep equals comparisons whenever possible. Perform `assert_eq!()` on entire objects, rather than individual fields.
+- Keep assertion failure messages precise about guarantees: use wording like “executes” unless the assertion is specifically about successful (`0`) exit status.
+- Avoid one-off passthrough helper functions in tests; inline single-use wrappers unless they improve readability materially.
 - Avoid mutating process environment in tests; prefer passing environment-derived flags or dependencies from above.
 
 ### Spawning workspace binaries in tests (Cargo vs Bazel)
