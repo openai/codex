@@ -251,7 +251,7 @@
     },
     "Personality": {
       "enum": [
-        "disabled",
+        "none",
         "friendly",
         "pragmatic"
       ],

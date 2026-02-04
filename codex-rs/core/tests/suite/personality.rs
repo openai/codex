@@ -182,7 +182,7 @@ async fn config_personality_none_sends_no_personality() -> anyhow::Result<()> {
         .with_config(|config| {
             config.features.disable(Feature::RemoteModels);
             config.features.enable(Feature::Personality);
-            config.personality = Some(Personality::Disabled);
+            config.personality = Some(Personality::None);
         });
     let test = builder.build(&server).await?;
 

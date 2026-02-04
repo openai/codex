@@ -96,7 +96,7 @@ pub enum WindowsSandboxLevel {
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum Personality {
-    Disabled,
+    None,
     Friendly,
     Pragmatic,
 }

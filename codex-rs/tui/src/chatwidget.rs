@@ -5505,7 +5505,7 @@ impl ChatWidget {
 
     fn personality_label(personality: Personality) -> &'static str {
         match personality {
-            Personality::Disabled => "Disabled",
+            Personality::None => "None",
             Personality::Friendly => "Friendly",
             Personality::Pragmatic => "Pragmatic",
         }
@@ -5513,7 +5513,7 @@ impl ChatWidget {
 
     fn personality_description(personality: Personality) -> &'static str {
         match personality {
-            Personality::Disabled => "No personality instructions.",
+            Personality::None => "No personality instructions.",
             Personality::Friendly => "Warm, collaborative, and helpful.",
             Personality::Pragmatic => "Concise, task-focused, and direct.",
         }

@@ -2326,7 +2326,7 @@ impl App {
 
     fn personality_label(personality: Personality) -> &'static str {
         match personality {
-            Personality::Disabled => "Disabled",
+            Personality::None => "None",
             Personality::Friendly => "Friendly",
             Personality::Pragmatic => "Pragmatic",
         }
