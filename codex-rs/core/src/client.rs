@@ -72,6 +72,8 @@ use crate::transport_manager::TransportManager;
 pub const WEB_SEARCH_ELIGIBLE_HEADER: &str = "x-oai-web-search-eligible";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 pub const X_CODEX_TURN_METADATA_HEADER: &str = "x-codex-turn-metadata";
+pub const X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER: &str =
+    "x-responsesapi-include-timing-metrics";
 
 #[derive(Debug, Default)]
 struct TurnMetadataCache {
@@ -489,6 +491,12 @@ impl ModelClientSession {
         if needs_new {
             let mut headers = options.extra_headers.clone();
             headers.extend(build_conversation_headers(options.conversation_id.clone()));
+            if self.state.config.features.enabled(Feature::RuntimeMetrics) {
+                headers.insert(
+                    X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER,
+                    HeaderValue::from_static("true"),
+                );
+            }
             let websocket_telemetry = self.build_websocket_telemetry();
             let new_conn: ApiWebSocketConnection =
                 ApiWebSocketResponsesClient::new(api_provider, api_auth)

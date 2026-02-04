@@ -10,6 +10,7 @@ use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::TransportManager;
 use codex_core::WireApi;
+use codex_core::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::SessionSource;
@@ -98,6 +99,72 @@ async fn responses_websocket_emits_websocket_telemetry_events() {
     assert_eq!(summary.streaming_events.count, 0);
     assert_eq!(summary.websocket_calls.count, 1);
     assert_eq!(summary.websocket_events.count, 2);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_includes_timing_metrics_header_when_runtime_metrics_enabled() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![vec![
+        ev_response_created("resp-1"),
+        serde_json::json!({
+            "type": "responsesapi.websocket_timing",
+            "timing_metrics": {
+                "responses_duration_excl_engine_and_client_tool_time_ms": 120,
+                "engine_service_total_ms": 450
+            }
+        }),
+        ev_completed("resp-1"),
+    ]]])
+    .await;
+
+    let harness = websocket_harness_with_runtime_metrics(&server, true).await;
+    harness.otel_manager.reset_runtime_metrics();
+    let mut session = harness.client.new_session(None);
+    let prompt = prompt_with_input(vec![message_item("hello")]);
+
+    stream_until_complete(&mut session, &prompt).await;
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    let handshake = server.single_handshake();
+    assert_eq!(
+        handshake.header(X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER),
+        Some("true".to_string())
+    );
+
+    let summary = harness
+        .otel_manager
+        .runtime_metrics_summary()
+        .expect("runtime metrics summary");
+    assert_eq!(summary.responses_api_overhead_ms, 120);
+    assert_eq!(summary.responses_api_inference_time_ms, 450);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_omits_timing_metrics_header_when_runtime_metrics_disabled() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![vec![
+        ev_response_created("resp-1"),
+        ev_completed("resp-1"),
+    ]]])
+    .await;
+
+    let harness = websocket_harness_with_runtime_metrics(&server, false).await;
+    let mut session = harness.client.new_session(None);
+    let prompt = prompt_with_input(vec![message_item("hello")]);
+
+    stream_until_complete(&mut session, &prompt).await;
+
+    let handshake = server.single_handshake();
+    assert_eq!(
+        handshake.header(X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER),
+        None
+    );
 
     server.shutdown().await;
 }
@@ -241,11 +308,21 @@ fn websocket_provider(server: &WebSocketTestServer) -> ModelProviderInfo {
 }
 
 async fn websocket_harness(server: &WebSocketTestServer) -> WebsocketTestHarness {
+    websocket_harness_with_runtime_metrics(server, false).await
+}
+
+async fn websocket_harness_with_runtime_metrics(
+    server: &WebSocketTestServer,
+    runtime_metrics_enabled: bool,
+) -> WebsocketTestHarness {
     let provider = websocket_provider(server);
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model = Some(MODEL.to_string());
     config.features.enable(Feature::ResponsesWebsockets);
+    if runtime_metrics_enabled {
+        config.features.enable(Feature::RuntimeMetrics);
+    }
     let config = Arc::new(config);
     let model_info = ModelsManager::construct_model_info_offline(MODEL, &config);
     let conversation_id = ThreadId::new();
