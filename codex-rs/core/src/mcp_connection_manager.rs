@@ -1009,7 +1009,7 @@ async fn list_tools_for_client(
 fn read_cached_codex_apps_tools() -> Option<Vec<ToolInfo>> {
     let mut cache_guard = CODEX_APPS_TOOLS_CACHE
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let now = Instant::now();
 
     if let Some(cached) = cache_guard.as_ref()
@@ -1025,7 +1025,7 @@ fn read_cached_codex_apps_tools() -> Option<Vec<ToolInfo>> {
 fn write_cached_codex_apps_tools(tools: &[ToolInfo]) {
     let mut cache_guard = CODEX_APPS_TOOLS_CACHE
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     *cache_guard = Some(CachedCodexAppsTools {
         expires_at: Instant::now() + CODEX_APPS_TOOLS_CACHE_TTL,
         tools: tools.to_vec(),
