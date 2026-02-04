@@ -11,7 +11,6 @@ use codex_core::config::Config;
 use codex_core::secrets::SecretName;
 use codex_core::secrets::SecretScope;
 use codex_core::secrets::SecretsManager;
-use codex_core::secrets::environment_id_from_cwd;
 use crossterm::event::Event;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyModifiers;
@@ -41,7 +40,7 @@ pub enum SecretsSubcommand {
 
 #[derive(Debug, Parser)]
 pub struct SecretsScopeArgs {
-    /// Use the global scope instead of the current environment scope.
+    /// Use the global scope (default).
     #[arg(long, default_value_t = false, conflicts_with = "environment_id")]
     pub global: bool,
 
@@ -96,10 +95,10 @@ impl SecretsCli {
         let config = load_config(self.config_overrides).await?;
         let manager = SecretsManager::new(config.codex_home.clone(), config.secrets_backend);
         match self.subcommand {
-            SecretsSubcommand::Set(args) => run_set(&config, &manager, args),
-            SecretsSubcommand::Edit(args) => run_edit(&config, &manager, args),
-            SecretsSubcommand::List(args) => run_list(&config, &manager, args),
-            SecretsSubcommand::Delete(args) => run_delete(&config, &manager, args),
+            SecretsSubcommand::Set(args) => run_set(&manager, args),
+            SecretsSubcommand::Edit(args) => run_edit(&manager, args),
+            SecretsSubcommand::List(args) => run_list(&manager, args),
+            SecretsSubcommand::Delete(args) => run_delete(&manager, args),
         }
     }
 }
@@ -113,18 +112,18 @@ async fn load_config(cli_config_overrides: CliConfigOverrides) -> Result<Config>
         .context("failed to load configuration")
 }
 
-fn run_set(config: &Config, manager: &SecretsManager, args: SecretsSetArgs) -> Result<()> {
+fn run_set(manager: &SecretsManager, args: SecretsSetArgs) -> Result<()> {
     let name = SecretName::new(&args.name)?;
-    let scope = resolve_scope(config, &args.scope)?;
+    let scope = resolve_scope(&args.scope)?;
     let value = resolve_value(&args.name, args.value)?;
     manager.set(&scope, &name, &value)?;
     println!("Stored {name} in {}.", scope_label(&scope));
     Ok(())
 }
 
-fn run_edit(config: &Config, manager: &SecretsManager, args: SecretsEditArgs) -> Result<()> {
+fn run_edit(manager: &SecretsManager, args: SecretsEditArgs) -> Result<()> {
     let name = SecretName::new(&args.name)?;
-    let scope = resolve_scope(config, &args.scope)?;
+    let scope = resolve_scope(&args.scope)?;
     let exists = manager.get(&scope, &name)?.is_some();
     if !exists {
         bail!(
@@ -138,19 +137,15 @@ fn run_edit(config: &Config, manager: &SecretsManager, args: SecretsEditArgs) ->
     Ok(())
 }
 
-fn run_list(config: &Config, manager: &SecretsManager, args: SecretsListArgs) -> Result<()> {
-    let default_scope = default_environment_scope(config)?;
+fn run_list(manager: &SecretsManager, args: SecretsListArgs) -> Result<()> {
     let scope_filter = match (args.scope.global, args.scope.environment_id.as_deref()) {
-        (true, _) => Some(SecretScope::Global),
-        (false, Some(env_id)) => Some(SecretScope::environment(env_id.to_string())?),
-        (false, None) => None,
+        (true, _) => SecretScope::Global,
+        (false, Some(env_id)) => SecretScope::environment(env_id.to_string())?,
+        (false, None) => SecretScope::Global,
     };
 
     let mut entries = manager.list(None)?;
-    entries.retain(|entry| match scope_filter.as_ref() {
-        Some(scope) => &entry.scope == scope,
-        None => entry.scope == SecretScope::Global || entry.scope == default_scope,
-    });
+    entries.retain(|entry| entry.scope == scope_filter);
 
     entries.sort_by(|a, b| {
         scope_label(&a.scope)
@@ -170,9 +165,9 @@ fn run_list(config: &Config, manager: &SecretsManager, args: SecretsListArgs) ->
     Ok(())
 }
 
-fn run_delete(config: &Config, manager: &SecretsManager, args: SecretsDeleteArgs) -> Result<()> {
+fn run_delete(manager: &SecretsManager, args: SecretsDeleteArgs) -> Result<()> {
     let name = SecretName::new(&args.name)?;
-    let scope = resolve_scope(config, &args.scope)?;
+    let scope = resolve_scope(&args.scope)?;
     let removed = manager.delete(&scope, &name)?;
     if removed {
         println!("Deleted {name} from {}.", scope_label(&scope));
@@ -182,19 +177,14 @@ fn run_delete(config: &Config, manager: &SecretsManager, args: SecretsDeleteArgs
     Ok(())
 }
 
-fn resolve_scope(config: &Config, scope_args: &SecretsScopeArgs) -> Result<SecretScope> {
+fn resolve_scope(scope_args: &SecretsScopeArgs) -> Result<SecretScope> {
     if scope_args.global {
         return Ok(SecretScope::Global);
     }
     if let Some(env_id) = scope_args.environment_id.as_deref() {
         return SecretScope::environment(env_id.to_string());
     }
-    default_environment_scope(config)
-}
-
-fn default_environment_scope(config: &Config) -> Result<SecretScope> {
-    let environment_id = environment_id_from_cwd(&config.cwd);
-    SecretScope::environment(environment_id)
+    Ok(SecretScope::Global)
 }
 
 fn resolve_value(display_name: &str, explicit: Option<String>) -> Result<String> {
@@ -321,7 +311,6 @@ mod tests {
         manager.set(&scope, &name, "before")?;
 
         run_edit(
-            &config,
             &manager,
             SecretsEditArgs {
                 name: "TEST_SECRET".to_string(),
@@ -350,7 +339,6 @@ mod tests {
         );
 
         let err = run_edit(
-            &config,
             &manager,
             SecretsEditArgs {
                 name: "TEST_SECRET".to_string(),
@@ -366,6 +354,17 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("No secret named TEST_SECRET found in global."));
         assert!(message.contains("codex secrets set TEST_SECRET"));
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_scope_defaults_to_global() -> Result<()> {
+        let scope = resolve_scope(&SecretsScopeArgs {
+            global: false,
+            environment_id: None,
+        })?;
+
+        assert_eq!(scope, SecretScope::Global);
         Ok(())
     }
 }
