@@ -181,7 +181,11 @@ pub(super) fn render_device_code_login(
         lines.push("".into());
     }
 
-    lines.push("  Press Esc to cancel".dim().into());
+    lines.push(Line::from(vec![
+        "  Press ".dim(),
+        widget.cancel_binding().into(),
+        " to cancel".dim(),
+    ]));
     Paragraph::new(lines)
         .wrap(Wrap { trim: false })
         .render(area, buf);

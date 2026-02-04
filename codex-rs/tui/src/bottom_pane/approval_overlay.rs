@@ -1,3 +1,16 @@
+//! Approval modal rendering and decision routing for high-risk operations.
+//!
+//! This module converts agent approval requests (exec/apply-patch/MCP
+//! elicitation) into a list-selection view with action-specific options and
+//! shortcuts. It owns two important contracts:
+//!
+//! 1. Selection always emits an explicit decision event back to the app.
+//! 2. MCP elicitation keeps `Esc` mapped to `Cancel`, even with custom
+//!    keybindings, so dismissal never silently becomes "continue without info".
+//!
+//! This module does not evaluate whether an action is safe to run; it only
+//! presents choices and routes user decisions.
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -13,6 +26,9 @@ use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
+use crate::key_hint::KeyBindingListExt;
+use crate::keymap::ApprovalKeymap;
+use crate::keymap::ListKeymap;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
@@ -27,7 +43,6 @@ use codex_protocol::mcp::RequestId;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
-use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
@@ -70,20 +85,30 @@ pub(crate) struct ApprovalOverlay {
     current_complete: bool,
     done: bool,
     features: Features,
+    approval_keymap: ApprovalKeymap,
+    list_keymap: ListKeymap,
 }
 
 impl ApprovalOverlay {
-    pub fn new(request: ApprovalRequest, app_event_tx: AppEventSender, features: Features) -> Self {
+    pub fn new(
+        request: ApprovalRequest,
+        app_event_tx: AppEventSender,
+        features: Features,
+        approval_keymap: ApprovalKeymap,
+        list_keymap: ListKeymap,
+    ) -> Self {
         let mut view = Self {
             current_request: None,
             current_variant: None,
             queue: Vec::new(),
             app_event_tx: app_event_tx.clone(),
-            list: ListSelectionView::new(Default::default(), app_event_tx),
+            list: ListSelectionView::new(Default::default(), app_event_tx, list_keymap.clone()),
             options: Vec::new(),
             current_complete: false,
             done: false,
             features,
+            approval_keymap,
+            list_keymap,
         };
         view.set_current(request);
         view
@@ -98,15 +123,18 @@ impl ApprovalOverlay {
         let ApprovalRequestState { variant, header } = ApprovalRequestState::from(request);
         self.current_variant = Some(variant.clone());
         self.current_complete = false;
-        let (options, params) = Self::build_options(variant, header, &self.features);
+        let (options, params) =
+            Self::build_options(variant, header, &self.features, &self.approval_keymap);
         self.options = options;
-        self.list = ListSelectionView::new(params, self.app_event_tx.clone());
+        self.list =
+            ListSelectionView::new(params, self.app_event_tx.clone(), self.list_keymap.clone());
     }
 
     fn build_options(
         variant: ApprovalVariant,
         header: Box<dyn Renderable>,
-        _features: &Features,
+        features: &Features,
+        approval_keymap: &ApprovalKeymap,
     ) -> (Vec<ApprovalOption>, SelectionViewParams) {
         let (options, title) = match &variant {
             ApprovalVariant::Exec {
@@ -117,6 +145,8 @@ impl ApprovalOverlay {
                 exec_options(
                     proposed_execpolicy_amendment.clone(),
                     network_approval_context.as_ref(),
+                    features,
+                    approval_keymap,
                 ),
                 network_approval_context.as_ref().map_or_else(
                     || "Would you like to run the following command?".to_string(),
@@ -129,11 +159,11 @@ impl ApprovalOverlay {
                 ),
             ),
             ApprovalVariant::ApplyPatch { .. } => (
-                patch_options(),
+                patch_options(approval_keymap),
                 "Would you like to make the following edits?".to_string(),
             ),
             ApprovalVariant::McpElicitation { server_name, .. } => (
-                elicitation_options(),
+                elicitation_options(approval_keymap),
                 format!("{server_name} needs your approval."),
             ),
         };
@@ -148,9 +178,7 @@ impl ApprovalOverlay {
             .iter()
             .map(|opt| SelectionItem {
                 name: opt.label.clone(),
-                display_shortcut: opt
-                    .display_shortcut
-                    .or_else(|| opt.additional_shortcuts.first().copied()),
+                display_shortcut: opt.shortcuts.first().copied(),
                 dismiss_on_select: false,
                 ..Default::default()
             })
@@ -243,34 +271,29 @@ impl ApprovalOverlay {
         }
     }
 
+    /// Apply approval-specific shortcuts before delegating to list navigation.
+    ///
+    /// `open_fullscreen` is handled here because it is orthogonal to list item
+    /// selection and should work regardless of current highlighted row.
     fn try_handle_shortcut(&mut self, key_event: &KeyEvent) -> bool {
-        match key_event {
-            KeyEvent {
-                kind: KeyEventKind::Press,
-                code: KeyCode::Char('a'),
-                modifiers,
-                ..
-            } if modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(request) = self.current_request.as_ref() {
-                    self.app_event_tx
-                        .send(AppEvent::FullScreenApprovalRequest(request.clone()));
-                    true
-                } else {
-                    false
-                }
-            }
-            e => {
-                if let Some(idx) = self
-                    .options
-                    .iter()
-                    .position(|opt| opt.shortcuts().any(|s| s.is_press(*e)))
-                {
-                    self.apply_selection(idx);
-                    true
-                } else {
-                    false
-                }
-            }
+        if key_event.kind == KeyEventKind::Press
+            && self.approval_keymap.open_fullscreen.is_pressed(*key_event)
+            && let Some(request) = self.current_request.as_ref()
+        {
+            self.app_event_tx
+                .send(AppEvent::FullScreenApprovalRequest(request.clone()));
+            return true;
+        }
+
+        if let Some(idx) = self
+            .options
+            .iter()
+            .position(|opt| opt.shortcuts.iter().any(|s| s.is_press(*key_event)))
+        {
+            self.apply_selection(idx);
+            true
+        } else {
+            false
         }
     }
 }
@@ -452,41 +475,31 @@ enum ApprovalDecision {
 struct ApprovalOption {
     label: String,
     decision: ApprovalDecision,
-    display_shortcut: Option<KeyBinding>,
-    additional_shortcuts: Vec<KeyBinding>,
-}
-
-impl ApprovalOption {
-    fn shortcuts(&self) -> impl Iterator<Item = KeyBinding> + '_ {
-        self.display_shortcut
-            .into_iter()
-            .chain(self.additional_shortcuts.iter().copied())
-    }
+    shortcuts: Vec<KeyBinding>,
 }
 
 fn exec_options(
     proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     network_approval_context: Option<&NetworkApprovalContext>,
+    _features: &Features,
+    keymap: &ApprovalKeymap,
 ) -> Vec<ApprovalOption> {
     if network_approval_context.is_some() {
         return vec![
             ApprovalOption {
                 label: "Yes, just this once".to_string(),
                 decision: ApprovalDecision::Review(ReviewDecision::Approved),
-                display_shortcut: None,
-                additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
+                shortcuts: keymap.approve.clone(),
             },
             ApprovalOption {
                 label: "Yes, and allow this host for this session".to_string(),
                 decision: ApprovalDecision::Review(ReviewDecision::ApprovedForSession),
-                display_shortcut: None,
-                additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
+                shortcuts: keymap.approve_for_session.clone(),
             },
             ApprovalOption {
                 label: "No, and tell Codex what to do differently".to_string(),
                 decision: ApprovalDecision::Review(ReviewDecision::Abort),
-                display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
-                additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
+                shortcuts: keymap.decline.clone(),
             },
         ];
     }
@@ -494,8 +507,7 @@ fn exec_options(
     vec![ApprovalOption {
         label: "Yes, proceed".to_string(),
         decision: ApprovalDecision::Review(ReviewDecision::Approved),
-        display_shortcut: None,
-        additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
+        shortcuts: keymap.approve.clone(),
     }]
     .into_iter()
     .chain(proposed_execpolicy_amendment.and_then(|prefix| {
@@ -511,61 +523,74 @@ fn exec_options(
             decision: ApprovalDecision::Review(ReviewDecision::ApprovedExecpolicyAmendment {
                 proposed_execpolicy_amendment: prefix,
             }),
-            display_shortcut: None,
-            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('p'))],
+            shortcuts: keymap.approve_for_prefix.clone(),
         })
     }))
     .chain([ApprovalOption {
         label: "No, and tell Codex what to do differently".to_string(),
         decision: ApprovalDecision::Review(ReviewDecision::Abort),
-        display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
-        additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
+        shortcuts: keymap.decline.clone(),
     }])
     .collect()
 }
 
-fn patch_options() -> Vec<ApprovalOption> {
+fn patch_options(keymap: &ApprovalKeymap) -> Vec<ApprovalOption> {
     vec![
         ApprovalOption {
             label: "Yes, proceed".to_string(),
             decision: ApprovalDecision::Review(ReviewDecision::Approved),
-            display_shortcut: None,
-            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
+            shortcuts: keymap.approve.clone(),
         },
         ApprovalOption {
             label: "Yes, and don't ask again for these files".to_string(),
             decision: ApprovalDecision::Review(ReviewDecision::ApprovedForSession),
-            display_shortcut: None,
-            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
+            shortcuts: keymap.approve_for_session.clone(),
         },
         ApprovalOption {
             label: "No, and tell Codex what to do differently".to_string(),
             decision: ApprovalDecision::Review(ReviewDecision::Abort),
-            display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
-            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
+            shortcuts: keymap.decline.clone(),
         },
     ]
 }
 
-fn elicitation_options() -> Vec<ApprovalOption> {
+/// Build MCP elicitation options with stable cancellation semantics.
+///
+/// `Esc` is always treated as cancel for elicitation prompts, even if users
+/// customize `decline`/`cancel` bindings. We keep this as a hard contract so
+/// dismissal remains a safe abort path and never silently maps to "continue
+/// without requested info." Any decline/cancel overlap is removed from the
+/// decline option in elicitation mode to preserve this invariant.
+fn elicitation_options(keymap: &ApprovalKeymap) -> Vec<ApprovalOption> {
+    let mut cancel_shortcuts = vec![key_hint::plain(KeyCode::Esc)];
+    for shortcut in &keymap.cancel {
+        if !cancel_shortcuts.contains(shortcut) {
+            cancel_shortcuts.push(*shortcut);
+        }
+    }
+
+    let decline_shortcuts: Vec<KeyBinding> = keymap
+        .decline
+        .iter()
+        .copied()
+        .filter(|shortcut| !cancel_shortcuts.contains(shortcut))
+        .collect();
+
     vec![
         ApprovalOption {
             label: "Yes, provide the requested info".to_string(),
             decision: ApprovalDecision::McpElicitation(ElicitationAction::Accept),
-            display_shortcut: None,
-            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
+            shortcuts: keymap.approve.clone(),
         },
         ApprovalOption {
             label: "No, but continue without it".to_string(),
             decision: ApprovalDecision::McpElicitation(ElicitationAction::Decline),
-            display_shortcut: None,
-            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
+            shortcuts: decline_shortcuts,
         },
         ApprovalOption {
             label: "Cancel this request".to_string(),
             decision: ApprovalDecision::McpElicitation(ElicitationAction::Cancel),
-            display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
-            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('c'))],
+            shortcuts: cancel_shortcuts,
         },
     ]
 }
@@ -575,8 +600,40 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use codex_core::protocol::NetworkApprovalProtocol;
+    use crossterm::event::KeyModifiers;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
+
+    fn make_overlay(
+        request: ApprovalRequest,
+        app_event_tx: AppEventSender,
+        features: Features,
+    ) -> ApprovalOverlay {
+        let keymap = crate::keymap::RuntimeKeymap::defaults();
+        make_overlay_with_keymap(
+            request,
+            app_event_tx,
+            features,
+            keymap.approval,
+            keymap.list,
+        )
+    }
+
+    fn make_overlay_with_keymap(
+        request: ApprovalRequest,
+        app_event_tx: AppEventSender,
+        features: Features,
+        approval_keymap: ApprovalKeymap,
+        list_keymap: ListKeymap,
+    ) -> ApprovalOverlay {
+        ApprovalOverlay::new(
+            request,
+            app_event_tx,
+            features,
+            approval_keymap,
+            list_keymap,
+        )
+    }
 
     fn make_exec_request() -> ApprovalRequest {
         ApprovalRequest::Exec {
@@ -588,11 +645,19 @@ mod tests {
         }
     }
 
+    fn make_elicitation_request() -> ApprovalRequest {
+        ApprovalRequest::McpElicitation {
+            server_name: "test-server".to_string(),
+            request_id: RequestId::String("request-1".to_string()),
+            message: "Need more information".to_string(),
+        }
+    }
+
     #[test]
     fn ctrl_c_aborts_and_clears_queue() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
-        let mut view = ApprovalOverlay::new(make_exec_request(), tx, Features::with_defaults());
+        let mut view = make_overlay(make_exec_request(), tx, Features::with_defaults());
         view.enqueue_request(make_exec_request());
         assert_eq!(CancellationEvent::Handled, view.on_ctrl_c());
         assert!(view.queue.is_empty());
@@ -603,7 +668,7 @@ mod tests {
     fn shortcut_triggers_selection() {
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
-        let mut view = ApprovalOverlay::new(make_exec_request(), tx, Features::with_defaults());
+        let mut view = make_overlay(make_exec_request(), tx, Features::with_defaults());
         assert!(!view.is_complete());
         view.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
         // We expect at least one CodexOp message in the queue.
@@ -621,7 +686,7 @@ mod tests {
     fn exec_prefix_option_emits_execpolicy_amendment() {
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
-        let mut view = ApprovalOverlay::new(
+        let mut view = make_overlay(
             ApprovalRequest::Exec {
                 id: "test".to_string(),
                 command: vec!["echo".to_string()],
@@ -669,7 +734,7 @@ mod tests {
             proposed_execpolicy_amendment: None,
         };
 
-        let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
+        let view = make_overlay(exec_request, tx, Features::with_defaults());
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, view.desired_height(80)));
         view.render(Rect::new(0, 0, 80, view.desired_height(80)), &mut buf);
 
@@ -694,9 +759,12 @@ mod tests {
             host: "example.com".to_string(),
             protocol: NetworkApprovalProtocol::Https,
         };
+        let keymap = crate::keymap::RuntimeKeymap::defaults();
         let options = exec_options(
             Some(ExecPolicyAmendment::new(vec!["curl".to_string()])),
             Some(&network_context),
+            &Features::with_defaults(),
+            &keymap.approval,
         );
 
         let labels: Vec<String> = options.into_iter().map(|option| option.label).collect();
@@ -725,7 +793,7 @@ mod tests {
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec!["curl".into()])),
         };
 
-        let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
+        let view = make_overlay(exec_request, tx, Features::with_defaults());
         let mut buf = Buffer::empty(Rect::new(0, 0, 100, view.desired_height(100)));
         view.render(Rect::new(0, 0, 100, view.desired_height(100)), &mut buf);
 
@@ -747,6 +815,27 @@ mod tests {
             !rendered.iter().any(|line| line.contains("don't ask again")),
             "network prompt should not show execpolicy option, got {rendered:?}"
         );
+    }
+
+    #[test]
+    fn ctrl_shift_a_opens_fullscreen() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_overlay(make_exec_request(), tx, Features::with_defaults());
+
+        view.handle_key_event(KeyEvent::new(
+            KeyCode::Char('a'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ));
+
+        let mut saw_fullscreen = false;
+        while let Ok(ev) = rx.try_recv() {
+            if matches!(ev, AppEvent::FullScreenApprovalRequest(_)) {
+                saw_fullscreen = true;
+                break;
+            }
+        }
+        assert!(saw_fullscreen, "expected ctrl+shift+a to open fullscreen");
     }
 
     #[test]
@@ -777,10 +866,84 @@ mod tests {
     }
 
     #[test]
+    fn esc_cancels_mcp_elicitation() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_overlay(make_elicitation_request(), tx, Features::with_defaults());
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        let mut decision = None;
+        while let Ok(ev) = rx.try_recv() {
+            if let AppEvent::CodexOp(Op::ResolveElicitation { decision: d, .. }) = ev {
+                decision = Some(d);
+                break;
+            }
+        }
+        assert_eq!(decision, Some(ElicitationAction::Cancel));
+    }
+
+    #[test]
+    fn esc_still_cancels_elicitation_with_custom_overlap() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut keymap = crate::keymap::RuntimeKeymap::defaults();
+        keymap.approval.decline = vec![
+            key_hint::plain(KeyCode::Esc),
+            key_hint::plain(KeyCode::Char('n')),
+        ];
+        keymap.approval.cancel = vec![key_hint::plain(KeyCode::Char('x'))];
+
+        let mut view = make_overlay_with_keymap(
+            make_elicitation_request(),
+            tx,
+            Features::with_defaults(),
+            keymap.approval,
+            keymap.list,
+        );
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let mut esc_decision = None;
+        while let Ok(ev) = rx.try_recv() {
+            if let AppEvent::CodexOp(Op::ResolveElicitation { decision, .. }) = ev {
+                esc_decision = Some(decision);
+                break;
+            }
+        }
+        assert_eq!(esc_decision, Some(ElicitationAction::Cancel));
+
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut keymap = crate::keymap::RuntimeKeymap::defaults();
+        keymap.approval.decline = vec![
+            key_hint::plain(KeyCode::Esc),
+            key_hint::plain(KeyCode::Char('n')),
+        ];
+        keymap.approval.cancel = vec![key_hint::plain(KeyCode::Char('x'))];
+
+        let mut view = make_overlay_with_keymap(
+            make_elicitation_request(),
+            tx,
+            Features::with_defaults(),
+            keymap.approval,
+            keymap.list,
+        );
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+        let mut n_decision = None;
+        while let Ok(ev) = rx.try_recv() {
+            if let AppEvent::CodexOp(Op::ResolveElicitation { decision, .. }) = ev {
+                n_decision = Some(decision);
+                break;
+            }
+        }
+        assert_eq!(n_decision, Some(ElicitationAction::Decline));
+    }
+
+    #[test]
     fn enter_sets_last_selected_index_without_dismissing() {
         let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let mut view = ApprovalOverlay::new(make_exec_request(), tx, Features::with_defaults());
+        let mut view = make_overlay(make_exec_request(), tx, Features::with_defaults());
         view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         assert!(

@@ -20,6 +20,7 @@ In the codex-rs folder where the rust code lives:
 - After dependency changes, run `just bazel-lock-check` from the repo root so lockfile drift is caught
   locally before CI.
 - Do not create small helper methods that are referenced only once.
+- For TUI keybind changes, do not mutate old preset defaults; add a new preset version, keep `latest` as an explicit pointer (currently to `v1`), and update `docs/default-keymap.toml` plus `docs/config.md` with migration notes (`TODO(docs): mirror this on developers.openai.com`).
 
 Run `just fmt` (in `codex-rs` directory) automatically after you have finished making Rust code changes; do not ask for approval to run it. Additionally, run the tests:
 

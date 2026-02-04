@@ -199,6 +199,7 @@ use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::WebSearchCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
+use crate::keymap::RuntimeKeymap;
 use crate::markdown::append_markdown;
 use crate::multi_agents;
 use crate::render::Insets;
@@ -2690,6 +2691,9 @@ impl ChatWidget {
         };
 
         widget.prefetch_rate_limits();
+        if let Ok(keymap) = RuntimeKeymap::from_config(&widget.config.tui_keymap) {
+            widget.bottom_pane.set_keymap_bindings(&keymap);
+        }
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
@@ -2853,6 +2857,9 @@ impl ChatWidget {
         };
 
         widget.prefetch_rate_limits();
+        if let Ok(keymap) = RuntimeKeymap::from_config(&widget.config.tui_keymap) {
+            widget.bottom_pane.set_keymap_bindings(&keymap);
+        }
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
@@ -3005,6 +3012,9 @@ impl ChatWidget {
         };
 
         widget.prefetch_rate_limits();
+        if let Ok(keymap) = RuntimeKeymap::from_config(&widget.config.tui_keymap) {
+            widget.bottom_pane.set_keymap_bindings(&keymap);
+        }
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));

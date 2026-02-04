@@ -1,3 +1,15 @@
+//! Onboarding screen orchestration and top-level keyboard routing.
+//!
+//! The onboarding flow is a small state machine over visible steps
+//! (welcome/auth/trust). This module decides which step receives key/paste
+//! events and enforces flow-level safety rules that cut across individual step
+//! widgets.
+//!
+//! In particular, onboarding quit handling has a text-entry guard for API-key
+//! input: printable quit bindings are treated as text input while the user is
+//! editing a non-empty API-key field, while control/alt chords remain available
+//! as explicit exit shortcuts.
+
 use codex_core::AuthManager;
 use codex_core::config::Config;
 #[cfg(target_os = "windows")]
@@ -7,6 +19,7 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::Widget;
@@ -17,6 +30,9 @@ use ratatui::widgets::WidgetRef;
 use codex_protocol::config_types::ForcedLoginMethod;
 
 use crate::LoginStatus;
+use crate::key_hint::KeyBindingListExt;
+use crate::keymap::OnboardingKeymap;
+use crate::keymap::RuntimeKeymap;
 use crate::onboarding::auth::AuthModeWidget;
 use crate::onboarding::auth::SignInOption;
 use crate::onboarding::auth::SignInState;
@@ -56,6 +72,7 @@ pub(crate) trait StepStateProvider {
 pub(crate) struct OnboardingScreen {
     request_frame: FrameRequester,
     steps: Vec<Step>,
+    onboarding_keymap: OnboardingKeymap,
     is_done: bool,
     should_exit: bool,
 }
@@ -73,6 +90,14 @@ pub(crate) struct OnboardingResult {
     pub should_exit: bool,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct ApiKeyEntryContext {
+    /// True when onboarding is currently rendering the API-key entry state.
+    active: bool,
+    /// True when the API-key input field currently contains user text.
+    has_text: bool,
+}
+
 impl OnboardingScreen {
     pub(crate) fn new(tui: &mut Tui, args: OnboardingScreenArgs) -> Self {
         let OnboardingScreenArgs {
@@ -87,11 +112,22 @@ impl OnboardingScreen {
         let forced_login_method = config.forced_login_method;
         let codex_home = config.codex_home.clone();
         let cli_auth_credentials_store_mode = config.cli_auth_credentials_store_mode;
+        let runtime_keymap = RuntimeKeymap::from_config(&config.tui_keymap).unwrap_or_else(|err| {
+            tracing::warn!(
+                "Invalid `tui.keymap` configuration during onboarding: {err}. \
+Falling back to default onboarding keymap values. \
+Fix `~/.codex/config.toml`.\n\
+Keymap template: https://github.com/openai/codex/blob/main/docs/default-keymap.toml"
+            );
+            RuntimeKeymap::defaults()
+        });
+        let onboarding_keymap = runtime_keymap.onboarding;
         let mut steps: Vec<Step> = Vec::new();
         steps.push(Step::Welcome(WelcomeWidget::new(
             !matches!(login_status, LoginStatus::NotAuthenticated),
             tui.frame_requester(),
             config.animations,
+            onboarding_keymap.clone(),
         )));
         if show_login_screen {
             let highlighted_mode = match forced_login_method {
@@ -110,6 +146,7 @@ impl OnboardingScreen {
                 forced_chatgpt_workspace_id,
                 forced_login_method,
                 animations_enabled: config.animations,
+                onboarding_keymap: onboarding_keymap.clone(),
             }))
         }
         #[cfg(target_os = "windows")]
@@ -127,12 +164,14 @@ impl OnboardingScreen {
                 selection: None,
                 highlighted,
                 error: None,
+                onboarding_keymap: onboarding_keymap.clone(),
             }))
         }
         // TODO: add git warning.
         Self {
             request_frame: tui.frame_requester(),
             steps,
+            onboarding_keymap,
             is_done: false,
             should_exit: false,
         }
@@ -199,45 +238,39 @@ impl OnboardingScreen {
         self.should_exit
     }
 
-    fn is_api_key_entry_active(&self) -> bool {
-        self.steps.iter().any(|step| {
-            if let Step::Auth(widget) = step {
-                return widget
-                    .sign_in_state
-                    .read()
-                    .is_ok_and(|g| matches!(&*g, SignInState::ApiKeyEntry(_)));
-            }
-            false
-        })
+    fn api_key_entry_context(&self) -> ApiKeyEntryContext {
+        self.steps
+            .iter()
+            .find_map(|step| {
+                if let Step::Auth(widget) = step {
+                    Some(ApiKeyEntryContext {
+                        active: widget.is_api_key_entry_active(),
+                        has_text: widget.api_key_entry_has_text(),
+                    })
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default()
     }
 }
 
 impl KeyboardHandler for OnboardingScreen {
+    /// Route key events to onboarding steps while preserving text-entry safety.
+    ///
+    /// In API-key entry mode, printable quit bindings are suppressed only after
+    /// the user has started typing in the API-key field. This keeps custom
+    /// printable quit keys usable on an empty field while protecting in-progress
+    /// text entry from accidental exits. Control/alt quit chords still work as
+    /// emergency exits.
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         if !matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
             return;
         }
-        let is_api_key_entry_active = self.is_api_key_entry_active();
-        let should_quit = match key_event {
-            KeyEvent {
-                code: KeyCode::Char('d'),
-                modifiers: crossterm::event::KeyModifiers::CONTROL,
-                kind: KeyEventKind::Press,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('c'),
-                modifiers: crossterm::event::KeyModifiers::CONTROL,
-                kind: KeyEventKind::Press,
-                ..
-            } => true,
-            KeyEvent {
-                code: KeyCode::Char('q'),
-                kind: KeyEventKind::Press,
-                ..
-            } => !is_api_key_entry_active,
-            _ => false,
-        };
+        let api_key_entry_context = self.api_key_entry_context();
+        let should_quit = key_event.kind == KeyEventKind::Press
+            && self.onboarding_keymap.quit.is_pressed(key_event)
+            && !suppress_quit_while_typing_api_key(key_event, api_key_entry_context);
         if should_quit {
             if self.is_auth_in_progress() {
                 // If the user cancels the auth menu, exit the app rather than
@@ -280,6 +313,24 @@ impl KeyboardHandler for OnboardingScreen {
         }
         self.request_frame.schedule_frame();
     }
+}
+
+/// Returns `true` when a quit shortcut should be ignored as text input.
+///
+/// This only applies while API-key entry is active and the key is a printable
+/// character without control/alt modifiers and there is already text in the
+/// input field. Empty input intentionally does not trigger suppression so
+/// printable custom quit bindings can still exit onboarding.
+fn suppress_quit_while_typing_api_key(
+    key_event: KeyEvent,
+    api_key_entry_context: ApiKeyEntryContext,
+) -> bool {
+    api_key_entry_context.active
+        && api_key_entry_context.has_text
+        && matches!(key_event.code, KeyCode::Char(_))
+        && !key_event
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
 }
 
 impl WidgetRef for &OnboardingScreen {
@@ -460,4 +511,61 @@ pub(crate) async fn run_onboarding_app(
         directory_trust_decision: onboarding_screen.directory_trust_decision(),
         should_exit: onboarding_screen.should_exit(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ApiKeyEntryContext;
+    use super::suppress_quit_while_typing_api_key;
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyEvent;
+    use crossterm::event::KeyModifiers;
+
+    #[test]
+    fn suppresses_printable_custom_quit_key_during_api_key_entry() {
+        let suppressed = suppress_quit_while_typing_api_key(
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+            ApiKeyEntryContext {
+                active: true,
+                has_text: true,
+            },
+        );
+        assert!(suppressed);
+    }
+
+    #[test]
+    fn does_not_suppress_printable_quit_key_when_api_key_input_is_empty() {
+        let suppressed = suppress_quit_while_typing_api_key(
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+            ApiKeyEntryContext {
+                active: true,
+                has_text: false,
+            },
+        );
+        assert!(!suppressed);
+    }
+
+    #[test]
+    fn does_not_suppress_control_quit_key_during_api_key_entry() {
+        let suppressed = suppress_quit_while_typing_api_key(
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+            ApiKeyEntryContext {
+                active: true,
+                has_text: true,
+            },
+        );
+        assert!(!suppressed);
+    }
+
+    #[test]
+    fn does_not_suppress_when_not_in_api_key_entry() {
+        let suppressed = suppress_quit_while_typing_api_key(
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+            ApiKeyEntryContext {
+                active: false,
+                has_text: true,
+            },
+        );
+        assert!(!suppressed);
+    }
 }

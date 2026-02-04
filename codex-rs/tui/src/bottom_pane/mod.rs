@@ -21,6 +21,7 @@ use crate::bottom_pane::queued_user_messages::QueuedUserMessages;
 use crate::bottom_pane::unified_exec_footer::UnifiedExecFooter;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
+use crate::keymap::RuntimeKeymap;
 use crate::render::renderable::FlexRenderable;
 use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableItem;
@@ -168,6 +169,7 @@ pub(crate) struct BottomPane {
     queued_user_messages: QueuedUserMessages,
     context_window_percent: Option<i64>,
     context_window_used_tokens: Option<i64>,
+    keymap: RuntimeKeymap,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -200,6 +202,8 @@ impl BottomPane {
             placeholder_text,
             disable_paste_burst,
         );
+        let keymap = RuntimeKeymap::defaults();
+        composer.set_keymap_bindings(&keymap);
         composer.set_skill_mentions(skills);
 
         Self {
@@ -218,6 +222,7 @@ impl BottomPane {
             animations_enabled,
             context_window_percent: None,
             context_window_used_tokens: None,
+            keymap,
         }
     }
 
@@ -245,6 +250,12 @@ impl BottomPane {
 
     pub fn take_recent_submission_mention_bindings(&mut self) -> Vec<MentionBinding> {
         self.composer.take_recent_submission_mention_bindings()
+    }
+
+    pub fn set_keymap_bindings(&mut self, keymap: &RuntimeKeymap) {
+        self.keymap = keymap.clone();
+        self.composer.set_keymap_bindings(keymap);
+        self.request_redraw();
     }
 
     /// Clear pending attachments and mention bindings e.g. when a slash command doesn't submit text.
@@ -676,7 +687,11 @@ impl BottomPane {
 
     /// Show a generic list selection view with the provided items.
     pub(crate) fn show_selection_view(&mut self, params: list_selection_view::SelectionViewParams) {
-        let view = list_selection_view::ListSelectionView::new(params, self.app_event_tx.clone());
+        let view = list_selection_view::ListSelectionView::new(
+            params,
+            self.app_event_tx.clone(),
+            self.keymap.list.clone(),
+        );
         self.push_view(Box::new(view));
     }
 
@@ -695,7 +710,11 @@ impl BottomPane {
         }
 
         self.view_stack.pop();
-        let view = list_selection_view::ListSelectionView::new(params, self.app_event_tx.clone());
+        let view = list_selection_view::ListSelectionView::new(
+            params,
+            self.app_event_tx.clone(),
+            self.keymap.list.clone(),
+        );
         self.push_view(Box::new(view));
         true
     }
@@ -781,7 +800,13 @@ impl BottomPane {
         };
 
         // Otherwise create a new approval modal overlay.
-        let modal = ApprovalOverlay::new(request, self.app_event_tx.clone(), features.clone());
+        let modal = ApprovalOverlay::new(
+            request,
+            self.app_event_tx.clone(),
+            features.clone(),
+            self.keymap.approval.clone(),
+            self.keymap.list.clone(),
+        );
         self.pause_status_timer_for_modal();
         self.push_view(Box::new(modal));
     }
