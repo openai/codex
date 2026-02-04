@@ -78,6 +78,8 @@ struct Payload {
     version: u32,
     offline_username: String,
     online_username: String,
+    #[serde(default = "default_offline_block_rule_name")]
+    offline_block_rule_name: String,
     codex_home: PathBuf,
     command_cwd: PathBuf,
     read_roots: Vec<PathBuf>,
@@ -95,6 +97,10 @@ enum SetupMode {
     #[default]
     Full,
     ReadAclsOnly,
+}
+
+fn default_offline_block_rule_name() -> String {
+    "codex_sandbox_offline_block_outbound".to_string()
 }
 
 fn log_line(log: &mut File, msg: &str) -> Result<()> {
@@ -572,7 +578,11 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
     };
     let mut refresh_errors: Vec<String> = Vec::new();
     if !refresh_only {
-        let firewall_result = firewall::ensure_offline_outbound_block(&offline_sid_str, log);
+        let firewall_result = firewall::ensure_offline_outbound_block(
+            &offline_sid_str,
+            &payload.offline_block_rule_name,
+            log,
+        );
         if let Err(err) = firewall_result {
             if extract_setup_failure(&err).is_some() {
                 return Err(err);
