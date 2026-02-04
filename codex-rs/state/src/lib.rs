@@ -29,6 +29,9 @@ pub use model::ThreadMetadata;
 pub use model::ThreadMetadataBuilder;
 pub use model::ThreadsPage;
 pub use runtime::STATE_DB_FILENAME;
+pub use runtime::STATE_DB_VERSION;
+pub use runtime::state_db_filename;
+pub use runtime::state_db_path;
 
 /// Errors encountered during DB operations. Tags: [stage]
 pub const DB_ERROR_METRIC: &str = "codex.db.error";
