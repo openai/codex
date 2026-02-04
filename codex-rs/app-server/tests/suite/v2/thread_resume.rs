@@ -7,6 +7,7 @@ use app_test_support::to_response;
 use chrono::Utc;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadResumeParams;
@@ -16,9 +17,11 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
+use codex_core::protocol_config_types::ReasoningSummary;
 use codex_protocol::config_types::Personality;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
 use core_test_support::responses;
@@ -257,6 +260,184 @@ async fn thread_resume_with_overrides_defers_updated_at_until_turn_start() -> Re
 
     let after_turn_modified = std::fs::metadata(&rollout.rollout_file_path)?.modified()?;
     assert!(after_turn_modified > rollout.before_modified);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_resume_without_turn_context_falls_back_to_current_config_defaults() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let conversation_id = create_fake_rollout_with_text_elements(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Vec::new(),
+        Some("mock_provider"),
+        None,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: conversation_id,
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        model,
+        model_provider,
+        ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
+
+    assert_eq!(model, "gpt-5.2-codex");
+    assert_eq!(model_provider, "mock_provider");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_resume_defaults_to_last_turn_context_and_preserves_override_precedence()
+-> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.2-codex".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let resumed_cwd = codex_home.path().join("resume-overrides");
+    std::fs::create_dir_all(&resumed_cwd)?;
+
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "Set custom turn context".to_string(),
+                text_elements: Vec::new(),
+            }],
+            cwd: Some(resumed_cwd.clone()),
+            approval_policy: Some(codex_app_server_protocol::AskForApproval::OnRequest),
+            sandbox_policy: Some(SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![resumed_cwd.clone().try_into()?],
+                network_access: true,
+                exclude_tmpdir_env_var: true,
+                exclude_slash_tmp: true,
+            }),
+            model: Some("mock-model-override".to_string()),
+            effort: Some(ReasoningEffort::High),
+            summary: Some(ReasoningSummary::Detailed),
+            personality: Some(Personality::Friendly),
+            output_schema: None,
+            collaboration_mode: None,
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let resume = to_response::<ThreadResumeResponse>(resume_resp)?;
+    assert_eq!(resume.model, "mock-model-override");
+    assert_eq!(resume.model_provider, "mock_provider");
+    assert_eq!(resume.cwd, resumed_cwd);
+    assert_eq!(
+        resume.approval_policy,
+        codex_app_server_protocol::AskForApproval::OnRequest
+    );
+    assert_eq!(
+        resume.sandbox,
+        SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![resume.cwd.clone().try_into()?],
+            network_access: true,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        }
+    );
+    assert_eq!(resume.reasoning_effort, Some(ReasoningEffort::High));
+
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "No turn overrides".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let resume_override_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id,
+            model: Some("forced-model".to_string()),
+            approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
+            sandbox: Some(codex_app_server_protocol::SandboxMode::ReadOnly),
+            ..Default::default()
+        })
+        .await?;
+    let resume_override_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_override_id)),
+    )
+    .await??;
+    let resume_override = to_response::<ThreadResumeResponse>(resume_override_resp)?;
+    assert_eq!(resume_override.model, "forced-model");
+    assert_eq!(
+        resume_override.approval_policy,
+        codex_app_server_protocol::AskForApproval::Never
+    );
+    assert_eq!(resume_override.sandbox, SandboxPolicy::ReadOnly);
 
     Ok(())
 }
