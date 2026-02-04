@@ -344,7 +344,7 @@ impl Codex {
         // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.collaboration_mode
         // to avoid extracting these fields separately and constructing CollaborationMode here.
         let collaboration_mode = CollaborationMode {
-            mode: ModeKind::Custom,
+            mode: ModeKind::Default,
             settings: Settings {
                 model: model.clone(),
                 reasoning_effort: config.model_reasoning_effort,
@@ -2501,6 +2501,22 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::ListSkills { cwds, force_reload } => {
                 handlers::list_skills(&sess, sub.id.clone(), cwds, force_reload).await;
             }
+            Op::ListRemoteSkills => {
+                handlers::list_remote_skills(&sess, &config, sub.id.clone()).await;
+            }
+            Op::DownloadRemoteSkill {
+                hazelnut_id,
+                is_preload,
+            } => {
+                handlers::download_remote_skill(
+                    &sess,
+                    &config,
+                    sub.id.clone(),
+                    hazelnut_id,
+                    is_preload,
+                )
+                .await;
+            }
             Op::Undo => {
                 handlers::undo(&sess, sub.id.clone()).await;
             }
@@ -2567,9 +2583,12 @@ mod handlers {
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::ListCustomPromptsResponseEvent;
+    use codex_protocol::protocol::ListRemoteSkillsResponseEvent;
     use codex_protocol::protocol::ListSkillsResponseEvent;
     use codex_protocol::protocol::McpServerRefreshConfig;
     use codex_protocol::protocol::Op;
+    use codex_protocol::protocol::RemoteSkillDownloadedEvent;
+    use codex_protocol::protocol::RemoteSkillSummary;
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
     use codex_protocol::protocol::SkillsListEntry;
@@ -2635,7 +2654,7 @@ mod handlers {
             } => {
                 let collaboration_mode = collaboration_mode.or_else(|| {
                     Some(CollaborationMode {
-                        mode: ModeKind::Custom,
+                        mode: ModeKind::Default,
                         settings: Settings {
                             model: model.clone(),
                             reasoning_effort: effort,
@@ -2925,6 +2944,77 @@ mod handlers {
             msg: EventMsg::ListSkillsResponse(ListSkillsResponseEvent { skills }),
         };
         sess.send_event_raw(event).await;
+    }
+
+    pub async fn list_remote_skills(sess: &Session, config: &Arc<Config>, sub_id: String) {
+        let response = crate::skills::remote::list_remote_skills(config)
+            .await
+            .map(|skills| {
+                skills
+                    .into_iter()
+                    .map(|skill| RemoteSkillSummary {
+                        id: skill.id,
+                        name: skill.name,
+                        description: skill.description,
+                    })
+                    .collect::<Vec<_>>()
+            });
+
+        match response {
+            Ok(skills) => {
+                let event = Event {
+                    id: sub_id,
+                    msg: EventMsg::ListRemoteSkillsResponse(ListRemoteSkillsResponseEvent {
+                        skills,
+                    }),
+                };
+                sess.send_event_raw(event).await;
+            }
+            Err(err) => {
+                let event = Event {
+                    id: sub_id,
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: format!("failed to list remote skills: {err}"),
+                        codex_error_info: Some(CodexErrorInfo::Other),
+                    }),
+                };
+                sess.send_event_raw(event).await;
+            }
+        }
+    }
+
+    pub async fn download_remote_skill(
+        sess: &Session,
+        config: &Arc<Config>,
+        sub_id: String,
+        hazelnut_id: String,
+        is_preload: bool,
+    ) {
+        match crate::skills::remote::download_remote_skill(config, hazelnut_id.as_str(), is_preload)
+            .await
+        {
+            Ok(result) => {
+                let event = Event {
+                    id: sub_id,
+                    msg: EventMsg::RemoteSkillDownloaded(RemoteSkillDownloadedEvent {
+                        id: result.id,
+                        name: result.name,
+                        path: result.path,
+                    }),
+                };
+                sess.send_event_raw(event).await;
+            }
+            Err(err) => {
+                let event = Event {
+                    id: sub_id,
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: format!("failed to download remote skill {hazelnut_id}: {err}"),
+                        codex_error_info: Some(CodexErrorInfo::Other),
+                    }),
+                };
+                sess.send_event_raw(event).await;
+            }
+        }
     }
 
     pub async fn undo(sess: &Arc<Session>, sub_id: String) {
@@ -4974,7 +5064,7 @@ mod tests {
         let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
         let reasoning_effort = config.model_reasoning_effort;
         let collaboration_mode = CollaborationMode {
-            mode: ModeKind::Custom,
+            mode: ModeKind::Default,
             settings: Settings {
                 model,
                 reasoning_effort,
@@ -5057,7 +5147,7 @@ mod tests {
         let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
         let reasoning_effort = config.model_reasoning_effort;
         let collaboration_mode = CollaborationMode {
-            mode: ModeKind::Custom,
+            mode: ModeKind::Default,
             settings: Settings {
                 model,
                 reasoning_effort,
@@ -5327,7 +5417,7 @@ mod tests {
         let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
         let reasoning_effort = config.model_reasoning_effort;
         let collaboration_mode = CollaborationMode {
-            mode: ModeKind::Custom,
+            mode: ModeKind::Default,
             settings: Settings {
                 model,
                 reasoning_effort,
@@ -5449,7 +5539,7 @@ mod tests {
         let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
         let reasoning_effort = config.model_reasoning_effort;
         let collaboration_mode = CollaborationMode {
-            mode: ModeKind::Custom,
+            mode: ModeKind::Default,
             settings: Settings {
                 model,
                 reasoning_effort,

@@ -9,6 +9,7 @@ use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
 use crate::tools::handlers::collab::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::collab::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::collab::MIN_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::request_user_input_tool_description;
 use crate::tools::registry::ToolRegistryBuilder;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -623,9 +624,7 @@ fn create_request_user_input_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "request_user_input".to_string(),
-        description:
-            "Request user input for one to three short questions and wait for the response."
-                .to_string(),
+        description: request_user_input_tool_description(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -1258,13 +1257,19 @@ pub(crate) fn build_specs(
 
     match &config.shell_type {
         ConfigShellToolType::Default => {
-            builder.push_spec(create_shell_tool(config.request_rule_enabled));
+            builder.push_spec_with_parallel_support(
+                create_shell_tool(config.request_rule_enabled),
+                true,
+            );
         }
         ConfigShellToolType::Local => {
-            builder.push_spec(ToolSpec::LocalShell {});
+            builder.push_spec_with_parallel_support(ToolSpec::LocalShell {}, true);
         }
         ConfigShellToolType::UnifiedExec => {
-            builder.push_spec(create_exec_command_tool(config.request_rule_enabled));
+            builder.push_spec_with_parallel_support(
+                create_exec_command_tool(config.request_rule_enabled),
+                true,
+            );
             builder.push_spec(create_write_stdin_tool());
             builder.register_handler("exec_command", unified_exec_handler.clone());
             builder.register_handler("write_stdin", unified_exec_handler);
@@ -1273,7 +1278,10 @@ pub(crate) fn build_specs(
             // Do nothing.
         }
         ConfigShellToolType::ShellCommand => {
-            builder.push_spec(create_shell_command_tool(config.request_rule_enabled));
+            builder.push_spec_with_parallel_support(
+                create_shell_command_tool(config.request_rule_enabled),
+                true,
+            );
         }
     }
 
@@ -1982,7 +1990,7 @@ mod tests {
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
 
-        assert!(!find_tool(&tools, "exec_command").supports_parallel_tool_calls);
+        assert!(find_tool(&tools, "exec_command").supports_parallel_tool_calls);
         assert!(!find_tool(&tools, "write_stdin").supports_parallel_tool_calls);
         assert!(find_tool(&tools, "grep_files").supports_parallel_tool_calls);
         assert!(find_tool(&tools, "list_dir").supports_parallel_tool_calls);
