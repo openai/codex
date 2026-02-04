@@ -9,7 +9,6 @@ use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::UserMessageEvent;
-use core_test_support::load_sse_fixture_with_id;
 use core_test_support::responses;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -23,10 +22,6 @@ use std::fs;
 use tokio::time::Duration;
 use tracing_subscriber::prelude::*;
 use uuid::Uuid;
-
-fn sse_completed(id: &str) -> String {
-    load_sse_fixture_with_id("../fixtures/completed_template.json", id)
-}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn new_thread_is_recorded_in_state_db() -> Result<()> {
@@ -195,7 +190,10 @@ async fn user_messages_persist_in_state_db() -> Result<()> {
     let server = start_mock_server().await;
     mount_sse_sequence(
         &server,
-        vec![sse_completed("resp-1"), sse_completed("resp-2")],
+        vec![
+            responses::sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+            responses::sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
     )
     .await;
 
