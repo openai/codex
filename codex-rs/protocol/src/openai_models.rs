@@ -323,7 +323,6 @@ pub struct ModelInstructionsVariables {
     pub personality_default: Option<String>,
     pub personality_friendly: Option<String>,
     pub personality_pragmatic: Option<String>,
-    pub personality_none: Option<String>,
 }
 
 impl ModelInstructionsVariables {
@@ -331,7 +330,6 @@ impl ModelInstructionsVariables {
         self.personality_default.is_some()
             && self.personality_friendly.is_some()
             && self.personality_pragmatic.is_some()
-            && self.personality_none.is_some()
     }
 
     pub fn get_personality_message(&self, personality: Option<Personality>) -> Option<String> {
