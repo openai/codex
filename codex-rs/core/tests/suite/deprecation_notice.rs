@@ -141,7 +141,9 @@ async fn emits_deprecation_notice_for_web_search_feature_flags() -> anyhow::Resu
     );
     assert_eq!(
         details.as_deref(),
-        Some("Set `web_search` to `\"live\"`, `\"cached\"`, or `\"disabled\"` in config.toml."),
+        Some(
+            "Set `web_search` to `\"live\"`, `\"cached\"`, or `\"disabled\"` at the top level (or under a profile) in config.toml."
+        ),
     );
 
     Ok(())
@@ -176,7 +178,9 @@ async fn emits_deprecation_notice_for_disabled_web_search_feature_flag() -> anyh
     );
     assert_eq!(
         details.as_deref(),
-        Some("Set `web_search` to `\"live\"`, `\"cached\"`, or `\"disabled\"` in config.toml."),
+        Some(
+            "Set `web_search` to `\"live\"`, `\"cached\"`, or `\"disabled\"` at the top level (or under a profile) in config.toml."
+        ),
     );
 
     Ok(())

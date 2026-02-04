@@ -3,6 +3,8 @@ use std::sync::Arc;
 use crate::Prompt;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::context_manager::ContextManager;
+use crate::context_manager::is_codex_generated_item;
 use crate::error::Result as CodexResult;
 use crate::protocol::CompactedItem;
 use crate::protocol::EventMsg;
@@ -11,6 +13,7 @@ use crate::protocol::TurnStartedEvent;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
+use tracing::info;
 
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
@@ -45,7 +48,16 @@ async fn run_remote_compact_task_inner_impl(
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(turn_context, &compaction_item)
         .await;
-    let history = sess.clone_history().await;
+    let mut history = sess.clone_history().await;
+    let deleted_items =
+        trim_function_call_history_to_fit_context_window(&mut history, turn_context.as_ref());
+    if deleted_items > 0 {
+        info!(
+            turn_id = %turn_context.sub_id,
+            deleted_items,
+            "trimmed history items before remote compaction"
+        );
+    }
 
     // Required to keep `/undo` available after compaction
     let ghost_snapshots: Vec<ResponseItem> = history
@@ -85,4 +97,32 @@ async fn run_remote_compact_task_inner_impl(
     sess.emit_turn_item_completed(turn_context, compaction_item)
         .await;
     Ok(())
+}
+
+fn trim_function_call_history_to_fit_context_window(
+    history: &mut ContextManager,
+    turn_context: &TurnContext,
+) -> usize {
+    let mut deleted_items = 0usize;
+    let Some(context_window) = turn_context.client.get_model_context_window() else {
+        return deleted_items;
+    };
+
+    while history
+        .estimate_token_count(turn_context)
+        .is_some_and(|estimated_tokens| estimated_tokens > context_window)
+    {
+        let Some(last_item) = history.raw_items().last() else {
+            break;
+        };
+        if !is_codex_generated_item(last_item) {
+            break;
+        }
+        if !history.remove_last_item() {
+            break;
+        }
+        deleted_items += 1;
+    }
+
+    deleted_items
 }

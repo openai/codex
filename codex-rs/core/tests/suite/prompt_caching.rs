@@ -412,7 +412,7 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
     let TestCodex { codex, .. } = test_codex().build(&server).await?;
 
     let collaboration_mode = CollaborationMode {
-        mode: ModeKind::Custom,
+        mode: ModeKind::Default,
         settings: Settings {
             model: "gpt-5.1".to_string(),
             reasoning_effort: Some(ReasoningEffort::High),

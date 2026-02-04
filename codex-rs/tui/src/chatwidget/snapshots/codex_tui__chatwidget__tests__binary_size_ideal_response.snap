@@ -27,7 +27,7 @@ expression: "lines[start_idx..].join(\"\\n\")"
   exec, linux-sandbox, tui, login, ollama, and mcp.
 
 • Ran for d in ansi-escape apply-patch arg0 cli common core exec execpolicy
-  │ file-search linux-sandbox login mcp-client mcp-server mcp-types ollama
+  │ file-search linux-sandbox login mcp-client mcp-server ollama
   │ tui; do echo "--- $d/Cargo.toml"; sed -n '1,200p' $d/Cargo.toml; echo;
   │ … +1 lines
   └ --- ansi-escape/Cargo.toml

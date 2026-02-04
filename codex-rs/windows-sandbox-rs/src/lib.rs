@@ -5,8 +5,21 @@ macro_rules! windows_modules {
 }
 
 windows_modules!(
-    acl, allow, audit, cap, dpapi, env, hide_users, identity, logging, policy, process, token,
-    winutil
+    acl,
+    allow,
+    audit,
+    cap,
+    dpapi,
+    env,
+    hide_users,
+    identity,
+    logging,
+    path_normalization,
+    policy,
+    process,
+    token,
+    winutil,
+    workspace_acl
 );
 
 #[cfg(target_os = "windows")]
@@ -19,6 +32,8 @@ mod elevated_impl;
 #[cfg(target_os = "windows")]
 mod setup_error;
 
+#[cfg(target_os = "windows")]
+pub use acl::add_deny_write_ace;
 #[cfg(target_os = "windows")]
 pub use acl::allow_null_device;
 #[cfg(target_os = "windows")]
@@ -35,6 +50,8 @@ pub use acl::path_mask_allows;
 pub use audit::apply_world_writable_scan_and_denies;
 #[cfg(target_os = "windows")]
 pub use cap::load_or_create_cap_sids;
+#[cfg(target_os = "windows")]
+pub use cap::workspace_cap_sid_for_cwd;
 #[cfg(target_os = "windows")]
 pub use dpapi::protect as dpapi_protect;
 #[cfg(target_os = "windows")]
@@ -53,6 +70,8 @@ pub use identity::sandbox_setup_is_complete;
 pub use logging::log_note;
 #[cfg(target_os = "windows")]
 pub use logging::LOG_FILE_NAME;
+#[cfg(target_os = "windows")]
+pub use path_normalization::canonicalize_path;
 #[cfg(target_os = "windows")]
 pub use policy::parse_policy;
 #[cfg(target_os = "windows")]
@@ -88,7 +107,9 @@ pub use token::convert_string_sid_to_sid;
 #[cfg(target_os = "windows")]
 pub use token::create_readonly_token_with_cap_from;
 #[cfg(target_os = "windows")]
-pub use token::create_workspace_write_token_with_cap_from;
+pub use token::create_readonly_token_with_caps_from;
+#[cfg(target_os = "windows")]
+pub use token::create_workspace_write_token_with_caps_from;
 #[cfg(target_os = "windows")]
 pub use token::get_current_token_for_restriction;
 #[cfg(target_os = "windows")]
@@ -99,6 +120,10 @@ pub use windows_impl::CaptureResult;
 pub use winutil::string_from_sid_bytes;
 #[cfg(target_os = "windows")]
 pub use winutil::to_wide;
+#[cfg(target_os = "windows")]
+pub use workspace_acl::is_command_cwd_root;
+#[cfg(target_os = "windows")]
+pub use workspace_acl::protect_workspace_codex_dir;
 
 #[cfg(not(target_os = "windows"))]
 pub use stub::apply_world_writable_scan_and_denies;
@@ -116,6 +141,7 @@ mod windows_impl {
     use super::allow::compute_allow_paths;
     use super::allow::AllowDenyPaths;
     use super::cap::load_or_create_cap_sids;
+    use super::cap::workspace_cap_sid_for_cwd;
     use super::env::apply_no_network_to_env;
     use super::env::ensure_non_interactive_pager;
     use super::env::normalize_null_device_env;
@@ -123,13 +149,17 @@ mod windows_impl {
     use super::logging::log_failure;
     use super::logging::log_start;
     use super::logging::log_success;
+    use super::path_normalization::canonicalize_path;
     use super::policy::parse_policy;
     use super::policy::SandboxPolicy;
     use super::process::make_env_block;
     use super::token::convert_string_sid_to_sid;
+    use super::token::create_workspace_write_token_with_caps_from;
     use super::winutil::format_last_error;
     use super::winutil::quote_windows_arg;
     use super::winutil::to_wide;
+    use super::workspace_acl::is_command_cwd_root;
+    use super::workspace_acl::protect_workspace_codex_dir;
     use anyhow::Result;
     use std::collections::HashMap;
     use std::ffi::c_void;
@@ -229,15 +259,25 @@ mod windows_impl {
             anyhow::bail!("DangerFullAccess and ExternalSandbox are not supported for sandboxing")
         }
         let caps = load_or_create_cap_sids(codex_home)?;
-        let (h_token, psid_to_use): (HANDLE, *mut c_void) = unsafe {
+        let (h_token, psid_generic, psid_workspace): (HANDLE, *mut c_void, Option<*mut c_void>) = unsafe {
             match &policy {
                 SandboxPolicy::ReadOnly => {
                     let psid = convert_string_sid_to_sid(&caps.readonly).unwrap();
-                    super::token::create_readonly_token_with_cap(psid)?
+                    let (h, _) = super::token::create_readonly_token_with_cap(psid)?;
+                    (h, psid, None)
                 }
                 SandboxPolicy::WorkspaceWrite { .. } => {
-                    let psid = convert_string_sid_to_sid(&caps.workspace).unwrap();
-                    super::token::create_workspace_write_token_with_cap(psid)?
+                    let psid_generic = convert_string_sid_to_sid(&caps.workspace).unwrap();
+                    let ws_sid = workspace_cap_sid_for_cwd(codex_home, cwd)?;
+                    let psid_workspace = convert_string_sid_to_sid(&ws_sid).unwrap();
+                    let base = super::token::get_current_token_for_restriction()?;
+                    let h_res = create_workspace_write_token_with_caps_from(
+                        base,
+                        &[psid_generic, psid_workspace],
+                    );
+                    windows_sys::Win32::Foundation::CloseHandle(base);
+                    let h = h_res?;
+                    (h, psid_generic, Some(psid_workspace))
                 }
                 SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
                     unreachable!("DangerFullAccess handled above")
@@ -261,29 +301,39 @@ mod windows_impl {
         let persist_aces = is_workspace_write;
         let AllowDenyPaths { allow, deny } =
             compute_allow_paths(&policy, sandbox_policy_cwd, &current_dir, &env_map);
+        let canonical_cwd = canonicalize_path(&current_dir);
         let mut guards: Vec<(PathBuf, *mut c_void)> = Vec::new();
         unsafe {
             for p in &allow {
-                if let Ok(added) = add_allow_ace(p, psid_to_use) {
+                let psid = if is_workspace_write && is_command_cwd_root(p, &canonical_cwd) {
+                    psid_workspace.unwrap_or(psid_generic)
+                } else {
+                    psid_generic
+                };
+                if let Ok(added) = add_allow_ace(p, psid) {
                     if added {
                         if persist_aces {
                             if p.is_dir() {
                                 // best-effort seeding omitted intentionally
                             }
                         } else {
-                            guards.push((p.clone(), psid_to_use));
+                            guards.push((p.clone(), psid));
                         }
                     }
                 }
             }
             for p in &deny {
-                if let Ok(added) = add_deny_write_ace(p, psid_to_use) {
+                if let Ok(added) = add_deny_write_ace(p, psid_generic) {
                     if added && !persist_aces {
-                        guards.push((p.clone(), psid_to_use));
+                        guards.push((p.clone(), psid_generic));
                     }
                 }
             }
-            allow_null_device(psid_to_use);
+            allow_null_device(psid_generic);
+            if let Some(psid) = psid_workspace {
+                allow_null_device(psid);
+                let _ = protect_workspace_codex_dir(&current_dir, psid);
+            }
         }
 
         let (stdin_pair, stdout_pair, stderr_pair) = unsafe { setup_stdio_pipes()? };

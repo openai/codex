@@ -23,6 +23,11 @@ use crate::dynamic_tools::DynamicToolCallRequest;
 use crate::dynamic_tools::DynamicToolResponse;
 use crate::dynamic_tools::DynamicToolSpec;
 use crate::items::TurnItem;
+use crate::mcp::CallToolResult;
+use crate::mcp::RequestId;
+use crate::mcp::Resource as McpResource;
+use crate::mcp::ResourceTemplate as McpResourceTemplate;
+use crate::mcp::Tool as McpTool;
 use crate::message_history::HistoryEntry;
 use crate::models::BaseInstructions;
 use crate::models::ContentItem;
@@ -35,11 +40,6 @@ use crate::plan_tool::UpdatePlanArgs;
 use crate::request_user_input::RequestUserInputResponse;
 use crate::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use mcp_types::CallToolResult;
-use mcp_types::RequestId;
-use mcp_types::Resource as McpResource;
-use mcp_types::ResourceTemplate as McpResourceTemplate;
-use mcp_types::Tool as McpTool;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -267,6 +267,15 @@ pub enum Op {
         /// When true, recompute skills even if a cached result exists.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         force_reload: bool,
+    },
+
+    /// Request the list of remote skills available via ChatGPT sharing.
+    ListRemoteSkills,
+
+    /// Download a remote skill by id into the local skills cache.
+    DownloadRemoteSkill {
+        hazelnut_id: String,
+        is_preload: bool,
     },
 
     /// Request the agent to summarize the current conversation context.
@@ -589,13 +598,18 @@ impl SandboxPolicy {
                             }
                             subpaths.push(top_level_git);
                         }
-                        #[allow(clippy::expect_used)]
-                        let top_level_codex = writable_root
-                            .join(".codex")
-                            .expect(".codex is a valid relative path");
-                        if top_level_codex.as_path().is_dir() {
-                            subpaths.push(top_level_codex);
+
+                        // Make .agents/skills and .codex/config.toml and
+                        // related files read-only to the agent, by default.
+                        for subdir in &[".agents", ".codex"] {
+                            #[allow(clippy::expect_used)]
+                            let top_level_codex =
+                                writable_root.join(subdir).expect("valid relative path");
+                            if top_level_codex.as_path().is_dir() {
+                                subpaths.push(top_level_codex);
+                            }
                         }
+
                         WritableRoot {
                             root: writable_root,
                             read_only_subpaths: subpaths,
@@ -816,6 +830,12 @@ pub enum EventMsg {
 
     /// List of skills available to the agent.
     ListSkillsResponse(ListSkillsResponseEvent),
+
+    /// List of remote skills available to the agent.
+    ListRemoteSkillsResponse(ListRemoteSkillsResponseEvent),
+
+    /// Remote skill downloaded to local cache.
+    RemoteSkillDownloaded(RemoteSkillDownloadedEvent),
 
     /// Notification that skill data may have been updated and clients may want to reload.
     SkillsUpdateAvailable,
@@ -1691,6 +1711,7 @@ impl From<CompactedItem> for ResponseItem {
                 text: value.message,
             }],
             end_turn: None,
+            phase: None,
         }
     }
 }
@@ -2119,6 +2140,27 @@ pub struct ListCustomPromptsResponseEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ListSkillsResponseEvent {
     pub skills: Vec<SkillsListEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct RemoteSkillSummary {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+}
+
+/// Response payload for `Op::ListRemoteSkills`.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ListRemoteSkillsResponseEvent {
+    pub skills: Vec<RemoteSkillSummary>,
+}
+
+/// Response payload for `Op::DownloadRemoteSkill`.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct RemoteSkillDownloadedEvent {
+    pub id: String,
+    pub name: String,
+    pub path: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]

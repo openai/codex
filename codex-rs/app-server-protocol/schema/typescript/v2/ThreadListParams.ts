@@ -8,27 +8,27 @@ export type ThreadListParams = {
 /**
  * Opaque pagination cursor returned by a previous call.
  */
-cursor: string | null, 
+cursor?: string | null, 
 /**
  * Optional page size; defaults to a reasonable server-side value.
  */
-limit: number | null, 
+limit?: number | null, 
 /**
  * Optional sort key; defaults to created_at.
  */
-sortKey: ThreadSortKey | null, 
+sortKey?: ThreadSortKey | null, 
 /**
  * Optional provider filter; when set, only sessions recorded under these
  * providers are returned. When present but empty, includes all providers.
  */
-modelProviders: Array<string> | null, 
+modelProviders?: Array<string> | null, 
 /**
  * Optional source filter; when set, only sessions from these source kinds
  * are returned. When omitted or empty, defaults to interactive sources.
  */
-sourceKinds: Array<ThreadSourceKind> | null, 
+sourceKinds?: Array<ThreadSourceKind> | null, 
 /**
  * Optional archived filter; when set to true, only archived threads are returned.
  * If false or null, only non-archived threads are returned.
  */
-archived: boolean | null, };
+archived?: boolean | null, };

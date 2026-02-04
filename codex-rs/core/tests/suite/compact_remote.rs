@@ -62,6 +62,7 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
                 text: "REMOTE_COMPACTED_SUMMARY".to_string(),
             }],
             end_turn: None,
+            phase: None,
         },
         ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
@@ -184,6 +185,7 @@ async fn remote_compact_runs_automatically() -> Result<()> {
                 text: "REMOTE_COMPACTED_SUMMARY".to_string(),
             }],
             end_turn: None,
+            phase: None,
         },
         ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
@@ -220,6 +222,135 @@ async fn remote_compact_runs_automatically() -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(target_os = "windows", ignore)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_trims_function_call_history_to_fit_context_window() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let first_user_message = "turn with retained shell call";
+    let second_user_message = "turn with trimmed shell call";
+    let retained_call_id = "retained-call";
+    let trimmed_call_id = "trimmed-call";
+    let retained_command = "echo retained-shell-output";
+    let trimmed_command = "yes x | head -n 3000";
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.features.enable(Feature::RemoteCompaction);
+                config.model_context_window = Some(2_000);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let response_log = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            sse(vec![
+                responses::ev_shell_command_call(retained_call_id, retained_command),
+                responses::ev_completed("retained-call-response"),
+            ]),
+            sse(vec![
+                responses::ev_assistant_message("retained-assistant", "retained complete"),
+                responses::ev_completed("retained-final-response"),
+            ]),
+            sse(vec![
+                responses::ev_shell_command_call(trimmed_call_id, trimmed_command),
+                responses::ev_completed("trimmed-call-response"),
+            ]),
+            sse(vec![responses::ev_completed("trimmed-final-response")]),
+        ],
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: first_user_message.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: second_user_message.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let compact_mock =
+        responses::mount_compact_json_once(harness.server(), serde_json::json!({ "output": [] }))
+            .await;
+
+    codex.submit(Op::Compact).await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    assert!(
+        response_log
+            .function_call_output_text(retained_call_id)
+            .is_some(),
+        "expected retained shell call to produce function_call_output before compaction"
+    );
+    assert!(
+        response_log
+            .function_call_output_text(trimmed_call_id)
+            .is_some(),
+        "expected trimmed shell call to produce function_call_output before compaction"
+    );
+
+    let compact_request = compact_mock.single_request();
+    let user_messages = compact_request.message_input_texts("user");
+    assert!(
+        user_messages
+            .iter()
+            .any(|message| message == first_user_message),
+        "expected compact request to retain earlier user history"
+    );
+    assert!(
+        user_messages
+            .iter()
+            .any(|message| message == second_user_message),
+        "expected compact request to retain the user boundary message"
+    );
+
+    assert!(
+        compact_request.has_function_call(retained_call_id)
+            && compact_request
+                .function_call_output_text(retained_call_id)
+                .is_some(),
+        "expected compact request to keep the older function call/result pair"
+    );
+    assert!(
+        !compact_request.has_function_call(trimmed_call_id)
+            && compact_request
+                .function_call_output_text(trimmed_call_id)
+                .is_none(),
+        "expected compact request to drop the trailing function call/result pair past the boundary"
+    );
+
+    assert_eq!(
+        compact_request.inputs_of_type("function_call").len(),
+        1,
+        "expected exactly one function call after trimming"
+    );
+    assert_eq!(
+        compact_request.inputs_of_type("function_call_output").len(),
+        1,
+        "expected exactly one function call output after trimming"
+    );
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_manual_compact_emits_context_compaction_items() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -251,6 +382,7 @@ async fn remote_manual_compact_emits_context_compaction_items() -> Result<()> {
                 text: "REMOTE_COMPACTED_SUMMARY".to_string(),
             }],
             end_turn: None,
+            phase: None,
         },
         ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
@@ -352,6 +484,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
                 text: "COMPACTED_USER_SUMMARY".to_string(),
             }],
             end_turn: None,
+            phase: None,
         },
         ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
@@ -363,6 +496,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
                 text: "COMPACTED_ASSISTANT_NOTE".to_string(),
             }],
             end_turn: None,
+            phase: None,
         },
     ];
     let compact_mock = responses::mount_compact_json_once(

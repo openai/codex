@@ -5,4 +5,4 @@
 /**
  * Initial collaboration mode to use when the TUI starts.
  */
-export type ModeKind = "plan" | "code" | "pair_programming" | "execute" | "custom";
+export type ModeKind = "plan" | "default";

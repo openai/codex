@@ -15,7 +15,9 @@ use uuid::Uuid;
 
 use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
+use crate::instructions::UserInstructions;
 use crate::protocol::EventMsg;
+use crate::session_prefix::is_session_prefix_content;
 use crate::state_db;
 use codex_file_search as file_search;
 use codex_protocol::ThreadId;
@@ -243,9 +245,7 @@ impl serde::Serialize for Cursor {
     {
         let ts_str = self
             .ts
-            .format(&format_description!(
-                "[year]-[month]-[day]T[hour]-[minute]-[second]"
-            ))
+            .format(&Rfc3339)
             .map_err(|e| serde::ser::Error::custom(format!("format error: {e}")))?;
         serializer.serialize_str(&format!("{ts_str}|{}", self.id))
     }
@@ -258,6 +258,14 @@ impl<'de> serde::Deserialize<'de> for Cursor {
     {
         let s = String::deserialize(deserializer)?;
         parse_cursor(&s).ok_or_else(|| serde::de::Error::custom("invalid cursor"))
+    }
+}
+
+impl From<codex_state::Anchor> for Cursor {
+    fn from(anchor: codex_state::Anchor) -> Self {
+        let ts = OffsetDateTime::from_unix_timestamp(anchor.ts.timestamp())
+            .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+        Self::new(ts, anchor.id)
     }
 }
 
@@ -628,9 +636,13 @@ pub fn parse_cursor(token: &str) -> Option<Cursor> {
         return None;
     };
 
-    let format: &[FormatItem] =
-        format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
-    let ts = PrimitiveDateTime::parse(file_ts, format).ok()?.assume_utc();
+    let ts = OffsetDateTime::parse(file_ts, &Rfc3339).ok().or_else(|| {
+        let format: &[FormatItem] =
+            format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
+        PrimitiveDateTime::parse(file_ts, format)
+            .ok()
+            .map(PrimitiveDateTime::assume_utc)
+    })?;
 
     Some(Cursor::new(ts, uuid))
 }
@@ -967,10 +979,7 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
             RolloutItem::SessionMeta(session_meta_line) => {
                 summary.source = Some(session_meta_line.meta.source.clone());
                 summary.model_provider = session_meta_line.meta.model_provider.clone();
-                summary.created_at = summary
-                    .created_at
-                    .clone()
-                    .or_else(|| Some(rollout_line.timestamp.clone()));
+                summary.created_at = Some(session_meta_line.meta.timestamp.clone());
                 summary.saw_session_meta = true;
                 if summary.head.len() < head_limit
                     && let Ok(val) = serde_json::to_value(session_meta_line)
@@ -983,6 +992,13 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                     .created_at
                     .clone()
                     .or_else(|| Some(rollout_line.timestamp.clone()));
+                if let codex_protocol::models::ResponseItem::Message { role, content, .. } = &item
+                    && role == "user"
+                    && !UserInstructions::is_user_instructions(content.as_slice())
+                    && !is_session_prefix_content(content.as_slice())
+                {
+                    summary.saw_user_event = true;
+                }
                 if summary.head.len() < head_limit
                     && let Ok(val) = serde_json::to_value(item)
                 {
@@ -1065,6 +1081,34 @@ async fn find_thread_path_by_id_str_in_subdir(
         return Ok(None);
     }
 
+    // Prefer DB lookup, then fall back to rollout file search.
+    // TODO(jif): sqlite migration phase 1
+    let archived_only = match subdir {
+        SESSIONS_SUBDIR => Some(false),
+        ARCHIVED_SESSIONS_SUBDIR => Some(true),
+        _ => None,
+    };
+    let state_db_ctx = state_db::open_if_present(codex_home, "").await;
+    if let Some(state_db_ctx) = state_db_ctx.as_deref()
+        && let Ok(thread_id) = ThreadId::from_string(id_str)
+        && let Some(db_path) = state_db::find_rollout_path_by_id(
+            Some(state_db_ctx),
+            thread_id,
+            archived_only,
+            "find_path_query",
+        )
+        .await
+    {
+        if tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
+            return Ok(Some(db_path));
+        }
+        tracing::error!(
+            "state db returned stale rollout path for thread {id_str}: {}",
+            db_path.display()
+        );
+        state_db::record_discrepancy("find_thread_path_by_id_str_in_subdir", "stale_db_path");
+    }
+
     let mut root = codex_home.to_path_buf();
     root.push(subdir);
     if !root.exists() {
@@ -1084,33 +1128,11 @@ async fn find_thread_path_by_id_str_in_subdir(
         .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
 
     let found = results.matches.into_iter().next().map(|m| m.full_path());
-
-    // Checking if DB is at parity.
-    // TODO(jif): sqlite migration phase 1
-    let archived_only = match subdir {
-        SESSIONS_SUBDIR => Some(false),
-        ARCHIVED_SESSIONS_SUBDIR => Some(true),
-        _ => None,
-    };
-    let state_db_ctx = state_db::open_if_present(codex_home, "").await;
-    if let Some(state_db_ctx) = state_db_ctx.as_deref()
-        && let Ok(thread_id) = ThreadId::from_string(id_str)
-    {
-        let db_path = state_db::find_rollout_path_by_id(
-            Some(state_db_ctx),
-            thread_id,
-            archived_only,
-            "find_path_query",
-        )
-        .await;
-        let canonical_path = found.as_deref();
-        if db_path.as_deref() != canonical_path {
-            tracing::warn!(
-                "state db path mismatch for thread {thread_id:?}: canonical={canonical_path:?} db={db_path:?}"
-            );
-            state_db::record_discrepancy("find_thread_path_by_id_str_in_subdir", "path_mismatch");
-        }
+    if found.is_some() {
+        tracing::error!("state db missing rollout path for thread {id_str}");
+        state_db::record_discrepancy("find_thread_path_by_id_str_in_subdir", "falling_back");
     }
+
     Ok(found)
 }
 

@@ -28,6 +28,7 @@ impl EnvironmentContext {
             cwd,
             // should compare all fields except shell
             shell: _,
+            ..
         } = other;
 
         self.cwd == *cwd
@@ -80,6 +81,7 @@ impl From<EnvironmentContext> for ResponseItem {
                 text: ec.serialize_to_xml(),
             }],
             end_turn: None,
+            phase: None,
         }
     }
 }

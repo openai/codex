@@ -16,7 +16,11 @@ use chrono::DateTime;
 use chrono::Utc;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::protocol::RolloutItem;
+use log::LevelFilter;
+use serde_json::Value;
+use sqlx::ConnectOptions;
 use sqlx::QueryBuilder;
 use sqlx::Row;
 use sqlx::Sqlite;
@@ -31,7 +35,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::warn;
 
-pub const STATE_DB_FILENAME: &str = "state.sqlite";
+pub const STATE_DB_FILENAME: &str = "state";
+pub const STATE_DB_VERSION: u32 = 2;
 
 const METRIC_DB_INIT: &str = "codex.db.init";
 
@@ -52,7 +57,8 @@ impl StateRuntime {
         otel: Option<OtelManager>,
     ) -> anyhow::Result<Arc<Self>> {
         tokio::fs::create_dir_all(&codex_home).await?;
-        let state_path = codex_home.join(STATE_DB_FILENAME);
+        remove_legacy_state_files(&codex_home).await;
+        let state_path = state_db_path(codex_home.as_path());
         let existed = tokio::fs::try_exists(&state_path).await.unwrap_or(false);
         let pool = match open_sqlite(&state_path).await {
             Ok(db) => Arc::new(db),
@@ -113,6 +119,38 @@ WHERE id = ?
         .await?;
         row.map(|row| ThreadRow::try_from_row(&row).and_then(ThreadMetadata::try_from))
             .transpose()
+    }
+
+    /// Get dynamic tools for a thread, if present.
+    pub async fn get_dynamic_tools(
+        &self,
+        thread_id: ThreadId,
+    ) -> anyhow::Result<Option<Vec<DynamicToolSpec>>> {
+        let rows = sqlx::query(
+            r#"
+SELECT name, description, input_schema
+FROM thread_dynamic_tools
+WHERE thread_id = ?
+ORDER BY position ASC
+            "#,
+        )
+        .bind(thread_id.to_string())
+        .fetch_all(self.pool.as_ref())
+        .await?;
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        let mut tools = Vec::with_capacity(rows.len());
+        for row in rows {
+            let input_schema: String = row.try_get("input_schema")?;
+            let input_schema = serde_json::from_str::<Value>(input_schema.as_str())?;
+            tools.push(DynamicToolSpec {
+                name: row.try_get("name")?,
+                description: row.try_get("description")?,
+                input_schema,
+            });
+        }
+        Ok(Some(tools))
     }
 
     /// Find a rollout path by thread id using the underlying database.
@@ -367,6 +405,50 @@ ON CONFLICT(id) DO UPDATE SET
         Ok(())
     }
 
+    /// Persist dynamic tools for a thread if none have been stored yet.
+    ///
+    /// Dynamic tools are defined at thread start and should not change afterward.
+    /// This only writes the first time we see tools for a given thread.
+    pub async fn persist_dynamic_tools(
+        &self,
+        thread_id: ThreadId,
+        tools: Option<&[DynamicToolSpec]>,
+    ) -> anyhow::Result<()> {
+        let Some(tools) = tools else {
+            return Ok(());
+        };
+        if tools.is_empty() {
+            return Ok(());
+        }
+        let thread_id = thread_id.to_string();
+        let mut tx = self.pool.begin().await?;
+        for (idx, tool) in tools.iter().enumerate() {
+            let position = i64::try_from(idx).unwrap_or(i64::MAX);
+            let input_schema = serde_json::to_string(&tool.input_schema)?;
+            sqlx::query(
+                r#"
+INSERT INTO thread_dynamic_tools (
+    thread_id,
+    position,
+    name,
+    description,
+    input_schema
+) VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(thread_id, position) DO NOTHING
+                "#,
+            )
+            .bind(thread_id.as_str())
+            .bind(position)
+            .bind(tool.name.as_str())
+            .bind(tool.description.as_str())
+            .bind(input_schema)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     /// Apply rollout items incrementally using the underlying database.
     pub async fn apply_rollout_items(
         &self,
@@ -388,9 +470,22 @@ ON CONFLICT(id) DO UPDATE SET
         if let Some(updated_at) = file_modified_time_utc(builder.rollout_path.as_path()).await {
             metadata.updated_at = updated_at;
         }
+        // Keep the thread upsert before dynamic tools to satisfy the foreign key constraint:
+        // thread_dynamic_tools.thread_id -> threads.id.
         if let Err(err) = self.upsert_thread(&metadata).await {
             if let Some(otel) = otel {
                 otel.counter(DB_ERROR_METRIC, 1, &[("stage", "apply_rollout_items")]);
+            }
+            return Err(err);
+        }
+        let dynamic_tools = extract_dynamic_tools(items);
+        if let Some(dynamic_tools) = dynamic_tools
+            && let Err(err) = self
+                .persist_dynamic_tools(builder.id, dynamic_tools.as_deref())
+                .await
+        {
+            if let Some(otel) = otel {
+                otel.counter(DB_ERROR_METRIC, 1, &[("stage", "persist_dynamic_tools")]);
             }
             return Err(err);
         }
@@ -505,19 +600,101 @@ fn push_like_filters<'a>(
     builder.push(")");
 }
 
+fn extract_dynamic_tools(items: &[RolloutItem]) -> Option<Option<Vec<DynamicToolSpec>>> {
+    items.iter().find_map(|item| match item {
+        RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.dynamic_tools.clone()),
+        RolloutItem::ResponseItem(_)
+        | RolloutItem::Compacted(_)
+        | RolloutItem::TurnContext(_)
+        | RolloutItem::EventMsg(_) => None,
+    })
+}
+
 async fn open_sqlite(path: &Path) -> anyhow::Result<SqlitePool> {
     let options = SqliteConnectOptions::new()
         .filename(path)
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
         .synchronous(SqliteSynchronous::Normal)
-        .busy_timeout(Duration::from_secs(5));
+        .busy_timeout(Duration::from_secs(5))
+        .log_statements(LevelFilter::Off);
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
         .connect_with(options)
         .await?;
     MIGRATOR.run(&pool).await?;
     Ok(pool)
+}
+
+pub fn state_db_filename() -> String {
+    format!("{STATE_DB_FILENAME}_{STATE_DB_VERSION}.sqlite")
+}
+
+pub fn state_db_path(codex_home: &Path) -> PathBuf {
+    codex_home.join(state_db_filename())
+}
+
+async fn remove_legacy_state_files(codex_home: &Path) {
+    let current_name = state_db_filename();
+    let mut entries = match tokio::fs::read_dir(codex_home).await {
+        Ok(entries) => entries,
+        Err(err) => {
+            warn!(
+                "failed to read codex_home for state db cleanup {}: {err}",
+                codex_home.display()
+            );
+            return;
+        }
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        if !entry
+            .file_type()
+            .await
+            .map(|file_type| file_type.is_file())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        if !should_remove_state_file(file_name.as_ref(), current_name.as_str()) {
+            continue;
+        }
+
+        let legacy_path = entry.path();
+        if let Err(err) = tokio::fs::remove_file(&legacy_path).await {
+            warn!(
+                "failed to remove legacy state db file {}: {err}",
+                legacy_path.display()
+            );
+        }
+    }
+}
+
+fn should_remove_state_file(file_name: &str, current_name: &str) -> bool {
+    let mut base_name = file_name;
+    for suffix in ["-wal", "-shm", "-journal"] {
+        if let Some(stripped) = file_name.strip_suffix(suffix) {
+            base_name = stripped;
+            break;
+        }
+    }
+    if base_name == current_name {
+        return false;
+    }
+    let unversioned_name = format!("{STATE_DB_FILENAME}.sqlite");
+    if base_name == unversioned_name {
+        return true;
+    }
+
+    let Some(version_with_extension) = base_name.strip_prefix(&format!("{STATE_DB_FILENAME}_"))
+    else {
+        return false;
+    };
+    let Some(version_suffix) = version_with_extension.strip_suffix(".sqlite") else {
+        return false;
+    };
+    !version_suffix.is_empty() && version_suffix.chars().all(|ch| ch.is_ascii_digit())
 }
 
 fn push_thread_filters<'a>(
@@ -587,4 +764,98 @@ fn push_thread_order_and_limit(
     builder.push(" DESC, id DESC");
     builder.push(" LIMIT ");
     builder.push_bind(limit as i64);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::STATE_DB_FILENAME;
+    use super::STATE_DB_VERSION;
+    use super::StateRuntime;
+    use super::state_db_filename;
+    use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
+    use std::time::SystemTime;
+    use std::time::UNIX_EPOCH;
+
+    fn unique_temp_dir() -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos());
+        std::env::temp_dir().join(format!("codex-state-runtime-test-{nanos}"))
+    }
+
+    #[tokio::test]
+    async fn init_removes_legacy_state_db_files() {
+        let codex_home = unique_temp_dir();
+        tokio::fs::create_dir_all(&codex_home)
+            .await
+            .expect("create codex_home");
+
+        let current_name = state_db_filename();
+        let previous_version = STATE_DB_VERSION.saturating_sub(1);
+        let unversioned_name = format!("{STATE_DB_FILENAME}.sqlite");
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            let path = codex_home.join(format!("{unversioned_name}{suffix}"));
+            tokio::fs::write(path, b"legacy")
+                .await
+                .expect("write legacy");
+            let old_version_path = codex_home.join(format!(
+                "{STATE_DB_FILENAME}_{previous_version}.sqlite{suffix}"
+            ));
+            tokio::fs::write(old_version_path, b"old_version")
+                .await
+                .expect("write old version");
+        }
+        let unrelated_path = codex_home.join("state.sqlite_backup");
+        tokio::fs::write(&unrelated_path, b"keep")
+            .await
+            .expect("write unrelated");
+        let numeric_path = codex_home.join("123");
+        tokio::fs::write(&numeric_path, b"keep")
+            .await
+            .expect("write numeric");
+
+        let _runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            let legacy_path = codex_home.join(format!("{unversioned_name}{suffix}"));
+            assert_eq!(
+                tokio::fs::try_exists(&legacy_path)
+                    .await
+                    .expect("check legacy path"),
+                false
+            );
+            let old_version_path = codex_home.join(format!(
+                "{STATE_DB_FILENAME}_{previous_version}.sqlite{suffix}"
+            ));
+            assert_eq!(
+                tokio::fs::try_exists(&old_version_path)
+                    .await
+                    .expect("check old version path"),
+                false
+            );
+        }
+        assert_eq!(
+            tokio::fs::try_exists(codex_home.join(current_name))
+                .await
+                .expect("check new db path"),
+            true
+        );
+        assert_eq!(
+            tokio::fs::try_exists(&unrelated_path)
+                .await
+                .expect("check unrelated path"),
+            true
+        );
+        assert_eq!(
+            tokio::fs::try_exists(&numeric_path)
+                .await
+                .expect("check numeric path"),
+            true
+        );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
 }

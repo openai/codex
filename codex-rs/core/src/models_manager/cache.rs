@@ -27,7 +27,7 @@ impl ModelsCacheManager {
     }
 
     /// Attempt to load a fresh cache entry. Returns `None` if the cache doesn't exist or is stale.
-    pub(crate) async fn load_fresh(&self) -> Option<ModelsCache> {
+    pub(crate) async fn load_fresh(&self, expected_version: &str) -> Option<ModelsCache> {
         let cache = match self.load().await {
             Ok(cache) => cache?,
             Err(err) => {
@@ -35,6 +35,9 @@ impl ModelsCacheManager {
                 return None;
             }
         };
+        if cache.client_version.as_deref() != Some(expected_version) {
+            return None;
+        }
         if !cache.is_fresh(self.cache_ttl) {
             return None;
         }
@@ -42,10 +45,16 @@ impl ModelsCacheManager {
     }
 
     /// Persist the cache to disk, creating parent directories as needed.
-    pub(crate) async fn persist_cache(&self, models: &[ModelInfo], etag: Option<String>) {
+    pub(crate) async fn persist_cache(
+        &self,
+        models: &[ModelInfo],
+        etag: Option<String>,
+        client_version: String,
+    ) {
         let cache = ModelsCache {
             fetched_at: Utc::now(),
             etag,
+            client_version: Some(client_version),
             models: models.to_vec(),
         };
         if let Err(err) = self.save_internal(&cache).await {
@@ -103,6 +112,20 @@ impl ModelsCacheManager {
         f(&mut cache.fetched_at);
         self.save_internal(&cache).await
     }
+
+    #[cfg(test)]
+    /// Mutate the full cache contents for testing.
+    pub(crate) async fn mutate_cache_for_test<F>(&self, f: F) -> io::Result<()>
+    where
+        F: FnOnce(&mut ModelsCache),
+    {
+        let mut cache = match self.load().await? {
+            Some(cache) => cache,
+            None => return Err(io::Error::new(ErrorKind::NotFound, "cache not found")),
+        };
+        f(&mut cache);
+        self.save_internal(&cache).await
+    }
 }
 
 /// Serialized snapshot of models and metadata cached on disk.
@@ -111,6 +134,8 @@ pub(crate) struct ModelsCache {
     pub(crate) fetched_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) etag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) client_version: Option<String>,
     pub(crate) models: Vec<ModelInfo>,
 }
 

@@ -1,8 +1,11 @@
 use crate::config::types::EnvironmentVariablePattern;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyInherit;
+use codex_protocol::ThreadId;
 use std::collections::HashMap;
 use std::collections::HashSet;
+
+pub const CODEX_THREAD_ID_ENV_VAR: &str = "CODEX_THREAD_ID";
 
 /// Construct an environment map based on the rules in the specified policy. The
 /// resulting map can be passed directly to `Command::envs()` after calling
@@ -11,11 +14,21 @@ use std::collections::HashSet;
 ///
 /// The derivation follows the algorithm documented in the struct-level comment
 /// for [`ShellEnvironmentPolicy`].
-pub fn create_env(policy: &ShellEnvironmentPolicy) -> HashMap<String, String> {
-    populate_env(std::env::vars(), policy)
+///
+/// `CODEX_THREAD_ID` is injected when a thread id is provided, even when
+/// `include_only` is set.
+pub fn create_env(
+    policy: &ShellEnvironmentPolicy,
+    thread_id: Option<ThreadId>,
+) -> HashMap<String, String> {
+    populate_env(std::env::vars(), policy, thread_id)
 }
 
-fn populate_env<I>(vars: I, policy: &ShellEnvironmentPolicy) -> HashMap<String, String>
+fn populate_env<I>(
+    vars: I,
+    policy: &ShellEnvironmentPolicy,
+    thread_id: Option<ThreadId>,
+) -> HashMap<String, String>
 where
     I: IntoIterator<Item = (String, String)>,
 {
@@ -72,6 +85,11 @@ where
         env_map.retain(|k, _| matches_any(k, &policy.include_only));
     }
 
+    // Step 6 – Populate the thread ID environment variable when provided.
+    if let Some(thread_id) = thread_id {
+        env_map.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+    }
+
     env_map
 }
 
@@ -98,14 +116,16 @@ mod tests {
         ]);
 
         let policy = ShellEnvironmentPolicy::default(); // inherit All, default excludes ignored
-        let result = populate_env(vars, &policy);
+        let thread_id = ThreadId::new();
+        let result = populate_env(vars, &policy, Some(thread_id));
 
-        let expected: HashMap<String, String> = hashmap! {
+        let mut expected: HashMap<String, String> = hashmap! {
             "PATH".to_string() => "/usr/bin".to_string(),
             "HOME".to_string() => "/home/user".to_string(),
             "API_KEY".to_string() => "secret".to_string(),
             "SECRET_TOKEN".to_string() => "t".to_string(),
         };
+        expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
 
         assert_eq!(result, expected);
     }
@@ -123,12 +143,14 @@ mod tests {
             ignore_default_excludes: false, // apply KEY/SECRET/TOKEN filter
             ..Default::default()
         };
-        let result = populate_env(vars, &policy);
+        let thread_id = ThreadId::new();
+        let result = populate_env(vars, &policy, Some(thread_id));
 
-        let expected: HashMap<String, String> = hashmap! {
+        let mut expected: HashMap<String, String> = hashmap! {
             "PATH".to_string() => "/usr/bin".to_string(),
             "HOME".to_string() => "/home/user".to_string(),
         };
+        expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
 
         assert_eq!(result, expected);
     }
@@ -144,11 +166,13 @@ mod tests {
             ..Default::default()
         };
 
-        let result = populate_env(vars, &policy);
+        let thread_id = ThreadId::new();
+        let result = populate_env(vars, &policy, Some(thread_id));
 
-        let expected: HashMap<String, String> = hashmap! {
+        let mut expected: HashMap<String, String> = hashmap! {
             "PATH".to_string() => "/usr/bin".to_string(),
         };
+        expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
 
         assert_eq!(result, expected);
     }
@@ -163,11 +187,41 @@ mod tests {
         };
         policy.r#set.insert("NEW_VAR".to_string(), "42".to_string());
 
-        let result = populate_env(vars, &policy);
+        let thread_id = ThreadId::new();
+        let result = populate_env(vars, &policy, Some(thread_id));
+
+        let mut expected: HashMap<String, String> = hashmap! {
+            "PATH".to_string() => "/usr/bin".to_string(),
+            "NEW_VAR".to_string() => "42".to_string(),
+        };
+        expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn populate_env_inserts_thread_id() {
+        let vars = make_vars(&[("PATH", "/usr/bin")]);
+        let policy = ShellEnvironmentPolicy::default();
+        let thread_id = ThreadId::new();
+        let result = populate_env(vars, &policy, Some(thread_id));
+
+        let mut expected: HashMap<String, String> = hashmap! {
+            "PATH".to_string() => "/usr/bin".to_string(),
+        };
+        expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn populate_env_omits_thread_id_when_missing() {
+        let vars = make_vars(&[("PATH", "/usr/bin")]);
+        let policy = ShellEnvironmentPolicy::default();
+        let result = populate_env(vars, &policy, None);
 
         let expected: HashMap<String, String> = hashmap! {
             "PATH".to_string() => "/usr/bin".to_string(),
-            "NEW_VAR".to_string() => "42".to_string(),
         };
 
         assert_eq!(result, expected);
@@ -183,8 +237,10 @@ mod tests {
             ..Default::default()
         };
 
-        let result = populate_env(vars.clone(), &policy);
-        let expected: HashMap<String, String> = vars.into_iter().collect();
+        let thread_id = ThreadId::new();
+        let result = populate_env(vars.clone(), &policy, Some(thread_id));
+        let mut expected: HashMap<String, String> = vars.into_iter().collect();
+        expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
         assert_eq!(result, expected);
     }
 
@@ -198,10 +254,12 @@ mod tests {
             ..Default::default()
         };
 
-        let result = populate_env(vars, &policy);
-        let expected: HashMap<String, String> = hashmap! {
+        let thread_id = ThreadId::new();
+        let result = populate_env(vars, &policy, Some(thread_id));
+        let mut expected: HashMap<String, String> = hashmap! {
             "PATH".to_string() => "/usr/bin".to_string(),
         };
+        expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
         assert_eq!(result, expected);
     }
 
@@ -220,11 +278,13 @@ mod tests {
             ..Default::default()
         };
 
-        let result = populate_env(vars, &policy);
-        let expected: HashMap<String, String> = hashmap! {
+        let thread_id = ThreadId::new();
+        let result = populate_env(vars, &policy, Some(thread_id));
+        let mut expected: HashMap<String, String> = hashmap! {
             "Path".to_string() => "C:\\Windows\\System32".to_string(),
             "TEMP".to_string() => "C:\\Temp".to_string(),
         };
+        expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
 
         assert_eq!(result, expected);
     }
@@ -242,10 +302,12 @@ mod tests {
             .r#set
             .insert("ONLY_VAR".to_string(), "yes".to_string());
 
-        let result = populate_env(vars, &policy);
-        let expected: HashMap<String, String> = hashmap! {
+        let thread_id = ThreadId::new();
+        let result = populate_env(vars, &policy, Some(thread_id));
+        let mut expected: HashMap<String, String> = hashmap! {
             "ONLY_VAR".to_string() => "yes".to_string(),
         };
+        expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
         assert_eq!(result, expected);
     }
 }

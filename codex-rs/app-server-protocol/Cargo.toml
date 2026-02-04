@@ -15,14 +15,15 @@ workspace = true
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 codex-protocol = { workspace = true }
+codex-experimental-api-macros = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
-mcp-types = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 strum_macros = { workspace = true }
 thiserror = { workspace = true }
 ts-rs = { workspace = true }
+inventory = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v7"] }
 
 [dev-dependencies]

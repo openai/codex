@@ -8,7 +8,10 @@ use std::path::PathBuf;
 use codex_common::CliConfigOverrides;
 use codex_core::config::Config;
 
-use mcp_types::JSONRPCMessage;
+use rmcp::model::ClientNotification;
+use rmcp::model::ClientRequest;
+use rmcp::model::JsonRpcMessage;
+use serde_json::Value;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
@@ -21,13 +24,13 @@ use tracing_subscriber::EnvFilter;
 
 mod codex_tool_config;
 mod codex_tool_runner;
-mod error_code;
 mod exec_approval;
 pub(crate) mod message_processor;
 mod outgoing_message;
 mod patch_approval;
 
 use crate::message_processor::MessageProcessor;
+use crate::outgoing_message::OutgoingJsonRpcMessage;
 use crate::outgoing_message::OutgoingMessage;
 use crate::outgoing_message::OutgoingMessageSender;
 
@@ -43,6 +46,8 @@ pub use crate::patch_approval::PatchApprovalResponse;
 /// plenty for an interactive CLI.
 const CHANNEL_CAPACITY: usize = 128;
 
+type IncomingMessage = JsonRpcMessage<ClientRequest, Value, ClientNotification>;
+
 pub async fn run_main(
     codex_linux_sandbox_exe: Option<PathBuf>,
     cli_config_overrides: CliConfigOverrides,
@@ -55,7 +60,7 @@ pub async fn run_main(
         .init();
 
     // Set up channels.
-    let (incoming_tx, mut incoming_rx) = mpsc::channel::<JSONRPCMessage>(CHANNEL_CAPACITY);
+    let (incoming_tx, mut incoming_rx) = mpsc::channel::<IncomingMessage>(CHANNEL_CAPACITY);
     let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel::<OutgoingMessage>();
 
     // Task: read from stdin, push to `incoming_tx`.
@@ -66,14 +71,14 @@ pub async fn run_main(
             let mut lines = reader.lines();
 
             while let Some(line) = lines.next_line().await.unwrap_or_default() {
-                match serde_json::from_str::<JSONRPCMessage>(&line) {
+                match serde_json::from_str::<IncomingMessage>(&line) {
                     Ok(msg) => {
                         if incoming_tx.send(msg).await.is_err() {
                             // Receiver gone – nothing left to do.
                             break;
                         }
                     }
-                    Err(e) => error!("Failed to deserialize JSONRPCMessage: {e}"),
+                    Err(e) => error!("Failed to deserialize JSON-RPC message: {e}"),
                 }
             }
 
@@ -106,10 +111,10 @@ pub async fn run_main(
         async move {
             while let Some(msg) = incoming_rx.recv().await {
                 match msg {
-                    JSONRPCMessage::Request(r) => processor.process_request(r).await,
-                    JSONRPCMessage::Response(r) => processor.process_response(r).await,
-                    JSONRPCMessage::Notification(n) => processor.process_notification(n).await,
-                    JSONRPCMessage::Error(e) => processor.process_error(e),
+                    JsonRpcMessage::Request(r) => processor.process_request(r).await,
+                    JsonRpcMessage::Response(r) => processor.process_response(r).await,
+                    JsonRpcMessage::Notification(n) => processor.process_notification(n).await,
+                    JsonRpcMessage::Error(e) => processor.process_error(e),
                 }
             }
 
@@ -121,7 +126,7 @@ pub async fn run_main(
     let stdout_writer_handle = tokio::spawn(async move {
         let mut stdout = io::stdout();
         while let Some(outgoing_message) = outgoing_rx.recv().await {
-            let msg: JSONRPCMessage = outgoing_message.into();
+            let msg: OutgoingJsonRpcMessage = outgoing_message.into();
             match serde_json::to_string(&msg) {
                 Ok(json) => {
                     if let Err(e) = stdout.write_all(json.as_bytes()).await {
@@ -133,7 +138,7 @@ pub async fn run_main(
                         break;
                     }
                 }
-                Err(e) => error!("Failed to serialize JSONRPCMessage: {e}"),
+                Err(e) => error!("Failed to serialize JSON-RPC message: {e}"),
             }
         }
 

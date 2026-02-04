@@ -1,0 +1,1 @@
+#error Should not use superproject generated config.h to compile bubblewrap

@@ -9,8 +9,8 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 /// Create a mock server that will provide the responses, in order, for
-/// requests to the `/v1/chat/completions` endpoint.
-pub async fn create_mock_chat_completions_server(responses: Vec<String>) -> MockServer {
+/// requests to the `/v1/responses` endpoint.
+pub async fn create_mock_responses_server(responses: Vec<String>) -> MockServer {
     let server = MockServer::start().await;
 
     let num_calls = responses.len();
@@ -20,7 +20,7 @@ pub async fn create_mock_chat_completions_server(responses: Vec<String>) -> Mock
     };
 
     Mock::given(method("POST"))
-        .and(path("/v1/chat/completions"))
+        .and(path("/v1/responses"))
         .respond_with(seq_responder)
         .expect(num_calls as u64)
         .mount(&server)

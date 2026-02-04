@@ -4,15 +4,12 @@ use codex_core::auth::CODEX_API_KEY_ENV_VAR;
 use codex_core::protocol::GitInfo;
 use codex_utils_cargo_bin::find_resource;
 use core_test_support::fs_wait;
+use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use std::time::Duration;
 use tempfile::TempDir;
 use uuid::Uuid;
-use wiremock::Mock;
 use wiremock::MockServer;
-use wiremock::ResponseTemplate;
-use wiremock::matchers::method;
-use wiremock::matchers::path;
 
 fn repo_root() -> std::path::PathBuf {
     #[expect(clippy::expect_used)]
@@ -24,41 +21,28 @@ fn cli_responses_fixture() -> std::path::PathBuf {
     find_resource!("tests/cli_responses_fixture.sse").expect("failed to resolve fixture path")
 }
 
-/// Tests streaming chat completions through the CLI using a mock server.
-/// This test:
-/// 1. Sets up a mock server that simulates OpenAI's chat completions API
-/// 2. Configures codex to use this mock server via a custom provider
-/// 3. Sends a simple "hello?" prompt and verifies the streamed response
-/// 4. Ensures the response is received exactly once and contains "hi"
+/// Tests streaming the Responses API through the CLI using a mock server.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn chat_mode_stream_cli() {
+async fn responses_mode_stream_cli() {
     skip_if_no_network!();
 
     let server = MockServer::start().await;
     let repo_root = repo_root();
-    let sse = concat!(
-        "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n",
-        "data: {\"choices\":[{\"delta\":{}}]}\n\n",
-        "data: [DONE]\n\n"
-    );
-    Mock::given(method("POST"))
-        .and(path("/v1/chat/completions"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("content-type", "text/event-stream")
-                .set_body_raw(sse, "text/event-stream"),
-        )
-        .expect(1)
-        .mount(&server)
-        .await;
+    let sse = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "hi"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let resp_mock = responses::mount_sse_once(&server, sse).await;
 
     let home = TempDir::new().unwrap();
     let provider_override = format!(
-        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"PATH\", wire_api = \"chat\" }}",
+        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"PATH\", wire_api = \"responses\" }}",
         server.uri()
     );
     let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
     let mut cmd = AssertCommand::new(bin);
+    cmd.timeout(Duration::from_secs(30));
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-c")
@@ -81,7 +65,8 @@ async fn chat_mode_stream_cli() {
     let hi_lines = stdout.lines().filter(|line| line.trim() == "hi").count();
     assert_eq!(hi_lines, 1, "Expected exactly one line with 'hi'");
 
-    server.verify().await;
+    let request = resp_mock.single_request();
+    assert_eq!(request.path(), "/v1/responses");
 
     // Verify a new session rollout was created and is discoverable via list_conversations
     let provider_filter = vec!["mock".to_string()];

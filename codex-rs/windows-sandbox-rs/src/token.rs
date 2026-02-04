@@ -284,17 +284,6 @@ unsafe fn enable_single_privilege(h_token: HANDLE, name: &str) -> Result<()> {
 
 /// # Safety
 /// Caller must close the returned token handle.
-pub unsafe fn create_workspace_write_token_with_cap(
-    psid_capability: *mut c_void,
-) -> Result<(HANDLE, *mut c_void)> {
-    let base = get_current_token_for_restriction()?;
-    let res = create_workspace_write_token_with_cap_from(base, psid_capability);
-    CloseHandle(base);
-    res
-}
-
-/// # Safety
-/// Caller must close the returned token handle.
 pub unsafe fn create_readonly_token_with_cap(
     psid_capability: *mut c_void,
 ) -> Result<(HANDLE, *mut c_void)> {
@@ -306,61 +295,63 @@ pub unsafe fn create_readonly_token_with_cap(
 
 /// # Safety
 /// Caller must close the returned token handle; base_token must be a valid primary token.
-pub unsafe fn create_workspace_write_token_with_cap_from(
-    base_token: HANDLE,
-    psid_capability: *mut c_void,
-) -> Result<(HANDLE, *mut c_void)> {
-    let mut logon_sid_bytes = get_logon_sid_bytes(base_token)?;
-    let psid_logon = logon_sid_bytes.as_mut_ptr() as *mut c_void;
-    let mut everyone = world_sid()?;
-    let psid_everyone = everyone.as_mut_ptr() as *mut c_void;
-    let mut entries: [SID_AND_ATTRIBUTES; 3] = std::mem::zeroed();
-    // Exact set and order: Capability, Logon, Everyone
-    entries[0].Sid = psid_capability;
-    entries[0].Attributes = 0;
-    entries[1].Sid = psid_logon;
-    entries[1].Attributes = 0;
-    entries[2].Sid = psid_everyone;
-    entries[2].Attributes = 0;
-    let mut new_token: HANDLE = 0;
-    let flags = DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED;
-    let ok = CreateRestrictedToken(
-        base_token,
-        flags,
-        0,
-        std::ptr::null(),
-        0,
-        std::ptr::null(),
-        3,
-        entries.as_mut_ptr(),
-        &mut new_token,
-    );
-    if ok == 0 {
-        return Err(anyhow!("CreateRestrictedToken failed: {}", GetLastError()));
-    }
-    set_default_dacl(new_token, &[psid_logon, psid_everyone, psid_capability])?;
-    enable_single_privilege(new_token, "SeChangeNotifyPrivilege")?;
-    Ok((new_token, psid_capability))
-}
-
 /// # Safety
 /// Caller must close the returned token handle; base_token must be a valid primary token.
 pub unsafe fn create_readonly_token_with_cap_from(
     base_token: HANDLE,
     psid_capability: *mut c_void,
 ) -> Result<(HANDLE, *mut c_void)> {
+    let new_token = create_token_with_caps_from(base_token, &[psid_capability])?;
+    Ok((new_token, psid_capability))
+}
+
+/// Create a restricted token that includes all provided capability SIDs.
+///
+/// # Safety
+/// Caller must close the returned token handle; base_token must be a valid primary token.
+pub unsafe fn create_workspace_write_token_with_caps_from(
+    base_token: HANDLE,
+    psid_capabilities: &[*mut c_void],
+) -> Result<HANDLE> {
+    create_token_with_caps_from(base_token, psid_capabilities)
+}
+
+/// Create a restricted token that includes all provided capability SIDs.
+///
+/// # Safety
+/// Caller must close the returned token handle; base_token must be a valid primary token.
+pub unsafe fn create_readonly_token_with_caps_from(
+    base_token: HANDLE,
+    psid_capabilities: &[*mut c_void],
+) -> Result<HANDLE> {
+    create_token_with_caps_from(base_token, psid_capabilities)
+}
+
+unsafe fn create_token_with_caps_from(
+    base_token: HANDLE,
+    psid_capabilities: &[*mut c_void],
+) -> Result<HANDLE> {
+    if psid_capabilities.is_empty() {
+        return Err(anyhow!("no capability SIDs provided"));
+    }
     let mut logon_sid_bytes = get_logon_sid_bytes(base_token)?;
     let psid_logon = logon_sid_bytes.as_mut_ptr() as *mut c_void;
     let mut everyone = world_sid()?;
     let psid_everyone = everyone.as_mut_ptr() as *mut c_void;
-    let mut entries: [SID_AND_ATTRIBUTES; 3] = std::mem::zeroed();
-    // Exact set and order: Capability, Logon, Everyone
-    entries[0].Sid = psid_capability;
-    entries[0].Attributes = 0;
-    entries[1].Sid = psid_logon;
-    entries[1].Attributes = 0;
-    entries[2].Sid = psid_everyone;
-    entries[2].Attributes = 0;
+
+    // Exact order: Capabilities..., Logon, Everyone
+    let mut entries: Vec<SID_AND_ATTRIBUTES> =
+        vec![std::mem::zeroed(); psid_capabilities.len() + 2];
+    for (i, psid) in psid_capabilities.iter().enumerate() {
+        entries[i].Sid = *psid;
+        entries[i].Attributes = 0;
+    }
+    let logon_idx = psid_capabilities.len();
+    entries[logon_idx].Sid = psid_logon;
+    entries[logon_idx].Attributes = 0;
+    entries[logon_idx + 1].Sid = psid_everyone;
+    entries[logon_idx + 1].Attributes = 0;
+
     let mut new_token: HANDLE = 0;
     let flags = DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED;
     let ok = CreateRestrictedToken(
@@ -370,14 +361,20 @@ pub unsafe fn create_readonly_token_with_cap_from(
         std::ptr::null(),
         0,
         std::ptr::null(),
-        3,
+        entries.len() as u32,
         entries.as_mut_ptr(),
         &mut new_token,
     );
     if ok == 0 {
         return Err(anyhow!("CreateRestrictedToken failed: {}", GetLastError()));
     }
-    set_default_dacl(new_token, &[psid_logon, psid_everyone, psid_capability])?;
+
+    let mut dacl_sids: Vec<*mut c_void> = Vec::with_capacity(psid_capabilities.len() + 2);
+    dacl_sids.push(psid_logon);
+    dacl_sids.push(psid_everyone);
+    dacl_sids.extend_from_slice(psid_capabilities);
+    set_default_dacl(new_token, &dacl_sids)?;
+
     enable_single_privilege(new_token, "SeChangeNotifyPrivilege")?;
-    Ok((new_token, psid_capability))
+    Ok(new_token)
 }

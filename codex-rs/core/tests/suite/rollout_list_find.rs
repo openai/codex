@@ -3,6 +3,7 @@ use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 
+use chrono::Utc;
 use codex_core::RolloutRecorder;
 use codex_core::RolloutRecorderParams;
 use codex_core::config::ConfigBuilder;
@@ -12,6 +13,8 @@ use codex_core::find_thread_path_by_name_str;
 use codex_core::protocol::SessionSource;
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
+use codex_state::StateRuntime;
+use codex_state::ThreadMetadataBuilder;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -52,6 +55,21 @@ fn write_minimal_rollout_with_id(codex_home: &Path, id: Uuid) -> PathBuf {
     write_minimal_rollout_with_id_in_subdir(codex_home, "sessions", id)
 }
 
+async fn upsert_thread_metadata(codex_home: &Path, thread_id: ThreadId, rollout_path: PathBuf) {
+    let runtime = StateRuntime::init(codex_home.to_path_buf(), "test-provider".to_string(), None)
+        .await
+        .unwrap();
+    let mut builder = ThreadMetadataBuilder::new(
+        thread_id,
+        rollout_path,
+        Utc::now(),
+        SessionSource::default(),
+    );
+    builder.cwd = codex_home.to_path_buf();
+    let metadata = builder.build("test-provider");
+    runtime.upsert_thread(&metadata).await.unwrap();
+}
+
 #[tokio::test]
 async fn find_locates_rollout_file_by_id() {
     let home = TempDir::new().unwrap();
@@ -75,6 +93,45 @@ async fn find_handles_gitignore_covering_codex_home_directory() {
     let expected = write_minimal_rollout_with_id(&codex_home, id);
 
     let found = find_thread_path_by_id_str(&codex_home, &id.to_string())
+        .await
+        .unwrap();
+
+    assert_eq!(found, Some(expected));
+}
+
+#[tokio::test]
+async fn find_prefers_sqlite_path_by_id() {
+    let home = TempDir::new().unwrap();
+    let id = Uuid::new_v4();
+    let thread_id = ThreadId::from_string(&id.to_string()).unwrap();
+    let db_path = home.path().join(format!(
+        "sessions/2030/12/30/rollout-2030-12-30T00-00-00-{id}.jsonl"
+    ));
+    std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
+    std::fs::write(&db_path, "").unwrap();
+    write_minimal_rollout_with_id(home.path(), id);
+    upsert_thread_metadata(home.path(), thread_id, db_path.clone()).await;
+
+    let found = find_thread_path_by_id_str(home.path(), &id.to_string())
+        .await
+        .unwrap();
+
+    assert_eq!(found, Some(db_path));
+}
+
+#[tokio::test]
+async fn find_falls_back_to_filesystem_when_sqlite_has_no_match() {
+    let home = TempDir::new().unwrap();
+    let id = Uuid::new_v4();
+    let expected = write_minimal_rollout_with_id(home.path(), id);
+    let unrelated_id = Uuid::new_v4();
+    let unrelated_thread_id = ThreadId::from_string(&unrelated_id.to_string()).unwrap();
+    let unrelated_path = home
+        .path()
+        .join("sessions/2030/12/30/rollout-2030-12-30T00-00-00-unrelated.jsonl");
+    upsert_thread_metadata(home.path(), unrelated_thread_id, unrelated_path).await;
+
+    let found = find_thread_path_by_id_str(home.path(), &id.to_string())
         .await
         .unwrap();
 

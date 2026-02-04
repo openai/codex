@@ -1,5 +1,7 @@
 use crate::metrics::names::API_CALL_COUNT_METRIC;
 use crate::metrics::names::API_CALL_DURATION_METRIC;
+use crate::metrics::names::RESPONSES_API_INFERENCE_TIME_DURATION_METRIC;
+use crate::metrics::names::RESPONSES_API_OVERHEAD_DURATION_METRIC;
 use crate::metrics::names::SSE_EVENT_COUNT_METRIC;
 use crate::metrics::names::SSE_EVENT_DURATION_METRIC;
 use crate::metrics::names::TOOL_CALL_COUNT_METRIC;
@@ -42,6 +44,10 @@ pub use crate::ToolDecisionSource;
 
 const SSE_UNKNOWN_KIND: &str = "unknown";
 const WEBSOCKET_UNKNOWN_KIND: &str = "unknown";
+const RESPONSES_WEBSOCKET_TIMING_KIND: &str = "responsesapi.websocket_timing";
+const RESPONSES_WEBSOCKET_TIMING_METRICS_FIELD: &str = "timing_metrics";
+const RESPONSES_API_OVERHEAD_FIELD: &str = "responses_duration_excl_engine_and_client_tool_time_ms";
+const RESPONSES_API_INFERENCE_FIELD: &str = "engine_service_total_ms";
 
 impl OtelManager {
     #[allow(clippy::too_many_arguments)]
@@ -252,6 +258,9 @@ impl OtelManager {
                                 .get("type")
                                 .and_then(|value| value.as_str())
                                 .map(std::string::ToString::to_string);
+                            if kind.as_deref() == Some(RESPONSES_WEBSOCKET_TIMING_KIND) {
+                                self.record_responses_websocket_timing_metrics(&value);
+                            }
                             if kind.as_deref() == Some("response.failed") {
                                 success = false;
                                 error_message = value
@@ -651,6 +660,22 @@ impl OtelManager {
         );
     }
 
+    fn record_responses_websocket_timing_metrics(&self, value: &serde_json::Value) {
+        let timing_metrics = value.get(RESPONSES_WEBSOCKET_TIMING_METRICS_FIELD);
+
+        let overhead_value =
+            timing_metrics.and_then(|value| value.get(RESPONSES_API_OVERHEAD_FIELD));
+        if let Some(duration) = duration_from_ms_value(overhead_value) {
+            self.record_duration(RESPONSES_API_OVERHEAD_DURATION_METRIC, duration, &[]);
+        }
+
+        let inference_value =
+            timing_metrics.and_then(|value| value.get(RESPONSES_API_INFERENCE_FIELD));
+        if let Some(duration) = duration_from_ms_value(inference_value) {
+            self.record_duration(RESPONSES_API_INFERENCE_TIME_DURATION_METRIC, duration, &[]);
+        }
+    }
+
     fn responses_type(event: &ResponseEvent) -> String {
         match event {
             ResponseEvent::Created => "created".into(),
@@ -688,4 +713,17 @@ impl OtelManager {
 
 fn timestamp() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+fn duration_from_ms_value(value: Option<&serde_json::Value>) -> Option<Duration> {
+    let value = value?;
+    let ms = value
+        .as_f64()
+        .or_else(|| value.as_i64().map(|v| v as f64))
+        .or_else(|| value.as_u64().map(|v| v as f64))?;
+    if !ms.is_finite() || ms < 0.0 {
+        return None;
+    }
+    let clamped = ms.min(u64::MAX as f64);
+    Some(Duration::from_millis(clamped.round() as u64))
 }

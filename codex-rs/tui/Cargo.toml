@@ -54,7 +54,6 @@ dunce = { workspace = true }
 image = { workspace = true, features = ["jpeg", "png"] }
 itertools = { workspace = true }
 lazy_static = { workspace = true }
-mcp-types = { workspace = true }
 pathdiff = { workspace = true }
 pulldown-cmark = { workspace = true }
 rand = { workspace = true }
@@ -67,6 +66,7 @@ ratatui = { workspace = true, features = [
 ratatui-macros = { workspace = true }
 regex-lite = { workspace = true }
 reqwest = { version = "0.12", features = ["json"] }
+rmcp = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
 shlex = { workspace = true }

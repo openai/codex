@@ -871,6 +871,7 @@ impl EventProcessor for EventProcessorWithJsonOutput {
                 }
                 CodexStatus::InitiateShutdown
             }
+            protocol::EventMsg::TurnAborted(_) => CodexStatus::InitiateShutdown,
             protocol::EventMsg::ShutdownComplete => CodexStatus::Shutdown,
             _ => CodexStatus::Running,
         }

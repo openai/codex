@@ -130,7 +130,7 @@ async fn run_command_under_sandbox(
     let sandbox_policy_cwd = cwd.clone();
 
     let stdio_policy = StdioPolicy::Inherit;
-    let env = create_env(&config.shell_environment_policy);
+    let env = create_env(&config.shell_environment_policy, None);
 
     // Special-case Windows sandbox: execute and exit the process to emulate inherited stdio.
     if let SandboxType::Windows = sandbox_type {

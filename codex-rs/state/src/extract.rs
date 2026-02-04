@@ -1,8 +1,5 @@
 use crate::model::ThreadMetadata;
-use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::models::is_local_image_close_tag_text;
-use codex_protocol::models::is_local_image_open_tag_text;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionMetaLine;
@@ -73,39 +70,8 @@ fn apply_event_msg(metadata: &mut ThreadMetadata, event: &EventMsg) {
     }
 }
 
-fn apply_response_item(metadata: &mut ThreadMetadata, item: &ResponseItem) {
-    if let Some(text) = extract_user_message_text(item) {
-        metadata.has_user_event = true;
-        if metadata.title.is_empty() {
-            metadata.title = text;
-        }
-    }
-}
-
-fn extract_user_message_text(item: &ResponseItem) -> Option<String> {
-    let ResponseItem::Message { role, content, .. } = item else {
-        return None;
-    };
-    if role != "user" {
-        return None;
-    }
-    let texts: Vec<&str> = content
-        .iter()
-        .filter_map(|content_item| match content_item {
-            ContentItem::InputText { text } => Some(text.as_str()),
-            ContentItem::InputImage { .. } | ContentItem::OutputText { .. } => None,
-        })
-        .filter(|text| !is_local_image_open_tag_text(text) && !is_local_image_close_tag_text(text))
-        .collect();
-    if texts.is_empty() {
-        return None;
-    }
-    let joined = texts.join("\n");
-    Some(
-        strip_user_message_prefix(joined.as_str())
-            .trim()
-            .to_string(),
-    )
+fn apply_response_item(_metadata: &mut ThreadMetadata, _item: &ResponseItem) {
+    // Title and has_user_event are derived from EventMsg::UserMessage only.
 }
 
 fn strip_user_message_prefix(text: &str) -> &str {
@@ -125,42 +91,61 @@ pub(crate) fn enum_to_string<T: Serialize>(value: &T) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::extract_user_message_text;
+    use super::apply_rollout_item;
     use crate::model::ThreadMetadata;
     use chrono::DateTime;
     use chrono::Utc;
     use codex_protocol::ThreadId;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::USER_MESSAGE_BEGIN;
+    use codex_protocol::protocol::UserMessageEvent;
+
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
     use uuid::Uuid;
 
     #[test]
-    fn extracts_user_message_text() {
-        let item = ResponseItem::Message {
+    fn response_item_user_messages_do_not_set_title_or_has_user_event() {
+        let mut metadata = metadata_for_test();
+        let item = RolloutItem::ResponseItem(ResponseItem::Message {
             id: None,
             role: "user".to_string(),
-            content: vec![
-                ContentItem::InputText {
-                    text: format!("<prior context> {USER_MESSAGE_BEGIN}actual question"),
-                },
-                ContentItem::InputImage {
-                    image_url: "https://example.com/image.png".to_string(),
-                },
-            ],
+            content: vec![ContentItem::InputText {
+                text: "hello from response item".to_string(),
+            }],
             end_turn: None,
-        };
-        let actual = extract_user_message_text(&item);
-        assert_eq!(actual.as_deref(), Some("actual question"));
+            phase: None,
+        });
+
+        apply_rollout_item(&mut metadata, &item, "test-provider");
+
+        assert_eq!(metadata.has_user_event, false);
+        assert_eq!(metadata.title, "");
     }
 
     #[test]
-    fn diff_fields_detects_changes() {
-        let id = ThreadId::from_string(&Uuid::now_v7().to_string()).expect("thread id");
+    fn event_msg_user_messages_set_title_and_has_user_event() {
+        let mut metadata = metadata_for_test();
+        let item = RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: format!("{USER_MESSAGE_BEGIN} actual user request"),
+            images: Some(vec![]),
+            local_images: vec![],
+            text_elements: vec![],
+        }));
+
+        apply_rollout_item(&mut metadata, &item, "test-provider");
+
+        assert_eq!(metadata.has_user_event, true);
+        assert_eq!(metadata.title, "actual user request");
+    }
+
+    fn metadata_for_test() -> ThreadMetadata {
+        let id = ThreadId::from_string(&Uuid::from_u128(42).to_string()).expect("thread id");
         let created_at = DateTime::<Utc>::from_timestamp(1_735_689_600, 0).expect("timestamp");
-        let base = ThreadMetadata {
+        ThreadMetadata {
             id,
             rollout_path: PathBuf::from("/tmp/a.jsonl"),
             created_at,
@@ -168,7 +153,7 @@ mod tests {
             source: "cli".to_string(),
             model_provider: "openai".to_string(),
             cwd: PathBuf::from("/tmp"),
-            title: "hello".to_string(),
+            title: String::new(),
             sandbox_policy: "read-only".to_string(),
             approval_mode: "on-request".to_string(),
             tokens_used: 1,
@@ -177,7 +162,14 @@ mod tests {
             git_sha: None,
             git_branch: None,
             git_origin_url: None,
-        };
+        }
+    }
+
+    #[test]
+    fn diff_fields_detects_changes() {
+        let mut base = metadata_for_test();
+        base.id = ThreadId::from_string(&Uuid::now_v7().to_string()).expect("thread id");
+        base.title = "hello".to_string();
         let mut other = base.clone();
         other.tokens_used = 2;
         other.title = "world".to_string();

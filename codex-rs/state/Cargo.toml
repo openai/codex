@@ -11,6 +11,7 @@ clap = { workspace = true, features = ["derive", "env"] }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 dirs = { workspace = true }
+log = { workspace = true }
 owo-colors = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

@@ -62,6 +62,14 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
         r#"{"type":"response.created"}"#.into(),
     ))));
     manager.record_websocket_event(&ws_response, Duration::from_millis(80));
+    let ws_timing_response: std::result::Result<
+        Option<std::result::Result<Message, tokio_tungstenite::tungstenite::Error>>,
+        codex_api::ApiError,
+    > = Ok(Some(Ok(Message::Text(
+        r#"{"type":"responsesapi.websocket_timing","timing_metrics":{"responses_duration_excl_engine_and_client_tool_time_ms":124,"engine_service_total_ms":457}}"#
+            .into(),
+    ))));
+    manager.record_websocket_event(&ws_timing_response, Duration::from_millis(20));
 
     let summary = manager
         .runtime_metrics_summary()
@@ -84,9 +92,11 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
             duration_ms: 400,
         },
         websocket_events: RuntimeMetricTotals {
-            count: 1,
-            duration_ms: 80,
+            count: 2,
+            duration_ms: 100,
         },
+        responses_api_overhead_ms: 124,
+        responses_api_inference_time_ms: 457,
     };
     assert_eq!(summary, expected);
 

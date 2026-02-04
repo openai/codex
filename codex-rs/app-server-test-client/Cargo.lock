@@ -175,7 +175,6 @@ dependencies = [
  "base64",
  "icu_decimal",
  "icu_locale_core",
- "mcp-types",
  "mime_guess",
  "serde",
  "serde_json",
@@ -520,16 +519,6 @@ name = "log"
 version = "0.4.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "34080505efa8e45a4b816c349525ebe327ceaa8559756f0356cba97ef3bf7432"
-
-[[package]]
-name = "mcp-types"
-version = "0.45.0"
-source = "git+https://github.com/openai/codex.git?tag=rust-v0.45.0#a7c7869c23f88f6c468281e6f438ba4a91b81f26"
-dependencies = [
- "serde",
- "serde_json",
- "ts-rs",
-]
 
 [[package]]
 name = "memchr"

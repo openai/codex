@@ -38,9 +38,10 @@ jobs:
             - If applicable, add one of the following labels to specify which sub-product or product surface the issue relates to.
             1. CLI — the Codex command line interface.
             2. extension — VS Code (or other IDE) extension-specific issues.
-            3. codex-web — Issues targeting the Codex web UI/Cloud experience.
-            4. github-action — Issues with the Codex GitHub action.
-            5. iOS — Issues with the Codex iOS app.
+            3. app - Issues related to the Codex desktop application.
+            4. codex-web — Issues targeting the Codex web UI/Cloud experience.
+            5. github-action — Issues with the Codex GitHub action.
+            6. iOS — Issues with the Codex iOS app.
 
             - Additionally add zero or more of the following labels that are relevant to the issue content. Prefer a small set of precise labels over many broad ones.
             1. windows-os — Bugs or friction specific to Windows environments (always when PowerShell is mentioned, path handling, copy/paste, OS-specific auth or tooling failures).

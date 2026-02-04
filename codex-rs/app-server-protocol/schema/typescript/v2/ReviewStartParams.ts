@@ -9,4 +9,4 @@ export type ReviewStartParams = { threadId: string, target: ReviewTarget,
  * Where to run the review: inline (default) on the current thread or
  * detached on a new thread (returned in `reviewThreadId`).
  */
-delivery: ReviewDelivery | null, };
+delivery?: ReviewDelivery | null, };

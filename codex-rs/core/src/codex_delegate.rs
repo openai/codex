@@ -312,14 +312,22 @@ async fn handle_exec_approval(
     event: ExecApprovalRequestEvent,
     cancel_token: &CancellationToken,
 ) {
+    let ExecApprovalRequestEvent {
+        call_id,
+        command,
+        cwd,
+        reason,
+        proposed_execpolicy_amendment,
+        ..
+    } = event;
     // Race approval with cancellation and timeout to avoid hangs.
     let approval_fut = parent_session.request_command_approval(
         parent_ctx,
-        parent_ctx.sub_id.clone(),
-        event.command,
-        event.cwd,
-        event.reason,
-        event.proposed_execpolicy_amendment,
+        call_id,
+        command,
+        cwd,
+        reason,
+        proposed_execpolicy_amendment,
     );
     let decision = await_approval_with_cancel(
         approval_fut,
@@ -341,14 +349,15 @@ async fn handle_patch_approval(
     event: ApplyPatchApprovalRequestEvent,
     cancel_token: &CancellationToken,
 ) {
+    let ApplyPatchApprovalRequestEvent {
+        call_id,
+        changes,
+        reason,
+        grant_root,
+        ..
+    } = event;
     let decision_rx = parent_session
-        .request_patch_approval(
-            parent_ctx,
-            parent_ctx.sub_id.clone(),
-            event.changes,
-            event.reason,
-            event.grant_root,
-        )
+        .request_patch_approval(parent_ctx, call_id, changes, reason, grant_root)
         .await;
     let decision = await_approval_with_cancel(
         async move { decision_rx.await.unwrap_or_default() },

@@ -1,7 +1,9 @@
+use codex_protocol::account::PlanType;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
 use http::HeaderMap;
+use serde::Deserialize;
 use std::fmt::Display;
 
 #[derive(Debug)]
@@ -38,6 +40,70 @@ pub fn parse_rate_limit(headers: &HeaderMap) -> Option<RateLimitSnapshot> {
         secondary,
         credits,
         plan_type: None,
+    })
+}
+
+#[derive(Debug, Deserialize)]
+struct RateLimitEventWindow {
+    used_percent: f64,
+    window_minutes: Option<i64>,
+    reset_at: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RateLimitEventDetails {
+    primary: Option<RateLimitEventWindow>,
+    secondary: Option<RateLimitEventWindow>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RateLimitEventCredits {
+    has_credits: bool,
+    unlimited: bool,
+    balance: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RateLimitEvent {
+    #[serde(rename = "type")]
+    kind: String,
+    plan_type: Option<PlanType>,
+    rate_limits: Option<RateLimitEventDetails>,
+    credits: Option<RateLimitEventCredits>,
+}
+
+pub fn parse_rate_limit_event(payload: &str) -> Option<RateLimitSnapshot> {
+    let event: RateLimitEvent = serde_json::from_str(payload).ok()?;
+    if event.kind != "codex.rate_limits" {
+        return None;
+    }
+    let (primary, secondary) = if let Some(details) = event.rate_limits.as_ref() {
+        (
+            map_event_window(details.primary.as_ref()),
+            map_event_window(details.secondary.as_ref()),
+        )
+    } else {
+        (None, None)
+    };
+    let credits = event.credits.map(|credits| CreditsSnapshot {
+        has_credits: credits.has_credits,
+        unlimited: credits.unlimited,
+        balance: credits.balance,
+    });
+    Some(RateLimitSnapshot {
+        primary,
+        secondary,
+        credits,
+        plan_type: event.plan_type,
+    })
+}
+
+fn map_event_window(window: Option<&RateLimitEventWindow>) -> Option<RateLimitWindow> {
+    let window = window?;
+    Some(RateLimitWindow {
+        used_percent: window.used_percent,
+        window_minutes: window.window_minutes,
+        resets_at: window.reset_at,
     })
 }
 

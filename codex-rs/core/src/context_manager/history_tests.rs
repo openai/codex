@@ -24,6 +24,7 @@ fn assistant_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         end_turn: None,
+        phase: None,
     }
 }
 
@@ -43,6 +44,7 @@ fn user_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         end_turn: None,
+        phase: None,
     }
 }
 
@@ -54,6 +56,24 @@ fn user_input_text_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         end_turn: None,
+        phase: None,
+    }
+}
+
+fn function_call_output(call_id: &str, content: &str) -> ResponseItem {
+    ResponseItem::FunctionCallOutput {
+        call_id: call_id.to_string(),
+        output: FunctionCallOutputPayload {
+            content: content.to_string(),
+            ..Default::default()
+        },
+    }
+}
+
+fn custom_tool_call_output(call_id: &str, output: &str) -> ResponseItem {
+    ResponseItem::CustomToolCallOutput {
+        call_id: call_id.to_string(),
+        output: output.to_string(),
     }
 }
 
@@ -97,6 +117,7 @@ fn filters_non_api_messages() {
             text: "ignored".to_string(),
         }],
         end_turn: None,
+        phase: None,
     };
     let reasoning = reasoning_msg("thinking...");
     h.record_items([&system, &reasoning, &ResponseItem::Other], policy);
@@ -127,6 +148,7 @@ fn filters_non_api_messages() {
                     text: "hi".to_string()
                 }],
                 end_turn: None,
+                phase: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -135,6 +157,7 @@ fn filters_non_api_messages() {
                     text: "hello".to_string()
                 }],
                 end_turn: None,
+                phase: None,
             }
         ]
     );
@@ -160,6 +183,63 @@ fn non_last_reasoning_tokens_ignore_entries_after_last_user() {
     // second: (1000 * 0.75 - 650) / 4 = 25 tokens
     // first + second = 62.5
     assert_eq!(history.get_non_last_reasoning_items_tokens(), 32);
+}
+
+#[test]
+fn trailing_codex_generated_tokens_stop_at_first_non_generated_item() {
+    let earlier_output = function_call_output("call-earlier", "earlier output");
+    let trailing_function_output = function_call_output("call-tail-1", "tail function output");
+    let trailing_custom_output = custom_tool_call_output("call-tail-2", "tail custom output");
+    let history = create_history_with_items(vec![
+        earlier_output,
+        user_msg("boundary item"),
+        trailing_function_output.clone(),
+        trailing_custom_output.clone(),
+    ]);
+    let expected_tokens = estimate_item_token_count(&trailing_function_output)
+        .saturating_add(estimate_item_token_count(&trailing_custom_output));
+
+    assert_eq!(
+        history.get_trailing_codex_generated_items_tokens(),
+        expected_tokens
+    );
+}
+
+#[test]
+fn trailing_codex_generated_tokens_exclude_function_call_tail() {
+    let history = create_history_with_items(vec![ResponseItem::FunctionCall {
+        id: None,
+        name: "not-generated".to_string(),
+        arguments: "{}".to_string(),
+        call_id: "call-tail".to_string(),
+    }]);
+
+    assert_eq!(history.get_trailing_codex_generated_items_tokens(), 0);
+}
+
+#[test]
+fn total_token_usage_includes_only_trailing_codex_generated_items() {
+    let non_trailing_output = function_call_output("call-before-message", "not trailing");
+    let trailing_assistant = assistant_msg("assistant boundary");
+    let trailing_output = custom_tool_call_output("tool-tail", "trailing output");
+    let mut history = create_history_with_items(vec![
+        non_trailing_output,
+        user_msg("boundary"),
+        trailing_assistant,
+        trailing_output.clone(),
+    ]);
+    history.update_token_info(
+        &TokenUsage {
+            total_tokens: 100,
+            ..Default::default()
+        },
+        None,
+    );
+
+    assert_eq!(
+        history.get_total_token_usage(true),
+        100 + estimate_item_token_count(&trailing_output)
+    );
 }
 
 #[test]
@@ -217,6 +297,30 @@ fn remove_first_item_removes_matching_call_for_output() {
 }
 
 #[test]
+fn remove_last_item_removes_matching_call_for_output() {
+    let items = vec![
+        user_msg("before tool call"),
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "do_it".to_string(),
+            arguments: "{}".to_string(),
+            call_id: "call-delete-last".to_string(),
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: "call-delete-last".to_string(),
+            output: FunctionCallOutputPayload {
+                content: "ok".to_string(),
+                ..Default::default()
+            },
+        },
+    ];
+    let mut h = create_history_with_items(items);
+
+    assert!(h.remove_last_item());
+    assert_eq!(h.raw_items(), vec![user_msg("before tool call")]);
+}
+
+#[test]
 fn replace_last_turn_images_replaces_tool_output_images() {
     let items = vec![
         user_input_text_msg("hi"),
@@ -262,6 +366,7 @@ fn replace_last_turn_images_does_not_touch_user_images() {
             image_url: "data:image/png;base64,AAA".to_string(),
         }],
         end_turn: None,
+        phase: None,
     }];
     let mut history = create_history_with_items(items.clone());
 

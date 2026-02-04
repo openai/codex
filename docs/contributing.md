@@ -41,6 +41,15 @@ If you are invited by a Codex team member to contribute a PR, here is the recomm
 3. **Document behavior.** If your change affects user-facing behavior, update the README, inline help (`codex --help`), or relevant example projects.
 4. **Keep commits atomic.** Each commit should compile and the tests should pass. This makes reviews and potential rollbacks easier.
 
+### Model metadata updates
+
+When a change updates model catalogs or model metadata (`/models` payloads, presets, or fixtures):
+
+- Set `input_modalities` explicitly for any model that does not support images.
+- Keep compatibility defaults in mind: omitted `input_modalities` currently implies text + image support.
+- Ensure client surfaces that accept images (for example, TUI paste/attach) consume the same capability signal.
+- Add/update tests that cover unsupported-image behavior and warning paths.
+
 ### Opening a pull request (by invitation only)
 
 - Fill in the PR template (or include similar information) - **What? Why? How?**

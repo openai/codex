@@ -66,6 +66,25 @@ pub fn elevated_setup_failure_details(_err: &anyhow::Error) -> Option<(String, S
 }
 
 #[cfg(target_os = "windows")]
+pub fn elevated_setup_failure_metric_name(err: &anyhow::Error) -> &'static str {
+    if codex_windows_sandbox::extract_setup_failure(err).is_some_and(|failure| {
+        matches!(
+            failure.code,
+            codex_windows_sandbox::SetupErrorCode::OrchestratorHelperLaunchCanceled
+        )
+    }) {
+        "codex.windows_sandbox.elevated_setup_canceled"
+    } else {
+        "codex.windows_sandbox.elevated_setup_failure"
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn elevated_setup_failure_metric_name(_err: &anyhow::Error) -> &'static str {
+    panic!("elevated_setup_failure_metric_name is only supported on Windows")
+}
+
+#[cfg(target_os = "windows")]
 pub fn run_elevated_setup(
     policy: &SandboxPolicy,
     policy_cwd: &Path,

@@ -9,7 +9,6 @@ import type { FunctionCallOutputContentItem } from "./FunctionCallOutputContentI
  * `content` preserves the historical plain-string payload so downstream
  * integrations (tests, logging, etc.) can keep treating tool output as
  * `String`. When an MCP server returns richer data we additionally populate
- * `content_items` with the structured form that the Responses/Chat
- * Completions APIs understand.
+ * `content_items` with the structured form that the Responses API understands.
  */
 export type FunctionCallOutputPayload = { content: string, content_items: Array<FunctionCallOutputContentItem> | null, success: boolean | null, };

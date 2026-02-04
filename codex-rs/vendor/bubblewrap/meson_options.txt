@@ -1,0 +1,73 @@
+option(
+  'bash_completion',
+  type : 'feature',
+  description : 'install bash completion script',
+  value : 'enabled',
+)
+option(
+  'bash_completion_dir',
+  type : 'string',
+  description : 'install bash completion script in this directory',
+  value : '',
+)
+option(
+  'bwrapdir',
+  type : 'string',
+  description : 'install bwrap in this directory [default: bindir, or libexecdir in subprojects]',
+)
+option(
+  'build_rpath',
+  type : 'string',
+  description : 'set a RUNPATH or RPATH on the bwrap executable',
+)
+option(
+  'install_rpath',
+  type : 'string',
+  description : 'set a RUNPATH or RPATH on the bwrap executable',
+)
+option(
+  'man',
+  type : 'feature',
+  description : 'generate man pages',
+  value : 'auto',
+)
+option(
+  'program_prefix',
+  type : 'string',
+  description : 'Prepend string to bwrap executable name, for use with subprojects',
+)
+option(
+  'python',
+  type : 'string',
+  description : 'Path to Python 3, or empty to use python3',
+)
+option(
+  'require_userns',
+  type : 'boolean',
+  description : 'require user namespaces by default when installed setuid',
+  value : false,
+)
+option(
+  'selinux',
+  type : 'feature',
+  description : 'enable optional SELINUX support',
+  value : 'auto',
+)
+option(
+  'tests',
+  type : 'boolean',
+  description : 'build tests',
+  value : true,
+)
+option(
+  'zsh_completion',
+  type : 'feature',
+  description : 'install zsh completion script',
+  value : 'enabled',
+)
+option(
+  'zsh_completion_dir',
+  type : 'string',
+  description : 'install zsh completion script in this directory',
+  value : '',
+)

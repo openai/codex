@@ -13,4 +13,4 @@ export type ChatgptAuthTokensRefreshParams = { reason: ChatgptAuthTokensRefreshR
  * This may be `null` when the prior ID token did not include a workspace
  * identifier (`chatgpt_account_id`) or when the token could not be parsed.
  */
-previousAccountId: string | null, };
+previousAccountId?: string | null, };

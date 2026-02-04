@@ -209,6 +209,14 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    /// Update image-paste behavior for the active composer and repaint immediately.
+    ///
+    /// Callers use this to keep composer affordances aligned with model capabilities.
+    pub fn set_image_paste_enabled(&mut self, enabled: bool) {
+        self.composer.set_image_paste_enabled(enabled);
+        self.request_redraw();
+    }
+
     pub fn set_connectors_snapshot(&mut self, snapshot: Option<ConnectorsSnapshot>) {
         self.composer.set_connector_mentions(snapshot);
         self.request_redraw();
@@ -216,6 +224,12 @@ impl BottomPane {
 
     pub fn take_mention_paths(&mut self) -> HashMap<String, String> {
         self.composer.take_mention_paths()
+    }
+
+    /// Clear pending attachments and mention paths e.g. when a slash command doesn't submit text.
+    pub(crate) fn drain_pending_submission_state(&mut self) {
+        let _ = self.take_recent_submission_images_with_placeholders();
+        let _ = self.take_mention_paths();
     }
 
     pub fn set_steer_enabled(&mut self, enabled: bool) {
@@ -396,6 +410,10 @@ impl BottomPane {
     }
 
     /// Replace the composer text with `text`.
+    ///
+    /// This is intended for fresh input where mention linkage does not need to
+    /// survive; it routes to `ChatComposer::set_text_content`, which resets
+    /// `mention_paths`.
     pub(crate) fn set_composer_text(
         &mut self,
         text: String,
@@ -404,6 +422,28 @@ impl BottomPane {
     ) {
         self.composer
             .set_text_content(text, text_elements, local_image_paths);
+        self.composer.move_cursor_to_end();
+        self.request_redraw();
+    }
+
+    /// Replace the composer text while preserving mention link targets.
+    ///
+    /// Use this when rehydrating a draft after a local validation/gating
+    /// failure (for example unsupported image submit) so previously selected
+    /// mention targets remain stable across retry.
+    pub(crate) fn set_composer_text_with_mention_paths(
+        &mut self,
+        text: String,
+        text_elements: Vec<TextElement>,
+        local_image_paths: Vec<PathBuf>,
+        mention_paths: HashMap<String, String>,
+    ) {
+        self.composer.set_text_content_with_mention_paths(
+            text,
+            text_elements,
+            local_image_paths,
+            mention_paths,
+        );
         self.request_redraw();
     }
 
@@ -785,6 +825,13 @@ impl BottomPane {
     ) -> Vec<LocalImageAttachment> {
         self.composer
             .take_recent_submission_images_with_placeholders()
+    }
+
+    pub(crate) fn prepare_inline_args_submission(
+        &mut self,
+        record_history: bool,
+    ) -> Option<(String, Vec<TextElement>)> {
+        self.composer.prepare_inline_args_submission(record_history)
     }
 
     fn as_renderable(&'_ self) -> RenderableItem<'_> {

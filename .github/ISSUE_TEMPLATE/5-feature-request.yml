@@ -1,0 +1,32 @@
+name: 🎁 Feature Request
+description: Propose a new feature for Codex
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Is Codex missing a feature that you'd like to see? Feel free to propose it here.
+
+        Before you submit a feature:
+        1. Search existing issues for similar features. If you find one, 👍 it rather than opening a new one.
+        2. The Codex team will try to balance the varying needs of the community when prioritizing or rejecting new features. Not all features will be accepted. See [Contributing](https://github.com/openai/codex#contributing) for more details.
+
+  - type: input
+    id: variant
+    attributes:
+      label: What variant of Codex are you using?
+      description: (e.g., App, IDE Extension, CLI, Web)
+    validations:
+      required: true
+  - type: textarea
+    id: feature
+    attributes:
+      label: What feature would you like to see?
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional information
+      description: Is there anything else you think we should know?

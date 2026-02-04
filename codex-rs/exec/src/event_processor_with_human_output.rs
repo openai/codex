@@ -375,7 +375,8 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 ts_msg!(self, "{}", title.style(title_style));
 
                 if let Ok(res) = result {
-                    let val: serde_json::Value = res.into();
+                    let val = serde_json::to_value(res)
+                        .unwrap_or_else(|_| serde_json::Value::String("<result>".to_string()));
                     let pretty =
                         serde_json::to_string_pretty(&val).unwrap_or_else(|_| val.to_string());
 
@@ -592,17 +593,20 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     view.path.display()
                 );
             }
-            EventMsg::TurnAborted(abort_reason) => match abort_reason.reason {
-                TurnAbortReason::Interrupted => {
-                    ts_msg!(self, "task interrupted");
+            EventMsg::TurnAborted(abort_reason) => {
+                match abort_reason.reason {
+                    TurnAbortReason::Interrupted => {
+                        ts_msg!(self, "task interrupted");
+                    }
+                    TurnAbortReason::Replaced => {
+                        ts_msg!(self, "task aborted: replaced by a new task");
+                    }
+                    TurnAbortReason::ReviewEnded => {
+                        ts_msg!(self, "task aborted: review ended");
+                    }
                 }
-                TurnAbortReason::Replaced => {
-                    ts_msg!(self, "task aborted: replaced by a new task");
-                }
-                TurnAbortReason::ReviewEnded => {
-                    ts_msg!(self, "task aborted: review ended");
-                }
-            },
+                return CodexStatus::InitiateShutdown;
+            }
             EventMsg::ContextCompacted(_) => {
                 ts_msg!(self, "context compacted");
             }
@@ -772,6 +776,8 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::McpListToolsResponse(_)
             | EventMsg::ListCustomPromptsResponse(_)
             | EventMsg::ListSkillsResponse(_)
+            | EventMsg::ListRemoteSkillsResponse(_)
+            | EventMsg::RemoteSkillDownloaded(_)
             | EventMsg::RawResponseItem(_)
             | EventMsg::UserMessage(_)
             | EventMsg::EnteredReviewMode(_)

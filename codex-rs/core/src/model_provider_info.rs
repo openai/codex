@@ -8,7 +8,6 @@
 use crate::auth::AuthMode;
 use crate::error::EnvVarError;
 use codex_api::Provider as ApiProvider;
-use codex_api::WireApi as ApiWireApi;
 use codex_api::is_azure_responses_wire_base_url;
 use codex_api::provider::RetryConfig as ApiRetryConfig;
 use http::HeaderMap;
@@ -28,25 +27,33 @@ const DEFAULT_REQUEST_MAX_RETRIES: u64 = 4;
 const MAX_STREAM_MAX_RETRIES: u64 = 100;
 /// Hard cap for user-configured `request_max_retries`.
 const MAX_REQUEST_MAX_RETRIES: u64 = 100;
-pub const CHAT_WIRE_API_DEPRECATION_SUMMARY: &str = r#"Support for the "chat" wire API is deprecated and will soon be removed. Update your model provider definition in config.toml to use wire_api = "responses"."#;
 
 const OPENAI_PROVIDER_NAME: &str = "OpenAI";
+const CHAT_WIRE_API_REMOVED_ERROR: &str = "`wire_api = \"chat\"` is no longer supported.\nHow to fix: set `wire_api = \"responses\"` in your provider config.\nMore info: https://github.com/openai/codex/discussions/7782";
+pub(crate) const LEGACY_OLLAMA_CHAT_PROVIDER_ID: &str = "ollama-chat";
+pub(crate) const OLLAMA_CHAT_PROVIDER_REMOVED_ERROR: &str = "`ollama-chat` is no longer supported.\nHow to fix: replace `ollama-chat` with `ollama` in `model_provider`, `oss_provider`, or `--local-provider`.\nMore info: https://github.com/openai/codex/discussions/7782";
 
-/// Wire protocol that the provider speaks. Most third-party services only
-/// implement the classic OpenAI Chat Completions JSON schema, whereas OpenAI
-/// itself (and a handful of others) additionally expose the more modern
-/// *Responses* API. The two protocols use different request/response shapes
-/// and *cannot* be auto-detected at runtime, therefore each provider entry
-/// must declare which one it expects.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+/// Wire protocol that the provider speaks.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum WireApi {
     /// The Responses API exposed by OpenAI at `/v1/responses`.
-    Responses,
-
-    /// Regular Chat Completions compatible with `/v1/chat/completions`.
     #[default]
-    Chat,
+    Responses,
+}
+
+impl<'de> Deserialize<'de> for WireApi {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        match value.as_str() {
+            "responses" => Ok(Self::Responses),
+            "chat" => Err(serde::de::Error::custom(CHAT_WIRE_API_REMOVED_ERROR)),
+            _ => Err(serde::de::Error::unknown_variant(&value, &["responses"])),
+        }
+    }
 }
 
 /// Serializable representation of a provider definition.
@@ -161,10 +168,6 @@ impl ModelProviderInfo {
             name: self.name.clone(),
             base_url,
             query_params: self.query_params.clone(),
-            wire: match self.wire_api {
-                WireApi::Responses => ApiWireApi::Responses,
-                WireApi::Chat => ApiWireApi::Chat,
-            },
             headers,
             retry,
             stream_idle_timeout: self.stream_idle_timeout(),
@@ -172,12 +175,7 @@ impl ModelProviderInfo {
     }
 
     pub(crate) fn is_azure_responses_endpoint(&self) -> bool {
-        let wire = match self.wire_api {
-            WireApi::Responses => ApiWireApi::Responses,
-            WireApi::Chat => ApiWireApi::Chat,
-        };
-
-        is_azure_responses_wire_base_url(wire, &self.name, self.base_url.as_deref())
+        is_azure_responses_wire_base_url(&self.name, self.base_url.as_deref())
     }
 
     /// If `env_key` is Some, returns the API key for this provider if present
@@ -277,7 +275,6 @@ pub const DEFAULT_OLLAMA_PORT: u16 = 11434;
 
 pub const LMSTUDIO_OSS_PROVIDER_ID: &str = "lmstudio";
 pub const OLLAMA_OSS_PROVIDER_ID: &str = "ollama";
-pub const OLLAMA_CHAT_PROVIDER_ID: &str = "ollama-chat";
 
 /// Built-in default provider list.
 pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
@@ -292,10 +289,6 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
         (
             OLLAMA_OSS_PROVIDER_ID,
             create_oss_provider(DEFAULT_OLLAMA_PORT, WireApi::Responses),
-        ),
-        (
-            OLLAMA_CHAT_PROVIDER_ID,
-            create_oss_provider(DEFAULT_OLLAMA_PORT, WireApi::Chat),
         ),
         (
             LMSTUDIO_OSS_PROVIDER_ID,
@@ -363,7 +356,7 @@ base_url = "http://localhost:11434/v1"
             env_key: None,
             env_key_instructions: None,
             experimental_bearer_token: None,
-            wire_api: WireApi::Chat,
+            wire_api: WireApi::Responses,
             query_params: None,
             http_headers: None,
             env_http_headers: None,
@@ -392,7 +385,7 @@ query_params = { api-version = "2025-04-01-preview" }
             env_key: Some("AZURE_OPENAI_API_KEY".into()),
             env_key_instructions: None,
             experimental_bearer_token: None,
-            wire_api: WireApi::Chat,
+            wire_api: WireApi::Responses,
             query_params: Some(maplit::hashmap! {
                 "api-version".to_string() => "2025-04-01-preview".to_string(),
             }),
@@ -424,7 +417,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             env_key: Some("API_KEY".into()),
             env_key_instructions: None,
             experimental_bearer_token: None,
-            wire_api: WireApi::Chat,
+            wire_api: WireApi::Responses,
             query_params: None,
             http_headers: Some(maplit::hashmap! {
                 "X-Example-Header".to_string() => "example-value".to_string(),
@@ -441,5 +434,18 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
         assert_eq!(expected_provider, provider);
+    }
+
+    #[test]
+    fn test_deserialize_chat_wire_api_shows_helpful_error() {
+        let provider_toml = r#"
+name = "OpenAI using Chat Completions"
+base_url = "https://api.openai.com/v1"
+env_key = "OPENAI_API_KEY"
+wire_api = "chat"
+        "#;
+
+        let err = toml::from_str::<ModelProviderInfo>(provider_toml).unwrap_err();
+        assert!(err.to_string().contains(CHAT_WIRE_API_REMOVED_ERROR));
     }
 }

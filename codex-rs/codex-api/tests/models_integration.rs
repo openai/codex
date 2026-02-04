@@ -2,7 +2,6 @@ use codex_api::AuthProvider;
 use codex_api::ModelsClient;
 use codex_api::provider::Provider;
 use codex_api::provider::RetryConfig;
-use codex_api::provider::WireApi;
 use codex_client::ReqwestTransport;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
@@ -11,6 +10,7 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationPolicyConfig;
+use codex_protocol::openai_models::default_input_modalities;
 use http::HeaderMap;
 use http::Method;
 use wiremock::Mock;
@@ -33,7 +33,6 @@ fn provider(base_url: &str) -> Provider {
         name: "test".to_string(),
         base_url: base_url.to_string(),
         query_params: None,
-        wire: WireApi::Responses,
         headers: HeaderMap::new(),
         retry: RetryConfig {
             max_attempts: 1,
@@ -88,6 +87,7 @@ async fn models_client_hits_models_endpoint() {
             auto_compact_token_limit: None,
             effective_context_window_percent: 95,
             experimental_supported_tools: Vec::new(),
+            input_modalities: default_input_modalities(),
         }],
     };
 

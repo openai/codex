@@ -9,6 +9,8 @@ Use /status to see the current model, approvals, and token usage.
 Use /fork to branch the current chat into a new thread.
 Use /init to create an AGENTS.md with project-specific guidance.
 Use /mcp to list configured MCP tools.
+Run `codex app` to open Codex Desktop (it installs on macOS if needed).
+Use /personality to customize how Codex communicates.
 Use /rename to rename your threads for easier thread resuming.
 Use the OpenAI docs MCP for API questions; enable it with `codex mcp add openaiDeveloperDocs --url https://developers.openai.com/mcp`.
 Join the OpenAI community Discord: http://discord.gg/openai
