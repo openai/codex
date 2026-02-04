@@ -6,6 +6,7 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::TokenUsage;
 use futures::Stream;
+use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 use std::pin::Pin;
@@ -13,7 +14,7 @@ use std::task::Context;
 use std::task::Poll;
 use tokio::sync::mpsc;
 
-/// Canonical prompt input for Chat and Responses endpoints.
+/// Canonical prompt input for Responses endpoints.
 #[derive(Debug, Clone)]
 pub struct Prompt {
     /// Fully-resolved system instructions for this turn.
@@ -35,6 +36,33 @@ pub struct CompactionInput<'a> {
     pub model: &'a str,
     pub input: &'a [ResponseItem],
     pub instructions: &'a str,
+}
+
+/// Canonical input payload for the memory trace summarize endpoint.
+#[derive(Debug, Clone, Serialize)]
+pub struct MemoryTraceSummarizeInput {
+    pub model: String,
+    pub traces: Vec<MemoryTrace>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<Reasoning>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MemoryTrace {
+    pub id: String,
+    pub metadata: MemoryTraceMetadata,
+    pub items: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MemoryTraceMetadata {
+    pub source_path: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct MemoryTraceSummaryOutput {
+    pub trace_summary: String,
+    pub memory_summary: String,
 }
 
 #[derive(Debug)]

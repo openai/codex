@@ -22,6 +22,8 @@ pub enum SetupErrorCode {
     OrchestratorPayloadSerializeFailed,
     /// Failed to launch the setup helper process (spawn or ShellExecuteExW).
     OrchestratorHelperLaunchFailed,
+    /// User canceled the UAC prompt while launching the helper.
+    OrchestratorHelperLaunchCanceled,
     /// Helper exited non-zero and no structured report was available.
     OrchestratorHelperExitNonzero,
     /// Helper exited non-zero and reading `setup_error.json` failed.
@@ -72,6 +74,7 @@ impl SetupErrorCode {
             Self::OrchestratorElevationCheckFailed => "orchestrator_elevation_check_failed",
             Self::OrchestratorPayloadSerializeFailed => "orchestrator_payload_serialize_failed",
             Self::OrchestratorHelperLaunchFailed => "orchestrator_helper_launch_failed",
+            Self::OrchestratorHelperLaunchCanceled => "orchestrator_helper_launch_canceled",
             Self::OrchestratorHelperExitNonzero => "orchestrator_helper_exit_nonzero",
             Self::OrchestratorHelperReportReadFailed => "orchestrator_helper_report_read_failed",
             Self::HelperRequestArgsFailed => "helper_request_args_failed",

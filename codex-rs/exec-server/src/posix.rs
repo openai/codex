@@ -241,7 +241,7 @@ async fn load_exec_policy() -> anyhow::Result<Policy> {
         cwd,
         &cli_overrides,
         overrides,
-        None,
+        codex_core::config_loader::CloudRequirementsLoader::default(),
     )
     .await?;
 

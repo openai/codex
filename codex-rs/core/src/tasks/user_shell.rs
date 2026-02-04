@@ -66,8 +66,8 @@ impl SessionTask for UserShellCommandTask {
             .counter("codex.task.user_shell", 1, &[]);
 
         let event = EventMsg::TurnStarted(TurnStartedEvent {
-            model_context_window: turn_context.client.get_model_context_window(),
-            collaboration_mode_kind: turn_context.collaboration_mode_kind,
+            model_context_window: turn_context.model_context_window(),
+            collaboration_mode_kind: turn_context.collaboration_mode.mode,
         });
         let session = session.clone_session();
         session.send_event(turn_context.as_ref(), event).await;
@@ -105,7 +105,10 @@ impl SessionTask for UserShellCommandTask {
         let exec_env = ExecEnv {
             command: exec_command.clone(),
             cwd: cwd.clone(),
-            env: create_env(&turn_context.shell_environment_policy),
+            env: create_env(
+                &turn_context.shell_environment_policy,
+                Some(session.conversation_id),
+            ),
             // TODO(zhao-oai): Now that we have ExecExpiration::Cancellation, we
             // should use that instead of an "arbitrarily large" timeout here.
             expiration: USER_SHELL_TIMEOUT_MS.into(),

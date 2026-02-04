@@ -69,7 +69,7 @@ async fn returns_config_error_for_invalid_user_config_toml() {
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await
     .expect_err("expected error");
@@ -99,7 +99,7 @@ async fn returns_config_error_for_invalid_managed_config_toml() {
         Some(cwd),
         &[] as &[(String, TomlValue)],
         overrides,
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await
     .expect_err("expected error");
@@ -188,7 +188,7 @@ extra = true
         Some(cwd),
         &[] as &[(String, TomlValue)],
         overrides,
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await
     .expect("load config");
@@ -225,7 +225,7 @@ async fn returns_empty_when_all_layers_missing() {
         Some(cwd),
         &[] as &[(String, TomlValue)],
         overrides,
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await
     .expect("load layers");
@@ -323,7 +323,7 @@ flag = false
         Some(cwd),
         &[] as &[(String, TomlValue)],
         overrides,
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await
     .expect("load config");
@@ -363,7 +363,7 @@ allowed_sandbox_modes = ["read-only"]
                 ),
             ),
         },
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await?;
 
@@ -424,7 +424,7 @@ allowed_approval_policies = ["never"]
                 ),
             ),
         },
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await?;
 
@@ -451,6 +451,7 @@ async fn load_requirements_toml_produces_expected_constraints() -> anyhow::Resul
         &requirements_file,
         r#"
 allowed_approval_policies = ["never", "on-request"]
+enforce_residency = "us"
 "#,
     )
     .await?;
@@ -465,7 +466,6 @@ allowed_approval_policies = ["never", "on-request"]
             .cloned(),
         Some(vec![AskForApproval::Never, AskForApproval::OnRequest])
     );
-
     let config_requirements: ConfigRequirements = config_requirements_toml.try_into()?;
     assert_eq!(
         config_requirements.approval_policy.value(),
@@ -479,6 +479,10 @@ allowed_approval_policies = ["never", "on-request"]
             .approval_policy
             .can_set(&AskForApproval::OnFailure)
             .is_err()
+    );
+    assert_eq!(
+        config_requirements.enforce_residency.value(),
+        Some(crate::config_loader::ResidencyRequirement::Us)
     );
     Ok(())
 }
@@ -503,6 +507,7 @@ allowed_approval_policies = ["on-request"]
             allowed_sandbox_modes: None,
             mcp_servers: None,
             rules: None,
+            enforce_residency: None,
         },
     );
     load_requirements_toml(&mut config_requirements_toml, &requirements_file).await?;
@@ -537,6 +542,7 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
         allowed_sandbox_modes: None,
         mcp_servers: None,
         rules: None,
+        enforce_residency: None,
     };
     let expected = requirements.clone();
     let cloud_requirements = CloudRequirementsLoader::new(async move { Some(requirements) });
@@ -546,7 +552,7 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
-        Some(cloud_requirements),
+        cloud_requirements,
     )
     .await?;
 
@@ -599,7 +605,7 @@ async fn project_layers_prefer_closest_cwd() -> std::io::Result<()> {
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await?;
 
@@ -731,7 +737,7 @@ async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> s
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await?;
 
@@ -750,6 +756,103 @@ async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> s
             disabled_reason: None,
         }],
         project_layers
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn codex_home_is_not_loaded_as_project_layer_from_home_dir() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let home_dir = tmp.path().join("home");
+    let codex_home = home_dir.join(".codex");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(codex_home.join(CONFIG_TOML_FILE), "foo = \"user\"\n").await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(&home_dir)?;
+    let layers = load_config_layers_state(
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+    )
+    .await?;
+
+    let project_layers: Vec<_> = layers
+        .get_layers(
+            super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
+            true,
+        )
+        .into_iter()
+        .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
+        .collect();
+    let expected: Vec<&ConfigLayerEntry> = Vec::new();
+    assert_eq!(expected, project_layers);
+    assert_eq!(
+        layers.effective_config().get("foo"),
+        Some(&TomlValue::String("user".to_string()))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn codex_home_within_project_tree_is_not_double_loaded() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    let project_dot_codex = project_root.join(".codex");
+    let nested_dot_codex = nested.join(".codex");
+
+    tokio::fs::create_dir_all(&nested_dot_codex).await?;
+    tokio::fs::create_dir_all(project_root.join(".git")).await?;
+    tokio::fs::write(nested_dot_codex.join(CONFIG_TOML_FILE), "foo = \"child\"\n").await?;
+
+    tokio::fs::create_dir_all(&project_dot_codex).await?;
+    make_config_for_test(&project_dot_codex, &project_root, TrustLevel::Trusted, None).await?;
+    let user_config_path = project_dot_codex.join(CONFIG_TOML_FILE);
+    let user_config_contents = tokio::fs::read_to_string(&user_config_path).await?;
+    tokio::fs::write(
+        &user_config_path,
+        format!("foo = \"user\"\n{user_config_contents}"),
+    )
+    .await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
+    let layers = load_config_layers_state(
+        &project_dot_codex,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+    )
+    .await?;
+
+    let project_layers: Vec<_> = layers
+        .get_layers(
+            super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
+            true,
+        )
+        .into_iter()
+        .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
+        .collect();
+
+    let child_config: TomlValue = toml::from_str("foo = \"child\"\n").expect("parse child config");
+    assert_eq!(
+        vec![&ConfigLayerEntry {
+            name: super::ConfigLayerSource::Project {
+                dot_codex_folder: AbsolutePathBuf::from_absolute_path(&nested_dot_codex)?,
+            },
+            config: child_config.clone(),
+            version: version_for_toml(&child_config),
+            disabled_reason: None,
+        }],
+        project_layers
+    );
+    assert_eq!(
+        layers.effective_config().get("foo"),
+        Some(&TomlValue::String("child".to_string()))
     );
 
     Ok(())
@@ -791,7 +894,7 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
         Some(cwd.clone()),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await?;
     let project_layers_untrusted: Vec<_> = layers_untrusted
@@ -829,7 +932,7 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await?;
     let project_layers_unknown: Vec<_> = layers_unknown
@@ -890,7 +993,7 @@ async fn invalid_project_config_ignored_when_untrusted_or_unknown() -> std::io::
             Some(cwd.clone()),
             &[] as &[(String, TomlValue)],
             LoaderOverrides::default(),
-            None,
+            CloudRequirementsLoader::default(),
         )
         .await?;
         let project_layers: Vec<_> = layers
@@ -946,7 +1049,7 @@ async fn cli_overrides_with_relative_paths_do_not_break_trust_check() -> std::io
         Some(cwd),
         &cli_overrides,
         LoaderOverrides::default(),
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await?;
 
@@ -988,7 +1091,7 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
-        None,
+        CloudRequirementsLoader::default(),
     )
     .await?;
 

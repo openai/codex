@@ -15,10 +15,9 @@ axum = { workspace = true, default-features = false, features = [
 ] }
 codex-keyring-store = { workspace = true }
 codex-protocol = { workspace = true }
-dirs = { workspace = true }
+codex-utils-home-dir = { workspace = true }
 futures = { workspace = true, default-features = false, features = ["std"] }
 keyring = { workspace = true, features = ["crypto-rust"] }
-mcp-types = { path = "../mcp-types" }
 oauth2 = "5"
 reqwest = { version = "0.12", default-features = false, features = [
     "json",
