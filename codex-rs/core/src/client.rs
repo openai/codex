@@ -1,13 +1,10 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::RwLock;
 
 use crate::api_bridge::CoreAuthProvider;
 use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::map_api_error;
 use crate::auth::UnauthorizedRecovery;
-use crate::turn_metadata::build_turn_metadata_header;
 use codex_api::CompactClient as ApiCompactClient;
 use codex_api::CompactionInput as ApiCompactionInput;
 use codex_api::Prompt as ApiPrompt;
@@ -72,12 +69,8 @@ use crate::transport_manager::TransportManager;
 pub const WEB_SEARCH_ELIGIBLE_HEADER: &str = "x-oai-web-search-eligible";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 pub const X_CODEX_TURN_METADATA_HEADER: &str = "x-codex-turn-metadata";
-
-#[derive(Debug, Default)]
-struct TurnMetadataCache {
-    cwd: Option<PathBuf>,
-    header: Option<HeaderValue>,
-}
+pub const X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER: &str =
+    "x-responsesapi-include-timing-metrics";
 
 #[derive(Debug)]
 struct ModelClientState {
@@ -91,7 +84,6 @@ struct ModelClientState {
     summary: ReasoningSummaryConfig,
     session_source: SessionSource,
     transport_manager: TransportManager,
-    turn_metadata_cache: Arc<RwLock<TurnMetadataCache>>,
 }
 
 #[derive(Debug, Clone)]
@@ -104,6 +96,7 @@ pub struct ModelClientSession {
     connection: Option<ApiWebSocketConnection>,
     websocket_last_items: Vec<ResponseItem>,
     transport_manager: TransportManager,
+    turn_metadata_header: Option<String>,
     /// Turn state for sticky routing.
     ///
     /// This is an `OnceLock` that stores the turn state value received from the server
@@ -143,111 +136,23 @@ impl ModelClient {
                 summary,
                 session_source,
                 transport_manager,
-                turn_metadata_cache: Arc::new(RwLock::new(TurnMetadataCache::default())),
             }),
         }
     }
 
-    pub fn new_session(&self, turn_metadata_cwd: Option<PathBuf>) -> ModelClientSession {
-        self.prewarm_turn_metadata_header(turn_metadata_cwd);
+    pub fn new_session(&self, turn_metadata_header: Option<String>) -> ModelClientSession {
         ModelClientSession {
             state: Arc::clone(&self.state),
             connection: None,
             websocket_last_items: Vec::new(),
             transport_manager: self.state.transport_manager.clone(),
+            turn_metadata_header,
             turn_state: Arc::new(OnceLock::new()),
-        }
-    }
-
-    /// Refresh turn metadata in the background and update a cached header that request
-    /// builders can read without blocking.
-    fn prewarm_turn_metadata_header(&self, turn_metadata_cwd: Option<PathBuf>) {
-        let turn_metadata_cwd =
-            turn_metadata_cwd.map(|cwd| std::fs::canonicalize(&cwd).unwrap_or(cwd));
-
-        if let Ok(mut cache) = self.state.turn_metadata_cache.write()
-            && cache.cwd != turn_metadata_cwd
-        {
-            cache.cwd = turn_metadata_cwd.clone();
-            cache.header = None;
-        }
-
-        let Some(cwd) = turn_metadata_cwd else {
-            return;
-        };
-        let turn_metadata_cache = Arc::clone(&self.state.turn_metadata_cache);
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let _task = handle.spawn(async move {
-                let header = build_turn_metadata_header(cwd.as_path())
-                    .await
-                    .and_then(|value| HeaderValue::from_str(value.as_str()).ok());
-
-                if let Ok(mut cache) = turn_metadata_cache.write()
-                    && cache.cwd.as_ref() == Some(&cwd)
-                {
-                    cache.header = header;
-                }
-            });
         }
     }
 }
 
 impl ModelClient {
-    pub fn get_model_context_window(&self) -> Option<i64> {
-        let model_info = &self.state.model_info;
-        let effective_context_window_percent = model_info.effective_context_window_percent;
-        model_info.context_window.map(|context_window| {
-            context_window.saturating_mul(effective_context_window_percent) / 100
-        })
-    }
-
-    pub fn config(&self) -> Arc<Config> {
-        Arc::clone(&self.state.config)
-    }
-
-    pub fn provider(&self) -> &ModelProviderInfo {
-        &self.state.provider
-    }
-
-    pub fn get_provider(&self) -> ModelProviderInfo {
-        self.state.provider.clone()
-    }
-
-    pub fn get_otel_manager(&self) -> OtelManager {
-        self.state.otel_manager.clone()
-    }
-
-    pub fn get_session_source(&self) -> SessionSource {
-        self.state.session_source.clone()
-    }
-
-    pub(crate) fn transport_manager(&self) -> TransportManager {
-        self.state.transport_manager.clone()
-    }
-
-    /// Returns the currently configured model slug.
-    pub fn get_model(&self) -> String {
-        self.state.model_info.slug.clone()
-    }
-
-    pub fn get_model_info(&self) -> ModelInfo {
-        self.state.model_info.clone()
-    }
-
-    /// Returns the current reasoning effort setting.
-    pub fn get_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
-        self.state.effort
-    }
-
-    /// Returns the current reasoning summary setting.
-    pub fn get_reasoning_summary(&self) -> ReasoningSummaryConfig {
-        self.state.summary
-    }
-
-    pub fn get_auth_manager(&self) -> Option<Arc<AuthManager>> {
-        self.state.auth_manager.clone()
-    }
-
     /// Compacts the current conversation history using the Compact endpoint.
     ///
     /// This is a unary call (no streaming) that returns a new list of
@@ -298,14 +203,6 @@ impl ModelClient {
 }
 
 impl ModelClientSession {
-    fn turn_metadata_header(&self) -> Option<HeaderValue> {
-        self.state
-            .turn_metadata_cache
-            .try_read()
-            .ok()
-            .and_then(|cache| cache.header.clone())
-    }
-
     /// Streams a single model turn using the configured Responses transport.
     pub async fn stream(&mut self, prompt: &Prompt) -> Result<ResponseStream> {
         let wire_api = self.state.provider.wire_api;
@@ -362,7 +259,10 @@ impl ModelClientSession {
         prompt: &Prompt,
         compression: Compression,
     ) -> ApiResponsesOptions {
-        let turn_metadata_header = self.turn_metadata_header();
+        let turn_metadata_header = self
+            .turn_metadata_header
+            .as_deref()
+            .and_then(|value| HeaderValue::from_str(value).ok());
         let model_info = &self.state.model_info;
 
         let default_reasoning_effort = model_info.default_reasoning_level;
@@ -489,6 +389,12 @@ impl ModelClientSession {
         if needs_new {
             let mut headers = options.extra_headers.clone();
             headers.extend(build_conversation_headers(options.conversation_id.clone()));
+            if self.state.config.features.enabled(Feature::RuntimeMetrics) {
+                headers.insert(
+                    X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER,
+                    HeaderValue::from_static("true"),
+                );
+            }
             let websocket_telemetry = self.build_websocket_telemetry();
             let new_conn: ApiWebSocketConnection =
                 ApiWebSocketResponsesClient::new(api_provider, api_auth)
