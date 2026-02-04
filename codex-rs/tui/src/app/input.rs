@@ -4,6 +4,7 @@
 //! entry, Ctrl-L clear, external editor launch, and agent navigation shortcuts.
 
 use super::*;
+use crate::key_hint::KeyBindingListExt;
 
 impl App {
     pub(super) async fn launch_external_editor(&mut self, tui: &mut tui::Tui) {
@@ -122,18 +123,62 @@ impl App {
             return;
         }
 
-        match key_event {
-            KeyEvent {
-                code: KeyCode::Char('t'),
-                modifiers: KeyModifiers::CONTROL,
-                kind: KeyEventKind::Press,
-                ..
-            } => {
-                // Enter alternate screen and set viewport to full size.
-                let _ = tui.enter_alt_screen();
-                self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
-                tui.frame_requester().schedule_frame();
+        if self.keymap.app.open_transcript.is_pressed(key_event) {
+            // Enter alternate screen and set viewport to full size.
+            let _ = tui.enter_alt_screen();
+            self.overlay = Some(Overlay::new_transcript(
+                self.transcript_cells.clone(),
+                self.keymap.pager.clone(),
+            ));
+            tui.frame_requester().schedule_frame();
+            return;
+        }
+
+        if self.keymap.app.open_external_editor.is_pressed(key_event) {
+            // Only launch the external editor if there is no overlay and the
+            // bottom pane is not in use. Note that it can be launched while a
+            // task is running to enable editing while the previous turn is
+            // ongoing.
+            if self.overlay.is_none()
+                && self.chat_widget.can_launch_external_editor()
+                && self.chat_widget.external_editor_state() == ExternalEditorState::Closed
+            {
+                self.request_external_editor_launch(tui);
             }
+            return;
+        }
+
+        if self.keymap.chat.edit_previous_message.is_pressed(key_event) {
+            // Esc primes/advances backtracking only in normal (not working) mode
+            // with the composer focused and empty. In any other state, forward
+            // Esc so the active UI (e.g. status indicator, modals, popups)
+            // handles it.
+            if self.chat_widget.is_normal_backtrack_mode() && self.chat_widget.composer_is_empty() {
+                self.handle_backtrack_esc_key(tui);
+            } else {
+                self.chat_widget.handle_key_event(key_event);
+            }
+            return;
+        }
+
+        if key_event.kind == KeyEventKind::Press
+            && self
+                .keymap
+                .chat
+                .confirm_edit_previous_message
+                .is_pressed(key_event)
+            && self.backtrack.primed
+            && self.backtrack.nth_user_message != usize::MAX
+            && self.chat_widget.composer_is_empty()
+        {
+            // Confirm backtrack when primed + count > 0.
+            if let Some(selection) = self.confirm_backtrack_from_main() {
+                self.apply_backtrack_selection(tui, selection);
+            }
+            return;
+        }
+
+        match key_event {
             KeyEvent {
                 code: KeyCode::Char('l'),
                 modifiers: KeyModifiers::CONTROL,
@@ -154,58 +199,15 @@ impl App {
                 }
             }
             KeyEvent {
-                code: KeyCode::Char('g'),
-                modifiers: KeyModifiers::CONTROL,
-                kind: KeyEventKind::Press,
-                ..
-            } => {
-                // Only launch the external editor if there is no overlay and the bottom pane is not in use.
-                // Note that it can be launched while a task is running to enable editing while the previous turn is ongoing.
-                if self.overlay.is_none()
-                    && self.chat_widget.can_launch_external_editor()
-                    && self.chat_widget.external_editor_state() == ExternalEditorState::Closed
-                {
-                    self.request_external_editor_launch(tui);
-                }
-            }
-            // Esc primes/advances backtracking only in normal (not working) mode
-            // with the composer focused and empty. In any other state, forward
-            // Esc so the active UI (e.g. status indicator, modals, popups)
-            // handles it.
-            KeyEvent {
-                code: KeyCode::Esc,
-                kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                ..
-            } => {
-                if self.chat_widget.is_normal_backtrack_mode()
-                    && self.chat_widget.composer_is_empty()
-                {
-                    self.handle_backtrack_esc_key(tui);
-                } else {
-                    self.chat_widget.handle_key_event(key_event);
-                }
-            }
-            // Enter confirms backtrack when primed + count > 0. Otherwise pass to widget.
-            KeyEvent {
-                code: KeyCode::Enter,
-                kind: KeyEventKind::Press,
-                ..
-            } if self.backtrack.primed
-                && self.backtrack.nth_user_message != usize::MAX
-                && self.chat_widget.composer_is_empty() =>
-            {
-                if let Some(selection) = self.confirm_backtrack_from_main() {
-                    self.apply_backtrack_selection(tui, selection);
-                }
-            }
-            KeyEvent {
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
             } => {
                 // Any non-Esc key press should cancel a primed backtrack.
                 // This avoids stale "Esc-primed" state after the user starts typing
                 // (even if they later backspace to empty).
-                if key_event.code != KeyCode::Esc && self.backtrack.primed {
+                if !self.keymap.chat.edit_previous_message.is_pressed(key_event)
+                    && self.backtrack.primed
+                {
                     self.reset_backtrack_state();
                 }
                 self.chat_widget.handle_key_event(key_event);

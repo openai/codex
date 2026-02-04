@@ -353,7 +353,7 @@ use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::WebSearchCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
-#[cfg(test)]
+use crate::keymap::RuntimeKeymap;
 use crate::markdown::append_markdown;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
@@ -5289,6 +5289,10 @@ impl ChatWidget {
             last_non_retry_error: None,
         };
 
+        widget.prefetch_rate_limits();
+        if let Ok(keymap) = RuntimeKeymap::from_config(&widget.config.tui_keymap) {
+            widget.bottom_pane.set_keymap_bindings(&keymap);
+        }
         widget
             .bottom_pane
             .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());

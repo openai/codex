@@ -13,6 +13,8 @@ pub(super) async fn make_test_app() -> App {
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
     let model = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
     let session_telemetry = test_session_telemetry(&config, model.as_str());
+    let keymap = RuntimeKeymap::from_config(&config.tui_keymap)
+        .expect("test config should always produce a valid runtime keymap");
 
     App {
         model_catalog: chat_widget.model_catalog(),
@@ -26,6 +28,7 @@ pub(super) async fn make_test_app() -> App {
         runtime_approval_policy_override: None,
         runtime_sandbox_policy_override: None,
         file_search,
+        keymap,
         transcript_cells: Vec::new(),
         overlay: None,
         deferred_history_lines: Vec::new(),
