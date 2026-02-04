@@ -4,7 +4,6 @@ use crate::harness::find_metric;
 use crate::harness::latest_metrics;
 use codex_app_server_protocol::AuthMode;
 use codex_otel::OtelManager;
-use codex_otel::hash_user_id;
 use codex_otel::metrics::Result;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
@@ -23,7 +22,6 @@ fn manager_attaches_metadata_tags_to_metrics() -> Result<()> {
         "gpt-5.1",
         Some("account-id".to_string()),
         None,
-        Some(hash_user_id("account-id")),
         Some(AuthMode::ApiKey),
         true,
         "tty".to_string(),
@@ -59,7 +57,6 @@ fn manager_attaches_metadata_tags_to_metrics() -> Result<()> {
         ("service".to_string(), "codex-cli".to_string()),
         ("session_source".to_string(), "cli".to_string()),
         ("source".to_string(), "tui".to_string()),
-        ("user.id".to_string(), hash_user_id("account-id")),
     ]);
     assert_eq!(attrs, expected);
 
@@ -76,7 +73,6 @@ fn manager_allows_disabling_metadata_tags() -> Result<()> {
         "gpt-4o",
         Some("account-id".to_string()),
         None,
-        Some(hash_user_id("account-id")),
         Some(AuthMode::ApiKey),
         true,
         "tty".to_string(),

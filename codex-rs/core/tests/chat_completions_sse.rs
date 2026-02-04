@@ -85,7 +85,6 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
         model_info.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
-        None,
         auth_mode,
         false,
         "test".to_string(),

@@ -62,7 +62,6 @@ let manager = OtelManager::new(
     slug,
     account_id,
     account_email,
-    user_id,
     auth_mode,
     log_user_prompts,
     terminal_type,

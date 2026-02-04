@@ -2,7 +2,6 @@ use crate::harness::attributes_to_map;
 use crate::harness::find_metric;
 use codex_app_server_protocol::AuthMode;
 use codex_otel::OtelManager;
-use codex_otel::hash_user_id;
 use codex_otel::metrics::MetricsClient;
 use codex_otel::metrics::MetricsConfig;
 use codex_otel::metrics::Result;
@@ -76,7 +75,6 @@ fn manager_snapshot_metrics_collects_without_shutdown() -> Result<()> {
         "gpt-5.1",
         Some("account-id".to_string()),
         None,
-        Some(hash_user_id("account-id")),
         Some(AuthMode::ApiKey),
         true,
         "tty".to_string(),
@@ -115,7 +113,6 @@ fn manager_snapshot_metrics_collects_without_shutdown() -> Result<()> {
         ("session_source".to_string(), "cli".to_string()),
         ("success".to_string(), "true".to_string()),
         ("tool".to_string(), "shell".to_string()),
-        ("user.id".to_string(), hash_user_id("account-id")),
     ]);
     assert_eq!(attrs, expected);
 
