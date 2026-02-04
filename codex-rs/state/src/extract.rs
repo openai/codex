@@ -5,8 +5,11 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
+use codex_protocol::protocol::UserMessageEvent;
 use serde::Serialize;
 use serde_json::Value;
+
+const IMAGE_ONLY_USER_MESSAGE_PLACEHOLDER: &str = "[Image]";
 
 /// Apply a rollout item to the metadata structure.
 pub fn apply_rollout_item(
@@ -65,11 +68,13 @@ fn apply_event_msg(metadata: &mut ThreadMetadata, event: &EventMsg) {
         }
         EventMsg::UserMessage(user) => {
             if metadata.first_user_message.is_none() {
-                metadata.first_user_message =
-                    Some(strip_user_message_prefix(user.message.as_str()).to_string());
+                metadata.first_user_message = user_message_preview(user);
             }
             if metadata.title.is_empty() {
-                metadata.title = strip_user_message_prefix(user.message.as_str()).to_string();
+                let title = strip_user_message_prefix(user.message.as_str());
+                if !title.is_empty() {
+                    metadata.title = title.to_string();
+                }
             }
         }
         _ => {}
@@ -85,6 +90,22 @@ fn strip_user_message_prefix(text: &str) -> &str {
         Some(idx) => text[idx + USER_MESSAGE_BEGIN.len()..].trim(),
         None => text.trim(),
     }
+}
+
+fn user_message_preview(user: &UserMessageEvent) -> Option<String> {
+    let message = strip_user_message_prefix(user.message.as_str());
+    if !message.is_empty() {
+        return Some(message.to_string());
+    }
+    if user
+        .images
+        .as_ref()
+        .is_some_and(|images| !images.is_empty())
+        || !user.local_images.is_empty()
+    {
+        return Some(IMAGE_ONLY_USER_MESSAGE_PLACEHOLDER.to_string());
+    }
+    None
 }
 
 pub(crate) fn enum_to_string<T: Serialize>(value: &T) -> String {
@@ -149,6 +170,41 @@ mod tests {
             Some("actual user request")
         );
         assert_eq!(metadata.title, "actual user request");
+    }
+
+    #[test]
+    fn event_msg_image_only_user_message_sets_image_placeholder_preview() {
+        let mut metadata = metadata_for_test();
+        let item = RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: String::new(),
+            images: Some(vec!["https://example.com/image.png".to_string()]),
+            local_images: vec![],
+            text_elements: vec![],
+        }));
+
+        apply_rollout_item(&mut metadata, &item, "test-provider");
+
+        assert_eq!(
+            metadata.first_user_message.as_deref(),
+            Some(super::IMAGE_ONLY_USER_MESSAGE_PLACEHOLDER)
+        );
+        assert_eq!(metadata.title, "");
+    }
+
+    #[test]
+    fn event_msg_blank_user_message_without_images_keeps_first_user_message_empty() {
+        let mut metadata = metadata_for_test();
+        let item = RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: "   ".to_string(),
+            images: Some(vec![]),
+            local_images: vec![],
+            text_elements: vec![],
+        }));
+
+        apply_rollout_item(&mut metadata, &item, "test-provider");
+
+        assert_eq!(metadata.first_user_message, None);
+        assert_eq!(metadata.title, "");
     }
 
     fn metadata_for_test() -> ThreadMetadata {
