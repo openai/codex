@@ -36,6 +36,12 @@ use unicode_width::UnicodeWidthStr;
 /// One selectable item in the generic selection list.
 pub(crate) type SelectionAction = Box<dyn Fn(&AppEventSender) + Send + Sync>;
 
+/// One row in a [`ListSelectionView`] selection list.
+///
+/// This is the source-of-truth model for row state before filtering and
+/// formatting into render rows. A row is treated as disabled when either
+/// `is_disabled` is true or `disabled_reason` is present; disabled rows cannot
+/// be accepted and are skipped by keyboard navigation.
 #[derive(Default)]
 pub(crate) struct SelectionItem {
     pub name: String,
@@ -53,7 +59,11 @@ pub(crate) struct SelectionItem {
 
 /// Construction-time configuration for [`ListSelectionView`].
 ///
-/// `col_width_mode` controls how column width is determined:
+/// This config is consumed once by [`ListSelectionView::new`]. After
+/// construction, mutable interaction state (filtering, scrolling, and selected
+/// row) lives on the view itself.
+///
+/// `col_width_mode` controls column width mode in selection lists:
 /// `AutoVisible` (default) measures only rows visible in the viewport
 /// `AutoAllRows` measures all rows to ensure stable column widths as the user scrolls
 /// `Fixed` used a fixed 30/70  split between columns
@@ -90,7 +100,8 @@ impl Default for SelectionViewParams {
 /// Runtime state for rendering and interacting with a list-based selection popup.
 ///
 /// This type is the single authority for filtered index mapping between
-/// visible rows and source items.
+/// visible rows and source items and for preserving selection while filters
+/// change.
 pub(crate) struct ListSelectionView {
     footer_note: Option<Line<'static>>,
     footer_hint: Option<Line<'static>>,
@@ -109,6 +120,13 @@ pub(crate) struct ListSelectionView {
 }
 
 impl ListSelectionView {
+    /// Create a selection popup view with filtering, scrolling, and callbacks wired.
+    ///
+    /// The constructor normalizes header/title composition and immediately
+    /// applies filtering so `ScrollState` starts in a valid visible range.
+    /// When search is enabled, rows without `search_value` will disappear as
+    /// soon as the query is non-empty, which can look like dropped data unless
+    /// callers intentionally populate that field.
     pub fn new(params: SelectionViewParams, app_event_tx: AppEventSender) -> Self {
         let mut header = params.header;
         if params.title.is_some() || params.subtitle.is_some() {

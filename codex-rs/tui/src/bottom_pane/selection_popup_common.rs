@@ -19,7 +19,11 @@ use crate::style::user_message_style;
 
 use super::scroll_state::ScrollState;
 
-/// A generic representation of a display row for selection popups.
+/// Render-ready representation of one row in a selection popup.
+///
+/// This type contains presentation-focused fields that are intentionally more
+/// concrete than source domain models. `match_indices` are character offsets
+/// into `name`, and `wrap_indent` is interpreted in terminal cell columns.
 #[derive(Default)]
 pub(crate) struct GenericDisplayRow {
     pub name: String,
@@ -31,7 +35,10 @@ pub(crate) struct GenericDisplayRow {
     pub wrap_indent: Option<usize>, // optional indent for wrapped lines
 }
 
-/// Controls how selection rows choose the split between name and description.
+/// Controls how selection rows choose the split between left/right name/description columns.
+///
+/// Callers should use the same mode for both measurement and rendering, or the
+/// popup can reserve the wrong number of lines and clip content.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) enum ColumnWidthMode {
@@ -66,7 +73,8 @@ pub(crate) const fn menu_surface_padding_height() -> u16 {
 /// Paint the shared menu background and return the inset content area.
 ///
 /// This keeps the surface treatment consistent across selection-style overlays
-/// (for example `/model`, approvals, and request-user-input).
+/// (for example `/model`, approvals, and request-user-input). Callers should
+/// render all inner content in the returned rect, not the original area.
 pub(crate) fn render_menu_surface(area: Rect, buf: &mut Buffer) -> Rect {
     if area.is_empty() {
         return area;
@@ -77,6 +85,10 @@ pub(crate) fn render_menu_surface(area: Rect, buf: &mut Buffer) -> Rect {
     menu_surface_inset(area)
 }
 
+/// Wrap a styled line while preserving span styles.
+///
+/// The function clamps `width` to at least one terminal cell so callers can use
+/// it safely with narrow layouts.
 pub(crate) fn wrap_styled_line<'a>(line: &'a Line<'a>, width: u16) -> Vec<Line<'a>> {
     use crate::wrapping::RtOptions;
     use crate::wrapping::word_wrap_line;
@@ -411,6 +423,9 @@ fn render_rows_inner(
 /// and behavior for selection popups.
 /// Description alignment is computed from visible rows only, which allows the
 /// layout to adapt tightly to the current viewport.
+///
+/// This function should be paired with [`measure_rows_height`] when reserving
+/// space; pairing it with a different measurement mode can cause clipping.
 pub(crate) fn render_rows(
     area: Rect,
     buf: &mut Buffer,
@@ -434,6 +449,10 @@ pub(crate) fn render_rows(
 /// and behavior for selection popups.
 /// This mode keeps column placement stable while scrolling by sizing the
 /// description column against the full dataset.
+///
+/// This function should be paired with
+/// [`measure_rows_height_stable_col_widths`] so reserved and rendered heights
+/// stay in sync.
 pub(crate) fn render_rows_stable_col_widths(
     area: Rect,
     buf: &mut Buffer,
@@ -455,6 +474,9 @@ pub(crate) fn render_rows_stable_col_widths(
 
 /// Render a list of rows using the provided ScrollState and explicit
 /// [`ColumnWidthMode`] behavior.
+///
+/// This is the low-level entry point for callers that need to thread a mode
+/// through higher-level configuration.
 pub(crate) fn render_rows_with_col_width_mode(
     area: Rect,
     buf: &mut Buffer,
@@ -476,6 +498,9 @@ pub(crate) fn render_rows_with_col_width_mode(
 }
 
 /// Render rows as a single line each (no wrapping), truncating overflow with an ellipsis.
+///
+/// This path always uses viewport-local width alignment and is best for dense
+/// list UIs where multi-line descriptions would add too much vertical churn.
 pub(crate) fn render_rows_single_line(
     area: Rect,
     buf: &mut Buffer,
@@ -556,6 +581,10 @@ pub(crate) fn render_rows_single_line(
 /// items from `rows_all` given the current scroll/selection state and the
 /// available `width`. Accounts for description wrapping and alignment so the
 /// caller can allocate sufficient vertical space.
+///
+/// This function matches [`render_rows`] semantics (`AutoVisible` column
+/// sizing). Mixing it with stable or fixed render modes can under- or
+/// over-estimate required height.
 pub(crate) fn measure_rows_height(
     rows_all: &[GenericDisplayRow],
     state: &ScrollState,
@@ -589,7 +618,9 @@ pub(crate) fn measure_rows_height_stable_col_widths(
     )
 }
 
-/// Measures selection-row height using explicit [`ColumnWidthMode`] behavior.
+/// Measure selection-row height using explicit [`ColumnWidthMode`] behavior.
+///
+/// This is the low-level companion to [`render_rows_with_col_width_mode`].
 pub(crate) fn measure_rows_height_with_col_width_mode(
     rows_all: &[GenericDisplayRow],
     state: &ScrollState,
