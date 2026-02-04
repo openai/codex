@@ -143,17 +143,19 @@ fn truncate_line_with_ellipsis_if_overflow(line: Line<'static>, max_width: usize
     Line::from(spans)
 }
 
-/// Compute a shared description-column start based on the widest visible name
-/// plus two spaces of padding. Ensures at least one column is left for the
-/// description.
+/// Computes the shared start column used for descriptions in selection rows.
+/// The column is derived from the widest row name plus two spaces of padding
+/// while always leaving at least one terminal cell for description content.
+/// When `use_all_rows_for_col_width` is `true`, width is computed across the
+/// full dataset so the description column does not shift as the user scrolls.
 fn compute_desc_col(
     rows_all: &[GenericDisplayRow],
     start_idx: usize,
     visible_items: usize,
     content_width: u16,
-    use_all_rows_for_desc_col: bool,
+    use_all_rows_for_col_width: bool,
 ) -> usize {
-    let max_name_width = if use_all_rows_for_desc_col {
+    let max_name_width = if use_all_rows_for_col_width {
         rows_all
             .iter()
             .map(|r| {
@@ -290,7 +292,7 @@ fn render_rows_inner(
     state: &ScrollState,
     max_results: usize,
     empty_message: &str,
-    use_all_rows_for_desc_col: bool,
+    use_all_rows_for_col_width: bool,
 ) {
     if rows_all.is_empty() {
         if area.height > 0 {
@@ -322,7 +324,7 @@ fn render_rows_inner(
         start_idx,
         visible_items,
         area.width,
-        use_all_rows_for_desc_col,
+        use_all_rows_for_col_width,
     );
 
     // Render items, wrapping descriptions and aligning wrapped lines under the
@@ -382,6 +384,8 @@ fn render_rows_inner(
 
 /// Render a list of rows using the provided ScrollState, with shared styling
 /// and behavior for selection popups.
+/// Description alignment is computed from visible rows only, which allows the
+/// layout to adapt tightly to the current viewport.
 pub(crate) fn render_rows(
     area: Rect,
     buf: &mut Buffer,
@@ -401,7 +405,11 @@ pub(crate) fn render_rows(
     );
 }
 
-pub(crate) fn render_rows_stable_desc_col(
+/// Render a list of rows using the provided ScrollState, with shared styling
+/// and behavior for selection popups.
+/// This mode keeps column placement stable while scrolling by sizing the
+/// description column against the full dataset.
+pub(crate) fn render_rows_stable_col_widths(
     area: Rect,
     buf: &mut Buffer,
     rows_all: &[GenericDisplayRow],
@@ -496,7 +504,10 @@ pub(crate) fn measure_rows_height(
     measure_rows_height_inner(rows_all, state, max_results, width, false)
 }
 
-pub(crate) fn measure_rows_height_stable_desc_col(
+/// Measures selection-row height while using full-dataset column alignment.
+/// This should be paired with [`render_rows_stable_col_widths`] so layout
+/// reservation matches rendering behavior.
+pub(crate) fn measure_rows_height_stable_col_widths(
     rows_all: &[GenericDisplayRow],
     state: &ScrollState,
     max_results: usize,
@@ -510,7 +521,7 @@ fn measure_rows_height_inner(
     state: &ScrollState,
     max_results: usize,
     width: u16,
-    use_all_rows_for_desc_col: bool,
+    use_all_rows_for_col_width: bool,
 ) -> u16 {
     if rows_all.is_empty() {
         return 1; // placeholder "no matches" line
@@ -536,7 +547,7 @@ fn measure_rows_height_inner(
         start_idx,
         visible_items,
         content_width,
-        use_all_rows_for_desc_col,
+        use_all_rows_for_col_width,
     );
 
     use crate::wrapping::RtOptions;

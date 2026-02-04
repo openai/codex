@@ -25,9 +25,9 @@ use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::measure_rows_height;
-use super::selection_popup_common::measure_rows_height_stable_desc_col;
+use super::selection_popup_common::measure_rows_height_stable_col_widths;
 use super::selection_popup_common::render_rows;
-use super::selection_popup_common::render_rows_stable_desc_col;
+use super::selection_popup_common::render_rows_stable_col_widths;
 use unicode_width::UnicodeWidthStr;
 
 /// One selectable item in the generic selection list.
@@ -48,6 +48,11 @@ pub(crate) struct SelectionItem {
     pub disabled_reason: Option<String>,
 }
 
+/// Construction-time configuration for [`ListSelectionView`].
+///
+/// `stable_col_widths` opts into width calculation using all rows rather
+/// than just the visible viewport. Use it for long, scrollable lists where a
+/// stable description column matters more than per-viewport compaction.
 pub(crate) struct SelectionViewParams {
     pub title: Option<String>,
     pub subtitle: Option<String>,
@@ -56,7 +61,7 @@ pub(crate) struct SelectionViewParams {
     pub items: Vec<SelectionItem>,
     pub is_searchable: bool,
     pub search_placeholder: Option<String>,
-    pub stable_desc_col: bool,
+    pub stable_col_widths: bool,
     pub header: Box<dyn Renderable>,
     pub initial_selected_idx: Option<usize>,
 }
@@ -71,13 +76,17 @@ impl Default for SelectionViewParams {
             items: Vec::new(),
             is_searchable: false,
             search_placeholder: None,
-            stable_desc_col: false,
+            stable_col_widths: false,
             header: Box::new(()),
             initial_selected_idx: None,
         }
     }
 }
 
+/// Runtime state for rendering and interacting with a list-based selection popup.
+///
+/// This type is the single authority for filtered index mapping between
+/// visible rows and source items.
 pub(crate) struct ListSelectionView {
     footer_note: Option<Line<'static>>,
     footer_hint: Option<Line<'static>>,
@@ -88,7 +97,7 @@ pub(crate) struct ListSelectionView {
     is_searchable: bool,
     search_query: String,
     search_placeholder: Option<String>,
-    stable_desc_col: bool,
+    stable_col_widths: bool,
     filtered_indices: Vec<usize>,
     last_selected_actual_idx: Option<usize>,
     header: Box<dyn Renderable>,
@@ -121,7 +130,7 @@ impl ListSelectionView {
             } else {
                 None
             },
-            stable_desc_col: params.stable_desc_col,
+            stable_col_widths: params.stable_col_widths,
             filtered_indices: Vec::new(),
             last_selected_actual_idx: None,
             header,
@@ -440,8 +449,8 @@ impl Renderable for ListSelectionView {
         // Build the same display rows used by the renderer so wrapping math matches.
         let rows = self.build_rows();
         let rows_width = Self::rows_width(width);
-        let rows_height = if self.stable_desc_col {
-            measure_rows_height_stable_desc_col(
+        let rows_height = if self.stable_col_widths {
+            measure_rows_height_stable_col_widths(
                 &rows,
                 &self.state,
                 MAX_POPUP_ROWS,
@@ -498,8 +507,8 @@ impl Renderable for ListSelectionView {
             .desired_height(outer_content_area.width.saturating_sub(4));
         let rows = self.build_rows();
         let rows_width = Self::rows_width(outer_content_area.width);
-        let rows_height = if self.stable_desc_col {
-            measure_rows_height_stable_desc_col(
+        let rows_height = if self.stable_col_widths {
+            measure_rows_height_stable_col_widths(
                 &rows,
                 &self.state,
                 MAX_POPUP_ROWS,
@@ -553,8 +562,8 @@ impl Renderable for ListSelectionView {
                 width: rows_width.max(1),
                 height: list_area.height,
             };
-            if self.stable_desc_col {
-                render_rows_stable_desc_col(
+            if self.stable_col_widths {
+                render_rows_stable_col_widths(
                     render_area,
                     buf,
                     &rows,
@@ -969,7 +978,7 @@ mod tests {
     }
 
     #[test]
-    fn stable_desc_column_does_not_shift_when_scrolling() {
+    fn stable_col_widths_does_not_shift_when_scrolling() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut items: Vec<SelectionItem> = (1..=8)
@@ -991,7 +1000,7 @@ mod tests {
             SelectionViewParams {
                 title: Some("Debug".to_string()),
                 items,
-                stable_desc_col: true,
+                stable_col_widths: true,
                 ..Default::default()
             },
             tx,
