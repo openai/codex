@@ -167,7 +167,7 @@ impl MultiSelectPicker {
     /// * `title` - The main title displayed at the top of the picker
     /// * `subtitle` - Optional subtitle displayed below the title (dimmed)
     /// * `app_event_tx` - Event sender for dispatching application events
-    pub fn new(
+    pub fn builder(
         title: String,
         subtitle: Option<String>,
         app_event_tx: AppEventSender,

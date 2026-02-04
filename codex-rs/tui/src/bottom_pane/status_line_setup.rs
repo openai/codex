@@ -208,10 +208,10 @@ impl StatusLineSetupView {
         }
 
         Self {
-            picker: MultiSelectPicker::new(
+            picker: MultiSelectPicker::builder(
                 "Configure Status Line".to_string(),
                 Some("Select which items to display in the status line.".to_string()),
-                app_event_tx.clone(),
+                app_event_tx,
             )
             .instructions(vec![
                 "Use ↑↓ to navigate, ←→ to move, space to select, enter to confirm, esc to cancel."
@@ -255,7 +255,6 @@ impl StatusLineSetupView {
             name: item.to_string(),
             description: Some(item.description().to_string()),
             enabled,
-            ..Default::default()
         }
     }
 }

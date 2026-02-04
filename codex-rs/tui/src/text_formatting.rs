@@ -339,7 +339,7 @@ pub(crate) fn proper_join<T: AsRef<str>>(items: &[T]) -> String {
         1 => items[0].as_ref().to_string(),
         2 => format!("{} and {}", items[0].as_ref(), items[1].as_ref()),
         _ => {
-            let last = items.last().unwrap().as_ref();
+            let last = items[items.len() - 1].as_ref();
             let mut result = String::new();
 
             for (i, item) in items.iter().take(items.len() - 1).enumerate() {
@@ -349,7 +349,7 @@ pub(crate) fn proper_join<T: AsRef<str>>(items: &[T]) -> String {
                 result.push_str(item.as_ref());
             }
 
-            format!("{} and {}", result, last)
+            format!("{result} and {last}")
         }
     }
 }
