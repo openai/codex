@@ -890,6 +890,16 @@ impl ChatWidget {
         self.status_line_branch_lookup_complete = true;
     }
 
+    fn request_status_line_branch_refresh(&mut self) {
+        let (items, _) = self.status_line_items_with_invalids();
+        if items.is_empty() || !items.contains(&StatusLineItem::GitBranch) {
+            return;
+        }
+        let cwd = self.status_line_cwd().to_path_buf();
+        self.sync_status_line_branch_state(&cwd);
+        self.request_status_line_branch(cwd);
+    }
+
     fn restore_retry_status_header_if_present(&mut self) {
         if let Some(header) = self.retry_status_header.take() {
             self.set_status_header(header);
@@ -1165,6 +1175,7 @@ impl ChatWidget {
             }
             self.needs_final_message_separator = false;
             self.had_work_activity = false;
+            self.request_status_line_branch_refresh();
         }
         // Mark task stopped and request redraw now that all content is in history.
         self.agent_turn_running = false;
@@ -1398,6 +1409,7 @@ impl ChatWidget {
         self.adaptive_chunking.reset();
         self.stream_controller = None;
         self.plan_stream_controller = None;
+        self.request_status_line_branch_refresh();
         self.maybe_show_pending_rate_limit_prompt();
     }
 
