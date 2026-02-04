@@ -477,7 +477,7 @@ impl BottomPaneView for MultiSelectPicker {
             KeyEvent {
                 code: KeyCode::Esc, ..
             } => {
-                self.on_ctrl_c();
+                self.close();
             }
             KeyEvent {
                 code: KeyCode::Char(c),
