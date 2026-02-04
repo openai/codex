@@ -160,7 +160,7 @@ async fn run_session_picker(
                 &request.codex_home,
                 PAGE_SIZE,
                 request.cursor.as_ref(),
-                ThreadSortKey::CreatedAt,
+                resume_picker_sort_key(),
                 INTERACTIVE_SESSION_SOURCES,
                 Some(provider_filter.as_slice()),
                 request.default_provider.as_str(),
@@ -221,6 +221,10 @@ async fn run_session_picker(
 
     // Fallback – treat as cancel/new
     Ok(SessionSelection::StartFresh)
+}
+
+fn resume_picker_sort_key() -> ThreadSortKey {
+    ThreadSortKey::UpdatedAt
 }
 
 /// RAII guard that ensures we leave the alt-screen on scope exit.
@@ -1191,11 +1195,23 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
 mod tests {
     use super::*;
     use chrono::Duration;
+    use codex_protocol::ThreadId;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::RolloutItem;
+    use codex_protocol::protocol::RolloutLine;
+    use codex_protocol::protocol::SessionMeta;
+    use codex_protocol::protocol::SessionMetaLine;
+    use codex_protocol::protocol::SessionSource;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
+    use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::fs::FileTimes;
+    use std::fs::OpenOptions;
+    use std::path::Path;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::Mutex;
@@ -1240,6 +1256,105 @@ mod tests {
             num_scanned_files,
             reached_scan_cap,
         }
+    }
+
+    fn set_rollout_mtime(path: &Path, updated_at: DateTime<Utc>) {
+        let times = FileTimes::new().set_modified(updated_at.into());
+        OpenOptions::new()
+            .append(true)
+            .open(path)
+            .expect("open rollout")
+            .set_times(times)
+            .expect("set times");
+    }
+
+    #[tokio::test]
+    async fn resume_picker_orders_by_updated_at() {
+        use uuid::Uuid;
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let sessions_root = tempdir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_root).expect("mkdir sessions root");
+
+        let now = Utc::now();
+
+        let write_rollout = |ts: DateTime<Utc>, preview: &str| -> PathBuf {
+            let dir = sessions_root
+                .join(ts.format("%Y").to_string())
+                .join(ts.format("%m").to_string())
+                .join(ts.format("%d").to_string());
+            std::fs::create_dir_all(&dir).expect("mkdir date dirs");
+            let filename = format!(
+                "rollout-{}-{}.jsonl",
+                ts.format("%Y-%m-%dT%H-%M-%S"),
+                Uuid::new_v4()
+            );
+            let path = dir.join(filename);
+            let meta = SessionMeta {
+                id: ThreadId::new(),
+                forked_from_id: None,
+                timestamp: ts.to_rfc3339(),
+                cwd: PathBuf::from("/tmp"),
+                originator: String::from("user"),
+                cli_version: String::from("0.0.0"),
+                source: SessionSource::Cli,
+                model_provider: Some(String::from("openai")),
+                base_instructions: None,
+                dynamic_tools: None,
+            };
+            let meta_line = RolloutLine {
+                timestamp: ts.to_rfc3339(),
+                item: RolloutItem::SessionMeta(SessionMetaLine { meta, git: None }),
+            };
+            let user_line = RolloutLine {
+                timestamp: ts.to_rfc3339(),
+                item: RolloutItem::ResponseItem(ResponseItem::Message {
+                    id: None,
+                    role: String::from("user"),
+                    content: vec![ContentItem::InputText {
+                        text: preview.to_string(),
+                    }],
+                    end_turn: None,
+                    phase: None,
+                }),
+            };
+            let meta_json = serde_json::to_string(&meta_line).expect("serialize meta");
+            let user_json = serde_json::to_string(&user_line).expect("serialize user");
+            std::fs::write(&path, format!("{meta_json}\n{user_json}\n")).expect("write rollout");
+            path
+        };
+
+        let created_a = now - Duration::minutes(1);
+        let created_b = now - Duration::minutes(2);
+
+        let path_a = write_rollout(created_a, "A (created newer)");
+        let path_b = write_rollout(created_b, "B (created older)");
+
+        set_rollout_mtime(&path_a, now - Duration::minutes(10));
+        set_rollout_mtime(&path_b, now - Duration::seconds(10));
+
+        let page = RolloutRecorder::list_threads(
+            tempdir.path(),
+            PAGE_SIZE,
+            None,
+            resume_picker_sort_key(),
+            INTERACTIVE_SESSION_SOURCES,
+            Some(&[String::from("openai")]),
+            "openai",
+        )
+        .await
+        .expect("list threads");
+
+        let rows = rows_from_items(page.items);
+        let previews: Vec<String> = rows.iter().map(|row| row.preview.clone()).collect();
+
+        assert_eq!(
+            previews,
+            vec![
+                "B (created older)".to_string(),
+                "A (created newer)".to_string()
+            ]
+        );
     }
 
     #[test]
