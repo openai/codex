@@ -43,7 +43,9 @@ const WRITE_RESTRICTED: u32 = 0x08;
 const GENERIC_ALL: u32 = 0x1000_0000;
 const WIN_WORLD_SID: i32 = 1;
 const WIN_AUTHENTICATED_USER_SID: i32 = 17;
-const WIN_BUILTIN_USERS_SID: i32 = 26;
+const WIN_LOCAL_SYSTEM_SID: i32 = 22;
+const WIN_BUILTIN_ADMINISTRATORS_SID: i32 = 26;
+const WIN_BUILTIN_USERS_SID: i32 = 27;
 const SE_GROUP_LOGON_ID: u32 = 0xC0000000;
 
 #[repr(C)]
@@ -113,6 +115,14 @@ pub unsafe fn world_sid() -> Result<Vec<u8>> {
 
 pub unsafe fn authenticated_users_sid() -> Result<Vec<u8>> {
     well_known_sid(WIN_AUTHENTICATED_USER_SID)
+}
+
+pub unsafe fn local_system_sid() -> Result<Vec<u8>> {
+    well_known_sid(WIN_LOCAL_SYSTEM_SID)
+}
+
+pub unsafe fn builtin_administrators_sid() -> Result<Vec<u8>> {
+    well_known_sid(WIN_BUILTIN_ADMINISTRATORS_SID)
 }
 
 pub unsafe fn builtin_users_sid() -> Result<Vec<u8>> {

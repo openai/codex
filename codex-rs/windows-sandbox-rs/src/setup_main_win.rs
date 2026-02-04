@@ -248,8 +248,8 @@ fn lock_sandbox_dir(
     _log: &mut File,
 ) -> Result<()> {
     std::fs::create_dir_all(dir)?;
-    let system_sid = resolve_sid("SYSTEM")?;
-    let admins_sid = resolve_sid("Administrators")?;
+    let system_sid = unsafe { codex_windows_sandbox::local_system_sid()? };
+    let admins_sid = unsafe { codex_windows_sandbox::builtin_administrators_sid()? };
     let real_sid = resolve_sid(real_user)?;
     let entries = [
         (
