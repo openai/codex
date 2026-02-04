@@ -23,11 +23,14 @@ use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
 use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
+pub(crate) use super::selection_popup_common::ColumnWidthMode;
 use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::measure_rows_height;
 use super::selection_popup_common::measure_rows_height_stable_col_widths;
+use super::selection_popup_common::measure_rows_height_with_col_width_mode;
 use super::selection_popup_common::render_rows;
 use super::selection_popup_common::render_rows_stable_col_widths;
+use super::selection_popup_common::render_rows_with_col_width_mode;
 use unicode_width::UnicodeWidthStr;
 
 /// One selectable item in the generic selection list.
@@ -50,9 +53,10 @@ pub(crate) struct SelectionItem {
 
 /// Construction-time configuration for [`ListSelectionView`].
 ///
-/// `stable_col_widths` opts into width calculation using all rows rather
-/// than just the visible viewport. Use it for long, scrollable lists where a
-/// stable description column matters more than per-viewport compaction.
+/// `col_width_mode` controls how column width is determined:
+/// `AutoVisible` (default) measures only rows visible in the viewport
+/// `AutoAllRows` measures all rows to ensure stable column widths as the user scrolls 
+/// `Fixed` used a fixed 30/70  split between columns
 pub(crate) struct SelectionViewParams {
     pub title: Option<String>,
     pub subtitle: Option<String>,
@@ -61,7 +65,7 @@ pub(crate) struct SelectionViewParams {
     pub items: Vec<SelectionItem>,
     pub is_searchable: bool,
     pub search_placeholder: Option<String>,
-    pub stable_col_widths: bool,
+    pub col_width_mode: ColumnWidthMode,
     pub header: Box<dyn Renderable>,
     pub initial_selected_idx: Option<usize>,
 }
@@ -76,7 +80,7 @@ impl Default for SelectionViewParams {
             items: Vec::new(),
             is_searchable: false,
             search_placeholder: None,
-            stable_col_widths: false,
+            col_width_mode: ColumnWidthMode::AutoVisible,
             header: Box::new(()),
             initial_selected_idx: None,
         }
@@ -97,7 +101,7 @@ pub(crate) struct ListSelectionView {
     is_searchable: bool,
     search_query: String,
     search_placeholder: Option<String>,
-    stable_col_widths: bool,
+    col_width_mode: ColumnWidthMode,
     filtered_indices: Vec<usize>,
     last_selected_actual_idx: Option<usize>,
     header: Box<dyn Renderable>,
@@ -130,7 +134,7 @@ impl ListSelectionView {
             } else {
                 None
             },
-            stable_col_widths: params.stable_col_widths,
+            col_width_mode: params.col_width_mode,
             filtered_indices: Vec::new(),
             last_selected_actual_idx: None,
             header,
@@ -449,20 +453,26 @@ impl Renderable for ListSelectionView {
         // Build the same display rows used by the renderer so wrapping math matches.
         let rows = self.build_rows();
         let rows_width = Self::rows_width(width);
-        let rows_height = if self.stable_col_widths {
-            measure_rows_height_stable_col_widths(
+        let rows_height = match self.col_width_mode {
+            ColumnWidthMode::AutoVisible => measure_rows_height(
                 &rows,
                 &self.state,
                 MAX_POPUP_ROWS,
                 rows_width.saturating_add(1),
-            )
-        } else {
-            measure_rows_height(
+            ),
+            ColumnWidthMode::AutoAllRows => measure_rows_height_stable_col_widths(
                 &rows,
                 &self.state,
                 MAX_POPUP_ROWS,
                 rows_width.saturating_add(1),
-            )
+            ),
+            ColumnWidthMode::Fixed => measure_rows_height_with_col_width_mode(
+                &rows,
+                &self.state,
+                MAX_POPUP_ROWS,
+                rows_width.saturating_add(1),
+                ColumnWidthMode::Fixed,
+            ),
         };
 
         // Subtract 4 for the padding on the left and right of the header.
@@ -507,20 +517,26 @@ impl Renderable for ListSelectionView {
             .desired_height(outer_content_area.width.saturating_sub(4));
         let rows = self.build_rows();
         let rows_width = Self::rows_width(outer_content_area.width);
-        let rows_height = if self.stable_col_widths {
-            measure_rows_height_stable_col_widths(
+        let rows_height = match self.col_width_mode {
+            ColumnWidthMode::AutoVisible => measure_rows_height(
                 &rows,
                 &self.state,
                 MAX_POPUP_ROWS,
                 rows_width.saturating_add(1),
-            )
-        } else {
-            measure_rows_height(
+            ),
+            ColumnWidthMode::AutoAllRows => measure_rows_height_stable_col_widths(
                 &rows,
                 &self.state,
                 MAX_POPUP_ROWS,
                 rows_width.saturating_add(1),
-            )
+            ),
+            ColumnWidthMode::Fixed => measure_rows_height_with_col_width_mode(
+                &rows,
+                &self.state,
+                MAX_POPUP_ROWS,
+                rows_width.saturating_add(1),
+                ColumnWidthMode::Fixed,
+            ),
         };
         let [header_area, _, search_area, list_area] = Layout::vertical([
             Constraint::Max(header_height),
@@ -562,24 +578,32 @@ impl Renderable for ListSelectionView {
                 width: rows_width.max(1),
                 height: list_area.height,
             };
-            if self.stable_col_widths {
-                render_rows_stable_col_widths(
+            match self.col_width_mode {
+                ColumnWidthMode::AutoVisible => render_rows(
                     render_area,
                     buf,
                     &rows,
                     &self.state,
                     render_area.height as usize,
                     "no matches",
-                );
-            } else {
-                render_rows(
+                ),
+                ColumnWidthMode::AutoAllRows => render_rows_stable_col_widths(
                     render_area,
                     buf,
                     &rows,
                     &self.state,
                     render_area.height as usize,
                     "no matches",
-                );
+                ),
+                ColumnWidthMode::Fixed => render_rows_with_col_width_mode(
+                    render_area,
+                    buf,
+                    &rows,
+                    &self.state,
+                    render_area.height as usize,
+                    "no matches",
+                    ColumnWidthMode::Fixed,
+                ),
             }
         }
 
@@ -700,6 +724,24 @@ mod tests {
             .expect("expected rendered line to contain row marker and description");
         line.find(description)
             .expect("expected rendered line to contain description")
+    }
+
+    fn make_scrolling_width_items() -> Vec<SelectionItem> {
+        let mut items: Vec<SelectionItem> = (1..=8)
+            .map(|idx| SelectionItem {
+                name: format!("Item {idx}"),
+                description: Some(format!("desc {idx}")),
+                dismiss_on_select: true,
+                ..Default::default()
+            })
+            .collect();
+        items.push(SelectionItem {
+            name: "Item 9 with an intentionally much longer name".to_string(),
+            description: Some("desc 9".to_string()),
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+        items
     }
 
     #[test]
@@ -978,29 +1020,15 @@ mod tests {
     }
 
     #[test]
-    fn stable_col_widths_does_not_shift_when_scrolling() {
+    fn auto_all_rows_col_width_does_not_shift_when_scrolling() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let mut items: Vec<SelectionItem> = (1..=8)
-            .map(|idx| SelectionItem {
-                name: format!("Item {idx}"),
-                description: Some(format!("desc {idx}")),
-                dismiss_on_select: true,
-                ..Default::default()
-            })
-            .collect();
-        items.push(SelectionItem {
-            name: "Item 9 with an intentionally much longer name".to_string(),
-            description: Some("desc 9".to_string()),
-            dismiss_on_select: true,
-            ..Default::default()
-        });
 
         let mut view = ListSelectionView::new(
             SelectionViewParams {
                 title: Some("Debug".to_string()),
-                items,
-                stable_col_widths: true,
+                items: make_scrolling_width_items(),
+                col_width_mode: ColumnWidthMode::AutoAllRows,
                 ..Default::default()
             },
             tx,
@@ -1022,6 +1050,40 @@ mod tests {
         assert_eq!(
             before_col, after_col,
             "description column changed across scroll:\nbefore:\n{before_scroll}\nafter:\n{after_scroll}"
+        );
+    }
+
+    #[test]
+    fn fixed_col_width_is_30_70_and_does_not_shift_when_scrolling() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let width = 96;
+        let mut view = ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Debug".to_string()),
+                items: make_scrolling_width_items(),
+                col_width_mode: ColumnWidthMode::Fixed,
+                ..Default::default()
+            },
+            tx,
+        );
+
+        let before_scroll = render_lines_with_width(&view, width);
+        let before_col = description_col(&before_scroll, "8. Item 8", "desc 8");
+        let expected_desc_col = ((width.saturating_sub(2) as usize) * 3) / 10;
+        assert_eq!(
+            before_col, expected_desc_col,
+            "fixed mode should place description column at a 30/70 split:\n{before_scroll}"
+        );
+
+        for _ in 0..8 {
+            view.handle_key_event(KeyEvent::from(KeyCode::Down));
+        }
+        let after_scroll = render_lines_with_width(&view, width);
+        let after_col = description_col(&after_scroll, "8. Item 8", "desc 8");
+        assert_eq!(
+            before_col, after_col,
+            "fixed description column changed across scroll:\nbefore:\n{before_scroll}\nafter:\n{after_scroll}"
         );
     }
 }

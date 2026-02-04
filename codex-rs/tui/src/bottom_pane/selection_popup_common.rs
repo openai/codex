@@ -31,6 +31,22 @@ pub(crate) struct GenericDisplayRow {
     pub wrap_indent: Option<usize>, // optional indent for wrapped lines
 }
 
+/// Controls how selection rows choose the split between name and description.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) enum ColumnWidthMode {
+    /// Derive column placement from only the visible viewport rows.
+    #[default]
+    AutoVisible,
+    /// Derive column placement from all rows so scrolling does not shift columns.
+    AutoAllRows,
+    /// Use a fixed two-column split: 30% left (name), 70% right (description).
+    Fixed,
+}
+
+const FIXED_LEFT_COLUMN_NUMERATOR: usize = 3;
+const FIXED_LEFT_COLUMN_DENOMINATOR: usize = 10;
+
 const MENU_SURFACE_INSET_V: u16 = 1;
 const MENU_SURFACE_INSET_H: u16 = 2;
 
@@ -146,48 +162,57 @@ fn truncate_line_with_ellipsis_if_overflow(line: Line<'static>, max_width: usize
 /// Computes the shared start column used for descriptions in selection rows.
 /// The column is derived from the widest row name plus two spaces of padding
 /// while always leaving at least one terminal cell for description content.
-/// When `use_all_rows_for_col_width` is `true`, width is computed across the
-/// full dataset so the description column does not shift as the user scrolls.
+/// [`ColumnWidthMode::AutoAllRows`] computes width across the full dataset so
+/// the description column does not shift as the user scrolls.
 fn compute_desc_col(
     rows_all: &[GenericDisplayRow],
     start_idx: usize,
     visible_items: usize,
     content_width: u16,
-    use_all_rows_for_col_width: bool,
+    col_width_mode: ColumnWidthMode,
 ) -> usize {
-    let max_name_width = if use_all_rows_for_col_width {
-        rows_all
-            .iter()
-            .map(|r| {
-                let mut spans: Vec<Span> = vec![r.name.clone().into()];
-                if r.disabled_reason.is_some() {
-                    spans.push(" (disabled)".dim());
-                }
-                Line::from(spans).width()
-            })
-            .max()
-            .unwrap_or(0)
-    } else {
-        let visible_range = start_idx..(start_idx + visible_items);
-        rows_all
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| visible_range.contains(i))
-            .map(|(_, r)| {
-                let mut spans: Vec<Span> = vec![r.name.clone().into()];
-                if r.disabled_reason.is_some() {
-                    spans.push(" (disabled)".dim());
-                }
-                Line::from(spans).width()
-            })
-            .max()
-            .unwrap_or(0)
-    };
-    let mut desc_col = max_name_width.saturating_add(2);
-    if (desc_col as u16) >= content_width {
-        desc_col = content_width.saturating_sub(1) as usize;
+    if content_width <= 1 {
+        return 0;
     }
-    desc_col
+
+    let max_desc_col = content_width.saturating_sub(1) as usize;
+    match col_width_mode {
+        ColumnWidthMode::Fixed => ((content_width as usize * FIXED_LEFT_COLUMN_NUMERATOR)
+            / FIXED_LEFT_COLUMN_DENOMINATOR)
+            .clamp(1, max_desc_col),
+        ColumnWidthMode::AutoVisible | ColumnWidthMode::AutoAllRows => {
+            let max_name_width = match col_width_mode {
+                ColumnWidthMode::AutoVisible => rows_all
+                    .iter()
+                    .enumerate()
+                    .skip(start_idx)
+                    .take(visible_items)
+                    .map(|(_, row)| {
+                        let mut spans: Vec<Span> = vec![row.name.clone().into()];
+                        if row.disabled_reason.is_some() {
+                            spans.push(" (disabled)".dim());
+                        }
+                        Line::from(spans).width()
+                    })
+                    .max()
+                    .unwrap_or(0),
+                ColumnWidthMode::AutoAllRows => rows_all
+                    .iter()
+                    .map(|row| {
+                        let mut spans: Vec<Span> = vec![row.name.clone().into()];
+                        if row.disabled_reason.is_some() {
+                            spans.push(" (disabled)".dim());
+                        }
+                        Line::from(spans).width()
+                    })
+                    .max()
+                    .unwrap_or(0),
+                ColumnWidthMode::Fixed => 0,
+            };
+
+            max_name_width.saturating_add(2).min(max_desc_col)
+        }
+    }
 }
 
 /// Determine how many spaces to indent wrapped lines for a row.
@@ -292,7 +317,7 @@ fn render_rows_inner(
     state: &ScrollState,
     max_results: usize,
     empty_message: &str,
-    use_all_rows_for_col_width: bool,
+    col_width_mode: ColumnWidthMode,
 ) {
     if rows_all.is_empty() {
         if area.height > 0 {
@@ -324,7 +349,7 @@ fn render_rows_inner(
         start_idx,
         visible_items,
         area.width,
-        use_all_rows_for_col_width,
+        col_width_mode,
     );
 
     // Render items, wrapping descriptions and aligning wrapped lines under the
@@ -401,7 +426,7 @@ pub(crate) fn render_rows(
         state,
         max_results,
         empty_message,
-        false,
+        ColumnWidthMode::AutoVisible,
     );
 }
 
@@ -417,7 +442,37 @@ pub(crate) fn render_rows_stable_col_widths(
     max_results: usize,
     empty_message: &str,
 ) {
-    render_rows_inner(area, buf, rows_all, state, max_results, empty_message, true);
+    render_rows_inner(
+        area,
+        buf,
+        rows_all,
+        state,
+        max_results,
+        empty_message,
+        ColumnWidthMode::AutoAllRows,
+    );
+}
+
+/// Render a list of rows using the provided ScrollState and explicit
+/// [`ColumnWidthMode`] behavior.
+pub(crate) fn render_rows_with_col_width_mode(
+    area: Rect,
+    buf: &mut Buffer,
+    rows_all: &[GenericDisplayRow],
+    state: &ScrollState,
+    max_results: usize,
+    empty_message: &str,
+    col_width_mode: ColumnWidthMode,
+) {
+    render_rows_inner(
+        area,
+        buf,
+        rows_all,
+        state,
+        max_results,
+        empty_message,
+        col_width_mode,
+    );
 }
 
 /// Render rows as a single line each (no wrapping), truncating overflow with an ellipsis.
@@ -452,7 +507,13 @@ pub(crate) fn render_rows_single_line(
         }
     }
 
-    let desc_col = compute_desc_col(rows_all, start_idx, visible_items, area.width, false);
+    let desc_col = compute_desc_col(
+        rows_all,
+        start_idx,
+        visible_items,
+        area.width,
+        ColumnWidthMode::AutoVisible,
+    );
 
     let mut cur_y = area.y;
     for (i, row) in rows_all
@@ -501,7 +562,13 @@ pub(crate) fn measure_rows_height(
     max_results: usize,
     width: u16,
 ) -> u16 {
-    measure_rows_height_inner(rows_all, state, max_results, width, false)
+    measure_rows_height_inner(
+        rows_all,
+        state,
+        max_results,
+        width,
+        ColumnWidthMode::AutoVisible,
+    )
 }
 
 /// Measures selection-row height while using full-dataset column alignment.
@@ -513,7 +580,24 @@ pub(crate) fn measure_rows_height_stable_col_widths(
     max_results: usize,
     width: u16,
 ) -> u16 {
-    measure_rows_height_inner(rows_all, state, max_results, width, true)
+    measure_rows_height_inner(
+        rows_all,
+        state,
+        max_results,
+        width,
+        ColumnWidthMode::AutoAllRows,
+    )
+}
+
+/// Measures selection-row height using explicit [`ColumnWidthMode`] behavior.
+pub(crate) fn measure_rows_height_with_col_width_mode(
+    rows_all: &[GenericDisplayRow],
+    state: &ScrollState,
+    max_results: usize,
+    width: u16,
+    col_width_mode: ColumnWidthMode,
+) -> u16 {
+    measure_rows_height_inner(rows_all, state, max_results, width, col_width_mode)
 }
 
 fn measure_rows_height_inner(
@@ -521,7 +605,7 @@ fn measure_rows_height_inner(
     state: &ScrollState,
     max_results: usize,
     width: u16,
-    use_all_rows_for_col_width: bool,
+    col_width_mode: ColumnWidthMode,
 ) -> u16 {
     if rows_all.is_empty() {
         return 1; // placeholder "no matches" line
@@ -547,7 +631,7 @@ fn measure_rows_height_inner(
         start_idx,
         visible_items,
         content_width,
-        use_all_rows_for_col_width,
+        col_width_mode,
     );
 
     use crate::wrapping::RtOptions;
