@@ -55,7 +55,7 @@ pub(crate) struct SelectionItem {
 ///
 /// `col_width_mode` controls how column width is determined:
 /// `AutoVisible` (default) measures only rows visible in the viewport
-/// `AutoAllRows` measures all rows to ensure stable column widths as the user scrolls 
+/// `AutoAllRows` measures all rows to ensure stable column widths as the user scrolls
 /// `Fixed` used a fixed 30/70  split between columns
 pub(crate) struct SelectionViewParams {
     pub title: Option<String>,
@@ -744,6 +744,28 @@ mod tests {
         items
     }
 
+    fn render_before_after_scroll_snapshot(col_width_mode: ColumnWidthMode, width: u16) -> String {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Debug".to_string()),
+                items: make_scrolling_width_items(),
+                col_width_mode,
+                ..Default::default()
+            },
+            tx,
+        );
+
+        let before_scroll = render_lines_with_width(&view, width);
+        for _ in 0..8 {
+            view.handle_key_event(KeyEvent::from(KeyCode::Down));
+        }
+        let after_scroll = render_lines_with_width(&view, width);
+
+        format!("before scroll:\n{before_scroll}\n\nafter scroll:\n{after_scroll}")
+    }
+
     #[test]
     fn renders_blank_line_between_title_and_items_without_subtitle() {
         let view = make_selection_view(None);
@@ -1016,6 +1038,30 @@ mod tests {
         assert_snapshot!(
             "list_selection_narrow_width_preserves_rows",
             render_lines_with_width(&view, 24)
+        );
+    }
+
+    #[test]
+    fn snapshot_auto_visible_col_width_mode_scroll_behavior() {
+        assert_snapshot!(
+            "list_selection_col_width_mode_auto_visible_scroll",
+            render_before_after_scroll_snapshot(ColumnWidthMode::AutoVisible, 96)
+        );
+    }
+
+    #[test]
+    fn snapshot_auto_all_rows_col_width_mode_scroll_behavior() {
+        assert_snapshot!(
+            "list_selection_col_width_mode_auto_all_rows_scroll",
+            render_before_after_scroll_snapshot(ColumnWidthMode::AutoAllRows, 96)
+        );
+    }
+
+    #[test]
+    fn snapshot_fixed_col_width_mode_scroll_behavior() {
+        assert_snapshot!(
+            "list_selection_col_width_mode_fixed_scroll",
+            render_before_after_scroll_snapshot(ColumnWidthMode::Fixed, 96)
         );
     }
 
