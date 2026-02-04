@@ -183,7 +183,7 @@ impl KeyringStore for DefaultKeyringStore {
     }
 }
 
-pub(crate) const MAX_KEYRING_VALUE_LEN: usize = 1024;
+pub(crate) const MAX_KEYRING_VALUE_LEN: usize = 512;
 pub(crate) const CHUNKED_HEADER_PREFIX: &str = "CODEX_CHUNKED:";
 
 pub(crate) fn get_chunk_key(account: &str, index: usize) -> String {

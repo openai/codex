@@ -350,7 +350,11 @@ fn derive_new_contents_from_chunks(
         }
     };
 
-    let mut original_lines: Vec<String> = original_contents.split('\n').map(String::from).collect();
+    let is_crlf = original_contents.contains("\r\n");
+    let mut original_lines: Vec<String> = original_contents
+        .split('\n')
+        .map(|s| s.trim_end_matches('\r').to_string())
+        .collect();
 
     // Drop the trailing empty element that results from the final newline so
     // that line counts match the behaviour of standard `diff`.
@@ -364,7 +368,9 @@ fn derive_new_contents_from_chunks(
     if !new_lines.last().is_some_and(String::is_empty) {
         new_lines.push(String::new());
     }
-    let new_contents = new_lines.join("\n");
+
+    let line_ending = if is_crlf { "\r\n" } else { "\n" };
+    let new_contents = new_lines.join(line_ending);
     Ok(AppliedPatch {
         original_contents,
         new_contents,
@@ -1061,5 +1067,59 @@ g
         let mut stderr = Vec::new();
         let result = apply_patch(&patch, &mut stdout, &mut stderr);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_apply_patch_preserves_crlf() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("crlf.txt");
+
+        // Write file with CRLF line endings
+        fs::write(&path, "first\r\nsecond\r\nthird\r\n").unwrap();
+
+        let patch = wrap_patch(&format!(
+            r#"*** Update File: {}
+@@
+ first
+-second
++SECOND
+ third"#,
+            path.display()
+        ));
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        apply_patch(&patch, &mut stdout, &mut stderr).unwrap();
+
+        let contents = fs::read_to_string(&path).unwrap();
+        // The resulting file should use CRLF as well.
+        assert_eq!(contents, "first\r\nSECOND\r\nthird\r\n");
+    }
+
+    #[test]
+    fn test_apply_patch_preserves_lf() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("lf.txt");
+
+        // Write file with LF line endings
+        fs::write(&path, "first\nsecond\nthird\n").unwrap();
+
+        let patch = wrap_patch(&format!(
+            r#"*** Update File: {}
+@@
+ first
+-second
++SECOND
+ third"#,
+            path.display()
+        ));
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        apply_patch(&patch, &mut stdout, &mut stderr).unwrap();
+
+        let contents = fs::read_to_string(&path).unwrap();
+        // The resulting file should use LF.
+        assert_eq!(contents, "first\nSECOND\nthird\n");
     }
 }

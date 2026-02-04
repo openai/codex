@@ -97,7 +97,7 @@ pub fn run_setup_refresh(
     };
     let json = serde_json::to_vec(&payload)?;
     let b64 = BASE64_STANDARD.encode(json);
-    let exe = find_setup_exe();
+    let exe = find_setup_exe()?;
     // Refresh should never request elevation; ensure verb isn't set and we don't trigger UAC.
     let mut cmd = Command::new(&exe);
     cmd.arg(&b64).stdout(Stdio::null()).stderr(Stdio::null());

@@ -40,6 +40,9 @@ function Convert-CommandElement {
     param($element)
 
     if ($element -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+        if ($element.StringConstantType -eq [System.Management.Automation.Language.StringConstantType]::BareWord -and ($element.Value.Contains('(') -or $element.Value.Contains(')'))) {
+            return $null
+        }
         return @($element.Value)
     }
 

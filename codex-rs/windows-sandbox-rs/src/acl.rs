@@ -369,13 +369,29 @@ pub unsafe fn ensure_allow_mask_aces(
     )
 }
 
-/// Ensure all provided SIDs have a write-capable allow ACE on the path.
+/// Ensure all provided SIDs have a write-capable allow ACE on the path, optionally recursively.
 /// Returns true if any ACE was added.
 ///
 /// # Safety
 /// Caller must pass valid SID pointers and an existing path; free the returned security descriptor with `LocalFree`.
-pub unsafe fn ensure_allow_write_aces(path: &Path, sids: &[*mut c_void]) -> Result<bool> {
-    ensure_allow_mask_aces(path, sids, WRITE_ALLOW_MASK)
+pub unsafe fn ensure_allow_write_aces(
+    path: &Path,
+    psids: &[*mut c_void],
+    recursive: bool,
+) -> Result<bool> {
+    let mut added = ensure_allow_mask_aces(path, psids, WRITE_ALLOW_MASK)?;
+
+    if recursive && path.is_dir() {
+        for entry in std::fs::read_dir(path)? {
+            let entry = entry?;
+            let child_path = entry.path();
+            if unsafe { ensure_allow_write_aces(&child_path, psids, true) }? {
+                added = true;
+            }
+        }
+    }
+
+    Ok(added)
 }
 
 /// Adds an allow ACE granting read/write/execute to the given SID on the target path.

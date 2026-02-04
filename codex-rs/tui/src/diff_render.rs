@@ -258,7 +258,7 @@ fn render_change(change: &FileChange, out: &mut Vec<RtLine<'static>>, width: usi
                     for l in h.lines() {
                         match l {
                             diffy::Line::Insert(text) => {
-                                let s = text.trim_end_matches('\n');
+                                let s = text.trim_end_matches(|c| c == '\n' || c == '\r');
                                 out.extend(push_wrapped_diff_line(
                                     new_ln,
                                     DiffLineType::Insert,
@@ -269,7 +269,7 @@ fn render_change(change: &FileChange, out: &mut Vec<RtLine<'static>>, width: usi
                                 new_ln += 1;
                             }
                             diffy::Line::Delete(text) => {
-                                let s = text.trim_end_matches('\n');
+                                let s = text.trim_end_matches(|c| c == '\n' || c == '\r');
                                 out.extend(push_wrapped_diff_line(
                                     old_ln,
                                     DiffLineType::Delete,
@@ -280,7 +280,7 @@ fn render_change(change: &FileChange, out: &mut Vec<RtLine<'static>>, width: usi
                                 old_ln += 1;
                             }
                             diffy::Line::Context(text) => {
-                                let s = text.trim_end_matches('\n');
+                                let s = text.trim_end_matches(|c| c == '\n' || c == '\r');
                                 out.extend(push_wrapped_diff_line(
                                     new_ln,
                                     DiffLineType::Context,
