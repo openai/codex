@@ -289,7 +289,7 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
         }
     }
 
-    Ok(Policy::new(combined_rules))
+    Ok(Policy::new(combined_rules, policy.network_rules().to_vec()))
 }
 
 /// If a command is not matched by any execpolicy rule, derive a [`Decision`].
