@@ -722,7 +722,7 @@ impl Session {
         TurnContext {
             sub_id,
             client,
-            cwd: cwd.clone(),
+            cwd,
             developer_instructions: session_configuration.developer_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
