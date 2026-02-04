@@ -18,6 +18,7 @@ use codex_otel::OtelManager;
 use codex_otel::metrics::MetricsClient;
 use codex_otel::metrics::MetricsConfig;
 use codex_protocol::ThreadId;
+use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ReasoningSummary;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::WebSocketConnectionConfig;
@@ -30,6 +31,7 @@ use core_test_support::skip_if_no_network;
 use futures::StreamExt;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -200,6 +202,90 @@ async fn responses_websocket_emits_reasoning_included_event() {
     }
 
     assert!(saw_reasoning_included);
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_emits_rate_limit_events() {
+    skip_if_no_network!();
+
+    let rate_limit_event = json!({
+        "type": "codex.rate_limits",
+        "plan_type": "plus",
+        "rate_limits": {
+            "allowed": true,
+            "limit_reached": false,
+            "primary": {
+                "used_percent": 42,
+                "window_minutes": 60,
+                "reset_at": 1700000000
+            },
+            "secondary": null
+        },
+        "code_review_rate_limits": null,
+        "credits": {
+            "has_credits": true,
+            "unlimited": false,
+            "balance": "123"
+        },
+        "promo": null
+    });
+
+    let server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
+        requests: vec![vec![
+            rate_limit_event,
+            ev_response_created("resp-1"),
+            ev_completed("resp-1"),
+        ]],
+        response_headers: vec![
+            ("X-Models-Etag".to_string(), "etag-123".to_string()),
+            ("X-Reasoning-Included".to_string(), "true".to_string()),
+        ],
+    }])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    let mut session = harness.client.new_session(None);
+    let prompt = prompt_with_input(vec![message_item("hello")]);
+
+    let mut stream = session
+        .stream(&prompt)
+        .await
+        .expect("websocket stream failed");
+
+    let mut saw_rate_limits = None;
+    let mut saw_models_etag = None;
+    let mut saw_reasoning_included = false;
+
+    while let Some(event) = stream.next().await {
+        match event.expect("event") {
+            ResponseEvent::RateLimits(snapshot) => {
+                saw_rate_limits = Some(snapshot);
+            }
+            ResponseEvent::ModelsEtag(etag) => {
+                saw_models_etag = Some(etag);
+            }
+            ResponseEvent::ServerReasoningIncluded(true) => {
+                saw_reasoning_included = true;
+            }
+            ResponseEvent::Completed { .. } => break,
+            _ => {}
+        }
+    }
+
+    let rate_limits = saw_rate_limits.expect("missing rate limits");
+    let primary = rate_limits.primary.expect("missing primary window");
+    assert_eq!(primary.used_percent, 42.0);
+    assert_eq!(primary.window_minutes, Some(60));
+    assert_eq!(primary.resets_at, Some(1_700_000_000));
+    assert_eq!(rate_limits.plan_type, Some(PlanType::Plus));
+    let credits = rate_limits.credits.expect("missing credits");
+    assert!(credits.has_credits);
+    assert!(!credits.unlimited);
+    assert_eq!(credits.balance.as_deref(), Some("123"));
+    assert_eq!(saw_models_etag.as_deref(), Some("etag-123"));
+    assert!(saw_reasoning_included);
+
     server.shutdown().await;
 }
 

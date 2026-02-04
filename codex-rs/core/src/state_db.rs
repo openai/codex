@@ -14,7 +14,6 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_state::DB_METRIC_COMPARE_ERROR;
 pub use codex_state::LogEntry;
-use codex_state::STATE_DB_FILENAME;
 use codex_state::ThreadMetadataBuilder;
 use serde_json::Value;
 use std::path::Path;
@@ -32,7 +31,7 @@ pub(crate) async fn init_if_enabled(
     config: &Config,
     otel: Option<&OtelManager>,
 ) -> Option<StateDbHandle> {
-    let state_path = config.codex_home.join(STATE_DB_FILENAME);
+    let state_path = codex_state::state_db_path(config.codex_home.as_path());
     if !config.features.enabled(Feature::Sqlite) {
         return None;
     }
@@ -74,7 +73,7 @@ pub(crate) async fn init_if_enabled(
 
 /// Get the DB if the feature is enabled and the DB exists.
 pub async fn get_state_db(config: &Config, otel: Option<&OtelManager>) -> Option<StateDbHandle> {
-    let state_path = config.codex_home.join(STATE_DB_FILENAME);
+    let state_path = codex_state::state_db_path(config.codex_home.as_path());
     if !config.features.enabled(Feature::Sqlite)
         || !tokio::fs::try_exists(&state_path).await.unwrap_or(false)
     {
@@ -93,7 +92,7 @@ pub async fn get_state_db(config: &Config, otel: Option<&OtelManager>) -> Option
 ///
 /// This is used for parity checks during the SQLite migration phase.
 pub async fn open_if_present(codex_home: &Path, default_provider: &str) -> Option<StateDbHandle> {
-    let db_path = codex_home.join(STATE_DB_FILENAME);
+    let db_path = codex_state::state_db_path(codex_home);
     if !tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
         return None;
     }
