@@ -31,6 +31,10 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use supports_color::Stream;
 
+#[cfg(target_os = "macos")]
+mod app_cmd;
+#[cfg(target_os = "macos")]
+mod desktop_app;
 mod mcp_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
@@ -98,12 +102,18 @@ enum Subcommand {
     /// [experimental] Run the app server or related tooling.
     AppServer(AppServerCommand),
 
+    /// Launch the Codex desktop app (downloads the macOS installer if missing).
+    #[cfg(target_os = "macos")]
+    App(app_cmd::AppCommand),
+
     /// Generate shell completion scripts.
     Completion(CompletionCommand),
 
     /// Run commands within a Codex-provided sandbox.
-    #[clap(visible_alias = "debug")]
     Sandbox(SandboxArgs),
+
+    /// Debugging tools.
+    Debug(DebugCommand),
 
     /// Execpolicy tooling.
     #[clap(hide = true)]
@@ -140,6 +150,36 @@ struct CompletionCommand {
     /// Shell to generate completions for
     #[clap(value_enum, default_value_t = Shell::Bash)]
     shell: Shell,
+}
+
+#[derive(Debug, Parser)]
+struct DebugCommand {
+    #[command(subcommand)]
+    subcommand: DebugSubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum DebugSubcommand {
+    /// Tooling: helps debug the app server.
+    AppServer(DebugAppServerCommand),
+}
+
+#[derive(Debug, Parser)]
+struct DebugAppServerCommand {
+    #[command(subcommand)]
+    subcommand: DebugAppServerSubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum DebugAppServerSubcommand {
+    // Send message to app server V2.
+    SendMessageV2(DebugAppServerSendMessageV2Command),
+}
+
+#[derive(Debug, Parser)]
+struct DebugAppServerSendMessageV2Command {
+    #[arg(value_name = "USER_MESSAGE", required = true)]
+    user_message: String,
 }
 
 #[derive(Debug, Parser)]
@@ -417,6 +457,15 @@ fn run_execpolicycheck(cmd: ExecPolicyCheckCommand) -> anyhow::Result<()> {
     cmd.run()
 }
 
+fn run_debug_app_server_command(cmd: DebugAppServerCommand) -> anyhow::Result<()> {
+    match cmd.subcommand {
+        DebugAppServerSubcommand::SendMessageV2(cmd) => {
+            let codex_bin = std::env::current_exe()?;
+            codex_app_server_test_client::send_message_v2(&codex_bin, &[], cmd.user_message, &None)
+        }
+    }
+}
+
 #[derive(Debug, Default, Parser, Clone)]
 struct FeatureToggles {
     /// Enable a feature (repeatable). Equivalent to `-c features.<name>=true`.
@@ -564,6 +613,10 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 )?;
             }
         },
+        #[cfg(target_os = "macos")]
+        Some(Subcommand::App(app_cli)) => {
+            app_cmd::run_app(app_cli).await?;
+        }
         Some(Subcommand::Resume(ResumeCommand {
             session_id,
             last,
@@ -679,6 +732,11 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                     codex_linux_sandbox_exe,
                 )
                 .await?;
+            }
+        },
+        Some(Subcommand::Debug(DebugCommand { subcommand })) => match subcommand {
+            DebugSubcommand::AppServer(cmd) => {
+                run_debug_app_server_command(cmd)?;
             }
         },
         Some(Subcommand::Execpolicy(ExecpolicyCommand { sub })) => match sub {

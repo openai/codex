@@ -17,6 +17,7 @@ members = [
     "cli",
     "common",
     "core",
+    "secrets",
     "exec",
     "exec-server",
     "execpolicy",
@@ -27,7 +28,6 @@ members = [
     "lmstudio",
     "login",
     "mcp-server",
-    "mcp-types",
     "network-proxy",
     "ollama",
     "process-hardening",
@@ -70,6 +70,7 @@ codex-ansi-escape = { path = "ansi-escape" }
 codex-api = { path = "codex-api" }
 codex-app-server = { path = "app-server" }
 codex-app-server-protocol = { path = "app-server-protocol" }
+codex-app-server-test-client = { path = "app-server-test-client" }
 codex-apply-patch = { path = "apply-patch" }
 codex-arg0 = { path = "arg0" }
 codex-async-utils = { path = "async-utils" }
@@ -80,6 +81,7 @@ codex-cli = { path = "cli"}
 codex-client = { path = "codex-client" }
 codex-common = { path = "common" }
 codex-core = { path = "core" }
+codex-secrets = { path = "secrets" }
 codex-exec = { path = "exec" }
 codex-execpolicy = { path = "execpolicy" }
 codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
@@ -112,10 +114,10 @@ codex-utils-string = { path = "utils/string" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }
 core_test_support = { path = "core/tests/common" }
 exec_server_test_support = { path = "exec-server/tests/common" }
-mcp-types = { path = "mcp-types" }
 mcp_test_support = { path = "mcp-server/tests/common" }
 
 # External
+age = "0.11.1"
 allocative = "0.3.3"
 ansi-to-tui = "7.0.0"
 anyhow = "1"
@@ -248,6 +250,7 @@ walkdir = "2.5.0"
 webbrowser = "1.0"
 which = "8"
 wildmatch = "2.6.1"
+zip = "2.4.2"
 
 wiremock = "0.6"
 zeroize = "1.8.2"
@@ -293,7 +296,7 @@ unwrap_used = "deny"
 # cargo-shear cannot see the platform-specific openssl-sys usage, so we
 # silence the false positive here instead of deleting a real dependency.
 [workspace.metadata.cargo-shear]
-ignored = ["icu_provider", "openssl-sys", "codex-utils-readiness"]
+ignored = ["icu_provider", "openssl-sys", "codex-utils-readiness", "codex-secrets"]
 
 [profile.release]
 lto = "fat"

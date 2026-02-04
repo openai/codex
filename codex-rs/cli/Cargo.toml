@@ -21,6 +21,7 @@ clap = { workspace = true, features = ["derive"] }
 clap_complete = { workspace = true }
 codex-app-server = { workspace = true }
 codex-app-server-protocol = { workspace = true }
+codex-app-server-test-client = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-chatgpt = { workspace = true }
 codex-cloud-tasks = { path = "../cloud-tasks" }
@@ -40,6 +41,7 @@ owo-colors = { workspace = true }
 regex-lite = { workspace = true }
 serde_json = { workspace = true }
 supports-color = { workspace = true }
+tempfile = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",
@@ -59,4 +61,3 @@ assert_matches = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }
-tempfile = { workspace = true }

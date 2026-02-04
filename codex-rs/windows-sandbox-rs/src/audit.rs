@@ -3,6 +3,7 @@ use crate::acl::path_mask_allows;
 use crate::cap::cap_sid_file;
 use crate::cap::load_or_create_cap_sids;
 use crate::logging::{debug_log, log_note};
+use crate::path_normalization::canonical_path_key;
 use crate::policy::SandboxPolicy;
 use crate::token::convert_string_sid_to_sid;
 use crate::token::world_sid;
@@ -30,11 +31,6 @@ const SKIP_DIR_SUFFIXES: &[&str] = &[
     "/windows/registration",
     "/programdata",
 ];
-
-pub(crate) fn normalize_path_key(p: &Path) -> String {
-    let n = dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-    n.to_string_lossy().replace('\\', "/").to_ascii_lowercase()
-}
 
 fn unique_push(set: &mut HashSet<PathBuf>, out: &mut Vec<PathBuf>, p: PathBuf) {
     if let Ok(abs) = p.canonicalize() {
@@ -131,7 +127,7 @@ pub fn audit_everyone_writable(
             checked += 1;
             let has = check_world_writable(&p);
             if has {
-                let key = normalize_path_key(&p);
+                let key = canonical_path_key(&p);
                 if seen.insert(key) {
                     flagged.push(p);
                 }
@@ -149,7 +145,7 @@ pub fn audit_everyone_writable(
         checked += 1;
         let has_root = check_world_writable(&root);
         if has_root {
-            let key = normalize_path_key(&root);
+            let key = canonical_path_key(&root);
             if seen.insert(key) {
                 flagged.push(root.clone());
             }
@@ -181,7 +177,7 @@ pub fn audit_everyone_writable(
                     checked += 1;
                     let has_child = check_world_writable(&p);
                     if has_child {
-                        let key = normalize_path_key(&p);
+                        let key = canonical_path_key(&p);
                         if seen.insert(key) {
                             flagged.push(p);
                         }

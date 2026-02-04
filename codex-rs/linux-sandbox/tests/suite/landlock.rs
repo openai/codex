@@ -34,7 +34,7 @@ const NETWORK_TIMEOUT_MS: u64 = 10_000;
 
 fn create_env_from_core_vars() -> HashMap<String, String> {
     let policy = ShellEnvironmentPolicy::default();
-    create_env(&policy)
+    create_env(&policy, None)
 }
 
 #[expect(clippy::print_stdout)]

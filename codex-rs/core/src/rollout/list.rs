@@ -1074,6 +1074,29 @@ async fn find_thread_path_by_id_str_in_subdir(
         return Ok(None);
     }
 
+    // Prefer DB lookup, then fall back to rollout file search.
+    // TODO(jif): sqlite migration phase 1
+    let archived_only = match subdir {
+        SESSIONS_SUBDIR => Some(false),
+        ARCHIVED_SESSIONS_SUBDIR => Some(true),
+        _ => None,
+    };
+    let state_db_ctx = state_db::open_if_present(codex_home, "").await;
+    if let Some(state_db_ctx) = state_db_ctx.as_deref()
+        && let Ok(thread_id) = ThreadId::from_string(id_str)
+    {
+        let db_path = state_db::find_rollout_path_by_id(
+            Some(state_db_ctx),
+            thread_id,
+            archived_only,
+            "find_path_query",
+        )
+        .await;
+        if db_path.is_some() {
+            return Ok(db_path);
+        }
+    }
+
     let mut root = codex_home.to_path_buf();
     root.push(subdir);
     if !root.exists() {
@@ -1093,33 +1116,11 @@ async fn find_thread_path_by_id_str_in_subdir(
         .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
 
     let found = results.matches.into_iter().next().map(|m| m.full_path());
-
-    // Checking if DB is at parity.
-    // TODO(jif): sqlite migration phase 1
-    let archived_only = match subdir {
-        SESSIONS_SUBDIR => Some(false),
-        ARCHIVED_SESSIONS_SUBDIR => Some(true),
-        _ => None,
-    };
-    let state_db_ctx = state_db::open_if_present(codex_home, "").await;
-    if let Some(state_db_ctx) = state_db_ctx.as_deref()
-        && let Ok(thread_id) = ThreadId::from_string(id_str)
-    {
-        let db_path = state_db::find_rollout_path_by_id(
-            Some(state_db_ctx),
-            thread_id,
-            archived_only,
-            "find_path_query",
-        )
-        .await;
-        let canonical_path = found.as_deref();
-        if db_path.as_deref() != canonical_path {
-            tracing::warn!(
-                "state db path mismatch for thread {thread_id:?}: canonical={canonical_path:?} db={db_path:?}"
-            );
-            state_db::record_discrepancy("find_thread_path_by_id_str_in_subdir", "path_mismatch");
-        }
+    if found.is_some() {
+        tracing::error!("state db missing rollout path for thread {id_str}");
+        state_db::record_discrepancy("find_thread_path_by_id_str_in_subdir", "path_mismatch");
     }
+
     Ok(found)
 }
 
