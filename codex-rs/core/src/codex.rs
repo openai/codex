@@ -3486,19 +3486,29 @@ pub(crate) async fn run_turn(
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
-        let pending_input = sess
+        let pending_response_items = sess
             .get_pending_input()
             .await
             .into_iter()
             .map(ResponseItem::from)
             .collect::<Vec<ResponseItem>>();
 
-        // Construct the input that we will send to the model.
-        let sampling_request_input: Vec<ResponseItem> = {
-            sess.record_conversation_items(&turn_context, &pending_input)
+        if !pending_response_items.is_empty() {
+            sess.record_conversation_items(&turn_context, &pending_response_items)
                 .await;
-            sess.clone_history().await.for_prompt()
-        };
+            for item in &pending_response_items {
+                if let Some(turn_item) = parse_turn_item(item)
+                    && matches!(turn_item, TurnItem::UserMessage(_))
+                {
+                    sess.emit_turn_item_started(&turn_context, &turn_item).await;
+                    sess.emit_turn_item_completed(&turn_context, turn_item)
+                        .await;
+                }
+            }
+        }
+
+        // Construct the input that we will send to the model.
+        let sampling_request_input: Vec<ResponseItem> = { sess.clone_history().await.for_prompt() };
 
         let sampling_request_input_messages = sampling_request_input
             .iter()
