@@ -7,6 +7,7 @@ const COLLABORATION_MODE_PLAN: &str = include_str!("../../templates/collaboratio
 const COLLABORATION_MODE_DEFAULT: &str =
     include_str!("../../templates/collaboration_mode/default.md");
 const KNOWN_MODE_NAMES_PLACEHOLDER: &str = "{{KNOWN_MODE_NAMES}}";
+const REQUEST_USER_INPUT_AVAILABILITY_PLACEHOLDER: &str = "{{REQUEST_USER_INPUT_AVAILABILITY}}";
 
 pub(super) fn builtin_collaboration_mode_presets() -> Vec<CollaborationModeMask> {
     vec![plan_preset(), default_preset()]
@@ -39,7 +40,14 @@ fn default_preset() -> CollaborationModeMask {
 
 fn default_mode_instructions() -> String {
     let known_mode_names = format_mode_names(&TUI_VISIBLE_COLLABORATION_MODES);
-    COLLABORATION_MODE_DEFAULT.replace(KNOWN_MODE_NAMES_PLACEHOLDER, &known_mode_names)
+    let request_user_input_availability =
+        request_user_input_availability_message(ModeKind::Default);
+    COLLABORATION_MODE_DEFAULT
+        .replace(KNOWN_MODE_NAMES_PLACEHOLDER, &known_mode_names)
+        .replace(
+            REQUEST_USER_INPUT_AVAILABILITY_PLACEHOLDER,
+            &request_user_input_availability,
+        )
 }
 
 fn format_mode_names(modes: &[ModeKind]) -> String {
@@ -49,6 +57,17 @@ fn format_mode_names(modes: &[ModeKind]) -> String {
         [mode_name] => (*mode_name).to_string(),
         [first, second] => format!("{first} and {second}"),
         [..] => mode_names.join(", "),
+    }
+}
+
+fn request_user_input_availability_message(mode: ModeKind) -> String {
+    let mode_name = mode.display_name();
+    if mode.allows_request_user_input() {
+        format!("The `request_user_input` tool is available in {mode_name} mode.")
+    } else {
+        format!(
+            "The `request_user_input` tool is unavailable in {mode_name} mode. If you call it while in {mode_name} mode, it will return an error."
+        )
     }
 }
 
@@ -71,9 +90,14 @@ mod tests {
             .expect("default instructions should be set");
 
         assert!(!default_instructions.contains(KNOWN_MODE_NAMES_PLACEHOLDER));
+        assert!(!default_instructions.contains(REQUEST_USER_INPUT_AVAILABILITY_PLACEHOLDER));
 
         let known_mode_names = format_mode_names(&TUI_VISIBLE_COLLABORATION_MODES);
         let expected_snippet = format!("Known mode names are {known_mode_names}.");
         assert!(default_instructions.contains(&expected_snippet));
+
+        let expected_availability_message =
+            request_user_input_availability_message(ModeKind::Default);
+        assert!(default_instructions.contains(&expected_availability_message));
     }
 }
