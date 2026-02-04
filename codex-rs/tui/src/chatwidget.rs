@@ -47,6 +47,7 @@ use crate::text_formatting::proper_join;
 use crate::version::CODEX_CLI_VERSION;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_backend_client::Client as BackendClient;
+use codex_chatgpt::apps_mapping;
 use codex_chatgpt::connectors;
 use codex_core::config::Config;
 use codex_core::config::ConstraintResult;
@@ -4645,6 +4646,8 @@ impl ChatWidget {
                     accessible_connectors,
                     true,
                 );
+                apps_mapping::materialize_apps_to_filesystem(&config, connectors.as_slice())
+                    .await?;;
                 Ok(ConnectorsSnapshot { connectors })
             }
             .await
