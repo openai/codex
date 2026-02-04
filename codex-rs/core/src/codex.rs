@@ -519,18 +519,34 @@ impl TurnContext {
             .unwrap_or(compact::SUMMARIZATION_PROMPT)
     }
 
-    pub(crate) async fn resolve_turn_metadata_header(&self) -> Option<String> {
+    async fn build_turn_metadata_header(&self) -> Option<String> {
         self.turn_metadata_header
             .get_or_init(|| async { build_turn_metadata_header(self.cwd.as_path()).await })
             .await
             .clone()
     }
 
+    pub async fn resolve_turn_metadata_header(&self) -> Option<String> {
+        const TURN_METADATA_HEADER_TIMEOUT_MS: u64 = 250;
+        match tokio::time::timeout(
+            std::time::Duration::from_millis(TURN_METADATA_HEADER_TIMEOUT_MS),
+            self.build_turn_metadata_header(),
+        )
+        .await
+        {
+            Ok(header) => header,
+            Err(_) => {
+                warn!("timed out after 500ms while building turn metadata header");
+                self.turn_metadata_header.get().cloned().flatten()
+            }
+        }
+    }
+
     pub fn spawn_turn_metadata_header_task(self: &Arc<Self>) {
         let context = Arc::clone(self);
         tokio::spawn(async move {
             trace!("Spawning turn metadata calculation task");
-            context.resolve_turn_metadata_header().await;
+            context.build_turn_metadata_header().await;
             trace!("Turn metadata calculation task completed");
         });
     }
