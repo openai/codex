@@ -3494,8 +3494,22 @@ pub(crate) async fn run_turn(
             .collect::<Vec<ResponseItem>>();
 
         if !pending_response_items.is_empty() {
-            sess.record_conversation_items(&turn_context, &pending_response_items)
-                .await;
+            for response_item in pending_response_items {
+                if let Some(TurnItem::UserMessage(user_message)) = parse_turn_item(&response_item) {
+                    sess.record_user_prompt_and_emit_turn_item(
+                        turn_context.as_ref(),
+                        &user_message.content,
+                        response_item,
+                    )
+                    .await;
+                } else {
+                    sess.record_conversation_items(
+                        &turn_context,
+                        std::slice::from_ref(&response_item),
+                    )
+                    .await;
+                }
+            }
         }
 
         // Construct the input that we will send to the model.
