@@ -1768,11 +1768,10 @@ impl Session {
                 }
                 RolloutItem::Compacted(compacted) => {
                     if let Some(replacement) = &compacted.replacement_history {
-                        let initial_context = self.build_initial_context(turn_context).await;
-                        history.replace(compact::refresh_compacted_developer_instructions(
-                            replacement.clone(),
-                            &initial_context,
-                        ));
+                        history.replace(
+                            self.process_compacted_history(turn_context, replacement.clone())
+                                .await,
+                        );
                     } else {
                         let user_messages = collect_user_messages(history.raw_items());
                         let rebuilt = compact::build_compacted_history(
@@ -1790,6 +1789,15 @@ impl Session {
             }
         }
         history.raw_items().to_vec()
+    }
+
+    pub(crate) async fn process_compacted_history(
+        &self,
+        turn_context: &TurnContext,
+        compacted_history: Vec<ResponseItem>,
+    ) -> Vec<ResponseItem> {
+        let initial_context = self.build_initial_context(turn_context).await;
+        compact::process_compacted_history(compacted_history, &initial_context)
     }
 
     /// Append ResponseItems to the in-memory conversation history only.

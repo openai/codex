@@ -264,7 +264,7 @@ pub(crate) fn is_summary_message(message: &str) -> bool {
     message.starts_with(format!("{SUMMARY_PREFIX}\n").as_str())
 }
 
-pub(crate) fn refresh_compacted_developer_instructions(
+pub(crate) fn process_compacted_history(
     mut compacted_history: Vec<ResponseItem>,
     initial_context: &[ResponseItem],
 ) -> Vec<ResponseItem> {
@@ -600,7 +600,7 @@ mod tests {
     }
 
     #[test]
-    fn refresh_compacted_developer_instructions_replaces_developer_messages() {
+    fn process_compacted_history_replaces_developer_messages() {
         let compacted_history = vec![
             ResponseItem::Message {
                 id: None,
@@ -660,8 +660,7 @@ mod tests {
             },
         ];
 
-        let refreshed =
-            refresh_compacted_developer_instructions(compacted_history, &initial_context);
+        let refreshed = process_compacted_history(compacted_history, &initial_context);
         let expected = vec![
             ResponseItem::Message {
                 id: None,
