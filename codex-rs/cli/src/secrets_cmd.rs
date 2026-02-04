@@ -216,7 +216,7 @@ fn resolve_value(display_name: &str, explicit: Option<String>) -> Result<String>
 }
 
 fn prompt_secret_value(display_name: &str) -> Result<String> {
-    print!("Enter value for {display_name}: ");
+    print!("Enter value for {display_name} (experimental): ");
     std::io::stdout()
         .flush()
         .context("failed to flush stdout before prompt")?;
