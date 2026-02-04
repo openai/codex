@@ -82,7 +82,6 @@ use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::tools::spec::create_tools_json_for_responses_api;
 
-pub const WEB_SEARCH_ELIGIBLE_HEADER: &str = "x-oai-web-search-eligible";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 pub const X_CODEX_TURN_METADATA_HEADER: &str = "x-codex-turn-metadata";
 pub const X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER: &str =
@@ -772,12 +771,11 @@ fn build_api_prompt(prompt: &Prompt, instructions: String, tools_json: Vec<Value
 /// These headers implement Codex-specific conventions:
 ///
 /// - `x-codex-beta-features`: comma-separated beta feature keys enabled for the session.
-/// - `x-oai-web-search-eligible`: whether this turn is allowed to use web search.
 /// - `x-codex-turn-state`: sticky routing token captured earlier in the turn.
 /// - `x-codex-turn-metadata`: optional per-turn metadata for observability.
 fn build_responses_headers(
     beta_features_header: Option<&str>,
-    web_search_eligible: bool,
+    _web_search_eligible: bool,
     turn_state: Option<&Arc<OnceLock<String>>>,
     turn_metadata_header: Option<&HeaderValue>,
 ) -> ApiHeaderMap {
@@ -788,10 +786,6 @@ fn build_responses_headers(
     {
         headers.insert("x-codex-beta-features", header_value);
     }
-    headers.insert(
-        WEB_SEARCH_ELIGIBLE_HEADER,
-        HeaderValue::from_static(if web_search_eligible { "true" } else { "false" }),
-    );
     if let Some(turn_state) = turn_state
         && let Some(state) = turn_state.get()
         && let Ok(header_value) = HeaderValue::from_str(state)
