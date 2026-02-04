@@ -27,6 +27,7 @@ use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::format_config_error_with_source;
 use codex_core::default_client::set_default_client_residency_requirement;
+use codex_core::features::Feature;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::find_thread_path_by_name_str;
 use codex_core::path_utils;
@@ -581,6 +582,7 @@ async fn run_ratatui_app(
                 &config.codex_home,
                 &config.model_provider_id,
                 cli.fork_show_all,
+                config.features.enabled(Feature::Sqlite),
             )
             .await?
             {
@@ -639,6 +641,7 @@ async fn run_ratatui_app(
             &config.codex_home,
             &config.model_provider_id,
             cli.resume_show_all,
+            config.features.enabled(Feature::Sqlite),
         )
         .await?
         {

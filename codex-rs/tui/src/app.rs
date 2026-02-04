@@ -1313,6 +1313,7 @@ impl App {
                     &self.config.codex_home,
                     &self.config.model_provider_id,
                     false,
+                    self.config.features.enabled(Feature::Sqlite),
                 )
                 .await?
                 {
