@@ -195,7 +195,7 @@ pub async fn load_config_layers_state(
         cwd,
         cli_overrides,
         overrides,
-        cloud_requirements,
+        Some(cloud_requirements),
         &RealEnv,
     )
     .await
@@ -220,7 +220,9 @@ async fn load_config_layers_state_with_env(
     )
     .await?;
 
-    if let Some(requirements) = cloud_requirements.get().await {
+    if let Some(loader) = cloud_requirements
+        && let Some(requirements) = loader.get().await
+    {
         config_requirements_toml
             .merge_unset_fields(RequirementSource::CloudRequirements, requirements);
     }
