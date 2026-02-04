@@ -68,7 +68,8 @@ impl Default for TimezoneConfig {
 
 /// Timezone-aware time formatter for tracing subscribers.
 ///
-/// Formats timestamps according to the configured timezone (Local or UTC).
+/// Implements `FormatTime` trait, formatting timestamps according to the
+/// configured timezone (Local or UTC) using chrono.
 pub struct ConfigurableTimer {
     timezone: TimezoneConfig,
 }
@@ -83,7 +84,6 @@ impl tracing_subscriber::fmt::time::FormatTime for ConfigurableTimer {
     fn format_time(&self, w: &mut tracing_subscriber::fmt::format::Writer<'_>) -> std::fmt::Result {
         match self.timezone {
             TimezoneConfig::Local => {
-                // Use local time formatting
                 write!(
                     w,
                     "{}",
@@ -91,7 +91,6 @@ impl tracing_subscriber::fmt::time::FormatTime for ConfigurableTimer {
                 )
             }
             TimezoneConfig::Utc => {
-                // Use UTC time formatting
                 write!(w, "{}", chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"))
             }
         }
@@ -128,7 +127,7 @@ pub fn build_env_filter(logging: &LoggingConfig, fallback_default: &str) -> EnvF
 /// Configure a fmt layer with timer, location, target, and filter from LoggingConfig.
 ///
 /// This macro takes a base fmt layer (with writer and mode-specific settings) and applies:
-/// 1. Timezone-aware timer
+/// 1. Timezone-aware timer (based on `$logging.timezone`)
 /// 2. Location (file/line) if enabled
 /// 3. Target (module path) settings
 /// 4. EnvFilter from config
@@ -175,7 +174,6 @@ mod tests {
         let timer = ConfigurableTimer::new(TimezoneConfig::Local);
         let mut buf = String::new();
         let mut writer = Writer::new(&mut buf);
-        // Just verify it doesn't panic
         let _ = timer.format_time(&mut writer);
     }
 
@@ -184,7 +182,6 @@ mod tests {
         let timer = ConfigurableTimer::new(TimezoneConfig::Utc);
         let mut buf = String::new();
         let mut writer = Writer::new(&mut buf);
-        // Just verify it doesn't panic
         let _ = timer.format_time(&mut writer);
     }
 
@@ -192,7 +189,6 @@ mod tests {
     fn test_build_env_filter_with_default() {
         let logging = LoggingConfig::default();
         let filter = build_env_filter(&logging, "error");
-        // Verify filter was created successfully (just check it doesn't panic)
         let _ = format!("{filter:?}");
     }
 
@@ -210,7 +206,6 @@ mod tests {
         };
         let filter = build_env_filter(&logging, "error");
         let filter_str = format!("{filter:?}");
-        // Verify modules were applied
         assert!(filter_str.contains("codex_core") || filter_str.contains("debug"));
     }
 }

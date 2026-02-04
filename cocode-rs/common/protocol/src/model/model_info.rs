@@ -5,6 +5,7 @@ use super::ConfigShellToolType;
 use super::ReasoningSummary;
 use super::TruncationPolicyConfig;
 use crate::thinking::ThinkingLevel;
+use crate::tool_config::ApplyPatchToolType;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -106,6 +107,14 @@ pub struct ModelInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub experimental_supported_tools: Option<Vec<String>>,
 
+    /// Apply patch tool type for this model.
+    ///
+    /// - `None`: Use Edit tool (default for Claude and most models)
+    /// - `Some(Function)`: JSON function tool
+    /// - `Some(Freeform)`: Grammar-based freeform tool (for GPT-5)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub apply_patch_tool_type: Option<ApplyPatchToolType>,
+
     // === Instructions ===
     /// Base instructions for this model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -138,6 +147,7 @@ pub mod override_keys {
     pub const REASONING_SUMMARY: &str = "reasoning_summary";
     pub const BASE_INSTRUCTIONS: &str = "base_instructions";
     pub const BASE_INSTRUCTIONS_FILE: &str = "base_instructions_file";
+    pub const APPLY_PATCH_TOOL_TYPE: &str = "apply_patch_tool_type";
 }
 
 impl ModelInfo {
@@ -183,6 +193,7 @@ impl ModelInfo {
         merge_field!(shell_type);
         merge_field!(truncation_policy);
         merge_field!(experimental_supported_tools);
+        merge_field!(apply_patch_tool_type);
         // Instructions
         merge_field!(base_instructions);
         merge_field!(base_instructions_file);
@@ -267,6 +278,12 @@ impl ModelInfo {
                         self.base_instructions_file = Some(s.to_string());
                     }
                 }
+                APPLY_PATCH_TOOL_TYPE => {
+                    // ApplyPatchToolType supports string format (e.g., "function", "freeform")
+                    if let Ok(tool_type) = serde_json::from_value(value.clone()) {
+                        self.apply_patch_tool_type = Some(tool_type);
+                    }
+                }
                 _ => {
                     // Unknown keys go to extra for pass-through to provider SDKs
                     let extra = self.extra.get_or_insert_with(HashMap::new);
@@ -342,6 +359,12 @@ impl ModelInfo {
     /// Set extra provider-specific parameters.
     pub fn with_extra(mut self, extra: HashMap<String, serde_json::Value>) -> Self {
         self.extra = Some(extra);
+        self
+    }
+
+    /// Set the apply_patch tool type.
+    pub fn with_apply_patch_tool_type(mut self, tool_type: ApplyPatchToolType) -> Self {
+        self.apply_patch_tool_type = Some(tool_type);
         self
     }
 

@@ -756,11 +756,29 @@ fn map_openai_error(e: &oai::OpenAIError) -> HyperError {
                 delay: *retry_after,
             }
         }
+        oai::OpenAIError::InternalServerError => {
+            // 5xx server errors are retryable
+            HyperError::Retryable {
+                message: "Internal server error".to_string(),
+                delay: None,
+            }
+        }
         oai::OpenAIError::Authentication(msg) => HyperError::AuthenticationFailed(msg.clone()),
-        oai::OpenAIError::Api { message, .. } => HyperError::ProviderError {
-            code: "api_error".to_string(),
-            message: message.clone(),
-        },
+        oai::OpenAIError::Api {
+            status, message, ..
+        } => {
+            // Check for 5xx errors first - these are retryable
+            if *status >= 500 {
+                return HyperError::Retryable {
+                    message: format!("Server error ({status}): {message}"),
+                    delay: None,
+                };
+            }
+            HyperError::ProviderError {
+                code: "api_error".to_string(),
+                message: message.clone(),
+            }
+        }
         _ => HyperError::ProviderError {
             code: "openai_error".to_string(),
             message: e.to_string(),

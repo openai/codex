@@ -130,7 +130,6 @@ description = "A test agent"
 agent_type = "my-agent"
 tools = ["Read", "Glob"]
 disallowed_tools = ["Write"]
-model = "claude-3-haiku"
 max_turns = 10
 "#,
         )
@@ -149,7 +148,6 @@ max_turns = 10
             assert_eq!(definition.agent_type, "my-agent");
             assert_eq!(definition.tools, vec!["Read", "Glob"]);
             assert_eq!(definition.disallowed_tools, vec!["Write"]);
-            assert_eq!(definition.model, Some("claude-3-haiku".to_string()));
             assert_eq!(definition.max_turns, Some(10));
             assert_eq!(plugin_name, "test-plugin");
         } else {
@@ -180,7 +178,6 @@ agent_type = "minimal"
             assert_eq!(definition.name, "minimal");
             assert!(definition.tools.is_empty());
             assert!(definition.disallowed_tools.is_empty());
-            assert!(definition.model.is_none());
             assert!(definition.max_turns.is_none());
         } else {
             panic!("Expected Agent contribution");

@@ -1,6 +1,8 @@
 use crate::definition::AgentDefinition;
+use cocode_protocol::execution::ExecutionIdentity;
 
 /// General-purpose agent with access to all tools.
+/// Inherits model from parent.
 pub fn general_agent() -> AgentDefinition {
     AgentDefinition {
         name: "general".to_string(),
@@ -8,7 +10,7 @@ pub fn general_agent() -> AgentDefinition {
         agent_type: "general".to_string(),
         tools: vec![],
         disallowed_tools: vec![],
-        model: None,
+        identity: Some(ExecutionIdentity::Inherit),
         max_turns: None,
     }
 }
@@ -25,6 +27,6 @@ mod tests {
         assert!(agent.tools.is_empty(), "general agent has all tools");
         assert!(agent.disallowed_tools.is_empty());
         assert!(agent.max_turns.is_none());
-        assert!(agent.model.is_none());
+        assert!(matches!(agent.identity, Some(ExecutionIdentity::Inherit)));
     }
 }

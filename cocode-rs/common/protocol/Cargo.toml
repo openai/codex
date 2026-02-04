@@ -5,10 +5,12 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+chrono = { workspace = true }
 humantime-serde = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 strum = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 
 [lints]
 workspace = true

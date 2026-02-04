@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use cocode_protocol::execution::ExecutionIdentity;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
@@ -59,7 +60,7 @@ pub struct AgentInstance {
 /// The callback receives:
 /// - `agent_type`: The type of agent being spawned
 /// - `prompt`: The task prompt for the agent
-/// - `model`: Optional model override
+/// - `identity`: Optional execution identity for model selection
 /// - `max_turns`: Optional turn limit override
 /// - `tools`: Filtered list of available tool names
 /// - `cancel_token`: Token for cancellation
@@ -67,12 +68,12 @@ pub struct AgentInstance {
 /// Returns the agent output as a string on success.
 pub type AgentExecuteFn = Box<
     dyn Fn(
-            String,            // agent_type
-            String,            // prompt
-            Option<String>,    // model
-            Option<i32>,       // max_turns
-            Vec<String>,       // filtered tools
-            CancellationToken, // cancel_token
+            String,                    // agent_type
+            String,                    // prompt
+            Option<ExecutionIdentity>, // identity
+            Option<i32>,               // max_turns
+            Vec<String>,               // filtered tools
+            CancellationToken,         // cancel_token
         )
             -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>>
         + Send
@@ -135,7 +136,7 @@ impl SubagentManager {
         let input = SpawnInput {
             agent_type: agent_type.to_string(),
             prompt: prompt.to_string(),
-            model: None,
+            identity: None,
             max_turns: None,
             run_in_background: false,
             allowed_tools: None,
@@ -168,8 +169,12 @@ impl SubagentManager {
             "Spawning subagent"
         );
 
-        // Resolve model (spawn input > definition > inherit parent)
-        let model = input.model.or_else(|| definition.model.clone());
+        // Resolve identity (spawn input > definition > inherit parent)
+        // Priority: input.identity > definition.identity > None (inherit)
+        let identity = input
+            .identity
+            .clone()
+            .or_else(|| definition.identity.clone());
 
         // Resolve max_turns (spawn input > definition)
         let max_turns = input.max_turns.or(definition.max_turns);
@@ -224,7 +229,7 @@ impl SubagentManager {
                     let result = execute_fn(
                         agent_type,
                         prompt,
-                        model,
+                        identity,
                         max_turns,
                         filtered_tools,
                         cancel_token,
@@ -285,7 +290,7 @@ impl SubagentManager {
                 let execute_future = execute_fn(
                     input.agent_type.clone(),
                     input.prompt.clone(),
-                    model.clone(),
+                    identity.clone(),
                     max_turns,
                     filtered_tools.clone(),
                     cancel_token.clone(),
@@ -340,7 +345,7 @@ impl SubagentManager {
                             let result = execute_fn(
                                 agent_type,
                                 prompt,
-                                model,
+                                identity,
                                 max_turns,
                                 filtered_tools,
                                 cancel_token,
@@ -457,7 +462,7 @@ mod tests {
             agent_type: name.to_string(),
             tools: vec![],
             disallowed_tools: vec![],
-            model: None,
+            identity: None,
             max_turns: None,
         }
     }
@@ -503,7 +508,7 @@ mod tests {
         let input = SpawnInput {
             agent_type: "bash".to_string(),
             prompt: "test".to_string(),
-            model: None,
+            identity: None,
             max_turns: None,
             run_in_background: false,
             allowed_tools: None,
@@ -523,7 +528,7 @@ mod tests {
         let input = SpawnInput {
             agent_type: "bash".to_string(),
             prompt: "test".to_string(),
-            model: None,
+            identity: None,
             max_turns: None,
             run_in_background: true,
             allowed_tools: None,

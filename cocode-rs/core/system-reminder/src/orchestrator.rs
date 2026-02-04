@@ -20,11 +20,14 @@ use crate::generators::CollabNotificationsGenerator;
 use crate::generators::DelegateModeGenerator;
 use crate::generators::LspDiagnosticsGenerator;
 use crate::generators::NestedMemoryGenerator;
+use crate::generators::OutputStyleGenerator;
 use crate::generators::PlanModeApprovedGenerator;
 use crate::generators::PlanModeEnterGenerator;
 use crate::generators::PlanModeExitGenerator;
 use crate::generators::PlanToolReminderGenerator;
 use crate::generators::PlanVerificationGenerator;
+use crate::generators::QueuedCommandsGenerator;
+use crate::generators::SecurityGuidelinesGenerator;
 use crate::generators::TodoRemindersGenerator;
 use crate::generators::TokenUsageGenerator;
 use crate::generators::UnifiedTasksGenerator;
@@ -82,6 +85,7 @@ impl SystemReminderOrchestrator {
     fn create_default_generators() -> Vec<Arc<dyn AttachmentGenerator>> {
         vec![
             // Core tier
+            Arc::new(SecurityGuidelinesGenerator),
             Arc::new(ChangedFilesGenerator),
             Arc::new(PlanModeEnterGenerator),
             Arc::new(PlanModeApprovedGenerator),
@@ -91,12 +95,14 @@ impl SystemReminderOrchestrator {
             // MainAgentOnly tier
             Arc::new(AvailableSkillsGenerator),
             Arc::new(LspDiagnosticsGenerator),
+            Arc::new(OutputStyleGenerator),
             Arc::new(TodoRemindersGenerator),
             Arc::new(UnifiedTasksGenerator),
             Arc::new(DelegateModeGenerator),
             Arc::new(CollabNotificationsGenerator),
             Arc::new(PlanVerificationGenerator),
             Arc::new(TokenUsageGenerator),
+            Arc::new(QueuedCommandsGenerator),
         ]
     }
 

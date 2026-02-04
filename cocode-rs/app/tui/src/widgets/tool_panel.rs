@@ -13,6 +13,7 @@ use ratatui::widgets::List;
 use ratatui::widgets::ListItem;
 use ratatui::widgets::Widget;
 
+use crate::i18n::t;
 use crate::state::ToolExecution;
 use crate::state::ToolStatus;
 
@@ -80,9 +81,9 @@ impl Widget for ToolPanel<'_> {
             .count();
 
         let title = if running_count > 0 {
-            format!(" Tools ({running_count} running) ")
+            format!(" {} ", t!("tool.title_running", count = running_count))
         } else {
-            " Tools ".to_string()
+            format!(" {} ", t!("tool.title"))
         };
 
         let block = Block::default()

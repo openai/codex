@@ -15,10 +15,6 @@ use std::path::PathBuf;
 use clap::Parser;
 use clap::Subcommand;
 use cocode_config::ConfigManager;
-use tracing::info;
-use tracing_subscriber::EnvFilter;
-use tracing_subscriber::fmt;
-use tracing_subscriber::prelude::*;
 
 /// Multi-provider LLM CLI
 #[derive(Parser)]
@@ -108,31 +104,27 @@ fn main() -> anyhow::Result<()> {
 }
 
 /// Main CLI entry point (runs inside Tokio runtime created by arg0).
+///
+/// Note: Logging is NOT initialized here. Instead:
+/// - TUI mode: Initializes file logging in tui_runner.rs
+/// - REPL mode: Initializes stderr logging in commands/chat.rs
 async fn cli_main(_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    // Initialize tracing
-    init_tracing(cli.verbose);
-
-    info!("Starting cocode CLI");
-
-    // Load configuration
+    // Load configuration first
     let config = ConfigManager::from_default()?;
 
     // Apply profile if specified
     if let Some(profile) = &cli.profile {
         match config.set_profile(profile) {
             Ok(true) => {
-                info!(profile = %profile, "Using profile");
+                // Profile applied successfully - will log after tracing is initialized
             }
             Ok(false) => {
-                tracing::warn!(
-                    profile = %profile,
-                    "Profile not found in config, using defaults"
-                );
+                eprintln!("Warning: Profile '{profile}' not found in config, using defaults");
             }
             Err(e) => {
-                tracing::error!(error = %e, "Failed to set profile");
+                eprintln!("Error setting profile: {e}");
             }
         }
     }
@@ -142,7 +134,11 @@ async fn cli_main(_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
         Some(Commands::Chat { title, max_turns }) => {
             run_interactive(
                 None, // No initial prompt for chat mode
-                title, max_turns, &config, cli.no_tui,
+                title,
+                max_turns,
+                &config,
+                cli.no_tui,
+                cli.verbose,
             )
             .await
         }
@@ -160,11 +156,12 @@ async fn cli_main(_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
                     Some(1), // Single turn for prompt mode
                     &config,
                     true, // Force no-tui for single prompt
+                    cli.verbose,
                 )
                 .await
             } else {
                 // Interactive mode: start chat (use TUI by default)
-                run_interactive(None, None, None, &config, cli.no_tui).await
+                run_interactive(None, None, None, &config, cli.no_tui, cli.verbose).await
             }
         }
     }
@@ -177,26 +174,13 @@ async fn run_interactive(
     max_turns: Option<i32>,
     config: &ConfigManager,
     no_tui: bool,
+    verbose: bool,
 ) -> anyhow::Result<()> {
-    // For single prompt, use REPL mode
+    // For single prompt or explicit --no-tui, use REPL mode
     if initial_prompt.is_some() || no_tui {
-        return commands::chat::run(initial_prompt, title, max_turns, config).await;
+        return commands::chat::run(initial_prompt, title, max_turns, config, verbose).await;
     }
 
     // Interactive mode: use TUI
-    tui_runner::run_tui(title, config).await
-}
-
-/// Initialize tracing with appropriate filters.
-fn init_tracing(verbose: bool) {
-    let filter = if verbose {
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,cocode=debug"))
-    } else {
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"))
-    };
-
-    tracing_subscriber::registry()
-        .with(fmt::layer().with_target(false).compact())
-        .with(filter)
-        .init();
+    tui_runner::run_tui(title, config, verbose).await
 }

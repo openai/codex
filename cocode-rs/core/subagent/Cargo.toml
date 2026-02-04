@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+cocode-config = { path = "../../common/config" }
 cocode-protocol.workspace = true
 cocode-tools.workspace = true
 tokio = { workspace = true, features = ["sync", "time", "fs"] }

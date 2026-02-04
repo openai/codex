@@ -12,17 +12,23 @@ cocode-tools.workspace = true
 cocode-context.workspace = true
 cocode-hooks.workspace = true
 cocode-subagent.workspace = true
+cocode-git.workspace = true
+cocode-error.workspace = true
 hyper-sdk.workspace = true
-tokio = { workspace = true, features = ["sync", "time"] }
+tokio = { workspace = true, features = ["sync", "time", "rt-multi-thread"] }
 tokio-util.workspace = true
 tracing.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 anyhow.workspace = true
+snafu.workspace = true
+snafu-virtstack.workspace = true
+chrono = { workspace = true, features = ["serde"] }
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tempfile.workspace = true
 
 [lints]
 workspace = true

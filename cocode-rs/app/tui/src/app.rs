@@ -4,19 +4,28 @@
 //! managing the event loop, state updates, and rendering.
 
 use std::io;
+use std::path::PathBuf;
 
 use cocode_protocol::LoopEvent;
 use futures::StreamExt;
 use tokio::sync::mpsc;
 
 use crate::command::UserCommand;
+use crate::editor;
+use crate::event::TuiCommand;
 use crate::event::TuiEvent;
-use crate::event::handle_key_event;
+use crate::event::handle_key_event_with_all_suggestions;
+use crate::file_search::FileSearchEvent;
+use crate::file_search::FileSearchManager;
+use crate::file_search::create_file_search_channel;
 use crate::render::render;
+use crate::skill_search::SkillSearchManager;
 use crate::state::AppState;
+use crate::state::Overlay;
 use crate::terminal::Tui;
 use crate::update::handle_agent_event;
 use crate::update::handle_command;
+use crate::update::handle_file_search_event;
 
 /// Configuration for the TUI application.
 #[derive(Debug, Clone)]
@@ -25,6 +34,8 @@ pub struct AppConfig {
     pub model: String,
     /// Available models for the model picker.
     pub available_models: Vec<String>,
+    /// Working directory for file search.
+    pub cwd: PathBuf,
 }
 
 impl Default for AppConfig {
@@ -36,6 +47,7 @@ impl Default for AppConfig {
                 "claude-opus-4-20250514".to_string(),
                 "claude-haiku-3-5-20241022".to_string(),
             ],
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         }
     }
 }
@@ -58,6 +70,12 @@ pub struct App {
     command_tx: mpsc::Sender<UserCommand>,
     /// Available models for the picker.
     available_models: Vec<String>,
+    /// File search manager for @mention autocomplete.
+    file_search: FileSearchManager,
+    /// Receiver for file search events.
+    file_search_rx: mpsc::Receiver<FileSearchEvent>,
+    /// Skill search manager for /command autocomplete.
+    skill_search: SkillSearchManager,
 }
 
 impl App {
@@ -77,8 +95,18 @@ impl App {
         command_tx: mpsc::Sender<UserCommand>,
         config: AppConfig,
     ) -> io::Result<Self> {
+        // Initialize i18n before anything else
+        crate::i18n::init();
+
         let tui = Tui::new()?;
         let state = AppState::with_model(&config.model);
+
+        // Create file search manager
+        let (file_search_tx, file_search_rx) = create_file_search_channel();
+        let file_search = FileSearchManager::new(config.cwd, file_search_tx);
+
+        // Create skill search manager
+        let skill_search = SkillSearchManager::new();
 
         Ok(Self {
             tui,
@@ -86,6 +114,9 @@ impl App {
             agent_rx,
             command_tx,
             available_models: config.available_models,
+            file_search,
+            file_search_rx,
+            skill_search,
         })
     }
 
@@ -96,12 +127,19 @@ impl App {
         agent_rx: mpsc::Receiver<LoopEvent>,
         command_tx: mpsc::Sender<UserCommand>,
     ) -> Self {
+        let (file_search_tx, file_search_rx) = create_file_search_channel();
+        let file_search = FileSearchManager::new(PathBuf::from("."), file_search_tx);
+        let skill_search = SkillSearchManager::new();
+
         Self {
             tui,
             state: AppState::new(),
             agent_rx,
             command_tx,
             available_models: vec![],
+            file_search,
+            file_search_rx,
+            skill_search,
         }
     }
 
@@ -125,6 +163,7 @@ impl App {
     /// This method blocks until the application exits. It handles:
     /// - Terminal events (keyboard, mouse, resize)
     /// - Agent events from the core loop
+    /// - File search events for autocomplete
     /// - Periodic tick events for animations
     ///
     /// # Errors
@@ -139,6 +178,9 @@ impl App {
         // Initial render
         self.render()?;
 
+        // Trigger initial file index refresh
+        self.file_search.refresh_index();
+
         loop {
             tokio::select! {
                 // Handle TUI events (keyboard, tick, draw)
@@ -148,6 +190,11 @@ impl App {
                 // Handle agent events
                 Some(loop_event) = self.agent_rx.recv() => {
                     self.handle_loop_event(loop_event);
+                    self.render()?;
+                }
+                // Handle file search results
+                Some(search_event) = self.file_search_rx.recv() => {
+                    handle_file_search_event(&mut self.state, search_event);
                     self.render()?;
                 }
             }
@@ -167,9 +214,23 @@ impl App {
     async fn handle_tui_event(&mut self, event: TuiEvent) -> io::Result<()> {
         match event {
             TuiEvent::Key(key) => {
-                if let Some(cmd) = handle_key_event(key, self.state.has_overlay()) {
+                let has_overlay = self.state.has_overlay();
+                let has_file_suggestions = self.state.ui.has_file_suggestions();
+                let has_skill_suggestions = self.state.ui.has_skill_suggestions();
+
+                if let Some(cmd) = handle_key_event_with_all_suggestions(
+                    key,
+                    has_overlay,
+                    has_file_suggestions,
+                    has_skill_suggestions,
+                ) {
                     self.handle_command_internal(cmd).await;
                 }
+
+                // Check for @mention or /command after input changes
+                self.check_at_mention();
+                self.check_slash_command();
+
                 self.render()?;
             }
             TuiEvent::Mouse(_mouse) => {
@@ -178,15 +239,32 @@ impl App {
             TuiEvent::Resize { .. } => {
                 self.render()?;
             }
-            TuiEvent::FocusChanged { .. } => {
-                // Focus events can be handled here if needed
+            TuiEvent::FocusChanged { focused } => {
+                self.state.ui.set_terminal_focused(focused);
+                // Could pause animations here if needed
             }
             TuiEvent::Draw => {
                 self.render()?;
             }
             TuiEvent::Tick => {
-                // Tick events for animations - just re-render if streaming
+                // Tick events for animations
+                let mut needs_render = false;
+
+                // Re-render if streaming
                 if self.state.is_streaming() {
+                    needs_render = true;
+                }
+
+                // Expire old toasts
+                if self.state.ui.has_toasts() {
+                    self.state.ui.expire_toasts();
+                    needs_render = true;
+                }
+
+                // Tick animation frame (for thinking animation, etc.)
+                self.state.ui.tick_animation();
+
+                if needs_render {
                     self.render()?;
                 }
             }
@@ -195,6 +273,9 @@ impl App {
                 for c in text.chars() {
                     self.state.ui.input.insert_char(c);
                 }
+                // Check for @mention or /command after paste
+                self.check_at_mention();
+                self.check_slash_command();
                 self.render()?;
             }
             TuiEvent::Agent(loop_event) => {
@@ -209,8 +290,52 @@ impl App {
         Ok(())
     }
 
+    /// Check for @mention in input and trigger file search if needed.
+    fn check_at_mention(&mut self) {
+        if let Some((start_pos, query)) = self.state.ui.input.current_at_token() {
+            // Start or update file suggestions
+            self.state
+                .ui
+                .start_file_suggestions(query.clone(), start_pos);
+            self.file_search.on_query(query, start_pos);
+        } else {
+            // No @mention, clear suggestions
+            self.state.ui.clear_file_suggestions();
+            self.file_search.cancel();
+        }
+    }
+
+    /// Check for /command in input and trigger skill search if needed.
+    fn check_slash_command(&mut self) {
+        if let Some((start_pos, query)) = self.state.ui.input.current_slash_token() {
+            // Start or update skill suggestions
+            self.state
+                .ui
+                .start_skill_suggestions(query.clone(), start_pos);
+            let suggestions = self.skill_search.search(&query);
+            self.state.ui.update_skill_suggestions(suggestions);
+        } else {
+            // No /command, clear suggestions
+            self.state.ui.clear_skill_suggestions();
+        }
+    }
+
+    /// Load skills into the skill search manager.
+    pub fn load_skills<'a>(
+        &mut self,
+        skills: impl Iterator<Item = &'a cocode_skill::SkillPromptCommand>,
+    ) {
+        self.skill_search.load_skills(skills);
+    }
+
     /// Handle a TUI command internally.
-    async fn handle_command_internal(&mut self, cmd: crate::event::TuiCommand) {
+    async fn handle_command_internal(&mut self, cmd: TuiCommand) {
+        // Handle external editor specially - it needs terminal access
+        if matches!(cmd, TuiCommand::OpenExternalEditor) {
+            self.handle_external_editor();
+            return;
+        }
+
         handle_command(
             &mut self.state,
             cmd,
@@ -218,6 +343,29 @@ impl App {
             &self.available_models,
         )
         .await;
+    }
+
+    /// Handle opening an external editor.
+    fn handle_external_editor(&mut self) {
+        let current_input = self.state.ui.input.text().to_string();
+
+        // Run the external editor (this blocks and suspends the TUI)
+        match editor::edit_in_external_editor(&current_input) {
+            Ok(result) => {
+                if result.modified {
+                    self.state.ui.input.set_text(result.content);
+                    tracing::info!("Input updated from external editor");
+                } else {
+                    tracing::debug!("External editor: no changes made");
+                }
+            }
+            Err(e) => {
+                tracing::error!("Failed to open external editor: {e}");
+                self.state
+                    .ui
+                    .set_overlay(Overlay::Error(format!("External editor failed: {e}")));
+            }
+        }
     }
 
     /// Handle a loop event from the core agent.

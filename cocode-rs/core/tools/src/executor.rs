@@ -44,10 +44,16 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+/// Default maximum concurrent tool executions.
+pub const DEFAULT_MAX_TOOL_CONCURRENCY: i32 = 10;
+
 /// Configuration for the tool executor.
 #[derive(Debug, Clone)]
 pub struct ExecutorConfig {
     /// Maximum concurrent tool executions.
+    ///
+    /// Configurable via `COCODE_MAX_TOOL_USE_CONCURRENCY` environment variable.
+    /// Default: 10.
     pub max_concurrency: i32,
     /// Working directory for tool execution.
     pub cwd: PathBuf,
@@ -72,8 +78,15 @@ pub struct ExecutorConfig {
 
 impl Default for ExecutorConfig {
     fn default() -> Self {
+        // Check environment variable for max concurrency override
+        let max_concurrency = std::env::var("COCODE_MAX_TOOL_USE_CONCURRENCY")
+            .ok()
+            .and_then(|v| v.parse::<i32>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(DEFAULT_MAX_TOOL_CONCURRENCY);
+
         Self {
-            max_concurrency: 10,
+            max_concurrency,
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
             session_id: String::new(),
             permission_mode: PermissionMode::Default,
@@ -156,6 +169,11 @@ pub struct StreamingToolExecutor {
     spawn_agent_fn: Option<SpawnAgentFn>,
     /// Optional skill manager for the Skill tool.
     skill_manager: Option<Arc<cocode_skill::SkillManager>>,
+    /// Parent selections for subagent isolation.
+    ///
+    /// When spawning subagents, these selections are passed to ensure
+    /// subagents are unaffected by changes to the parent's model settings.
+    parent_selections: Option<cocode_protocol::RoleSelections>,
 }
 
 impl StreamingToolExecutor {
@@ -180,6 +198,7 @@ impl StreamingToolExecutor {
             background_registry: BackgroundTaskRegistry::new(),
             spawn_agent_fn: None,
             skill_manager: None,
+            parent_selections: None,
         }
     }
 
@@ -222,6 +241,16 @@ impl StreamingToolExecutor {
     /// Set a custom async hook tracker.
     pub fn with_async_hook_tracker(mut self, tracker: Arc<AsyncHookTracker>) -> Self {
         self.async_hook_tracker = tracker;
+        self
+    }
+
+    /// Set parent selections for subagent isolation.
+    ///
+    /// When spawning subagents via the Task tool, these selections will be
+    /// cloned and passed to the subagent, ensuring it's unaffected by
+    /// subsequent changes to the parent's model settings.
+    pub fn with_parent_selections(mut self, selections: cocode_protocol::RoleSelections) -> Self {
+        self.parent_selections = Some(selections);
         self
     }
 
@@ -630,6 +659,11 @@ impl StreamingToolExecutor {
         // Add session_dir if available
         if let Some(ref dir) = self.config.session_dir {
             builder = builder.session_dir(dir.clone());
+        }
+
+        // Add parent_selections for subagent isolation
+        if let Some(ref selections) = self.parent_selections {
+            builder = builder.parent_selections(selections.clone());
         }
 
         builder.build()

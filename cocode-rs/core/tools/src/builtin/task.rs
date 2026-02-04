@@ -126,7 +126,7 @@ impl Tool for TaskTool {
             )));
         }
 
-        // Build spawn input
+        // Build spawn input with parent's selections for isolation
         let spawn_input = SpawnAgentInput {
             agent_type: subagent_type.to_string(),
             prompt: prompt.to_string(),
@@ -134,6 +134,7 @@ impl Tool for TaskTool {
             max_turns,
             run_in_background,
             allowed_tools,
+            parent_selections: ctx.parent_selections.clone(),
         };
 
         // Spawn the agent

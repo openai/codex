@@ -5,6 +5,13 @@ use crate::context::ToolContext;
 use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
+use cocode_file_encoding::Encoding;
+use cocode_file_encoding::LineEnding;
+use cocode_file_encoding::detect_encoding;
+use cocode_file_encoding::detect_line_ending;
+use cocode_file_encoding::normalize_line_endings;
+use cocode_file_encoding::preserve_trailing_newline;
+use cocode_file_encoding::write_with_format_async;
 use cocode_plan_mode::is_safe_file;
 use cocode_protocol::ConcurrencySafety;
 use cocode_protocol::ContextModifier;
@@ -94,16 +101,18 @@ impl Tool for WriteTool {
             }
         }
 
-        // If file exists, must have been read first
-        if path.exists() {
+        // Detect original encoding, line ending, and trailing newline for existing files
+        let (original_encoding, original_line_ending, original_content_for_trailing) = if path
+            .exists()
+        {
             if !ctx.was_file_read(&path).await {
                 return Err(crate::error::tool_error::ExecutionFailedSnafu {
-                    message: format!(
-                        "Existing file must be read before overwriting: {}. Use the Read tool first.",
-                        path.display()
-                    ),
-                }
-                .build());
+                        message: format!(
+                            "Existing file must be read before overwriting: {}. Use the Read tool first.",
+                            path.display()
+                        ),
+                    }
+                    .build());
             }
 
             // Check file_mtime hasn't changed since last read (detect external modifications)
@@ -116,16 +125,36 @@ impl Tool for WriteTool {
                 {
                     if curr_mtime > read_mtime {
                         return Err(crate::error::tool_error::ExecutionFailedSnafu {
-                            message: format!(
-                                "File has been modified externally since last read: {}. Read the file again before writing.",
-                                path.display()
-                            ),
-                        }
-                        .build());
+                                message: format!(
+                                    "File has been modified externally since last read: {}. Read the file again before writing.",
+                                    path.display()
+                                ),
+                            }
+                            .build());
                     }
                 }
             }
-        }
+
+            // Detect encoding and line ending from original file
+            let bytes = fs::read(&path).await.map_err(|e| {
+                crate::error::tool_error::ExecutionFailedSnafu {
+                    message: format!("Failed to read file for encoding detection: {e}"),
+                }
+                .build()
+            })?;
+            let encoding = detect_encoding(&bytes);
+            let original_content = encoding.decode(&bytes).map_err(|e| {
+                crate::error::tool_error::ExecutionFailedSnafu {
+                    message: format!("Failed to decode file: {e}"),
+                }
+                .build()
+            })?;
+            let line_ending = detect_line_ending(&original_content);
+            (encoding, line_ending, Some(original_content))
+        } else {
+            // New file: use defaults (UTF-8, LF), no trailing newline preservation
+            (Encoding::Utf8, LineEnding::Lf, None)
+        };
 
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
@@ -139,13 +168,30 @@ impl Tool for WriteTool {
             }
         }
 
-        // Write file
-        fs::write(&path, content).await.map_err(|e| {
+        // Preserve trailing newline state from original file
+        let content_to_write = if let Some(ref orig) = original_content_for_trailing {
+            preserve_trailing_newline(orig, content)
+        } else {
+            content.to_string()
+        };
+
+        // Write file preserving encoding and line ending
+        write_with_format_async(
+            &path,
+            &content_to_write,
+            original_encoding,
+            original_line_ending,
+        )
+        .await
+        .map_err(|e| {
             crate::error::tool_error::ExecutionFailedSnafu {
                 message: format!("Failed to write file: {e}"),
             }
             .build()
         })?;
+
+        // Normalize content for the context (always use LF internally)
+        let normalized_content = normalize_line_endings(&content_to_write, LineEnding::Lf);
 
         // Track modification and update read state with new content/mtime
         ctx.record_file_modified(&path).await;
@@ -156,14 +202,14 @@ impl Tool for WriteTool {
         use crate::context::FileReadState;
         ctx.record_file_read_with_state(
             &path,
-            FileReadState::complete(content.to_string(), new_mtime),
+            FileReadState::complete(normalized_content.clone(), new_mtime),
         )
         .await;
 
         let mut result = ToolOutput::text(format!("Successfully wrote to {}", path.display()));
         result.modifiers.push(ContextModifier::FileRead {
             path: path.clone(),
-            content: content.to_string(),
+            content: normalized_content,
         });
 
         Ok(result)
@@ -324,5 +370,52 @@ mod tests {
 
         let result = tool.execute(input, &mut ctx).await.unwrap();
         assert!(!result.is_error);
+    }
+
+    #[tokio::test]
+    async fn test_write_preserves_crlf_line_endings() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("crlf.txt");
+
+        // Create file with CRLF line endings
+        std::fs::write(&file_path, "line1\r\nline2\r\n").unwrap();
+
+        let tool = WriteTool::new();
+        let mut ctx = make_context();
+        ctx.record_file_read(&file_path).await;
+
+        let input = serde_json::json!({
+            "file_path": file_path.to_str().unwrap(),
+            "content": "new line1\nnew line2\n"
+        });
+
+        let result = tool.execute(input, &mut ctx).await.unwrap();
+        assert!(!result.is_error);
+
+        // Verify CRLF was preserved
+        let bytes = std::fs::read(&file_path).unwrap();
+        assert!(bytes.windows(2).any(|w| w == b"\r\n"));
+        assert!(!bytes.contains(&b'\n') || bytes.windows(2).filter(|w| *w == b"\r\n").count() > 0);
+    }
+
+    #[tokio::test]
+    async fn test_write_new_file_uses_lf() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("new.txt");
+
+        let tool = WriteTool::new();
+        let mut ctx = make_context();
+
+        let input = serde_json::json!({
+            "file_path": file_path.to_str().unwrap(),
+            "content": "line1\nline2\n"
+        });
+
+        let result = tool.execute(input, &mut ctx).await.unwrap();
+        assert!(!result.is_error);
+
+        // Verify LF is used for new files
+        let bytes = std::fs::read(&file_path).unwrap();
+        assert_eq!(bytes, b"line1\nline2\n");
     }
 }

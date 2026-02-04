@@ -7,7 +7,8 @@ use serde::Serialize;
 /// Model role identifier.
 ///
 /// Different roles allow using specialized models for specific tasks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ModelRole {
     /// Primary model for main interactions.
     Main,

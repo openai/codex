@@ -10,6 +10,7 @@ members = [
     "core/context",
     "core/prompt",
     "core/system-reminder",
+    "utils/file-encoding",
     "utils/file-ignore",
     "utils/file-search",
     "provider-sdks/anthropic",
@@ -89,6 +90,7 @@ google-genai-sdk = { path = "provider-sdks/google-genai" }
 hyper-sdk = { path = "provider-sdks/hyper-sdk" }
 
 # Internal - utilities (renamed codex → cocode)
+cocode-file-encoding = { path = "utils/file-encoding" }
 cocode-async-utils = { path = "utils/async-utils" }
 cocode-keyring-store = { path = "utils/keyring-store" }
 cocode-file-ignore = { path = "utils/file-ignore" }
@@ -220,6 +222,9 @@ tree-sitter-highlight = "0.25"
 unicode-segmentation = "1"
 unicode-width = "0.2"
 vt100 = "0.15"
+
+# i18n
+rust-i18n = "3"
 
 [workspace.lints]
 rust = {}

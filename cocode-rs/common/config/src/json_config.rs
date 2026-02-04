@@ -149,6 +149,11 @@ pub struct AppConfig {
     /// Extended path configuration.
     #[serde(default)]
     pub paths: Option<PathConfig>,
+
+    /// Preferred language for responses (e.g., "en", "zh", "ja").
+    /// When set, the agent will respond in this language.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language_preference: Option<String>,
 }
 
 /// Resolved configuration with profile applied.
@@ -173,6 +178,8 @@ pub struct ResolvedAppConfig {
     pub attachment: Option<AttachmentConfig>,
     /// Effective path configuration.
     pub paths: Option<PathConfig>,
+    /// Effective language preference.
+    pub language_preference: Option<String>,
 }
 
 impl AppConfig {
@@ -194,6 +201,7 @@ impl AppConfig {
             plan: self.plan.clone(),
             attachment: self.attachment.clone(),
             paths: self.paths.clone(),
+            language_preference: self.language_preference.clone(),
         }
     }
 
@@ -264,6 +272,8 @@ fn merge_logging(base: &LoggingConfig, profile: &LoggingConfig) -> LoggingConfig
         level: profile.level.clone().or_else(|| base.level.clone()),
         location: profile.location.or(base.location),
         target: profile.target.or(base.target),
+        timezone: profile.timezone.clone().or_else(|| base.timezone.clone()),
+        modules: profile.modules.clone().or_else(|| base.modules.clone()),
     }
 }
 
@@ -275,11 +285,19 @@ fn merge_logging(base: &LoggingConfig, profile: &LoggingConfig) -> LoggingConfig
 /// {
 ///   "logging": {
 ///     "level": "debug",
+///     "timezone": "local",
+///     "modules": ["cocode_core=debug", "cocode_api=trace"],
 ///     "location": true,
 ///     "target": false
 ///   }
 /// }
 /// ```
+///
+/// # Note
+///
+/// Logging destination is determined by the runtime mode:
+/// - TUI mode: Logs to `~/.cocode/log/cocode-tui.log`
+/// - REPL mode (`--no-tui`): Logs to stderr
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct LoggingConfig {
     /// Log level (e.g., "trace", "debug", "info", "warn", "error").
@@ -293,6 +311,31 @@ pub struct LoggingConfig {
     /// Include target module path in logs.
     #[serde(default)]
     pub target: Option<bool>,
+
+    /// Timezone for log timestamps ("local" or "utc", default: "local").
+    #[serde(default)]
+    pub timezone: Option<String>,
+
+    /// Per-module log levels (e.g., ["cocode_core=debug", "cocode_api=trace"]).
+    #[serde(default)]
+    pub modules: Option<Vec<String>>,
+}
+
+impl LoggingConfig {
+    /// Convert to `cocode_utils_common::LoggingConfig` for use with the
+    /// `configure_fmt_layer!` macro.
+    pub fn to_common_logging(&self) -> cocode_utils_common::LoggingConfig {
+        cocode_utils_common::LoggingConfig {
+            level: self.level.clone().unwrap_or_else(|| "info".to_string()),
+            location: self.location.unwrap_or(false),
+            target: self.target.unwrap_or(false),
+            timezone: match self.timezone.as_deref() {
+                Some("utc") => cocode_utils_common::TimezoneConfig::Utc,
+                _ => cocode_utils_common::TimezoneConfig::Local,
+            },
+            modules: self.modules.clone().unwrap_or_default(),
+        }
+    }
 }
 
 /// Feature toggles section in JSON format.
@@ -726,11 +769,15 @@ mod tests {
             level: Some("info".to_string()),
             location: Some(false),
             target: Some(true),
+            timezone: Some("local".to_string()),
+            modules: Some(vec!["cocode_core=info".to_string()]),
         };
         let override_config = LoggingConfig {
             level: Some("debug".to_string()),
             location: Some(true),
             target: None,
+            timezone: None,
+            modules: Some(vec!["cocode_core=debug".to_string()]),
         };
 
         let merged = merge_logging(&base, &override_config);
@@ -738,6 +785,8 @@ mod tests {
         assert_eq!(merged.level, Some("debug".to_string()));
         assert_eq!(merged.location, Some(true));
         assert_eq!(merged.target, Some(true)); // Kept from base
+        assert_eq!(merged.timezone, Some("local".to_string())); // Kept from base
+        assert_eq!(merged.modules, Some(vec!["cocode_core=debug".to_string()])); // From override
     }
 
     // ==========================================================

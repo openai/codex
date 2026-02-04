@@ -9,17 +9,35 @@ mod session;
 mod ui;
 
 pub use session::ChatMessage;
+pub use session::McpServerStatus;
 pub use session::MessageRole;
+pub use session::PlanPhase;
 pub use session::SessionState;
+pub use session::SubagentInstance;
+pub use session::SubagentStatus;
 pub use session::ToolExecution;
 pub use session::ToolStatus;
+pub use ui::CommandAction;
+pub use ui::CommandItem;
+pub use ui::CommandPaletteOverlay;
+pub use ui::FileSuggestionItem;
+pub use ui::FileSuggestionState;
 pub use ui::FocusTarget;
+pub use ui::HistoryEntry;
 pub use ui::InputState;
 pub use ui::ModelPickerOverlay;
 pub use ui::Overlay;
 pub use ui::PermissionOverlay;
+pub use ui::SessionBrowserOverlay;
+pub use ui::SessionSummary;
+pub use ui::SkillSuggestionItem;
+pub use ui::SkillSuggestionState;
 pub use ui::StreamingState;
 pub use ui::UiState;
+
+// Re-export theme types for convenience
+pub use crate::theme::Theme;
+pub use crate::theme::ThemeName;
 
 use cocode_protocol::ReasoningEffort;
 use cocode_protocol::ThinkingLevel;

@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use cocode_api::ApiClient;
+use cocode_api::ModelHub;
 use cocode_config::ConfigManager;
 use cocode_context::ConversationContext;
 use cocode_context::EnvironmentInfo;
@@ -26,8 +27,6 @@ use cocode_protocol::model::ModelRole;
 use cocode_skill::SkillInterface;
 use cocode_tools::ToolRegistry;
 
-use cocode_api::thinking_convert;
-use hyper_sdk::Provider;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::mpsc;
@@ -126,9 +125,14 @@ pub struct SessionState {
     /// API client for model inference.
     api_client: ApiClient,
 
-    /// Model for inference.
-    model: Arc<dyn hyper_sdk::Model>,
+    /// Model hub for model acquisition and caching.
+    ///
+    /// Note: ModelHub is role-agnostic. Role selections are stored in
+    /// `self.session.selections` and passed to ModelHub methods as parameters.
+    model_hub: Arc<ModelHub>,
 
+    // NOTE: Role selections are stored in `self.session.selections` (single source of truth).
+    // This enables proper persistence when the session is saved.
     /// Cancellation token for graceful shutdown.
     cancel_token: CancellationToken,
 
@@ -147,9 +151,6 @@ pub struct SessionState {
     /// Context window size for the model.
     context_window: i32,
 
-    /// Runtime role selections (model + thinking_level per role).
-    current_selections: RoleSelections,
-
     /// Provider type for the current session.
     provider_type: ProviderType,
 }
@@ -163,25 +164,50 @@ impl SessionState {
     /// - Hook registry (empty by default)
     /// - Skills (loaded from project/user directories)
     pub async fn new(session: Session, config: &ConfigManager) -> anyhow::Result<Self> {
+        // Get the primary model info from session
+        let primary_model = session
+            .primary_model()
+            .ok_or_else(|| anyhow::anyhow!("Session has no main model configured"))?;
+        let provider_name = primary_model.provider();
+        let model_name = primary_model.model_name();
+
         info!(
             session_id = %session.id,
-            model = %session.model,
-            provider = %session.provider,
+            model = %model_name,
+            provider = %provider_name,
             "Creating session state"
         );
 
         // Resolve provider info
-        let provider_info = config.resolve_provider(&session.provider)?;
+        let provider_info = config.resolve_provider(provider_name)?;
+        let provider_type = provider_info.provider_type;
 
         // Get model context window (default to 200k if not specified)
         let context_window = provider_info
-            .get_model(&session.model)
+            .get_model(model_name)
             .and_then(|m| m.info.context_window)
             .unwrap_or(200_000) as i32;
 
-        // Create API client and model
-        let (api_client, model) =
-            Self::create_api_client_and_model(&provider_info, &session.model)?;
+        // Create API client
+        let api_client = ApiClient::new();
+
+        // Merge config defaults into session.selections (session is the single source of truth)
+        // Start with config defaults, then apply session's existing selections on top
+        let mut merged_selections = config.current_selections();
+        merged_selections.merge(&session.selections);
+
+        // Ensure main model is set
+        let main_spec = cocode_protocol::model::ModelSpec::new(provider_name, model_name);
+        if merged_selections.get(ModelRole::Main).is_none() {
+            merged_selections.set(ModelRole::Main, RoleSelection::new(main_spec));
+        }
+
+        // Update session with merged selections (session owns the selections)
+        let mut session = session;
+        session.selections = merged_selections;
+
+        // Create ModelHub (role-agnostic, just for model caching)
+        let model_hub = Arc::new(ModelHub::new(Arc::new(config.clone())));
 
         // Create tool registry with built-in tools
         let mut tool_registry = ToolRegistry::new();
@@ -199,12 +225,6 @@ impl SessionState {
             ..LoopConfig::default()
         };
 
-        // Store provider type
-        let provider_type = provider_info.provider_type;
-
-        // Initialize role selections from config
-        let current_selections = config.current_selections();
-
         Ok(Self {
             session,
             message_history: MessageHistory::new(),
@@ -212,108 +232,15 @@ impl SessionState {
             hook_registry: Arc::new(hook_registry),
             skills,
             api_client,
-            model,
+            model_hub,
             cancel_token: CancellationToken::new(),
             loop_config,
             total_turns: 0,
             total_input_tokens: 0,
             total_output_tokens: 0,
             context_window,
-            current_selections,
             provider_type,
         })
-    }
-
-    /// Create an API client and model from provider info.
-    ///
-    /// Returns both the model-agnostic ApiClient and the provider-specific Model.
-    fn create_api_client_and_model(
-        provider_info: &cocode_protocol::ProviderInfo,
-        model: &str,
-    ) -> anyhow::Result<(ApiClient, Arc<dyn hyper_sdk::Model>)> {
-        use hyper_sdk::providers::anthropic::AnthropicConfig;
-        use hyper_sdk::providers::gemini::GeminiConfig;
-        use hyper_sdk::providers::openai::OpenAIConfig;
-        use hyper_sdk::providers::volcengine::VolcengineConfig;
-        use hyper_sdk::providers::zai::ZaiConfig;
-
-        // Get provider model info
-        let provider_model = provider_info.get_model(model).ok_or_else(|| {
-            anyhow::anyhow!(
-                "Model '{}' not found in provider '{}'",
-                model,
-                provider_info.name
-            )
-        })?;
-
-        // Get the actual model name to use for API
-        let api_model_name = provider_model.api_model_name();
-
-        // Create provider-specific model
-        let model: Arc<dyn hyper_sdk::Model> = match provider_info.provider_type {
-            ProviderType::Openai | ProviderType::OpenaiCompat => {
-                let config = OpenAIConfig {
-                    api_key: provider_info.api_key.clone(),
-                    base_url: provider_info.base_url.clone(),
-                    ..Default::default()
-                };
-                let provider = hyper_sdk::OpenAIProvider::new(config)
-                    .map_err(|e| anyhow::anyhow!("Failed to create OpenAI provider: {e}"))?;
-                provider
-                    .model(api_model_name)
-                    .map_err(|e| anyhow::anyhow!("Failed to create model: {e}"))?
-            }
-            ProviderType::Anthropic => {
-                let config = AnthropicConfig {
-                    api_key: provider_info.api_key.clone(),
-                    base_url: provider_info.base_url.clone(),
-                    ..Default::default()
-                };
-                let provider = hyper_sdk::AnthropicProvider::new(config)
-                    .map_err(|e| anyhow::anyhow!("Failed to create Anthropic provider: {e}"))?;
-                provider
-                    .model(api_model_name)
-                    .map_err(|e| anyhow::anyhow!("Failed to create model: {e}"))?
-            }
-            ProviderType::Gemini => {
-                let config = GeminiConfig {
-                    api_key: provider_info.api_key.clone(),
-                    base_url: provider_info.base_url.clone(),
-                    ..Default::default()
-                };
-                let provider = hyper_sdk::GeminiProvider::new(config)
-                    .map_err(|e| anyhow::anyhow!("Failed to create Gemini provider: {e}"))?;
-                provider
-                    .model(api_model_name)
-                    .map_err(|e| anyhow::anyhow!("Failed to create model: {e}"))?
-            }
-            ProviderType::Volcengine => {
-                let config = VolcengineConfig {
-                    api_key: provider_info.api_key.clone(),
-                    base_url: provider_info.base_url.clone(),
-                    ..Default::default()
-                };
-                let provider = hyper_sdk::VolcengineProvider::new(config)
-                    .map_err(|e| anyhow::anyhow!("Failed to create Volcengine provider: {e}"))?;
-                provider
-                    .model(api_model_name)
-                    .map_err(|e| anyhow::anyhow!("Failed to create model: {e}"))?
-            }
-            ProviderType::Zai => {
-                let config = ZaiConfig {
-                    api_key: provider_info.api_key.clone(),
-                    base_url: provider_info.base_url.clone(),
-                    ..Default::default()
-                };
-                let provider = hyper_sdk::ZaiProvider::new(config)
-                    .map_err(|e| anyhow::anyhow!("Failed to create Z.AI provider: {e}"))?;
-                provider
-                    .model(api_model_name)
-                    .map_err(|e| anyhow::anyhow!("Failed to create model: {e}"))?
-            }
-        };
-
-        Ok((ApiClient::new(), model))
     }
 
     /// Run a single turn with the given user input.
@@ -345,9 +272,13 @@ impl SessionState {
         });
 
         // Build environment info
+        let model_name = self
+            .session
+            .model()
+            .ok_or_else(|| anyhow::anyhow!("Session has no main model"))?;
         let environment = EnvironmentInfo::builder()
             .cwd(&self.session.working_dir)
-            .model(&self.session.model)
+            .model(model_name)
             .context_window(self.context_window)
             .output_token_limit(16_384)
             .build()
@@ -361,9 +292,11 @@ impl SessionState {
             .map_err(|e| anyhow::anyhow!("Failed to build context: {e}"))?;
 
         // Build and run the agent loop
+        // Clone selections so the loop has its own copy (isolation)
         let mut loop_instance = AgentLoop::builder()
             .api_client(self.api_client.clone())
-            .model(self.model.clone())
+            .model_hub(self.model_hub.clone())
+            .selections(self.session.selections.clone())
             .tool_registry(self.tool_registry.clone())
             .context(context)
             .config(self.loop_config.clone())
@@ -438,13 +371,17 @@ impl SessionState {
     }
 
     /// Get the model name.
+    ///
+    /// Returns the main model name, or an empty string if not configured.
     pub fn model(&self) -> &str {
-        &self.session.model
+        self.session.model().unwrap_or("")
     }
 
     /// Get the provider name.
+    ///
+    /// Returns the main provider name, or an empty string if not configured.
     pub fn provider(&self) -> &str {
-        &self.session.provider
+        self.session.provider().unwrap_or("")
     }
 
     /// Get total turns run.
@@ -502,23 +439,28 @@ impl SessionState {
     // ==========================================================
 
     /// Get all current role selections.
-    pub fn selections(&self) -> &RoleSelections {
-        &self.current_selections
+    ///
+    /// Returns a clone of the session's selections.
+    pub fn get_selections(&self) -> RoleSelections {
+        self.session.selections.clone()
     }
 
     /// Get selection for a specific role.
-    pub fn selection(&self, role: ModelRole) -> Option<&RoleSelection> {
-        self.current_selections.get(role)
+    ///
+    /// Falls back to Main if the role is not configured.
+    pub fn selection(&self, role: ModelRole) -> Option<RoleSelection> {
+        self.session.selections.get_or_main(role).cloned()
     }
 
     /// Get thinking level for a specific role.
     ///
     /// Returns the explicitly set thinking level for this role, or None
     /// if no override is set (model's default will be used).
-    pub fn thinking_level(&self, role: ModelRole) -> Option<&ThinkingLevel> {
-        self.current_selections
-            .get(role)
-            .and_then(|s| s.thinking_level.as_ref())
+    pub fn thinking_level(&self, role: ModelRole) -> Option<ThinkingLevel> {
+        self.session
+            .selections
+            .get_or_main(role)
+            .and_then(|s| s.thinking_level.clone())
     }
 
     /// Get the provider type for this session.
@@ -526,12 +468,54 @@ impl SessionState {
         self.provider_type
     }
 
+    /// Get the model hub.
+    ///
+    /// The hub provides model acquisition and caching (role-agnostic).
+    pub fn model_hub(&self) -> &Arc<ModelHub> {
+        &self.model_hub
+    }
+
+    /// Get or create a model for a specific role.
+    ///
+    /// Get model for a specific role using the session's selections.
+    /// Falls back to the main role if the requested role has no selection.
+    ///
+    /// # Returns
+    ///
+    /// A tuple of (model, provider_type) for the role, or None if no selection exists.
+    pub fn get_model_for_role(
+        &self,
+        role: ModelRole,
+    ) -> anyhow::Result<Option<(Arc<dyn hyper_sdk::Model>, ProviderType)>> {
+        match self
+            .model_hub
+            .get_model_for_role_with_selections(role, &self.session.selections)
+        {
+            Ok((model, provider_type)) => Ok(Some((model, provider_type))),
+            Err(e) => {
+                // If error is "no model configured", return None instead of error
+                if e.is_no_model_configured() {
+                    Ok(None)
+                } else {
+                    Err(anyhow::anyhow!("{}", e))
+                }
+            }
+        }
+    }
+
+    /// Get the main model (shorthand for get_model_for_role(ModelRole::Main)).
+    ///
+    /// Returns the main model using the session's selections.
+    pub fn main_model(&self) -> anyhow::Result<Arc<dyn hyper_sdk::Model>> {
+        self.model_hub
+            .get_model_for_role_with_selections(ModelRole::Main, &self.session.selections)
+            .map(|(m, _)| m)
+            .map_err(|e| anyhow::anyhow!("{}", e))
+    }
+
     /// Switch model for a specific role.
     ///
-    /// This updates the role selection and recreates the API client if needed.
-    /// Note: For now, this only updates the selection. Full model switching
-    /// with client recreation will be implemented when multi-model support
-    /// is added to the agent loop.
+    /// Updates the session's role selections.
     pub fn switch_role(&mut self, role: ModelRole, selection: RoleSelection) {
         info!(
             role = %role,
@@ -539,7 +523,7 @@ impl SessionState {
             thinking = ?selection.thinking_level,
             "Switching role"
         );
-        self.current_selections.set(role, selection);
+        self.session.selections.set(role, selection);
     }
 
     /// Switch only the thinking level for a specific role.
@@ -552,15 +536,17 @@ impl SessionState {
             thinking = %level,
             "Switching thinking level for role"
         );
-        self.current_selections.set_thinking_level(role, level)
+        self.session.selections.set_thinking_level(role, level)
     }
 
     /// Clear thinking level override for a specific role.
     ///
     /// Returns `true` if the role selection exists and was updated.
     pub fn clear_thinking_level(&mut self, role: ModelRole) -> bool {
-        if let Some(selection) = self.current_selections.get_mut(role) {
+        // Get current selection, clear thinking level, and set it back
+        if let Some(mut selection) = self.session.selections.get(role).cloned() {
             selection.clear_thinking_level();
+            self.session.selections.set(role, selection);
             info!(role = %role, "Cleared thinking level for role");
             true
         } else {
@@ -592,7 +578,11 @@ impl SessionState {
         let thinking_level = self.thinking_level(role)?;
         let default_model_info = cocode_protocol::ModelInfo::default();
         let model_info = model_info.unwrap_or(&default_model_info);
-        thinking_convert::to_provider_options(thinking_level, model_info, self.provider_type)
+        cocode_api::thinking_convert::to_provider_options(
+            &thinking_level,
+            model_info,
+            self.provider_type,
+        )
     }
 
     // ==========================================================
@@ -637,9 +627,13 @@ impl SessionState {
         self.session.touch();
 
         // Build environment info
+        let model_name = self
+            .session
+            .model()
+            .ok_or_else(|| anyhow::anyhow!("Session has no main model"))?;
         let environment = EnvironmentInfo::builder()
             .cwd(&self.session.working_dir)
-            .model(&self.session.model)
+            .model(model_name)
             .context_window(self.context_window)
             .output_token_limit(16_384)
             .build()
@@ -653,9 +647,11 @@ impl SessionState {
             .map_err(|e| anyhow::anyhow!("Failed to build context: {e}"))?;
 
         // Build and run the agent loop with the provided event channel
+        // Clone selections so the loop has its own copy (isolation)
         let mut loop_instance = AgentLoop::builder()
             .api_client(self.api_client.clone())
-            .model(self.model.clone())
+            .model_hub(self.model_hub.clone())
+            .selections(self.session.selections.clone())
             .tool_registry(self.tool_registry.clone())
             .context(context)
             .config(self.loop_config.clone())

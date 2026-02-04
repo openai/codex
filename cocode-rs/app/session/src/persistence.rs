@@ -153,7 +153,8 @@ pub fn session_file_path(session_id: &str) -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cocode_protocol::ProviderType;
+    use cocode_protocol::ModelSpec;
+    use cocode_protocol::RoleSelection;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -162,7 +163,8 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("test_session.json");
 
-        let session = Session::new(PathBuf::from("/test"), "gpt-5", ProviderType::Openai);
+        let selection = RoleSelection::new(ModelSpec::new("openai", "gpt-5"));
+        let session = Session::new(PathBuf::from("/test"), selection);
         let history = MessageHistory::new();
 
         // Save
@@ -176,8 +178,8 @@ mod tests {
         let (loaded_session, _loaded_history) = load_session_from_file(&path).await.unwrap();
 
         assert_eq!(loaded_session.id, session.id);
-        assert_eq!(loaded_session.model, session.model);
-        assert_eq!(loaded_session.provider, session.provider);
+        assert_eq!(loaded_session.model(), session.model());
+        assert_eq!(loaded_session.provider(), session.provider());
     }
 
     #[tokio::test]
@@ -185,7 +187,8 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("to_delete.json");
 
-        let session = Session::new(PathBuf::from("/test"), "gpt-5", ProviderType::Openai);
+        let selection = RoleSelection::new(ModelSpec::new("openai", "gpt-5"));
+        let session = Session::new(PathBuf::from("/test"), selection);
         let history = MessageHistory::new();
 
         save_session_to_file(&session, &history, &path)
@@ -206,7 +209,8 @@ mod tests {
 
     #[test]
     fn test_persisted_session_version() {
-        let session = Session::new(PathBuf::from("/test"), "gpt-5", ProviderType::Openai);
+        let selection = RoleSelection::new(ModelSpec::new("openai", "gpt-5"));
+        let session = Session::new(PathBuf::from("/test"), selection);
         let history = MessageHistory::new();
         let persisted = PersistedSession::new(session, history);
 

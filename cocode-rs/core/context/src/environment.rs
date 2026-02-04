@@ -29,6 +29,9 @@ pub struct EnvironmentInfo {
     pub context_window: i32,
     /// Maximum output tokens for this model.
     pub output_token_limit: i32,
+    /// Preferred response language (e.g., "en", "zh", "ja").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language_preference: Option<String>,
 }
 
 impl EnvironmentInfo {
@@ -50,6 +53,7 @@ pub struct EnvironmentInfoBuilder {
     model: Option<String>,
     context_window: Option<i32>,
     output_token_limit: Option<i32>,
+    language_preference: Option<String>,
 }
 
 impl EnvironmentInfoBuilder {
@@ -98,6 +102,11 @@ impl EnvironmentInfoBuilder {
         self
     }
 
+    pub fn language_preference(mut self, lang: impl Into<String>) -> Self {
+        self.language_preference = Some(lang.into());
+        self
+    }
+
     /// Build the [`EnvironmentInfo`].
     ///
     /// Returns `Err` if required fields are missing.
@@ -125,6 +134,7 @@ impl EnvironmentInfoBuilder {
             })?,
             context_window: self.context_window.unwrap_or(200000),
             output_token_limit: self.output_token_limit.unwrap_or(16384),
+            language_preference: self.language_preference,
         })
     }
 }

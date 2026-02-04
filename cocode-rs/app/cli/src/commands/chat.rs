@@ -3,11 +3,49 @@
 use std::path::PathBuf;
 
 use cocode_config::ConfigManager;
+use cocode_protocol::ModelSpec;
+use cocode_protocol::RoleSelection;
 use cocode_session::Session;
 use cocode_session::SessionState;
+use tracing::info;
+use tracing_subscriber::fmt;
+use tracing_subscriber::prelude::*;
 
 use crate::output;
 use crate::repl::Repl;
+
+/// Initialize stderr logging for REPL mode.
+///
+/// If logging is already initialized, this will do nothing and return None.
+fn init_repl_logging(config: &ConfigManager, verbose: bool) -> Option<()> {
+    // Get logging config
+    let logging_config = config.logging_config();
+    let common_logging = logging_config
+        .map(|c| c.to_common_logging())
+        .unwrap_or_default();
+
+    // Override level if verbose flag is set
+    let effective_logging = if verbose {
+        cocode_utils_common::LoggingConfig {
+            level: "info,cocode=debug".to_string(),
+            ..common_logging
+        }
+    } else {
+        common_logging
+    };
+
+    // Build stderr layer (timezone is handled inside the macro via ConfigurableTimer)
+    let stderr_layer = cocode_utils_common::configure_fmt_layer!(
+        fmt::layer().with_writer(std::io::stderr).compact(),
+        &effective_logging,
+        "warn"
+    );
+
+    match tracing_subscriber::registry().with(stderr_layer).try_init() {
+        Ok(()) => Some(()),
+        Err(_) => None, // Already initialized
+    }
+}
 
 /// Run the chat command in REPL mode.
 ///
@@ -17,12 +55,19 @@ use crate::repl::Repl;
 /// * `title` - Optional session title
 /// * `max_turns` - Optional max turns limit
 /// * `config` - Configuration manager
+/// * `verbose` - Enable verbose logging
 pub async fn run(
     initial_prompt: Option<String>,
     title: Option<String>,
     max_turns: Option<i32>,
     config: &ConfigManager,
+    verbose: bool,
 ) -> anyhow::Result<()> {
+    // Initialize logging for REPL mode (stderr)
+    let _ = init_repl_logging(config, verbose);
+
+    info!("Starting REPL mode");
+
     // Get working directory
     let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
@@ -35,9 +80,10 @@ pub async fn run(
         .map(|info| info.provider_type)
         .unwrap_or(cocode_protocol::ProviderType::OpenaiCompat);
 
-    // Create session
-    let mut session = Session::new(working_dir, &model_name, provider_type);
-    session.provider = provider_name;
+    // Create session with the model spec
+    let spec = ModelSpec::with_type(&provider_name, provider_type, &model_name);
+    let selection = RoleSelection::new(spec);
+    let mut session = Session::new(working_dir, selection);
 
     if let Some(t) = title {
         session.set_title(t);

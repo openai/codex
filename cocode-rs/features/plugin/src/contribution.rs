@@ -184,7 +184,7 @@ mod tests {
             agent_type: "test-agent".to_string(),
             tools: vec!["Read".to_string()],
             disallowed_tools: vec![],
-            model: None,
+            identity: None,
             max_turns: None,
         };
 

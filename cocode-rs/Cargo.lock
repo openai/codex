@@ -1165,6 +1165,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "base62"
+version = "2.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1adf9755786e27479693dedd3271691a92b5e242ab139cacb9fb8e7fb5381111"
+
+[[package]]
 name = "base64"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1632,6 +1638,9 @@ dependencies = [
 name = "cocode-api"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
+ "async-trait",
+ "cocode-config",
  "cocode-error",
  "cocode-protocol",
  "futures",
@@ -1641,8 +1650,10 @@ dependencies = [
  "serde_json",
  "snafu",
  "snafu-virtstack",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -1699,12 +1710,15 @@ dependencies = [
  "cocode-session",
  "cocode-skill",
  "cocode-tui",
+ "cocode-utils-common",
  "dirs 6.0.0",
  "serde_json",
  "tempfile",
  "tokio",
  "tracing",
+ "tracing-appender",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -1713,8 +1727,10 @@ version = "0.0.0"
 dependencies = [
  "cocode-error",
  "cocode-protocol",
+ "cocode-utils-common",
  "dirs 5.0.1",
  "hyper-sdk",
+ "jsonc-parser",
  "serde",
  "serde_json",
  "snafu",
@@ -1752,8 +1768,11 @@ name = "cocode-executor"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "cocode-api",
  "cocode-context",
+ "cocode-error",
+ "cocode-git",
  "cocode-hooks",
  "cocode-loop",
  "cocode-protocol",
@@ -1762,10 +1781,21 @@ dependencies = [
  "hyper-sdk",
  "serde",
  "serde_json",
+ "snafu",
+ "snafu-virtstack",
+ "tempfile",
  "tokio",
  "tokio-util",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "cocode-file-encoding"
+version = "0.0.0"
+dependencies = [
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -1823,7 +1853,7 @@ dependencies = [
  "snafu-virtstack",
  "tempfile",
  "tokio",
- "toml",
+ "toml 0.9.11+spec-1.1.0",
  "tracing",
  "uuid",
 ]
@@ -1970,7 +2000,7 @@ dependencies = [
  "snafu",
  "snafu-virtstack",
  "tempfile",
- "toml",
+ "toml 0.9.11+spec-1.1.0",
  "tracing",
  "walkdir",
 ]
@@ -1994,10 +2024,12 @@ dependencies = [
 name = "cocode-protocol"
 version = "0.0.0"
 dependencies = [
+ "chrono",
  "humantime-serde",
  "serde",
  "serde_json",
  "strum 0.27.2",
+ "uuid",
 ]
 
 [[package]]
@@ -2025,8 +2057,8 @@ dependencies = [
  "lance-index",
  "lancedb",
  "lru 0.12.5",
- "notify",
- "notify-debouncer-mini",
+ "notify 7.0.0",
+ "notify-debouncer-mini 0.5.0",
  "once_cell",
  "petgraph 0.8.3",
  "pretty_assertions",
@@ -2048,7 +2080,7 @@ dependencies = [
  "tokio-stream",
  "tokio-test",
  "tokio-util",
- "toml",
+ "toml 0.9.11+spec-1.1.0",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -2184,7 +2216,7 @@ dependencies = [
  "snafu-virtstack",
  "tempfile",
  "tokio",
- "toml",
+ "toml 0.9.11+spec-1.1.0",
  "tracing",
  "walkdir",
 ]
@@ -2206,6 +2238,7 @@ name = "cocode-subagent"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "cocode-config",
  "cocode-protocol",
  "cocode-tools",
  "once_cell",
@@ -2223,15 +2256,20 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "cocode-config",
  "cocode-error",
  "cocode-protocol",
  "futures",
+ "notify 8.2.0",
+ "notify-debouncer-mini 0.6.0",
  "pretty_assertions",
  "regex-lite",
  "serde",
  "serde_json",
+ "similar",
  "snafu",
  "snafu-virtstack",
+ "tempfile",
  "tokio",
  "tracing",
  "uuid",
@@ -2245,6 +2283,7 @@ dependencies = [
  "async-trait",
  "cocode-apply-patch",
  "cocode-error",
+ "cocode-file-encoding",
  "cocode-file-ignore",
  "cocode-file-search",
  "cocode-hooks",
@@ -2278,13 +2317,17 @@ version = "0.0.0"
 dependencies = [
  "cocode-config",
  "cocode-error",
+ "cocode-file-search",
  "cocode-loop",
  "cocode-protocol",
+ "cocode-skill",
+ "cocode-utils-common",
  "crossterm",
  "futures",
  "insta",
  "pretty_assertions",
  "ratatui",
+ "rust-i18n",
  "textwrap",
  "tokio",
  "tokio-stream",
@@ -2350,7 +2393,7 @@ version = "0.0.0"
 dependencies = [
  "pretty_assertions",
  "serde_json",
- "toml",
+ "toml 0.9.11+spec-1.1.0",
 ]
 
 [[package]]
@@ -4279,6 +4322,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "globwalk"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93e3af942408868f6934a7b85134a3230832b9977cf66125df2f9edcfce4ddcc"
+dependencies = [
+ "bitflags 1.3.2",
+ "ignore",
+ "walkdir",
+]
+
+[[package]]
 name = "gloo-timers"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5025,6 +5079,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "inotify"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f37dccff2791ab604f9babef0ba14fbe0be30bd368dc541e2b08d07c8aa908f3"
+dependencies = [
+ "bitflags 2.10.0",
+ "inotify-sys",
+ "libc",
+]
+
+[[package]]
 name = "inotify-sys"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5109,6 +5174,15 @@ name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
+
+[[package]]
+name = "itertools"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1c173a5686ce8bfa551b3563d0c2170bf24ca44da99c7ca4bfdab5418c3fe57"
+dependencies = [
+ "either",
+]
 
 [[package]]
 name = "itertools"
@@ -5234,6 +5308,15 @@ dependencies = [
  "rand 0.9.2",
  "ryu",
  "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "jsonc-parser"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ebcfcb2f2b016f7372835b99cd3be24cc13ce9823107beb0f98b09c6092ba9f"
+dependencies = [
  "serde_json",
 ]
 
@@ -6412,6 +6495,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0676bb32a98c1a483ce53e500a81ad9c3d5b3f7c920c28c24e9cb0980d0b5bc8"
 
 [[package]]
+name = "normpath"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf23ab2b905654b4cb177e30b629937b3868311d4e1cba859f899c041046e69b"
+dependencies = [
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "notify"
 version = "7.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6420,14 +6512,32 @@ dependencies = [
  "bitflags 2.10.0",
  "filetime",
  "fsevent-sys",
- "inotify",
+ "inotify 0.10.2",
  "kqueue",
  "libc",
  "log",
  "mio",
- "notify-types",
+ "notify-types 1.0.1",
  "walkdir",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "notify"
+version = "8.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4d3d07927151ff8575b7087f245456e549fea62edf0ec4e565a5ee50c8402bc3"
+dependencies = [
+ "bitflags 2.10.0",
+ "fsevent-sys",
+ "inotify 0.11.0",
+ "kqueue",
+ "libc",
+ "log",
+ "mio",
+ "notify-types 2.1.0",
+ "walkdir",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -6437,8 +6547,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aaa5a66d07ed97dce782be94dcf5ab4d1b457f4243f7566c7557f15cabc8c799"
 dependencies = [
  "log",
- "notify",
- "notify-types",
+ "notify 7.0.0",
+ "notify-types 1.0.1",
+ "tempfile",
+]
+
+[[package]]
+name = "notify-debouncer-mini"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a689eb4262184d9a1727f9087cd03883ea716682ab03ed24efec57d7716dccb8"
+dependencies = [
+ "log",
+ "notify 8.2.0",
+ "notify-types 2.1.0",
  "tempfile",
 ]
 
@@ -6449,6 +6571,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "585d3cb5e12e01aed9e8a1f70d5c6b5e86fe2a6e48fc8cd0b3e0b8df6f6eb174"
 dependencies = [
  "instant",
+]
+
+[[package]]
+name = "notify-types"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42b8cfee0e339a0337359f3c88165702ac6e600dc01c0cc9579a92d62b08477a"
+dependencies = [
+ "bitflags 2.10.0",
 ]
 
 [[package]]
@@ -7386,7 +7517,7 @@ version = "3.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "219cb19e96be00ab2e37d6e299658a0cfa83e52429179969b0f0121b4ac46983"
 dependencies = [
- "toml_edit",
+ "toml_edit 0.23.10+spec-1.0.0",
 ]
 
 [[package]]
@@ -8165,6 +8296,60 @@ dependencies = [
 ]
 
 [[package]]
+name = "rust-i18n"
+version = "3.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fda2551fdfaf6cc5ee283adc15e157047b92ae6535cf80f6d4962d05717dc332"
+dependencies = [
+ "globwalk",
+ "once_cell",
+ "regex",
+ "rust-i18n-macro",
+ "rust-i18n-support",
+ "smallvec",
+]
+
+[[package]]
+name = "rust-i18n-macro"
+version = "3.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22baf7d7f56656d23ebe24f6bb57a5d40d2bce2a5f1c503e692b5b2fa450f965"
+dependencies = [
+ "glob",
+ "once_cell",
+ "proc-macro2",
+ "quote",
+ "rust-i18n-support",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "syn 2.0.114",
+]
+
+[[package]]
+name = "rust-i18n-support"
+version = "3.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "940ed4f52bba4c0152056d771e563b7133ad9607d4384af016a134b58d758f19"
+dependencies = [
+ "arc-swap",
+ "base62",
+ "globwalk",
+ "itertools 0.11.0",
+ "lazy_static",
+ "normpath",
+ "once_cell",
+ "proc-macro2",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "siphasher",
+ "toml 0.8.23",
+ "triomphe",
+]
+
+[[package]]
 name = "rust-ini"
 version = "0.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8607,6 +8792,15 @@ dependencies = [
 
 [[package]]
 name = "serde_spanned"
+version = "0.6.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf41e0cfaf7226dca15e8197172c295a782857fcb97fad1808a166870dee75a3"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "serde_spanned"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8bbf91e5a4d6315eee45e704372590b30e260ee83af6639d64557f51b067776"
@@ -8655,6 +8849,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.114",
+]
+
+[[package]]
+name = "serde_yaml"
+version = "0.9.34+deprecated"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
+dependencies = [
+ "indexmap 2.13.0",
+ "itoa",
+ "ryu",
+ "serde",
+ "unsafe-libyaml",
 ]
 
 [[package]]
@@ -9681,17 +9888,38 @@ dependencies = [
 
 [[package]]
 name = "toml"
+version = "0.8.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc1beb996b9d83529a9e75c17a1686767d148d70663143c7854d8b4a09ced362"
+dependencies = [
+ "serde",
+ "serde_spanned 0.6.9",
+ "toml_datetime 0.6.11",
+ "toml_edit 0.22.27",
+]
+
+[[package]]
+name = "toml"
 version = "0.9.11+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f3afc9a848309fe1aaffaed6e1546a7a14de1f935dc9d89d32afd9a44bab7c46"
 dependencies = [
  "indexmap 2.13.0",
  "serde_core",
- "serde_spanned",
- "toml_datetime",
+ "serde_spanned 1.0.4",
+ "toml_datetime 0.7.5+spec-1.1.0",
  "toml_parser",
  "toml_writer",
  "winnow",
+]
+
+[[package]]
+name = "toml_datetime"
+version = "0.6.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22cddaf88f4fbc13c51aebbf5f8eceb5c7c5a9da2ac40a13519eb5b0a0e8f11c"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -9705,12 +9933,26 @@ dependencies = [
 
 [[package]]
 name = "toml_edit"
+version = "0.22.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "41fe8c660ae4257887cf66394862d21dbca4a6ddd26f04a3560410406a2f819a"
+dependencies = [
+ "indexmap 2.13.0",
+ "serde",
+ "serde_spanned 0.6.9",
+ "toml_datetime 0.6.11",
+ "toml_write",
+ "winnow",
+]
+
+[[package]]
+name = "toml_edit"
 version = "0.23.10+spec-1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "84c8b9f757e028cee9fa244aea147aab2a9ec09d5325a9b01e0a49730c2b5269"
 dependencies = [
  "indexmap 2.13.0",
- "toml_datetime",
+ "toml_datetime 0.7.5+spec-1.1.0",
  "toml_parser",
  "winnow",
 ]
@@ -9723,6 +9965,12 @@ checksum = "a3198b4b0a8e11f09dd03e133c0280504d0801269e9afa46362ffde1cbeebf44"
 dependencies = [
  "winnow",
 ]
+
+[[package]]
+name = "toml_write"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d99f8c9a7727884afe522e9bd5edbfc91a3312b36a77b5fb8926e4c31a41801"
 
 [[package]]
 name = "toml_writer"
@@ -10019,6 +10267,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "triomphe"
+version = "0.1.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dd69c5aa8f924c7519d6372789a74eac5b94fb0f8fcf0d4a97eb0bfc3e785f39"
+dependencies = [
+ "arc-swap",
+ "serde",
+ "stable_deref_trait",
+]
+
+[[package]]
 name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10141,6 +10400,12 @@ name = "unicode_categories"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39ec24b3121d976906ece63c9daad25b85969647682eee313cb5779fdd69e14e"
+
+[[package]]
+name = "unsafe-libyaml"
+version = "0.2.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
 
 [[package]]
 name = "untrusted"

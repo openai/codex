@@ -70,7 +70,7 @@ mod tests {
             agent_type: "test".to_string(),
             tools: tools.into_iter().map(String::from).collect(),
             disallowed_tools: disallowed.into_iter().map(String::from).collect(),
-            model: None,
+            identity: None,
             max_turns: None,
         }
     }

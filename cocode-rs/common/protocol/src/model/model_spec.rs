@@ -1,5 +1,6 @@
 //! Unified model specification type.
 
+use crate::ProviderType;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -7,33 +8,88 @@ use serde::Serializer;
 use std::fmt;
 use std::str::FromStr;
 
-/// Unified model specification: "{provider}/{model}".
+/// Resolve a provider string to a ProviderType enum.
 ///
-/// Provides a single string format for specifying both provider and model.
+/// This maps common provider names to their ProviderType enum values.
+/// Unknown providers default to OpenaiCompat for maximum compatibility.
+///
+/// # Examples
+///
+/// ```
+/// use cocode_protocol::model::resolve_provider_type;
+/// use cocode_protocol::ProviderType;
+///
+/// assert_eq!(resolve_provider_type("anthropic"), ProviderType::Anthropic);
+/// assert_eq!(resolve_provider_type("openai"), ProviderType::Openai);
+/// assert_eq!(resolve_provider_type("unknown"), ProviderType::OpenaiCompat);
+/// ```
+pub fn resolve_provider_type(provider: &str) -> ProviderType {
+    // Normalize provider name to lowercase for comparison
+    match provider.to_lowercase().as_str() {
+        "anthropic" => ProviderType::Anthropic,
+        "openai" => ProviderType::Openai,
+        "gemini" | "genai" | "google" => ProviderType::Gemini,
+        "volcengine" | "ark" => ProviderType::Volcengine,
+        "zai" | "zhipu" | "zhipuai" => ProviderType::Zai,
+        "openai_compat" | "openai-compat" => ProviderType::OpenaiCompat,
+        // Default to OpenaiCompat for unknown providers (most compatible)
+        _ => ProviderType::OpenaiCompat,
+    }
+}
+
+/// Unified model specification: "{provider}/{model}" with resolved provider type.
+///
+/// Provides a single string format for specifying both provider and model,
+/// along with the resolved `ProviderType` for API dispatch.
 ///
 /// # Examples
 ///
 /// ```
 /// use cocode_protocol::model::ModelSpec;
+/// use cocode_protocol::ProviderType;
 ///
 /// let spec: ModelSpec = "anthropic/claude-opus-4".parse().unwrap();
 /// assert_eq!(spec.provider, "anthropic");
 /// assert_eq!(spec.model, "claude-opus-4");
+/// assert_eq!(spec.provider_type, ProviderType::Anthropic);
 /// assert_eq!(spec.to_string(), "anthropic/claude-opus-4");
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ModelSpec {
     /// Provider name (e.g., "anthropic", "openai", "genai").
     pub provider: String,
+    /// Resolved provider type for API dispatch.
+    pub provider_type: ProviderType,
     /// Model ID (e.g., "claude-opus-4", "gpt-5").
     pub model: String,
 }
 
 impl ModelSpec {
-    /// Create a new model specification.
+    /// Create a new model specification with auto-resolved provider type.
+    ///
+    /// The provider type is automatically resolved from the provider name.
     pub fn new(provider: impl Into<String>, model: impl Into<String>) -> Self {
+        let provider = provider.into();
+        let provider_type = resolve_provider_type(&provider);
+        Self {
+            provider,
+            provider_type,
+            model: model.into(),
+        }
+    }
+
+    /// Create a new model specification with explicit provider type.
+    ///
+    /// Use this when you know the exact provider type and don't want
+    /// to rely on string-based resolution.
+    pub fn with_type(
+        provider: impl Into<String>,
+        provider_type: ProviderType,
+        model: impl Into<String>,
+    ) -> Self {
         Self {
             provider: provider.into(),
+            provider_type,
             model: model.into(),
         }
     }
@@ -67,7 +123,14 @@ impl FromStr for ModelSpec {
                 "invalid format: expected 'provider/model', got '{s}'"
             )));
         }
+        // new() automatically resolves provider_type from provider string
         Ok(Self::new(parts[0], parts[1]))
+    }
+}
+
+impl From<(String, ProviderType, String)> for ModelSpec {
+    fn from((provider, provider_type, model): (String, ProviderType, String)) -> Self {
+        Self::with_type(provider, provider_type, model)
     }
 }
 
@@ -90,10 +153,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_resolve_provider_type() {
+        assert_eq!(resolve_provider_type("anthropic"), ProviderType::Anthropic);
+        assert_eq!(resolve_provider_type("Anthropic"), ProviderType::Anthropic);
+        assert_eq!(resolve_provider_type("openai"), ProviderType::Openai);
+        assert_eq!(resolve_provider_type("OpenAI"), ProviderType::Openai);
+        assert_eq!(resolve_provider_type("gemini"), ProviderType::Gemini);
+        assert_eq!(resolve_provider_type("genai"), ProviderType::Gemini);
+        assert_eq!(resolve_provider_type("google"), ProviderType::Gemini);
+        assert_eq!(
+            resolve_provider_type("volcengine"),
+            ProviderType::Volcengine
+        );
+        assert_eq!(resolve_provider_type("ark"), ProviderType::Volcengine);
+        assert_eq!(resolve_provider_type("zai"), ProviderType::Zai);
+        assert_eq!(resolve_provider_type("zhipu"), ProviderType::Zai);
+        assert_eq!(
+            resolve_provider_type("openai_compat"),
+            ProviderType::OpenaiCompat
+        );
+        assert_eq!(
+            resolve_provider_type("openai-compat"),
+            ProviderType::OpenaiCompat
+        );
+        // Unknown providers default to OpenaiCompat
+        assert_eq!(resolve_provider_type("unknown"), ProviderType::OpenaiCompat);
+        assert_eq!(
+            resolve_provider_type("custom-provider"),
+            ProviderType::OpenaiCompat
+        );
+    }
+
+    #[test]
     fn test_parse_valid() {
         let spec: ModelSpec = "anthropic/claude-opus-4".parse().unwrap();
         assert_eq!(spec.provider, "anthropic");
         assert_eq!(spec.model, "claude-opus-4");
+        assert_eq!(spec.provider_type, ProviderType::Anthropic);
     }
 
     #[test]
@@ -104,6 +200,8 @@ mod tests {
             .unwrap();
         assert_eq!(spec.provider, "fireworks");
         assert_eq!(spec.model, "accounts/fireworks/models/llama-v3");
+        // Unknown provider defaults to OpenaiCompat
+        assert_eq!(spec.provider_type, ProviderType::OpenaiCompat);
     }
 
     #[test]
@@ -123,6 +221,26 @@ mod tests {
     fn test_parse_invalid_empty_model() {
         let result: Result<ModelSpec, _> = "anthropic/".parse();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_new_auto_resolves_provider_type() {
+        let spec = ModelSpec::new("openai", "gpt-5");
+        assert_eq!(spec.provider, "openai");
+        assert_eq!(spec.model, "gpt-5");
+        assert_eq!(spec.provider_type, ProviderType::Openai);
+
+        let spec = ModelSpec::new("gemini", "gemini-2.0-flash");
+        assert_eq!(spec.provider_type, ProviderType::Gemini);
+    }
+
+    #[test]
+    fn test_with_type_explicit() {
+        // Create with explicit provider type (even if it doesn't match the name)
+        let spec = ModelSpec::with_type("my-custom-anthropic", ProviderType::Anthropic, "model-x");
+        assert_eq!(spec.provider, "my-custom-anthropic");
+        assert_eq!(spec.model, "model-x");
+        assert_eq!(spec.provider_type, ProviderType::Anthropic);
     }
 
     #[test]

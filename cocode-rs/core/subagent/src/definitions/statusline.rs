@@ -1,6 +1,8 @@
 use crate::definition::AgentDefinition;
+use cocode_protocol::execution::ExecutionIdentity;
 
 /// Statusline agent - makes small targeted edits to status/progress displays.
+/// Inherits model from parent.
 pub fn statusline_agent() -> AgentDefinition {
     AgentDefinition {
         name: "statusline".to_string(),
@@ -8,7 +10,7 @@ pub fn statusline_agent() -> AgentDefinition {
         agent_type: "statusline".to_string(),
         tools: vec!["Read".to_string(), "Edit".to_string()],
         disallowed_tools: vec![],
-        model: None,
+        identity: Some(ExecutionIdentity::Inherit),
         max_turns: Some(5),
     }
 }
@@ -25,6 +27,6 @@ mod tests {
         assert_eq!(agent.tools, vec!["Read", "Edit"]);
         assert!(agent.disallowed_tools.is_empty());
         assert_eq!(agent.max_turns, Some(5));
-        assert!(agent.model.is_none());
+        assert!(matches!(agent.identity, Some(ExecutionIdentity::Inherit)));
     }
 }

@@ -52,8 +52,13 @@ impl AttachmentGenerator for PlanModeEnterGenerator {
             .map(|p| format!("\n\n## Plan File Info:\n\nYour plan file is at: `{}`\n\nYou should create your plan at this path using the Write tool. You can read it and make incremental edits using the Edit tool.", p.display()))
             .unwrap_or_default();
 
-        // Don't show full instructions on re-entry, just a brief reminder
-        let content = if ctx.is_plan_reentry {
+        // Use turn-based sparse logic: full on turn 1 and every 5th turn,
+        // sparse otherwise. This reduces token usage while maintaining guidance.
+        // Note: is_plan_reentry is kept for backwards compatibility but
+        // turn-based logic is the primary driver.
+        let use_sparse = ctx.should_use_sparse_reminders() || ctx.is_plan_reentry;
+
+        let content = if use_sparse {
             format!("{}{}", PLAN_MODE_SPARSE_INSTRUCTIONS, plan_path_info)
         } else {
             format!("{}{}", PLAN_MODE_FULL_INSTRUCTIONS, plan_path_info)
@@ -263,7 +268,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_plan_mode_enter_sparse() {
+    async fn test_plan_mode_enter_sparse_via_reentry() {
         let config = test_config();
         let ctx = GeneratorContext::builder()
             .config(&config)
@@ -280,6 +285,49 @@ mod tests {
         let reminder = result.expect("reminder");
         assert!(!reminder.content.contains("Phase 1")); // Sparse doesn't have phases
         assert!(reminder.content.contains("ExitPlanMode"));
+    }
+
+    #[tokio::test]
+    async fn test_plan_mode_enter_sparse_via_turn() {
+        let config = test_config();
+        // Turn 2 should use sparse reminders (not turn 1 or turn % 5 == 1)
+        let ctx = GeneratorContext::builder()
+            .config(&config)
+            .turn_number(2)
+            .cwd(PathBuf::from("/tmp"))
+            .is_plan_mode(true)
+            .is_plan_reentry(false)
+            .build();
+
+        let generator = PlanModeEnterGenerator;
+        let result = generator.generate(&ctx).await.expect("generate");
+        assert!(result.is_some());
+
+        let reminder = result.expect("reminder");
+        assert!(!reminder.content.contains("Phase 1")); // Sparse doesn't have phases
+        assert!(reminder.content.contains("ExitPlanMode"));
+    }
+
+    #[tokio::test]
+    async fn test_plan_mode_enter_full_on_turn_6() {
+        let config = test_config();
+        // Turn 6 (5+1) should use full reminders
+        let ctx = GeneratorContext::builder()
+            .config(&config)
+            .turn_number(6)
+            .cwd(PathBuf::from("/tmp"))
+            .is_plan_mode(true)
+            .is_plan_reentry(false)
+            .plan_file_path(PathBuf::from("/tmp/plan.md"))
+            .build();
+
+        let generator = PlanModeEnterGenerator;
+        let result = generator.generate(&ctx).await.expect("generate");
+        assert!(result.is_some());
+
+        let reminder = result.expect("reminder");
+        assert!(reminder.content.contains("Phase 1")); // Full has phases
+        assert!(reminder.content.contains("Phase 5"));
     }
 
     #[tokio::test]

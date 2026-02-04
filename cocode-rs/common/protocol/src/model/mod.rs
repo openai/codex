@@ -17,6 +17,7 @@ pub use model_roles::ModelRole;
 pub use model_roles::ModelRoles;
 pub use model_spec::ModelSpec;
 pub use model_spec::ModelSpecParseError;
+pub use model_spec::resolve_provider_type;
 pub use reasoning::ReasoningEffort;
 pub use reasoning::ReasoningSummary;
 pub use reasoning::nearest_effort;

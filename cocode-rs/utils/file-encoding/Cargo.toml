@@ -1,0 +1,15 @@
+[package]
+name = "cocode-file-encoding"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "File encoding and line ending detection and preservation utilities"
+
+[dependencies]
+tokio = { workspace = true, features = ["fs"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

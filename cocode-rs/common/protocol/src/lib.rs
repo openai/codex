@@ -10,18 +10,24 @@
 //! - Core loop configuration and events
 //! - Tool execution types
 //! - Query and compaction tracking
+//! - Agent status and correlation tracking
 
+pub mod agent_status;
 pub mod attachment_config;
 pub mod compact_config;
+pub mod correlation;
+pub mod execution;
 pub mod features;
 pub mod loop_config;
 pub mod loop_event;
+pub mod mcp_config;
 pub mod model;
 pub mod path_config;
 pub mod permission;
 pub mod plan_config;
 pub mod protocol;
 pub mod provider;
+pub mod queue;
 pub mod sandbox;
 pub mod thinking;
 pub mod tool_config;
@@ -32,12 +38,22 @@ pub mod tracking;
 pub use model::Capability;
 pub use model::ConfigShellToolType;
 pub use model::ModelInfo;
+pub use model::ModelRole;
+pub use model::ModelRoles;
+pub use model::ModelSpec;
+pub use model::ModelSpecParseError;
 pub use model::ReasoningEffort;
 pub use model::RoleSelection;
 pub use model::RoleSelections;
 pub use model::TruncationMode;
 pub use model::TruncationPolicyConfig;
 pub use model::nearest_effort;
+pub use model::resolve_provider_type;
+
+// Execution context types
+pub use execution::AgentKind;
+pub use execution::ExecutionIdentity;
+pub use execution::InferenceContext;
 
 // Provider types
 pub use provider::ProviderInfo;
@@ -111,6 +127,9 @@ pub use tool_types::ToolOutput;
 pub use tool_types::ValidationError;
 pub use tool_types::ValidationResult;
 
+// Queue types (user input during streaming)
+pub use queue::UserQueuedCommand;
+
 // Tracking types
 pub use tracking::AutoCompactTracking;
 pub use tracking::FileChange;
@@ -163,7 +182,25 @@ pub use plan_config::MAX_AGENT_COUNT;
 pub use plan_config::MIN_AGENT_COUNT;
 pub use plan_config::PlanModeConfig;
 pub use thinking::ThinkingLevel;
+pub use tool_config::ApplyPatchToolType;
 pub use tool_config::DEFAULT_MAX_RESULT_SIZE;
 pub use tool_config::DEFAULT_MAX_TOOL_CONCURRENCY;
 pub use tool_config::DEFAULT_RESULT_PREVIEW_SIZE;
 pub use tool_config::ToolConfig;
+
+// MCP config types
+pub use mcp_config::McpAutoSearchConfig;
+pub use mcp_config::McpConfig;
+pub use mcp_config::McpToolCacheConfig;
+// MCP config constants
+pub use mcp_config::DEFAULT_AUTOSEARCH_CONTEXT_THRESHOLD;
+pub use mcp_config::DEFAULT_AUTOSEARCH_MIN_CONTEXT_WINDOW;
+pub use mcp_config::DEFAULT_CHARS_PER_TOKEN;
+pub use mcp_config::DEFAULT_TOOL_CACHE_TTL_SECS;
+
+// Agent status types
+pub use agent_status::AgentStatus;
+
+// Correlation types
+pub use correlation::CorrelatedEvent;
+pub use correlation::SubmissionId;

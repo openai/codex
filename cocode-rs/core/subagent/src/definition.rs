@@ -1,3 +1,4 @@
+use cocode_protocol::execution::ExecutionIdentity;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -24,9 +25,15 @@ pub struct AgentDefinition {
     #[serde(default)]
     pub disallowed_tools: Vec<String>,
 
-    /// Override the model used by this agent.
+    /// Model selection identity for this agent type.
+    ///
+    /// Determines how the model is resolved:
+    /// - `Role(ModelRole)`: Use the model configured for that role
+    /// - `Spec(ModelSpec)`: Use a specific provider/model
+    /// - `Inherit`: Use the parent agent's model
+    /// - `None`: Fall back to parent model (same as Inherit)
     #[serde(default)]
-    pub model: Option<String>,
+    pub identity: Option<ExecutionIdentity>,
 
     /// Override the maximum number of turns for this agent.
     #[serde(default)]
@@ -36,6 +43,7 @@ pub struct AgentDefinition {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cocode_protocol::model::ModelRole;
 
     #[test]
     fn test_agent_definition_defaults() {
@@ -44,7 +52,7 @@ mod tests {
         assert_eq!(def.name, "test");
         assert!(def.tools.is_empty());
         assert!(def.disallowed_tools.is_empty());
-        assert!(def.model.is_none());
+        assert!(def.identity.is_none());
         assert!(def.max_turns.is_none());
     }
 
@@ -56,7 +64,7 @@ mod tests {
             agent_type: "bash".to_string(),
             tools: vec!["Bash".to_string()],
             disallowed_tools: vec!["Edit".to_string()],
-            model: Some("claude-3".to_string()),
+            identity: Some(ExecutionIdentity::Role(ModelRole::Main)),
             max_turns: Some(10),
         };
         let json = serde_json::to_string(&def).expect("serialize");
@@ -64,7 +72,27 @@ mod tests {
         assert_eq!(back.name, "bash");
         assert_eq!(back.tools, vec!["Bash"]);
         assert_eq!(back.disallowed_tools, vec!["Edit"]);
-        assert_eq!(back.model, Some("claude-3".to_string()));
+        assert!(matches!(
+            back.identity,
+            Some(ExecutionIdentity::Role(ModelRole::Main))
+        ));
         assert_eq!(back.max_turns, Some(10));
+    }
+
+    #[test]
+    fn test_agent_definition_with_identity() {
+        let def = AgentDefinition {
+            name: "explore".to_string(),
+            description: "Explorer".to_string(),
+            agent_type: "explore".to_string(),
+            tools: vec![],
+            disallowed_tools: vec![],
+            identity: Some(ExecutionIdentity::Role(ModelRole::Explore)),
+            max_turns: None,
+        };
+        assert!(matches!(
+            def.identity,
+            Some(ExecutionIdentity::Role(ModelRole::Explore))
+        ));
     }
 }

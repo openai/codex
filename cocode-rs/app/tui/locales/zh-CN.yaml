@@ -1,0 +1,267 @@
+# Simplified Chinese translations for cocode TUI
+# 简体中文翻译
+
+# ============================================================
+# 命令翻译 (TuiCommand Display)
+# ============================================================
+
+# 模式切换
+command.toggle_plan_mode: "切换计划模式"
+command.cycle_thinking_level: "切换思考级别"
+command.cycle_model: "切换模型"
+command.show_model_picker: "显示模型选择器"
+
+# 文件自动完成
+command.select_next_suggestion: "选择下一个建议"
+command.select_prev_suggestion: "选择上一个建议"
+command.accept_suggestion: "接受建议"
+command.dismiss_suggestions: "关闭建议"
+
+# 技能自动完成
+command.select_next_skill_suggestion: "选择下一个技能建议"
+command.select_prev_skill_suggestion: "选择上一个技能建议"
+command.accept_skill_suggestion: "接受技能建议"
+command.dismiss_skill_suggestions: "关闭技能建议"
+
+# 输入操作
+command.submit_input: "提交输入"
+command.interrupt: "中断"
+command.clear_screen: "清屏"
+command.cancel: "取消"
+
+# 导航
+command.scroll_up: "向上滚动"
+command.scroll_down: "向下滚动"
+command.page_up: "向上翻页"
+command.page_down: "向下翻页"
+command.focus_next: "下一焦点"
+command.focus_previous: "上一焦点"
+
+# 编辑
+command.insert_char: "插入 '%{c}'"
+command.delete_backward: "向前删除"
+command.delete_forward: "向后删除"
+command.cursor_left: "光标左移"
+command.cursor_right: "光标右移"
+command.cursor_up: "光标上移"
+command.cursor_down: "光标下移"
+command.cursor_home: "光标到行首"
+command.cursor_end: "光标到行尾"
+command.word_left: "上一个单词"
+command.word_right: "下一个单词"
+command.delete_word_backward: "删除前一个单词"
+command.delete_word_forward: "删除后一个单词"
+command.insert_newline: "插入换行"
+
+# 审批
+command.approve: "批准"
+command.deny: "拒绝"
+command.approve_all: "全部批准"
+
+# 外部编辑器
+command.open_external_editor: "打开外部编辑器"
+
+# 帮助
+command.show_help: "显示帮助"
+
+# 命令面板
+command.show_command_palette: "显示命令面板"
+
+# 会话浏览器
+command.show_session_browser: "显示会话浏览器"
+command.load_session: "加载会话 %{id}"
+command.delete_session: "删除会话 %{id}"
+
+# 思考切换
+command.toggle_thinking: "切换思考显示"
+
+# 队列
+command.queue_input: "排队输入"
+
+# 退出
+command.quit: "退出"
+
+# ============================================================
+# 状态栏翻译
+# ============================================================
+
+status.hints: "Tab:计划 Ctrl+T:思考 Ctrl+M:模型 ?:帮助"
+
+# 思考级别标签
+status.think_off: "关"
+status.think_min: "最低"
+status.think_low: "低"
+status.think_med: "中"
+status.think_high: "高"
+status.think_max: "最高"
+status.think_label: "思考:%{level}"
+
+# 计划模式
+status.plan: "计划"
+
+# MCP 状态
+status.mcp: "MCP:%{count}"
+
+# Token 显示
+status.tokens: "%{count} tokens"
+
+# 队列状态
+status.queued: "%{count} 排队"
+status.waiting: "等待中:"
+
+# 思考状态
+status.thinking: "思考中..."
+status.thinking_with_duration: "思考中... %{duration}秒"
+status.thought_for: "思考了 %{duration}秒"
+
+# 思考预算
+status.thinking_budget: "%{used}/%{total}"
+
+# ============================================================
+# 对话框/覆盖层翻译
+# ============================================================
+
+# 权限覆盖层
+dialog.permission_required: "需要权限"
+dialog.tool: "工具:"
+dialog.approve: "[Y] 批准"
+dialog.deny: "[N] 拒绝"
+dialog.approve_all: "[A] 全部批准"
+
+# 模型选择器
+dialog.select_model: "选择模型"
+dialog.select_model_filter: "选择模型 [%{filter}]"
+dialog.no_models_match: "没有匹配的模型"
+dialog.model_picker_hints: "↑/↓: 导航  Enter: 选择  Esc: 取消  输入以筛选"
+
+# 帮助覆盖层
+dialog.keyboard_shortcuts: "键盘快捷键"
+dialog.press_esc_close: "按 Esc 关闭"
+
+# 命令面板
+dialog.command_palette: "命令面板"
+dialog.command_palette_filter: "命令面板 [%{filter}]"
+dialog.no_commands_match: "没有匹配的命令"
+dialog.command_palette_hints: "↑/↓: 导航  Enter: 选择  Esc: 取消  输入以筛选"
+
+# 会话浏览器
+dialog.session_browser: "会话浏览器"
+dialog.session_browser_filter: "会话浏览器 [%{filter}]"
+dialog.no_saved_sessions: "没有保存的会话"
+dialog.session_message_count: "(%{count} 条消息)"
+dialog.session_browser_hints: "↑/↓: 导航  Enter: 加载  Del: 删除  Esc: 取消"
+
+# 错误覆盖层
+dialog.error: "错误"
+dialog.press_esc_enter_dismiss: "按 Esc 或 Enter 关闭"
+
+# ============================================================
+# 帮助覆盖层快捷键
+# ============================================================
+
+help.tab: "切换计划模式"
+help.ctrl_t: "切换思考级别"
+help.ctrl_shift_t: "切换思考显示"
+help.ctrl_m: "切换模型"
+help.ctrl_e: "打开外部编辑器"
+help.ctrl_l: "清屏"
+help.ctrl_c: "中断"
+help.ctrl_q: "退出"
+help.enter: "提交消息"
+help.shift_enter: "换行"
+help.esc: "取消/关闭覆盖层"
+help.question_f1: "显示帮助"
+help.up_down: "历史导航"
+help.alt_up_down: "滚动聊天"
+help.pgup_pgdn: "翻页"
+help.ctrl_left_right: "单词移动"
+help.ctrl_bksp: "删除前一个单词"
+
+# ============================================================
+# 提示通知
+# ============================================================
+
+# 上下文警告 (剩余/总量格式)
+toast.context_warning: "上下文剩余 %{percent}% (%{remain}/%{total})"
+
+# 压缩
+toast.compacting: "正在压缩上下文..."
+toast.compacted: "已压缩 %{messages} 条消息 (%{tokens} tokens)"
+toast.compaction_failed: "压缩失败: %{error}"
+
+# 模型回退
+toast.model_fallback: "回退: %{from} -> %{to}"
+
+# MCP
+toast.mcp_ready: "MCP: %{server} 已就绪"
+toast.mcp_failed: "MCP: %{server} 失败"
+toast.mcp_connected: "%{count} 个 MCP 服务器已连接"
+toast.mcp_error: "MCP %{name}: %{error}"
+
+# ============================================================
+# 聊天组件
+# ============================================================
+
+chat.you: "你"
+chat.assistant: "助手"
+chat.system: "系统"
+chat.messages_count: "%{count} 条消息"
+
+# 思考显示
+chat.thinking_tokens: "思考 (%{tokens} tokens):"
+chat.thinking_collapsed: "思考 (%{tokens} tokens) [Ctrl+Shift+T 展开]"
+chat.thinking_active: "思考中 (%{duration}):"
+chat.thinking_active_collapsed: "思考中 (%{tokens} tokens, %{duration})... [Ctrl+Shift+T 展开]"
+
+# ============================================================
+# 输入组件
+# ============================================================
+
+input.title: "消息"
+input.placeholder: "输入消息... (Enter 发送, Shift+Enter 换行)"
+
+# 队列提示消息
+toast.command_queued: "已排队 (%{count} 等待中)"
+toast.steering_added: "引导已添加"
+
+# ============================================================
+# 命令面板项目
+# ============================================================
+
+palette.toggle_plan_mode: "切换计划模式"
+palette.toggle_plan_mode_desc: "启用或禁用计划模式"
+palette.cycle_thinking: "切换思考级别"
+palette.cycle_thinking_desc: "更改 AI 思考深度"
+palette.switch_model: "切换模型"
+palette.switch_model_desc: "更改 AI 模型"
+palette.show_help: "显示帮助"
+palette.show_help_desc: "显示键盘快捷键"
+palette.session_browser: "会话浏览器"
+palette.session_browser_desc: "浏览保存的会话"
+palette.clear_screen: "清屏"
+palette.clear_screen_desc: "清除聊天历史"
+palette.interrupt: "中断"
+palette.interrupt_desc: "取消当前操作"
+palette.quit: "退出"
+palette.quit_desc: "退出应用程序"
+
+# ============================================================
+# 工具面板
+# ============================================================
+
+tool.title: "工具"
+tool.title_running: "工具 (%{count} 运行中)"
+tool.running: "运行中"
+tool.completed: "已完成"
+tool.failed: "失败"
+
+# ============================================================
+# 子代理面板
+# ============================================================
+
+subagent.title: "子代理"
+subagent.running: "运行中"
+subagent.completed: "已完成"
+subagent.backgrounded: "后台运行"
+subagent.step_progress: "步骤 %{current}/%{total}"
+subagent.more: "+%{count} 更多..."

@@ -58,10 +58,12 @@
 pub mod config;
 pub mod error;
 pub mod file_tracker;
+pub mod file_watcher;
 pub mod generator;
 pub mod generators;
 pub mod inject;
 pub mod orchestrator;
+pub mod parsing;
 pub mod throttle;
 pub mod types;
 pub mod xml;
@@ -72,9 +74,14 @@ pub use error::Result;
 pub use error::SystemReminderError;
 pub use file_tracker::FileTracker;
 pub use file_tracker::ReadFileState;
+pub use file_watcher::FileChangeEvent;
+pub use file_watcher::FileChangeKind;
+pub use file_watcher::FileSystemWatcher;
+pub use file_watcher::FileWatcherConfig;
 pub use generator::AttachmentGenerator;
 pub use generator::GeneratorContext;
 pub use generator::GeneratorContextBuilder;
+pub use generator::QueuedCommandInfo;
 pub use inject::combine_reminders;
 pub use inject::inject_reminders;
 pub use orchestrator::SystemReminderOrchestrator;
@@ -88,10 +95,20 @@ pub use xml::extract_system_reminder;
 pub use xml::wrap_system_reminder;
 pub use xml::wrap_with_tag;
 
+// Parsing utilities
+pub use parsing::AgentMention;
+pub use parsing::FileMention;
+pub use parsing::ParsedMentions;
+pub use parsing::parse_agent_mentions;
+pub use parsing::parse_file_mentions;
+pub use parsing::parse_mentions;
+
 /// Prelude module for convenient imports.
 pub mod prelude {
     pub use crate::config::SystemReminderConfig;
     pub use crate::file_tracker::FileTracker;
+    pub use crate::file_watcher::FileChangeEvent;
+    pub use crate::file_watcher::FileSystemWatcher;
     pub use crate::generator::AttachmentGenerator;
     pub use crate::generator::GeneratorContext;
     pub use crate::inject::inject_reminders;

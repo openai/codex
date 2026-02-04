@@ -66,6 +66,15 @@ pub enum ConfigError {
         location: Location,
     },
 
+    /// JSONC parsing error (comments, trailing commas, etc.).
+    #[snafu(display("JSONC parse error in {file}: {message}"))]
+    JsoncParse {
+        file: String,
+        message: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+
     /// Configuration validation error (no underlying source).
     #[snafu(display("Config error in {file}: {message}"))]
     ConfigValidation {
@@ -105,7 +114,9 @@ impl ErrorExt for ConfigError {
     fn status_code(&self) -> StatusCode {
         match self {
             Self::Io { .. } => StatusCode::IoError,
-            Self::JsonParse { .. } | Self::ConfigValidation { .. } => StatusCode::InvalidConfig,
+            Self::JsonParse { .. } | Self::JsoncParse { .. } | Self::ConfigValidation { .. } => {
+                StatusCode::InvalidConfig
+            }
             Self::Internal { .. } => StatusCode::Internal,
             Self::NotFound { kind, .. } => match kind {
                 NotFoundKind::Provider => StatusCode::ProviderNotFound,

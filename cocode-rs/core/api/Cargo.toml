@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 cocode-protocol.workspace = true
+cocode-config.workspace = true
 cocode-error.workspace = true
 hyper-sdk.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }
@@ -16,6 +17,10 @@ serde_json.workspace = true
 humantime-serde = "1.1"
 snafu.workspace = true
 snafu-virtstack.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

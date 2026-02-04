@@ -5,6 +5,12 @@ use crate::context::ToolContext;
 use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
+use cocode_file_encoding::LineEnding;
+use cocode_file_encoding::detect_encoding;
+use cocode_file_encoding::detect_line_ending;
+use cocode_file_encoding::normalize_line_endings;
+use cocode_file_encoding::preserve_trailing_newline;
+use cocode_file_encoding::write_with_format_async;
 use cocode_plan_mode::is_safe_file;
 use cocode_protocol::ConcurrencySafety;
 use cocode_protocol::ContextModifier;
@@ -104,6 +110,18 @@ impl Tool for EditTool {
 
         let path = ctx.resolve_path(file_path);
 
+        // Check for .ipynb files - redirect to NotebookEdit
+        if path.extension().is_some_and(|ext| ext == "ipynb") {
+            return Err(crate::error::tool_error::ExecutionFailedSnafu {
+                message: format!(
+                    "Cannot use Edit tool on Jupyter notebook files. \
+                     Use the NotebookEdit tool instead to modify cells in '{}'.",
+                    path.display()
+                ),
+            }
+            .build());
+        }
+
         // Plan mode check: only allow edits to the plan file
         if ctx.is_plan_mode {
             if !is_safe_file(&path, ctx.plan_file_path.as_deref()) {
@@ -147,13 +165,21 @@ impl Tool for EditTool {
             }
         }
 
-        // Read current content
-        let content = fs::read_to_string(&path).await.map_err(|e| {
+        // Read current content with encoding detection
+        let bytes = fs::read(&path).await.map_err(|e| {
             crate::error::tool_error::ExecutionFailedSnafu {
                 message: format!("Failed to read file: {e}"),
             }
             .build()
         })?;
+        let encoding = detect_encoding(&bytes);
+        let content = encoding.decode(&bytes).map_err(|e| {
+            crate::error::tool_error::ExecutionFailedSnafu {
+                message: format!("Failed to decode file: {e}"),
+            }
+            .build()
+        })?;
+        let line_ending = detect_line_ending(&content);
 
         // Check that old_string exists
         if !content.contains(old_string) {
@@ -178,19 +204,27 @@ impl Tool for EditTool {
         }
 
         // Perform replacement
-        let new_content = if replace_all {
+        let replaced_content = if replace_all {
             content.replace(old_string, new_string)
         } else {
             content.replacen(old_string, new_string, 1)
         };
 
-        // Write back
-        fs::write(&path, &new_content).await.map_err(|e| {
-            crate::error::tool_error::ExecutionFailedSnafu {
-                message: format!("Failed to write file: {e}"),
-            }
-            .build()
-        })?;
+        // Preserve trailing newline state from original content
+        let new_content = preserve_trailing_newline(&content, &replaced_content);
+
+        // Write back preserving encoding and line ending
+        write_with_format_async(&path, &new_content, encoding, line_ending)
+            .await
+            .map_err(|e| {
+                crate::error::tool_error::ExecutionFailedSnafu {
+                    message: format!("Failed to write file: {e}"),
+                }
+                .build()
+            })?;
+
+        // Normalize content for the context (always use LF internally)
+        let normalized_content = normalize_line_endings(&new_content, LineEnding::Lf);
 
         // Track modification and update read state with new content/mtime
         ctx.record_file_modified(&path).await;
@@ -201,14 +235,14 @@ impl Tool for EditTool {
         use crate::context::FileReadState;
         ctx.record_file_read_with_state(
             &path,
-            FileReadState::complete(new_content.clone(), new_mtime),
+            FileReadState::complete(normalized_content.clone(), new_mtime),
         )
         .await;
 
         let mut result = ToolOutput::text(format!("Successfully edited {}", path.display()));
         result.modifiers.push(ContextModifier::FileRead {
             path: path.clone(),
-            content: new_content,
+            content: normalized_content,
         });
 
         Ok(result)
@@ -386,5 +420,92 @@ mod tests {
 
         let result = tool.execute(input, &mut ctx).await.unwrap();
         assert!(!result.is_error);
+    }
+
+    #[tokio::test]
+    async fn test_edit_preserves_crlf_line_endings() {
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("crlf.txt");
+
+        // Create file with CRLF line endings
+        std::fs::write(&file_path, "line1\r\nline2\r\nline3\r\n").unwrap();
+
+        let tool = EditTool::new();
+        let mut ctx = make_context();
+        ctx.record_file_read(&file_path).await;
+
+        let input = serde_json::json!({
+            "file_path": file_path.to_str().unwrap(),
+            "old_string": "line2",
+            "new_string": "modified"
+        });
+
+        let result = tool.execute(input, &mut ctx).await.unwrap();
+        assert!(!result.is_error);
+
+        // Verify CRLF was preserved
+        let bytes = std::fs::read(&file_path).unwrap();
+        let content = String::from_utf8(bytes.clone()).unwrap();
+        assert!(content.contains("\r\n"), "CRLF should be preserved");
+        assert!(content.contains("modified"), "Edit should be applied");
+    }
+
+    #[tokio::test]
+    async fn test_edit_preserves_lf_line_endings() {
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("lf.txt");
+
+        // Create file with LF line endings
+        std::fs::write(&file_path, "line1\nline2\nline3\n").unwrap();
+
+        let tool = EditTool::new();
+        let mut ctx = make_context();
+        ctx.record_file_read(&file_path).await;
+
+        let input = serde_json::json!({
+            "file_path": file_path.to_str().unwrap(),
+            "old_string": "line2",
+            "new_string": "modified"
+        });
+
+        let result = tool.execute(input, &mut ctx).await.unwrap();
+        assert!(!result.is_error);
+
+        // Verify LF was preserved (no CRLF introduced)
+        let bytes = std::fs::read(&file_path).unwrap();
+        let content = String::from_utf8(bytes).unwrap();
+        assert!(!content.contains("\r\n"), "LF should be preserved, no CRLF");
+        assert!(content.contains("modified"), "Edit should be applied");
+    }
+
+    #[tokio::test]
+    async fn test_edit_rejects_ipynb_files() {
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("test.ipynb");
+
+        // Create a minimal notebook file
+        std::fs::write(
+            &file_path,
+            r#"{"cells": [], "metadata": {}, "nbformat": 4}"#,
+        )
+        .unwrap();
+
+        let tool = EditTool::new();
+        let mut ctx = make_context();
+        ctx.record_file_read(&file_path).await;
+
+        let input = serde_json::json!({
+            "file_path": file_path.to_str().unwrap(),
+            "old_string": "cells",
+            "new_string": "modified"
+        });
+
+        let result = tool.execute(input, &mut ctx).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("NotebookEdit"));
     }
 }

@@ -35,12 +35,20 @@
 #![warn(missing_docs)]
 #![warn(clippy::unwrap_used)]
 
+// Initialize i18n at crate root - this generates the _rust_i18n_t function
+rust_i18n::i18n!("locales", fallback = "en");
+
 pub mod app;
 pub mod command;
+pub mod editor;
 pub mod event;
+pub mod file_search;
+pub mod i18n;
 pub mod render;
+pub mod skill_search;
 pub mod state;
 pub mod terminal;
+pub mod theme;
 pub mod update;
 pub mod widgets;
 
@@ -58,6 +66,27 @@ pub use state::RunningState;
 pub use terminal::Tui;
 pub use terminal::restore_terminal;
 pub use terminal::setup_terminal;
+
+// File search for autocomplete
+pub use file_search::FileSearchEvent;
+pub use file_search::FileSearchManager;
+pub use file_search::create_file_search_channel;
+
+// Skill search for slash command autocomplete
+pub use skill_search::SkillInfo;
+pub use skill_search::SkillSearchManager;
+
+// External editor support
+pub use editor::edit_in_external_editor;
+
+// Theme system
+pub use theme::Theme;
+pub use theme::ThemeName;
+
+// Re-export correlation types from protocol for convenience
+pub use cocode_protocol::AgentStatus;
+pub use cocode_protocol::CorrelatedEvent;
+pub use cocode_protocol::SubmissionId;
 
 #[cfg(test)]
 mod tests {

@@ -19,6 +19,13 @@ futures = { workspace = true }
 cocode-protocol = { workspace = true }
 cocode-error = { workspace = true }
 cocode-config = { workspace = true }
+cocode-utils-common = { workspace = true }
+
+# Internal - utils
+cocode-file-search = { workspace = true }
+
+# Internal - features
+cocode-skill = { workspace = true }
 
 # Internal - core
 cocode-loop = { workspace = true }
@@ -29,6 +36,9 @@ textwrap = { workspace = true }
 
 # Utilities
 tracing = { workspace = true }
+
+# i18n
+rust-i18n = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

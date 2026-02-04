@@ -21,6 +21,17 @@ use std::sync::atomic::Ordering;
 use tokio::process::Command;
 
 mod cli;
+pub mod index;
+
+pub use index::CACHE_TTL_SECS;
+pub use index::DiscoveryResult;
+pub use index::FileIndex;
+pub use index::FileSuggestion;
+pub use index::MAX_SUGGESTIONS;
+pub use index::SharedFileIndex;
+pub use index::create_shared_index;
+pub use index::discover_files;
+pub use index::extract_directories;
 
 pub use cli::Cli;
 

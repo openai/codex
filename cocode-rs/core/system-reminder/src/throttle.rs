@@ -61,6 +61,16 @@ impl ThrottleConfig {
             max_per_session: None,
         }
     }
+
+    /// Standard throttle for output style.
+    /// Injects once per session at the start, consistent with Claude Code behavior.
+    pub fn output_style() -> Self {
+        Self {
+            min_turns_between: 0,
+            min_turns_after_trigger: 0,
+            max_per_session: Some(1),
+        }
+    }
 }
 
 /// State tracking for a single attachment type.
@@ -274,5 +284,9 @@ mod tests {
 
         let todo = ThrottleConfig::todo_reminder();
         assert_eq!(todo.min_turns_between, 5);
+
+        let output_style = ThrottleConfig::output_style();
+        assert_eq!(output_style.min_turns_between, 0);
+        assert_eq!(output_style.max_per_session, Some(1));
     }
 }

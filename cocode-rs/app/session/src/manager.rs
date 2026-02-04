@@ -6,7 +6,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use cocode_config::ConfigManager;
+use cocode_protocol::ModelSpec;
 use cocode_protocol::ProviderType;
+use cocode_protocol::RoleSelection;
+use cocode_protocol::RoleSelections;
 use tokio::fs;
 use tracing::debug;
 use tracing::info;
@@ -50,7 +53,7 @@ pub struct SessionSummary {
 /// ```ignore
 /// use cocode_session::SessionManager;
 /// use cocode_config::ConfigManager;
-/// use cocode_protocol::ProviderType;
+/// use cocode_protocol::{ProviderType, ModelSpec, RoleSelection};
 /// use std::path::PathBuf;
 ///
 /// let config = ConfigManager::from_default()?;
@@ -107,7 +110,11 @@ impl SessionManager {
         provider_type: ProviderType,
         config: &ConfigManager,
     ) -> anyhow::Result<String> {
-        let session = Session::new(working_dir, model, provider_type);
+        // Create ModelSpec with the provider type's name and the model
+        let provider_name = provider_type.to_string();
+        let spec = ModelSpec::with_type(&provider_name, provider_type, model);
+        let selection = RoleSelection::new(spec);
+        let session = Session::new(working_dir, selection);
         let session_id = session.id.clone();
 
         info!(
@@ -135,8 +142,10 @@ impl SessionManager {
         let provider_info = config.resolve_provider(provider)?;
         let provider_type = provider_info.provider_type;
 
-        let mut session = Session::new(working_dir, model, provider_type);
-        session.provider = provider.to_string();
+        // Create ModelSpec with explicit provider type
+        let spec = ModelSpec::with_type(provider, provider_type, model);
+        let selection = RoleSelection::new(spec);
+        let session = Session::new(working_dir, selection);
 
         let session_id = session.id.clone();
 
@@ -145,6 +154,32 @@ impl SessionManager {
             model = model,
             provider = provider,
             "Creating new session with provider"
+        );
+
+        let state = SessionState::new(session, config).await?;
+        self.sessions.insert(session_id.clone(), state);
+
+        Ok(session_id)
+    }
+
+    /// Create a session with full role selections.
+    ///
+    /// Use this when you have pre-configured role selections
+    /// (e.g., from configuration with multiple models per role).
+    pub async fn create_session_with_selections(
+        &mut self,
+        working_dir: PathBuf,
+        selections: RoleSelections,
+        config: &ConfigManager,
+    ) -> anyhow::Result<String> {
+        let session = Session::with_selections(working_dir, selections);
+        let session_id = session.id.clone();
+
+        info!(
+            session_id = %session_id,
+            model = ?session.model(),
+            provider = ?session.provider(),
+            "Creating new session with selections"
         );
 
         let state = SessionState::new(session, config).await?;
@@ -175,8 +210,8 @@ impl SessionManager {
             .map(|state| SessionSummary {
                 id: state.session.id.clone(),
                 title: state.session.title.clone(),
-                model: state.session.model.clone(),
-                provider: state.session.provider.clone(),
+                model: state.session.model().unwrap_or("").to_string(),
+                provider: state.session.provider().unwrap_or("").to_string(),
                 created_at: state.session.created_at.to_rfc3339(),
                 last_activity_at: state.session.last_activity_at.to_rfc3339(),
                 turn_count: state.total_turns(),
@@ -199,11 +234,14 @@ impl SessionManager {
             if path.extension().is_some_and(|ext| ext == "json") {
                 match load_session_from_file(&path).await {
                     Ok((session, _history)) => {
+                        // Extract model/provider before moving session fields
+                        let model = session.model().unwrap_or("").to_string();
+                        let provider = session.provider().unwrap_or("").to_string();
                         summaries.push(SessionSummary {
                             id: session.id,
                             title: session.title,
-                            model: session.model,
-                            provider: session.provider,
+                            model,
+                            provider,
                             created_at: session.created_at.to_rfc3339(),
                             last_activity_at: session.last_activity_at.to_rfc3339(),
                             turn_count: 0, // Not tracked in persisted session
@@ -263,7 +301,7 @@ impl SessionManager {
 
         info!(
             session_id = %session.id,
-            model = %session.model,
+            model = ?session.model(),
             "Loading session"
         );
 

@@ -13,16 +13,17 @@
 use crate::error::ConfigError;
 use crate::error::config_error::IoSnafu;
 use crate::error::config_error::JsonParseSnafu;
+use crate::error::config_error::JsoncParseSnafu;
 use crate::json_config::AppConfig;
 use crate::types::ModelsFile;
 use crate::types::ProviderConfig;
 use crate::types::ProvidersFile;
 use cocode_protocol::ModelInfo;
+use jsonc_parser::ParseOptions;
 use snafu::ResultExt;
 use std::path::Path;
 use std::path::PathBuf;
 use tracing::debug;
-use tracing::warn;
 
 /// Default configuration directory path.
 pub const DEFAULT_CONFIG_DIR: &str = ".cocode";
@@ -239,7 +240,12 @@ impl ConfigLoader {
         self.load_json_file(&path)
     }
 
-    /// Load a JSON file, returning default if it doesn't exist.
+    /// Load a JSON/JSONC file, returning default if it doesn't exist.
+    ///
+    /// Supports JSONC extensions:
+    /// - Comments (`//` and `/* */`)
+    /// - Trailing commas (`[1, 2, 3,]`)
+    /// - Unquoted keys (`{key: "value"}`) - only simple alphanumeric names
     fn load_json_file<T: serde::de::DeserializeOwned + Default>(
         &self,
         path: &Path,
@@ -259,27 +265,42 @@ impl ConfigLoader {
             return Ok(T::default());
         }
 
-        serde_json::from_str(&content).context(JsonParseSnafu {
+        // Parse with JSONC extensions enabled
+        let parse_opts = ParseOptions {
+            allow_comments: true,
+            allow_trailing_commas: true,
+            allow_loose_object_property_names: true,
+        };
+
+        let json_value =
+            jsonc_parser::parse_to_serde_value(&content, &parse_opts).map_err(|e| {
+                JsoncParseSnafu {
+                    file: path.display().to_string(),
+                    message: e.to_string(),
+                }
+                .build()
+            })?;
+
+        // parse_to_serde_value returns Option<Value>, None means empty/whitespace-only
+        let json_value = json_value.unwrap_or(serde_json::Value::Null);
+
+        serde_json::from_value(json_value).context(JsonParseSnafu {
             file: path.display().to_string(),
         })
     }
 
     /// Load all configuration files at once.
+    ///
+    /// Returns an error if any configuration file has invalid JSON format or
+    /// fails validation (e.g., duplicate provider names). This ensures users
+    /// are notified of configuration errors rather than silently using defaults.
+    ///
+    /// Note: Missing or empty configuration files are handled gracefully by
+    /// `load_json_file()` which returns `T::default()` in those cases.
     pub fn load_all(&self) -> Result<LoadedConfig, ConfigError> {
-        let models = self.load_models().unwrap_or_else(|e| {
-            warn!(error = %e, "Failed to load model files, using defaults");
-            ModelsFile::default()
-        });
-
-        let providers = self.load_providers().unwrap_or_else(|e| {
-            warn!(error = %e, "Failed to load provider files, using defaults");
-            ProvidersFile::default()
-        });
-
-        let config = self.load_config().unwrap_or_else(|e| {
-            debug!(error = %e, "Failed to load config.json, using defaults");
-            AppConfig::default()
-        });
+        let models = self.load_models()?;
+        let providers = self.load_providers()?;
+        let config = self.load_config()?;
 
         Ok(LoadedConfig {
             models,
@@ -546,7 +567,79 @@ mod tests {
         let result = loader.load_models();
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(matches!(err, ConfigError::JsonParse { .. }));
+        // With JSONC parser, unquoted keys are allowed, so this parses differently
+        // The error is now from serde deserialization, not JSON parsing
+        assert!(
+            matches!(err, ConfigError::JsonParse { .. })
+                || matches!(err, ConfigError::JsoncParse { .. })
+        );
+    }
+
+    #[test]
+    fn test_load_jsonc_with_comments() {
+        let (temp_dir, loader) = create_temp_config();
+
+        // JSONC content with comments and trailing commas
+        let jsonc_content = r#"[
+            // This is a line comment
+            {
+                "slug": "test-model",
+                "display_name": "Test Model", // inline comment
+                "context_window": 4096,  // trailing comma allowed
+            },
+            /* Block comment */
+        ]"#;
+
+        std::fs::write(temp_dir.path().join("model.json"), jsonc_content).unwrap();
+
+        let models = loader.load_models().unwrap();
+        assert!(models.models.contains_key("test-model"));
+        assert_eq!(
+            models.models["test-model"].display_name,
+            Some("Test Model".to_string())
+        );
+        assert_eq!(models.models["test-model"].context_window, Some(4096));
+    }
+
+    #[test]
+    fn test_load_jsonc_with_unquoted_keys() {
+        let (temp_dir, loader) = create_temp_config();
+
+        // JSONC content with unquoted keys (only simple alphanumeric names work)
+        // Note: underscores in unquoted keys are not supported by jsonc-parser 0.24
+        let jsonc_content = r#"[
+            {
+                slug: "unquoted-model"
+            }
+        ]"#;
+
+        std::fs::write(temp_dir.path().join("model.json"), jsonc_content).unwrap();
+
+        let models = loader.load_models().unwrap();
+        assert!(models.models.contains_key("unquoted-model"));
+    }
+
+    #[test]
+    fn test_load_jsonc_config_file() {
+        let (temp_dir, loader) = create_temp_config();
+
+        // JSONC config with comments
+        let config_jsonc = r#"{
+            // Model configuration
+            "models": {
+                "main": "openai/gpt-5", // primary model
+            },
+            "profile": "fast", // trailing comma
+        }"#;
+
+        std::fs::write(temp_dir.path().join(CONFIG_FILE), config_jsonc).unwrap();
+
+        let config = loader.load_config().unwrap();
+        assert!(config.models.is_some());
+        let models = config.models.as_ref().unwrap();
+        assert_eq!(models.main.as_ref().unwrap().provider, "openai");
+        assert_eq!(models.main.as_ref().unwrap().model, "gpt-5");
+        assert_eq!(config.profile, Some("fast".to_string()));
     }
 
     #[test]

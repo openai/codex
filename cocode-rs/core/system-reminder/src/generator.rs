@@ -240,6 +240,22 @@ pub struct CollabNotification {
     pub received_turn: i32,
 }
 
+/// Information about a queued command (real-time steering).
+///
+/// Queued commands are entered by the user via Enter during streaming.
+/// They serve dual purpose:
+/// 1. Injected as `<system-reminder>User sent: {prompt}</system-reminder>` for real-time steering
+/// 2. Executed as new user turns after the current turn completes
+#[derive(Debug, Clone)]
+pub struct QueuedCommandInfo {
+    /// Unique identifier for this command.
+    pub id: String,
+    /// The user's prompt/message.
+    pub prompt: String,
+    /// When the command was queued (Unix millis).
+    pub queued_at: i64,
+}
+
 /// Context passed to generators during execution.
 ///
 /// This provides all the runtime state needed for generators to
@@ -326,6 +342,11 @@ pub struct GeneratorContext<'a> {
     /// Pending collaboration notifications from other agents.
     pub collab_notifications: Vec<CollabNotification>,
 
+    // === Real-time steering ===
+    /// Queued commands from user (Enter during streaming).
+    /// These are injected as "User sent: {message}" to steer the model.
+    pub queued_commands: Vec<QueuedCommandInfo>,
+
     // === Global state flags ===
     /// Whether plan mode exit is pending (triggers one-time exit instructions).
     pub plan_mode_exit_pending: bool,
@@ -393,6 +414,23 @@ impl<'a> GeneratorContext<'a> {
     pub fn is_budget_low(&self) -> bool {
         self.budget.as_ref().map(|b| b.is_low).unwrap_or(false)
     }
+
+    /// Check if full reminders should be used this turn.
+    ///
+    /// Full reminders are used on turn 1 and every 5th turn thereafter
+    /// (i.e., turns 1, 6, 11, 16, ...). This follows Claude Code's steering
+    /// pattern to reduce token usage while maintaining model guidance.
+    pub fn should_use_full_reminders(&self) -> bool {
+        self.turn_number == 1 || self.turn_number % 5 == 1
+    }
+
+    /// Check if sparse reminders should be used this turn.
+    ///
+    /// Sparse reminders are brief summaries used on turns where full
+    /// reminders are not needed. This is the inverse of `should_use_full_reminders()`.
+    pub fn should_use_sparse_reminders(&self) -> bool {
+        !self.should_use_full_reminders()
+    }
 }
 
 /// Builder for [`GeneratorContext`].
@@ -426,6 +464,7 @@ pub struct GeneratorContextBuilder<'a> {
     token_usage: Option<TokenUsageStats>,
     budget: Option<BudgetInfo>,
     collab_notifications: Vec<CollabNotification>,
+    queued_commands: Vec<QueuedCommandInfo>,
     plan_mode_exit_pending: bool,
 }
 
@@ -565,6 +604,11 @@ impl<'a> GeneratorContextBuilder<'a> {
         self
     }
 
+    pub fn queued_commands(mut self, commands: Vec<QueuedCommandInfo>) -> Self {
+        self.queued_commands = commands;
+        self
+    }
+
     pub fn plan_mode_exit_pending(mut self, pending: bool) -> Self {
         self.plan_mode_exit_pending = pending;
         self
@@ -605,6 +649,7 @@ impl<'a> GeneratorContextBuilder<'a> {
             token_usage: self.token_usage,
             budget: self.budget,
             collab_notifications: self.collab_notifications,
+            queued_commands: self.queued_commands,
             plan_mode_exit_pending: self.plan_mode_exit_pending,
         }
     }
@@ -699,5 +744,61 @@ mod tests {
         assert_eq!(task.task_type, BackgroundTaskType::Shell);
         assert_eq!(task.status, BackgroundTaskStatus::Running);
         assert!(task.has_new_output);
+    }
+
+    #[test]
+    fn test_should_use_full_reminders() {
+        let config = test_config();
+
+        // Turn 1 - should be full
+        let ctx = GeneratorContext::builder()
+            .config(&config)
+            .turn_number(1)
+            .cwd(PathBuf::from("/tmp"))
+            .build();
+        assert!(ctx.should_use_full_reminders());
+        assert!(!ctx.should_use_sparse_reminders());
+
+        // Turn 2, 3, 4, 5 - should be sparse
+        for turn in [2, 3, 4, 5] {
+            let ctx = GeneratorContext::builder()
+                .config(&config)
+                .turn_number(turn)
+                .cwd(PathBuf::from("/tmp"))
+                .build();
+            assert!(
+                !ctx.should_use_full_reminders(),
+                "Turn {turn} should be sparse"
+            );
+            assert!(
+                ctx.should_use_sparse_reminders(),
+                "Turn {turn} should be sparse"
+            );
+        }
+
+        // Turn 6 (5+1) - should be full
+        let ctx = GeneratorContext::builder()
+            .config(&config)
+            .turn_number(6)
+            .cwd(PathBuf::from("/tmp"))
+            .build();
+        assert!(ctx.should_use_full_reminders());
+        assert!(!ctx.should_use_sparse_reminders());
+
+        // Turn 11 (10+1) - should be full
+        let ctx = GeneratorContext::builder()
+            .config(&config)
+            .turn_number(11)
+            .cwd(PathBuf::from("/tmp"))
+            .build();
+        assert!(ctx.should_use_full_reminders());
+
+        // Turn 16 (15+1) - should be full
+        let ctx = GeneratorContext::builder()
+            .config(&config)
+            .turn_number(16)
+            .cwd(PathBuf::from("/tmp"))
+            .build();
+        assert!(ctx.should_use_full_reminders());
     }
 }

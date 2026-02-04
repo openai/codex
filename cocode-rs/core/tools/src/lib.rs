@@ -4,7 +4,7 @@
 //! - Tool trait with 5-stage pipeline and input-dependent concurrency
 //! - Tool registry (built-in + MCP)
 //! - Streaming tool executor
-//! - 17 built-in tools aligned with Claude Code v2.1.7
+//! - 18 built-in tools aligned with Claude Code v2.1.7
 //!
 //! # Architecture
 //!
@@ -19,9 +19,10 @@
 //! │  - post_process()    │                     │                    │
 //! │  - cleanup()         │                     │                    │
 //! ├──────────────────────┴─────────────────────┴────────────────────┤
-//! │  Built-in Tools (17): Read, Glob, Grep, Edit, Write, Bash,     │
+//! │  Built-in Tools (18): Read, Glob, Grep, Edit, Write, Bash,      │
 //! │  Task, TaskOutput, KillShell, TodoWrite, EnterPlanMode,         │
-//! │  ExitPlanMode, AskUserQuestion, WebFetch, WebSearch, Skill, Lsp │
+//! │  ExitPlanMode, AskUserQuestion, WebFetch, WebSearch, Skill,     │
+//! │  Lsp, ApplyPatch                                                │
 //! └─────────────────────────────────────────────────────────────────┘
 //! ```
 //!
@@ -142,6 +143,7 @@ pub mod prelude {
     pub use crate::ToolOutput;
     pub use crate::builtin::builtin_tool_names;
     pub use crate::builtin::register_builtin_tools;
+    pub use crate::builtin::register_builtin_tools_with_config;
     pub use crate::context::ToolContext;
     pub use crate::error::Result;
     pub use crate::error::ToolError;

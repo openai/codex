@@ -305,6 +305,15 @@ pub enum LoopEvent {
         /// Skills that were restored.
         skills: Vec<String>,
     },
+    /// Context was restored after compaction.
+    ContextRestored {
+        /// Number of files restored.
+        files_count: i32,
+        /// Whether todos were restored.
+        has_todos: bool,
+        /// Whether plan was restored.
+        has_plan: bool,
+    },
 
     // ========== Session Memory Extraction ==========
     /// Background session memory extraction has started.
@@ -447,6 +456,63 @@ pub enum LoopEvent {
     },
     /// Prompt cache miss.
     PromptCacheMiss,
+
+    // ========== Speculative Execution ==========
+    /// Speculative execution has started.
+    ///
+    /// Tool execution is proceeding optimistically before full confirmation.
+    SpeculativeStarted {
+        /// Unique identifier for this speculation batch.
+        speculation_id: String,
+        /// Tool call IDs being executed speculatively.
+        tool_calls: Vec<String>,
+    },
+    /// Speculative execution has been committed.
+    ///
+    /// The speculative results are confirmed and will be used.
+    SpeculativeCommitted {
+        /// Speculation batch identifier.
+        speculation_id: String,
+        /// Number of tool calls committed.
+        committed_count: i32,
+    },
+    /// Speculative execution has been rolled back.
+    ///
+    /// The speculative results are discarded due to model reconsideration.
+    SpeculativeRolledBack {
+        /// Speculation batch identifier.
+        speculation_id: String,
+        /// Reason for rollback.
+        reason: String,
+        /// Tool calls that were rolled back.
+        rolled_back_calls: Vec<String>,
+    },
+
+    // ========== Queue ==========
+    /// A command was queued (Enter during streaming).
+    ///
+    /// This command will be processed as a new user turn after the
+    /// current turn completes. Also injected as a system reminder
+    /// for real-time steering.
+    CommandQueued {
+        /// Command identifier.
+        id: String,
+        /// Preview of the command (truncated).
+        preview: String,
+    },
+    /// A queued command was dequeued and is being processed.
+    CommandDequeued {
+        /// Command identifier.
+        id: String,
+    },
+    /// Queue state changed.
+    ///
+    /// Emitted when the queue count changes, allowing
+    /// the UI to update its status display.
+    QueueStateChanged {
+        /// Number of commands in the queue.
+        queued: i32,
+    },
 
     // ========== Errors & Control ==========
     /// An error occurred in the loop.
@@ -1237,6 +1303,71 @@ mod tests {
             LoopEvent::SessionMemoryExtractionFailed { error, attempts } => {
                 assert_eq!(error, "API timeout");
                 assert_eq!(attempts, 2);
+            }
+            _ => panic!("Wrong event type"),
+        }
+    }
+
+    #[test]
+    fn test_speculative_execution_events() {
+        // Test SpeculativeStarted
+        let event = LoopEvent::SpeculativeStarted {
+            speculation_id: "spec-1".to_string(),
+            tool_calls: vec!["call-1".to_string(), "call-2".to_string()],
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("speculative_started"));
+        assert!(json.contains("spec-1"));
+        let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+        match parsed {
+            LoopEvent::SpeculativeStarted {
+                speculation_id,
+                tool_calls,
+            } => {
+                assert_eq!(speculation_id, "spec-1");
+                assert_eq!(tool_calls.len(), 2);
+            }
+            _ => panic!("Wrong event type"),
+        }
+
+        // Test SpeculativeCommitted
+        let event = LoopEvent::SpeculativeCommitted {
+            speculation_id: "spec-1".to_string(),
+            committed_count: 2,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("speculative_committed"));
+        let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+        match parsed {
+            LoopEvent::SpeculativeCommitted {
+                speculation_id,
+                committed_count,
+            } => {
+                assert_eq!(speculation_id, "spec-1");
+                assert_eq!(committed_count, 2);
+            }
+            _ => panic!("Wrong event type"),
+        }
+
+        // Test SpeculativeRolledBack
+        let event = LoopEvent::SpeculativeRolledBack {
+            speculation_id: "spec-1".to_string(),
+            reason: "Model reconsideration".to_string(),
+            rolled_back_calls: vec!["call-1".to_string()],
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("speculative_rolled_back"));
+        assert!(json.contains("Model reconsideration"));
+        let parsed: LoopEvent = serde_json::from_str(&json).unwrap();
+        match parsed {
+            LoopEvent::SpeculativeRolledBack {
+                speculation_id,
+                reason,
+                rolled_back_calls,
+            } => {
+                assert_eq!(speculation_id, "spec-1");
+                assert_eq!(reason, "Model reconsideration");
+                assert_eq!(rolled_back_calls.len(), 1);
             }
             _ => panic!("Wrong event type"),
         }

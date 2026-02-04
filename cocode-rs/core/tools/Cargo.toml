@@ -14,6 +14,7 @@ cocode-rmcp-client.workspace = true
 cocode-shell.workspace = true
 cocode-shell-parser.workspace = true
 cocode-apply-patch.workspace = true
+cocode-file-encoding.workspace = true
 cocode-file-ignore.workspace = true
 cocode-file-search.workspace = true
 cocode-plan-mode.workspace = true

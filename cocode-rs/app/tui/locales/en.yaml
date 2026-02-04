@@ -1,0 +1,267 @@
+# English translations for cocode TUI
+# This is the base/fallback language
+
+# ============================================================
+# Command translations (TuiCommand Display)
+# ============================================================
+
+# Mode toggles
+command.toggle_plan_mode: "Toggle Plan Mode"
+command.cycle_thinking_level: "Cycle Thinking Level"
+command.cycle_model: "Cycle Model"
+command.show_model_picker: "Show Model Picker"
+
+# File autocomplete
+command.select_next_suggestion: "Select Next Suggestion"
+command.select_prev_suggestion: "Select Previous Suggestion"
+command.accept_suggestion: "Accept Suggestion"
+command.dismiss_suggestions: "Dismiss Suggestions"
+
+# Skill autocomplete
+command.select_next_skill_suggestion: "Select Next Skill Suggestion"
+command.select_prev_skill_suggestion: "Select Previous Skill Suggestion"
+command.accept_skill_suggestion: "Accept Skill Suggestion"
+command.dismiss_skill_suggestions: "Dismiss Skill Suggestions"
+
+# Input actions
+command.submit_input: "Submit Input"
+command.interrupt: "Interrupt"
+command.clear_screen: "Clear Screen"
+command.cancel: "Cancel"
+
+# Navigation
+command.scroll_up: "Scroll Up"
+command.scroll_down: "Scroll Down"
+command.page_up: "Page Up"
+command.page_down: "Page Down"
+command.focus_next: "Focus Next"
+command.focus_previous: "Focus Previous"
+
+# Editing
+command.insert_char: "Insert '%{c}'"
+command.delete_backward: "Delete Backward"
+command.delete_forward: "Delete Forward"
+command.cursor_left: "Cursor Left"
+command.cursor_right: "Cursor Right"
+command.cursor_up: "Cursor Up"
+command.cursor_down: "Cursor Down"
+command.cursor_home: "Cursor Home"
+command.cursor_end: "Cursor End"
+command.word_left: "Word Left"
+command.word_right: "Word Right"
+command.delete_word_backward: "Delete Word Backward"
+command.delete_word_forward: "Delete Word Forward"
+command.insert_newline: "Insert Newline"
+
+# Approval
+command.approve: "Approve"
+command.deny: "Deny"
+command.approve_all: "Approve All"
+
+# External editor
+command.open_external_editor: "Open External Editor"
+
+# Help
+command.show_help: "Show Help"
+
+# Command palette
+command.show_command_palette: "Show Command Palette"
+
+# Session browser
+command.show_session_browser: "Show Session Browser"
+command.load_session: "Load Session %{id}"
+command.delete_session: "Delete Session %{id}"
+
+# Thinking toggle
+command.toggle_thinking: "Toggle Thinking"
+
+# Queue
+command.queue_input: "Queue Input"
+
+# Quit
+command.quit: "Quit"
+
+# ============================================================
+# Status bar translations
+# ============================================================
+
+status.hints: "Tab:plan Ctrl+T:think Ctrl+M:model ?:help"
+
+# Thinking level labels
+status.think_off: "off"
+status.think_min: "min"
+status.think_low: "low"
+status.think_med: "med"
+status.think_high: "high"
+status.think_max: "max"
+status.think_label: "Think:%{level}"
+
+# Plan mode
+status.plan: "PLAN"
+
+# MCP status
+status.mcp: "MCP:%{count}"
+
+# Token display
+status.tokens: "%{count} tokens"
+
+# Queue status
+status.queued: "%{count} queued"
+status.waiting: "Waiting:"
+
+# Thinking status
+status.thinking: "thinking..."
+status.thinking_with_duration: "thinking... %{duration}s"
+status.thought_for: "thought for %{duration}s"
+
+# Thinking budget
+status.thinking_budget: "%{used}/%{total}"
+
+# ============================================================
+# Dialog/Overlay translations
+# ============================================================
+
+# Permission overlay
+dialog.permission_required: "Permission Required"
+dialog.tool: "Tool:"
+dialog.approve: "[Y] Approve"
+dialog.deny: "[N] Deny"
+dialog.approve_all: "[A] Approve All"
+
+# Model picker
+dialog.select_model: "Select Model"
+dialog.select_model_filter: "Select Model [%{filter}]"
+dialog.no_models_match: "No models match filter"
+dialog.model_picker_hints: "↑/↓: Navigate  Enter: Select  Esc: Cancel  Type to filter"
+
+# Help overlay
+dialog.keyboard_shortcuts: "Keyboard Shortcuts"
+dialog.press_esc_close: "Press Esc to close"
+
+# Command palette
+dialog.command_palette: "Command Palette"
+dialog.command_palette_filter: "Command Palette [%{filter}]"
+dialog.no_commands_match: "No commands match filter"
+dialog.command_palette_hints: "↑/↓: Navigate  Enter: Select  Esc: Cancel  Type to filter"
+
+# Session browser
+dialog.session_browser: "Session Browser"
+dialog.session_browser_filter: "Session Browser [%{filter}]"
+dialog.no_saved_sessions: "No saved sessions"
+dialog.session_message_count: "(%{count} msgs)"
+dialog.session_browser_hints: "↑/↓: Navigate  Enter: Load  Del: Delete  Esc: Cancel"
+
+# Error overlay
+dialog.error: "Error"
+dialog.press_esc_enter_dismiss: "Press Esc or Enter to dismiss"
+
+# ============================================================
+# Help overlay shortcuts
+# ============================================================
+
+help.tab: "Toggle plan mode"
+help.ctrl_t: "Cycle thinking level"
+help.ctrl_shift_t: "Toggle thinking display"
+help.ctrl_m: "Switch model"
+help.ctrl_e: "Open external editor"
+help.ctrl_l: "Clear screen"
+help.ctrl_c: "Interrupt"
+help.ctrl_q: "Quit"
+help.enter: "Submit message"
+help.shift_enter: "New line"
+help.esc: "Cancel/Close overlay"
+help.question_f1: "Show this help"
+help.up_down: "History navigation"
+help.alt_up_down: "Scroll chat"
+help.pgup_pgdn: "Page scroll"
+help.ctrl_left_right: "Word movement"
+help.ctrl_bksp: "Delete word backward"
+
+# ============================================================
+# Toast notifications
+# ============================================================
+
+# Context warnings (remain/total format)
+toast.context_warning: "Context %{percent}% remaining (%{remain}/%{total})"
+
+# Compaction
+toast.compacting: "Compacting context..."
+toast.compacted: "Compacted %{messages} messages (%{tokens} tokens)"
+toast.compaction_failed: "Compaction failed: %{error}"
+
+# Model fallback
+toast.model_fallback: "Fallback: %{from} -> %{to}"
+
+# MCP
+toast.mcp_ready: "MCP: %{server} ready"
+toast.mcp_failed: "MCP: %{server} failed"
+toast.mcp_connected: "%{count} MCP server(s) connected"
+toast.mcp_error: "MCP %{name}: %{error}"
+
+# ============================================================
+# Chat widget
+# ============================================================
+
+chat.you: "You"
+chat.assistant: "Assistant"
+chat.system: "System"
+chat.messages_count: "%{count} messages"
+
+# Thinking display
+chat.thinking_tokens: "Thinking (%{tokens} tokens):"
+chat.thinking_collapsed: "Thinking (%{tokens} tokens) [Ctrl+Shift+T to expand]"
+chat.thinking_active: "Thinking (%{duration}):"
+chat.thinking_active_collapsed: "Thinking (%{tokens} tokens, %{duration})... [Ctrl+Shift+T to expand]"
+
+# ============================================================
+# Input widget
+# ============================================================
+
+input.title: "Message"
+input.placeholder: "Type a message... (Enter to send, Shift+Enter for newline)"
+
+# Toast messages for queue
+toast.command_queued: "Queued (%{count} waiting)"
+toast.steering_added: "Steering added"
+
+# ============================================================
+# Command palette items
+# ============================================================
+
+palette.toggle_plan_mode: "Toggle Plan Mode"
+palette.toggle_plan_mode_desc: "Enable or disable plan mode"
+palette.cycle_thinking: "Cycle Thinking Level"
+palette.cycle_thinking_desc: "Change the AI thinking depth"
+palette.switch_model: "Switch Model"
+palette.switch_model_desc: "Change the AI model"
+palette.show_help: "Show Help"
+palette.show_help_desc: "Display keyboard shortcuts"
+palette.session_browser: "Session Browser"
+palette.session_browser_desc: "Browse saved sessions"
+palette.clear_screen: "Clear Screen"
+palette.clear_screen_desc: "Clear chat history"
+palette.interrupt: "Interrupt"
+palette.interrupt_desc: "Cancel current operation"
+palette.quit: "Quit"
+palette.quit_desc: "Exit the application"
+
+# ============================================================
+# Tool panel
+# ============================================================
+
+tool.title: "Tools"
+tool.title_running: "Tools (%{count} running)"
+tool.running: "Running"
+tool.completed: "Completed"
+tool.failed: "Failed"
+
+# ============================================================
+# Subagent panel
+# ============================================================
+
+subagent.title: "Subagents"
+subagent.running: "Running"
+subagent.completed: "Completed"
+subagent.backgrounded: "Backgrounded"
+subagent.step_progress: "Step %{current}/%{total}"
+subagent.more: "+%{count} more..."

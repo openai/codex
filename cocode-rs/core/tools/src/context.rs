@@ -8,6 +8,7 @@ use cocode_hooks::HookRegistry;
 use cocode_lsp::LspServerManager;
 use cocode_protocol::LoopEvent;
 use cocode_protocol::PermissionMode;
+use cocode_protocol::RoleSelections;
 use cocode_shell::BackgroundTaskRegistry;
 use cocode_skill::SkillManager;
 use serde::Deserialize;
@@ -38,6 +39,12 @@ pub struct SpawnAgentInput {
     pub run_in_background: bool,
     /// Optional tool filter override.
     pub allowed_tools: Option<Vec<String>>,
+    /// Parent's role selections (snapshot at spawn time for isolation).
+    ///
+    /// When present, the spawned subagent will use these selections,
+    /// ensuring it's unaffected by subsequent changes to the parent's settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_selections: Option<RoleSelections>,
 }
 
 /// Result of spawning a subagent.
@@ -306,6 +313,11 @@ pub struct ToolContext {
     /// Large tool results (>400K chars by default) are persisted here with only
     /// a preview kept in context. Typical path: `~/.cocode/sessions/{session_id}/`
     pub session_dir: Option<PathBuf>,
+    /// Parent's role selections (snapshot for subagent isolation).
+    ///
+    /// When set, spawned subagents will inherit these selections,
+    /// ensuring they're unaffected by subsequent changes to the parent's settings.
+    pub parent_selections: Option<RoleSelections>,
 }
 
 impl ToolContext {
@@ -332,6 +344,7 @@ impl ToolContext {
             hook_registry: None,
             invoked_skills: Arc::new(Mutex::new(Vec::new())),
             session_dir: None,
+            parent_selections: None,
         }
     }
 
@@ -597,6 +610,7 @@ pub struct ToolContextBuilder {
     hook_registry: Option<Arc<HookRegistry>>,
     invoked_skills: Arc<Mutex<Vec<InvokedSkill>>>,
     session_dir: Option<PathBuf>,
+    parent_selections: Option<RoleSelections>,
 }
 
 impl ToolContextBuilder {
@@ -623,6 +637,7 @@ impl ToolContextBuilder {
             hook_registry: None,
             invoked_skills: Arc::new(Mutex::new(Vec::new())),
             session_dir: None,
+            parent_selections: None,
         }
     }
 
@@ -723,6 +738,16 @@ impl ToolContextBuilder {
         self
     }
 
+    /// Set parent selections for subagent isolation.
+    ///
+    /// When spawning subagents via the Task tool, these selections will be
+    /// passed to the subagent, ensuring it's unaffected by subsequent
+    /// changes to the parent's model settings.
+    pub fn parent_selections(mut self, selections: RoleSelections) -> Self {
+        self.parent_selections = Some(selections);
+        self
+    }
+
     /// Build the context.
     pub fn build(self) -> ToolContext {
         ToolContext {
@@ -746,6 +771,7 @@ impl ToolContextBuilder {
             hook_registry: self.hook_registry,
             invoked_skills: self.invoked_skills,
             session_dir: self.session_dir,
+            parent_selections: self.parent_selections,
         }
     }
 }

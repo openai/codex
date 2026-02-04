@@ -1,10 +1,12 @@
 //! Skill manager for loading and executing skills.
 //!
 //! The [`SkillManager`] provides a convenient interface for:
+//! - Loading bundled skills
 //! - Loading skills from configured directories
 //! - Looking up skills by name
 //! - Executing skill commands by injecting prompts
 
+use crate::bundled::bundled_skills;
 use crate::command::SkillPromptCommand;
 use crate::dedup::dedup_skills;
 use crate::loader::load_all_skills;
@@ -49,6 +51,43 @@ impl SkillManager {
     /// Create a new empty skill manager.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Create a new skill manager with bundled skills pre-loaded.
+    ///
+    /// Bundled skills are compiled into the binary and provide essential
+    /// system commands like `/output-style`.
+    pub fn with_bundled() -> Self {
+        let mut manager = Self::new();
+        manager.register_bundled();
+        manager
+    }
+
+    /// Register all bundled skills.
+    ///
+    /// Bundled skills have lowest priority and will be overridden by
+    /// user-defined skills with the same name.
+    pub fn register_bundled(&mut self) {
+        for bundled in bundled_skills() {
+            debug!(
+                name = %bundled.name,
+                fingerprint = %bundled.fingerprint,
+                "Registering bundled skill"
+            );
+            // Only register if not already present (user skills take precedence)
+            if !self.skills.contains_key(&bundled.name) {
+                self.skills.insert(
+                    bundled.name.clone(),
+                    SkillPromptCommand {
+                        name: bundled.name,
+                        description: bundled.description,
+                        prompt: bundled.prompt,
+                        allowed_tools: None,
+                        interface: None,
+                    },
+                );
+            }
+        }
     }
 
     /// Load skills from the given root directories.
@@ -325,5 +364,30 @@ mod tests {
         // With placeholder but no args (placeholder becomes empty)
         let result = execute_skill(&manager, "/review").unwrap();
         assert_eq!(result.prompt, "Review PR #");
+    }
+
+    #[test]
+    fn test_with_bundled() {
+        let manager = SkillManager::with_bundled();
+
+        // Should have output-style skill
+        assert!(manager.has("output-style"));
+        let skill = manager.get("output-style").unwrap();
+        assert!(skill.prompt.contains("/output-style"));
+    }
+
+    #[test]
+    fn test_register_bundled_does_not_override_user_skills() {
+        let mut manager = SkillManager::new();
+
+        // Register a user skill with the same name as a bundled skill
+        manager.register(make_skill("output-style", "User's custom output-style"));
+
+        // Now register bundled skills
+        manager.register_bundled();
+
+        // User skill should still be there, not overridden
+        let skill = manager.get("output-style").unwrap();
+        assert_eq!(skill.prompt, "User's custom output-style");
     }
 }

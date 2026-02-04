@@ -1,6 +1,8 @@
 use crate::definition::AgentDefinition;
+use cocode_protocol::execution::ExecutionIdentity;
 
 /// Guide agent - reads and navigates documentation and code.
+/// Inherits model from parent.
 pub fn guide_agent() -> AgentDefinition {
     AgentDefinition {
         name: "guide".to_string(),
@@ -8,7 +10,7 @@ pub fn guide_agent() -> AgentDefinition {
         agent_type: "guide".to_string(),
         tools: vec!["Glob".to_string(), "Grep".to_string(), "Read".to_string()],
         disallowed_tools: vec![],
-        model: None,
+        identity: Some(ExecutionIdentity::Inherit),
         max_turns: Some(15),
     }
 }
@@ -25,6 +27,6 @@ mod tests {
         assert_eq!(agent.tools, vec!["Glob", "Grep", "Read"]);
         assert!(agent.disallowed_tools.is_empty());
         assert_eq!(agent.max_turns, Some(15));
-        assert!(agent.model.is_none());
+        assert!(matches!(agent.identity, Some(ExecutionIdentity::Inherit)));
     }
 }

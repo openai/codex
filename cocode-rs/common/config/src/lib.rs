@@ -42,6 +42,7 @@
 //! ```
 
 pub mod builtin;
+pub mod builtin_agents;
 pub mod config;
 pub mod env_loader;
 pub mod error;
@@ -127,3 +128,11 @@ pub use cocode_protocol::ToolConfig;
 
 // Re-export env loader
 pub use env_loader::EnvLoader;
+
+// Re-export builtin agents config
+pub use builtin_agents::BUILTIN_AGENT_TYPES;
+pub use builtin_agents::BuiltinAgentOverride;
+pub use builtin_agents::BuiltinAgentsConfig;
+pub use builtin_agents::apply_env_overrides;
+pub use builtin_agents::is_builtin_agent;
+pub use builtin_agents::load_builtin_agents_config;

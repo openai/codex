@@ -52,14 +52,21 @@ pub fn assemble_sections(sections: &[(PromptSection, String)]) -> String {
 pub fn render_environment(ctx: &ConversationContext) -> String {
     let git_branch = ctx.environment.git_branch.as_deref().unwrap_or("(none)");
 
-    templates::ENVIRONMENT_TEMPLATE
+    let mut env = templates::ENVIRONMENT_TEMPLATE
         .replace("{{platform}}", &ctx.environment.platform)
         .replace("{{os_version}}", &ctx.environment.os_version)
         .replace("{{cwd}}", &ctx.environment.cwd.display().to_string())
         .replace("{{is_git_repo}}", &ctx.environment.is_git_repo.to_string())
         .replace("{{git_branch}}", git_branch)
         .replace("{{date}}", &ctx.environment.date)
-        .replace("{{model}}", &ctx.environment.model)
+        .replace("{{model}}", &ctx.environment.model);
+
+    // Append language preference if set
+    if let Some(ref lang) = ctx.environment.language_preference {
+        env.push_str(&format!("\n# Language Preference\n\nYou MUST respond in {}. All your responses, explanations, and communications should be in this language unless the user explicitly requests otherwise.\n", lang));
+    }
+
+    env
 }
 
 /// Get the permission section text for the given mode.
@@ -259,5 +266,41 @@ mod tests {
 
         let before_injections = render_injections(&ctx, InjectionPosition::BeforeTools);
         assert!(before_injections.contains("Before tools"));
+    }
+
+    #[test]
+    fn test_render_environment_without_language_preference() {
+        let ctx = test_ctx();
+        let rendered = render_environment(&ctx);
+
+        // Should not contain language preference section
+        assert!(!rendered.contains("# Language Preference"));
+    }
+
+    #[test]
+    fn test_render_environment_with_language_preference() {
+        let env = EnvironmentInfo::builder()
+            .platform("darwin")
+            .os_version("Darwin 24.0.0")
+            .cwd("/home/user/project")
+            .is_git_repo(true)
+            .git_branch("main")
+            .date("2025-01-29")
+            .model("claude-3-opus")
+            .language_preference("中文")
+            .build()
+            .unwrap();
+
+        let ctx = ConversationContext::builder()
+            .environment(env)
+            .build()
+            .unwrap();
+
+        let rendered = render_environment(&ctx);
+
+        // Should contain language preference section
+        assert!(rendered.contains("# Language Preference"));
+        assert!(rendered.contains("中文"));
+        assert!(rendered.contains("MUST respond in"));
     }
 }

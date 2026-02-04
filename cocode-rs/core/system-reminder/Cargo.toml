@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 cocode-protocol.workspace = true
 cocode-error.workspace = true
+cocode-config.workspace = true
 snafu.workspace = true
 snafu-virtstack.workspace = true
 serde = { workspace = true, features = ["derive"] }
@@ -18,10 +19,14 @@ futures = { workspace = true, features = ["alloc"] }
 regex-lite.workspace = true
 chrono.workspace = true
 uuid = { workspace = true, features = ["v4"] }
+notify = "8"
+notify-debouncer-mini = "0.6"
+similar.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 pretty_assertions.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true

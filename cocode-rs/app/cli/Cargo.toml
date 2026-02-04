@@ -18,15 +18,18 @@ cocode-protocol.workspace = true
 cocode-skill.workspace = true
 cocode-tui.workspace = true
 cocode-loop.workspace = true
+cocode-utils-common.workspace = true
 
 # External
 clap = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["full"] }
 anyhow.workspace = true
 tracing.workspace = true
+tracing-appender.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 dirs.workspace = true
 serde_json.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 tempfile.workspace = true

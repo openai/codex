@@ -1,4 +1,5 @@
 use crate::definition::AgentDefinition;
+use cocode_protocol::execution::ExecutionIdentity;
 
 /// Bash agent - executes shell commands.
 pub fn bash_agent() -> AgentDefinition {
@@ -8,7 +9,7 @@ pub fn bash_agent() -> AgentDefinition {
         agent_type: "bash".to_string(),
         tools: vec!["Bash".to_string()],
         disallowed_tools: vec![],
-        model: None,
+        identity: Some(ExecutionIdentity::Inherit),
         max_turns: Some(10),
     }
 }
@@ -25,6 +26,6 @@ mod tests {
         assert_eq!(agent.tools, vec!["Bash"]);
         assert!(agent.disallowed_tools.is_empty());
         assert_eq!(agent.max_turns, Some(10));
-        assert!(agent.model.is_none());
+        assert!(matches!(agent.identity, Some(ExecutionIdentity::Inherit)));
     }
 }

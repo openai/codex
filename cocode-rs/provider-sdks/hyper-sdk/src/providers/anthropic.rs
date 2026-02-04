@@ -645,8 +645,24 @@ fn map_anthropic_error(e: &ant::AnthropicError) -> HyperError {
                 delay: *retry_after,
             }
         }
+        ant::AnthropicError::InternalServerError => {
+            // 5xx server errors are retryable
+            HyperError::Retryable {
+                message: "Internal server error".to_string(),
+                delay: None,
+            }
+        }
         ant::AnthropicError::Authentication(msg) => HyperError::AuthenticationFailed(msg.clone()),
-        ant::AnthropicError::Api { message, .. } => {
+        ant::AnthropicError::Api {
+            status, message, ..
+        } => {
+            // Check for 5xx errors first - these are retryable
+            if *status >= 500 {
+                return HyperError::Retryable {
+                    message: format!("Server error ({status}): {message}"),
+                    delay: None,
+                };
+            }
             // Check for quota exceeded patterns in API errors
             let lower_msg = message.to_lowercase();
             if lower_msg.contains("quota") || lower_msg.contains("insufficient_quota") {

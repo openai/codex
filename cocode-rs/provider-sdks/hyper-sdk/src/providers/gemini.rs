@@ -513,6 +513,13 @@ fn convert_gemini_error(err: gem::GenAiError) -> HyperError {
             message,
             status,
         } => {
+            // Check for 5xx errors first - these are retryable
+            if code >= 500 {
+                return HyperError::Retryable {
+                    message: format!("Server error ({code}): {message}"),
+                    delay: None,
+                };
+            }
             // Check for specific error types
             if status.contains("RESOURCE_EXHAUSTED") || code == 429 {
                 HyperError::RateLimitExceeded(message)

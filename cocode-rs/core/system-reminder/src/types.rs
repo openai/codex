@@ -63,6 +63,8 @@ impl XmlTag {
 #[serde(rename_all = "snake_case")]
 pub enum AttachmentType {
     // === Core tier (always run) ===
+    /// Security guidelines (dual-placed for compaction survival).
+    SecurityGuidelines,
     /// Detects files that changed since last read.
     ChangedFiles,
     /// Plan mode entry instructions (5-phase workflow).
@@ -103,6 +105,8 @@ pub enum AttachmentType {
     AtMentionedFiles,
     /// Agent invocations via @agent-type syntax.
     AgentMentions,
+    /// Skill invoked by user (skill prompt content injection).
+    InvokedSkills,
 
     // === Hook-related (MainAgentOnly tier) ===
     /// Background hook completed and returned additional context.
@@ -111,6 +115,11 @@ pub enum AttachmentType {
     HookBlockingError,
     /// Hook succeeded and added context for the model.
     HookAdditionalContext,
+
+    // === Real-time steering ===
+    /// Queued commands from user (Enter during streaming).
+    /// Injected as "User sent: {message}" to steer model in real-time.
+    QueuedCommands,
 
     // === Phase 2 (future) ===
     /// Tool result injection.
@@ -130,7 +139,8 @@ impl AttachmentType {
     pub fn xml_tag(&self) -> XmlTag {
         match self {
             // Most attachments use the standard system-reminder tag
-            AttachmentType::ChangedFiles
+            AttachmentType::SecurityGuidelines
+            | AttachmentType::ChangedFiles
             | AttachmentType::PlanModeEnter
             | AttachmentType::PlanModeApproved
             | AttachmentType::PlanModeFileReference
@@ -147,9 +157,11 @@ impl AttachmentType {
             | AttachmentType::PlanVerification
             | AttachmentType::AtMentionedFiles
             | AttachmentType::AgentMentions
+            | AttachmentType::InvokedSkills
             | AttachmentType::AsyncHookResponse
             | AttachmentType::HookBlockingError
             | AttachmentType::HookAdditionalContext
+            | AttachmentType::QueuedCommands
             | AttachmentType::ToolResult
             | AttachmentType::AsyncAgentStatus
             | AttachmentType::TokenUsage
@@ -167,7 +179,8 @@ impl AttachmentType {
     pub fn tier(&self) -> ReminderTier {
         match self {
             // Core tier - always run
-            AttachmentType::ChangedFiles
+            AttachmentType::SecurityGuidelines
+            | AttachmentType::ChangedFiles
             | AttachmentType::PlanModeEnter
             | AttachmentType::PlanModeApproved
             | AttachmentType::PlanModeFileReference
@@ -188,6 +201,7 @@ impl AttachmentType {
             | AttachmentType::AsyncHookResponse
             | AttachmentType::HookBlockingError
             | AttachmentType::HookAdditionalContext
+            | AttachmentType::QueuedCommands
             | AttachmentType::ToolResult
             | AttachmentType::AsyncAgentStatus
             | AttachmentType::SessionMemoryContent
@@ -195,15 +209,16 @@ impl AttachmentType {
             | AttachmentType::BudgetUsd => ReminderTier::MainAgentOnly,
 
             // UserPrompt tier
-            AttachmentType::AtMentionedFiles | AttachmentType::AgentMentions => {
-                ReminderTier::UserPrompt
-            }
+            AttachmentType::AtMentionedFiles
+            | AttachmentType::AgentMentions
+            | AttachmentType::InvokedSkills => ReminderTier::UserPrompt,
         }
     }
 
     /// Get the display name for this attachment type.
     pub fn name(&self) -> &'static str {
         match self {
+            AttachmentType::SecurityGuidelines => "security_guidelines",
             AttachmentType::ChangedFiles => "changed_files",
             AttachmentType::PlanModeEnter => "plan_mode_enter",
             AttachmentType::PlanModeApproved => "plan_mode_approved",
@@ -222,9 +237,11 @@ impl AttachmentType {
             AttachmentType::PlanVerification => "plan_verification",
             AttachmentType::AtMentionedFiles => "at_mentioned_files",
             AttachmentType::AgentMentions => "agent_mentions",
+            AttachmentType::InvokedSkills => "invoked_skills",
             AttachmentType::AsyncHookResponse => "async_hook_response",
             AttachmentType::HookBlockingError => "hook_blocking_error",
             AttachmentType::HookAdditionalContext => "hook_additional_context",
+            AttachmentType::QueuedCommands => "queued_commands",
             AttachmentType::ToolResult => "tool_result",
             AttachmentType::AsyncAgentStatus => "async_agent_status",
             AttachmentType::SessionMemoryContent => "session_memory",

@@ -12,6 +12,9 @@ mod stream;
 
 pub use broker::EventBroker;
 pub use handler::handle_key_event;
+pub use handler::handle_key_event_full;
+pub use handler::handle_key_event_with_all_suggestions;
+pub use handler::handle_key_event_with_suggestions;
 pub use stream::TuiEventStream;
 
 use cocode_protocol::LoopEvent;
@@ -111,6 +114,32 @@ pub enum TuiCommand {
     /// Move focus to the previous element.
     FocusPrevious,
 
+    // ========== File Autocomplete ==========
+    /// Select next file suggestion.
+    SelectNextSuggestion,
+
+    /// Select previous file suggestion.
+    SelectPrevSuggestion,
+
+    /// Accept the current file suggestion.
+    AcceptSuggestion,
+
+    /// Dismiss file suggestions.
+    DismissSuggestions,
+
+    // ========== Skill Autocomplete ==========
+    /// Select next skill suggestion.
+    SelectNextSkillSuggestion,
+
+    /// Select previous skill suggestion.
+    SelectPrevSkillSuggestion,
+
+    /// Accept the current skill suggestion.
+    AcceptSkillSuggestion,
+
+    /// Dismiss skill suggestions.
+    DismissSkillSuggestions,
+
     // ========== Editing ==========
     /// Insert a character at the cursor.
     InsertChar(char),
@@ -139,6 +168,18 @@ pub enum TuiCommand {
     /// Move cursor to end of line.
     CursorEnd,
 
+    /// Move cursor to the start of the previous word.
+    WordLeft,
+
+    /// Move cursor to the start of the next word.
+    WordRight,
+
+    /// Delete the word before the cursor.
+    DeleteWordBackward,
+
+    /// Delete the word after the cursor.
+    DeleteWordForward,
+
     /// Insert a newline in the input.
     InsertNewline,
 
@@ -156,6 +197,37 @@ pub enum TuiCommand {
     /// Open the current input in an external editor.
     OpenExternalEditor,
 
+    // ========== Help ==========
+    /// Show the help overlay.
+    ShowHelp,
+
+    // ========== Command Palette ==========
+    /// Show command palette.
+    ShowCommandPalette,
+
+    // ========== Session Browser ==========
+    /// Show session browser.
+    ShowSessionBrowser,
+
+    /// Load a session.
+    LoadSession(String),
+
+    /// Delete a session.
+    DeleteSession(String),
+
+    // ========== Thinking Toggle ==========
+    /// Toggle display of thinking content in chat.
+    ToggleThinking,
+
+    // ========== Queue ==========
+    /// Queue input for later processing (Enter while streaming).
+    ///
+    /// The input will be processed as a new user turn after the
+    /// current turn completes. Also serves as real-time steering:
+    /// queued commands are injected into the current turn as
+    /// <system-reminder>User sent: {message}</system-reminder>
+    QueueInput,
+
     // ========== Quit ==========
     /// Request to quit the application.
     Quit,
@@ -163,36 +235,69 @@ pub enum TuiCommand {
 
 impl std::fmt::Display for TuiCommand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use crate::i18n::t;
+
         match self {
-            TuiCommand::TogglePlanMode => write!(f, "Toggle Plan Mode"),
-            TuiCommand::CycleThinkingLevel => write!(f, "Cycle Thinking Level"),
-            TuiCommand::CycleModel => write!(f, "Cycle Model"),
-            TuiCommand::ShowModelPicker => write!(f, "Show Model Picker"),
-            TuiCommand::SubmitInput => write!(f, "Submit Input"),
-            TuiCommand::Interrupt => write!(f, "Interrupt"),
-            TuiCommand::ClearScreen => write!(f, "Clear Screen"),
-            TuiCommand::Cancel => write!(f, "Cancel"),
-            TuiCommand::ScrollUp => write!(f, "Scroll Up"),
-            TuiCommand::ScrollDown => write!(f, "Scroll Down"),
-            TuiCommand::PageUp => write!(f, "Page Up"),
-            TuiCommand::PageDown => write!(f, "Page Down"),
-            TuiCommand::FocusNext => write!(f, "Focus Next"),
-            TuiCommand::FocusPrevious => write!(f, "Focus Previous"),
-            TuiCommand::InsertChar(c) => write!(f, "Insert '{c}'"),
-            TuiCommand::DeleteBackward => write!(f, "Delete Backward"),
-            TuiCommand::DeleteForward => write!(f, "Delete Forward"),
-            TuiCommand::CursorLeft => write!(f, "Cursor Left"),
-            TuiCommand::CursorRight => write!(f, "Cursor Right"),
-            TuiCommand::CursorUp => write!(f, "Cursor Up"),
-            TuiCommand::CursorDown => write!(f, "Cursor Down"),
-            TuiCommand::CursorHome => write!(f, "Cursor Home"),
-            TuiCommand::CursorEnd => write!(f, "Cursor End"),
-            TuiCommand::InsertNewline => write!(f, "Insert Newline"),
-            TuiCommand::Approve => write!(f, "Approve"),
-            TuiCommand::Deny => write!(f, "Deny"),
-            TuiCommand::ApproveAll => write!(f, "Approve All"),
-            TuiCommand::OpenExternalEditor => write!(f, "Open External Editor"),
-            TuiCommand::Quit => write!(f, "Quit"),
+            TuiCommand::TogglePlanMode => write!(f, "{}", t!("command.toggle_plan_mode")),
+            TuiCommand::CycleThinkingLevel => write!(f, "{}", t!("command.cycle_thinking_level")),
+            TuiCommand::CycleModel => write!(f, "{}", t!("command.cycle_model")),
+            TuiCommand::ShowModelPicker => write!(f, "{}", t!("command.show_model_picker")),
+            TuiCommand::SelectNextSuggestion => {
+                write!(f, "{}", t!("command.select_next_suggestion"))
+            }
+            TuiCommand::SelectPrevSuggestion => {
+                write!(f, "{}", t!("command.select_prev_suggestion"))
+            }
+            TuiCommand::AcceptSuggestion => write!(f, "{}", t!("command.accept_suggestion")),
+            TuiCommand::DismissSuggestions => write!(f, "{}", t!("command.dismiss_suggestions")),
+            TuiCommand::SelectNextSkillSuggestion => {
+                write!(f, "{}", t!("command.select_next_skill_suggestion"))
+            }
+            TuiCommand::SelectPrevSkillSuggestion => {
+                write!(f, "{}", t!("command.select_prev_skill_suggestion"))
+            }
+            TuiCommand::AcceptSkillSuggestion => {
+                write!(f, "{}", t!("command.accept_skill_suggestion"))
+            }
+            TuiCommand::DismissSkillSuggestions => {
+                write!(f, "{}", t!("command.dismiss_skill_suggestions"))
+            }
+            TuiCommand::SubmitInput => write!(f, "{}", t!("command.submit_input")),
+            TuiCommand::Interrupt => write!(f, "{}", t!("command.interrupt")),
+            TuiCommand::ClearScreen => write!(f, "{}", t!("command.clear_screen")),
+            TuiCommand::Cancel => write!(f, "{}", t!("command.cancel")),
+            TuiCommand::ScrollUp => write!(f, "{}", t!("command.scroll_up")),
+            TuiCommand::ScrollDown => write!(f, "{}", t!("command.scroll_down")),
+            TuiCommand::PageUp => write!(f, "{}", t!("command.page_up")),
+            TuiCommand::PageDown => write!(f, "{}", t!("command.page_down")),
+            TuiCommand::FocusNext => write!(f, "{}", t!("command.focus_next")),
+            TuiCommand::FocusPrevious => write!(f, "{}", t!("command.focus_previous")),
+            TuiCommand::InsertChar(c) => write!(f, "{}", t!("command.insert_char", c = c)),
+            TuiCommand::DeleteBackward => write!(f, "{}", t!("command.delete_backward")),
+            TuiCommand::DeleteForward => write!(f, "{}", t!("command.delete_forward")),
+            TuiCommand::CursorLeft => write!(f, "{}", t!("command.cursor_left")),
+            TuiCommand::CursorRight => write!(f, "{}", t!("command.cursor_right")),
+            TuiCommand::CursorUp => write!(f, "{}", t!("command.cursor_up")),
+            TuiCommand::CursorDown => write!(f, "{}", t!("command.cursor_down")),
+            TuiCommand::CursorHome => write!(f, "{}", t!("command.cursor_home")),
+            TuiCommand::CursorEnd => write!(f, "{}", t!("command.cursor_end")),
+            TuiCommand::WordLeft => write!(f, "{}", t!("command.word_left")),
+            TuiCommand::WordRight => write!(f, "{}", t!("command.word_right")),
+            TuiCommand::DeleteWordBackward => write!(f, "{}", t!("command.delete_word_backward")),
+            TuiCommand::DeleteWordForward => write!(f, "{}", t!("command.delete_word_forward")),
+            TuiCommand::InsertNewline => write!(f, "{}", t!("command.insert_newline")),
+            TuiCommand::Approve => write!(f, "{}", t!("command.approve")),
+            TuiCommand::Deny => write!(f, "{}", t!("command.deny")),
+            TuiCommand::ApproveAll => write!(f, "{}", t!("command.approve_all")),
+            TuiCommand::OpenExternalEditor => write!(f, "{}", t!("command.open_external_editor")),
+            TuiCommand::ShowHelp => write!(f, "{}", t!("command.show_help")),
+            TuiCommand::ShowCommandPalette => write!(f, "{}", t!("command.show_command_palette")),
+            TuiCommand::ShowSessionBrowser => write!(f, "{}", t!("command.show_session_browser")),
+            TuiCommand::LoadSession(id) => write!(f, "{}", t!("command.load_session", id = id)),
+            TuiCommand::DeleteSession(id) => write!(f, "{}", t!("command.delete_session", id = id)),
+            TuiCommand::ToggleThinking => write!(f, "{}", t!("command.toggle_thinking")),
+            TuiCommand::QueueInput => write!(f, "{}", t!("command.queue_input")),
+            TuiCommand::Quit => write!(f, "{}", t!("command.quit")),
         }
     }
 }
@@ -203,9 +308,16 @@ mod tests {
 
     #[test]
     fn test_tui_command_display() {
-        assert_eq!(TuiCommand::TogglePlanMode.to_string(), "Toggle Plan Mode");
-        assert_eq!(TuiCommand::InsertChar('a').to_string(), "Insert 'a'");
-        assert_eq!(TuiCommand::Quit.to_string(), "Quit");
+        // Test that Display impl produces non-empty translated strings
+        assert!(!TuiCommand::TogglePlanMode.to_string().is_empty());
+        assert!(!TuiCommand::InsertChar('a').to_string().is_empty());
+        assert!(!TuiCommand::Quit.to_string().is_empty());
+        assert!(!TuiCommand::WordLeft.to_string().is_empty());
+        assert!(!TuiCommand::WordRight.to_string().is_empty());
+        assert!(!TuiCommand::DeleteWordBackward.to_string().is_empty());
+        assert!(!TuiCommand::DeleteWordForward.to_string().is_empty());
+        assert!(!TuiCommand::ShowHelp.to_string().is_empty());
+        assert!(!TuiCommand::ToggleThinking.to_string().is_empty());
     }
 
     #[test]

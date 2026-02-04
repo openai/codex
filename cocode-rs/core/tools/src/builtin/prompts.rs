@@ -245,6 +245,55 @@ Important:\n\
 - NEVER just announce a skill without actually calling this tool\n\
 - Do not invoke a skill that is already running";
 
+/// Description for the ApplyPatch tool (JSON function mode).
+pub const APPLY_PATCH_DESCRIPTION: &str =
+    include_str!("../../../../utils/apply-patch/apply_patch_tool_instructions.md");
+
+/// Description for the ApplyPatch tool (freeform mode for GPT-5).
+pub const APPLY_PATCH_FREEFORM_DESCRIPTION: &str = "\
+Use the `apply_patch` tool to edit files. This is a FREEFORM tool — output the patch directly without JSON wrapping.\n\
+\n\
+Your patch language is a stripped-down, file-oriented diff format:\n\
+\n\
+*** Begin Patch\n\
+[ one or more file sections ]\n\
+*** End Patch\n\
+\n\
+Each operation starts with one of three headers:\n\
+- *** Add File: <path> — create a new file. Following lines start with +\n\
+- *** Delete File: <path> — remove an existing file\n\
+- *** Update File: <path> — patch an existing file in place\n\
+\n\
+For Update File, use @@ to introduce hunks with context. Each hunk line starts with:\n\
+- ` ` (space) for context lines\n\
+- `-` for lines to remove\n\
+- `+` for lines to add\n\
+\n\
+Important:\n\
+- Include 3 lines of context before and after changes\n\
+- File references must be relative, never absolute\n\
+- You must prefix new lines with + even when creating a new file";
+
+/// Description for the NotebookEdit tool.
+pub const NOTEBOOK_EDIT_DESCRIPTION: &str = "\
+Completely replaces the contents of a specific cell in a Jupyter notebook (.ipynb file) with new source.\n\
+\n\
+Jupyter notebooks are interactive documents that combine code, text, and visualizations, \
+commonly used for data analysis and scientific computing.\n\
+\n\
+Usage:\n\
+- The notebook_path parameter must be an absolute path, not a relative path\n\
+- The cell_id is used to identify which cell to modify; use Read to see cell IDs first\n\
+- Use edit_mode=insert to add a new cell at the index specified by cell_number\n\
+- Use edit_mode=delete to delete the cell at the index specified by cell_number\n\
+- When inserting a new cell, specify cell_type (code or markdown)\n\
+- Prefer using Read tool first to understand the notebook structure\n\
+\n\
+Edit modes:\n\
+- replace (default): Replace the content of an existing cell\n\
+- insert: Insert a new cell (cell_type required)\n\
+- delete: Delete the specified cell";
+
 /// Description for the LSP tool.
 pub const LSP_DESCRIPTION: &str = "\
 Language Server Protocol operations for code intelligence.\n\

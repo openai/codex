@@ -8,6 +8,9 @@
 use sha2::Digest;
 use sha2::Sha256;
 
+// Bundled skill prompt templates (embedded at compile time)
+const OUTPUT_STYLE_PROMPT: &str = include_str!("bundled/output_style_prompt.md");
+
 /// A skill bundled with the binary.
 ///
 /// Contains the full prompt text and a SHA-256 fingerprint for change
@@ -59,12 +62,15 @@ fn hex_encode(bytes: &[u8]) -> String {
 
 /// Returns the list of bundled skills.
 ///
-/// Currently returns an empty list. New bundled skills should be added
-/// here by constructing [`BundledSkill`] values with pre-computed
-/// fingerprints.
+/// Bundled skills are compiled into the binary and provide essential
+/// system commands like output-style management.
 pub fn bundled_skills() -> Vec<BundledSkill> {
-    // Placeholder: add bundled skills here as they are developed.
-    Vec::new()
+    vec![BundledSkill {
+        name: "output-style".to_string(),
+        description: "Manage response output styles (explanatory, learning, etc.)".to_string(),
+        prompt: OUTPUT_STYLE_PROMPT.to_string(),
+        fingerprint: compute_fingerprint(OUTPUT_STYLE_PROMPT.as_bytes()),
+    }]
 }
 
 #[cfg(test)]
@@ -114,8 +120,21 @@ mod tests {
     #[test]
     fn test_bundled_skills_returns_vec() {
         let skills = bundled_skills();
-        // Currently empty; when skills are added, this test should be updated
-        assert!(skills.is_empty());
+        // Should contain output-style skill
+        assert!(!skills.is_empty());
+        assert!(skills.iter().any(|s| s.name == "output-style"));
+    }
+
+    #[test]
+    fn test_output_style_skill() {
+        let skills = bundled_skills();
+        let output_style = skills.iter().find(|s| s.name == "output-style").unwrap();
+        assert_eq!(
+            output_style.description,
+            "Manage response output styles (explanatory, learning, etc.)"
+        );
+        assert!(output_style.prompt.contains("/output-style"));
+        assert_eq!(output_style.fingerprint.len(), 64);
     }
 
     #[test]

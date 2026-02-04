@@ -1,6 +1,9 @@
 use crate::definition::AgentDefinition;
+use cocode_protocol::execution::ExecutionIdentity;
+use cocode_protocol::model::ModelRole;
 
 /// Explore agent - read-only file exploration.
+/// Uses the Explore model role if configured, otherwise inherits from parent.
 pub fn explore_agent() -> AgentDefinition {
     AgentDefinition {
         name: "explore".to_string(),
@@ -8,7 +11,7 @@ pub fn explore_agent() -> AgentDefinition {
         agent_type: "explore".to_string(),
         tools: vec!["Read".to_string(), "Glob".to_string(), "Grep".to_string()],
         disallowed_tools: vec![],
-        model: None,
+        identity: Some(ExecutionIdentity::Role(ModelRole::Explore)),
         max_turns: Some(20),
     }
 }
@@ -25,6 +28,9 @@ mod tests {
         assert_eq!(agent.tools, vec!["Read", "Glob", "Grep"]);
         assert!(agent.disallowed_tools.is_empty());
         assert_eq!(agent.max_turns, Some(20));
-        assert!(agent.model.is_none());
+        assert!(matches!(
+            agent.identity,
+            Some(ExecutionIdentity::Role(ModelRole::Explore))
+        ));
     }
 }

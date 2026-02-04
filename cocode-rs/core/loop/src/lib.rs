@@ -65,5 +65,6 @@ pub use result::StopReason;
 pub use session_memory_agent::ExtractionResult;
 pub use session_memory_agent::SessionMemoryExtractionAgent;
 
-// Re-export LoopConfig from cocode-protocol
+// Re-export LoopConfig and AgentStatus from cocode-protocol
+pub use cocode_protocol::AgentStatus;
 pub use cocode_protocol::LoopConfig;

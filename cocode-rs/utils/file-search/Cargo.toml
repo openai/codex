@@ -20,7 +20,7 @@ ignore = { workspace = true }
 nucleo-matcher = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["full"] }
+tokio = { workspace = true, features = ["full", "sync", "time", "process"] }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
