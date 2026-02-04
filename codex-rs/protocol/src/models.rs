@@ -249,7 +249,7 @@ impl DeveloperInstructions {
                     match command_prefixes {
                         Some(prefixes) => {
                             format!(
-                                "{APPROVAL_POLICY_ON_REQUEST_RULE}\nApproved command prefixes:\n{prefixes}"
+                                "{APPROVAL_POLICY_ON_REQUEST_RULE}\n## Approved command prefixes\nThe following prefix rules have already been approved: {prefixes}"
                             )
                         }
                         None => APPROVAL_POLICY_ON_REQUEST_RULE.to_string(),

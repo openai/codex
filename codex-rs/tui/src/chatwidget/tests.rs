@@ -852,6 +852,7 @@ async fn make_chatwidget_manual(
         rate_limit_warnings: RateLimitWarningState::default(),
         rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
         rate_limit_poller: None,
+        adaptive_chunking: crate::streaming::chunking::AdaptiveChunkingPolicy::default(),
         stream_controller: None,
         plan_stream_controller: None,
         running_commands: HashMap::new(),

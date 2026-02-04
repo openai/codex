@@ -998,6 +998,7 @@ pub struct ModelListParams {
 pub struct Model {
     pub id: String,
     pub model: String,
+    pub upgrade: Option<String>,
     pub display_name: String,
     pub description: String,
     pub supported_reasoning_efforts: Vec<ReasoningEffortOption>,
@@ -1406,6 +1407,18 @@ pub struct ThreadSetNameResponse {}
 pub struct ThreadUnarchiveResponse {
     pub thread: Thread,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadCompactStartParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadCompactStartResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

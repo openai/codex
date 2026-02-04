@@ -144,7 +144,7 @@ pub(crate) async fn maybe_prompt_and_install_mcp_dependencies(
         return;
     }
 
-    let config = turn_context.client.config();
+    let config = turn_context.config.clone();
     if mentioned_skills.is_empty() || !config.features.enabled(Feature::SkillMcpDependencyInstall) {
         return;
     }
