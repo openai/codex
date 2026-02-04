@@ -146,6 +146,8 @@ Start a fresh thread when you need a new Codex conversation.
 { "method": "thread/started", "params": { "thread": { … } } }
 ```
 
+Valid `personality` values are `"friendly"`, `"pragmatic"`, and `"none"`. When `"none"` is selected, the personality placeholder is replaced with an empty string.
+
 To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape matches `thread/start`, and no additional notifications are emitted. You can also pass the same configuration overrides supported by `thread/start`, such as `personality`:
 
 ```json

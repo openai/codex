@@ -178,6 +178,111 @@ async fn config_personality_some_sets_instructions_template() -> anyhow::Result<
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_personality_none_sends_no_personality() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let mut builder = test_codex()
+        .with_model("gpt-5.2-codex")
+        .with_config(|config| {
+            config.features.disable(Feature::RemoteModels);
+            config.features.enable(Feature::Personality);
+            config.personality = Some(Personality::None);
+        });
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd_path().to_path_buf(),
+            approval_policy: test.config.approval_policy.value(),
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            model: test.session_configured.model.clone(),
+            effort: test.config.model_reasoning_effort,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let instructions_text = request.instructions_text();
+    assert!(
+        !instructions_text.contains(LOCAL_FRIENDLY_TEMPLATE),
+        "expected no friendly personality template, got: {instructions_text:?}"
+    );
+    assert!(
+        !instructions_text.contains(LOCAL_PRAGMATIC_TEMPLATE),
+        "expected no pragmatic personality template, got: {instructions_text:?}"
+    );
+    assert!(
+        !instructions_text.contains("{{ personality }}"),
+        "expected personality placeholder to be removed, got: {instructions_text:?}"
+    );
+
+    let developer_texts = request.message_input_texts("developer");
+    assert!(
+        !developer_texts
+            .iter()
+            .any(|text| text.contains("<personality_spec>")),
+        "did not expect a personality update message when personality is None"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn default_personality_is_friendly_without_config_toml() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let mut builder = test_codex()
+        .with_model("gpt-5.2-codex")
+        .with_config(|config| {
+            config.features.disable(Feature::RemoteModels);
+            config.features.enable(Feature::Personality);
+        });
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd_path().to_path_buf(),
+            approval_policy: test.config.approval_policy.value(),
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            model: test.session_configured.model.clone(),
+            effort: test.config.model_reasoning_effort,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let instructions_text = request.instructions_text();
+    assert!(
+        instructions_text.contains(LOCAL_FRIENDLY_TEMPLATE),
+        "expected default friendly template, got: {instructions_text:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
