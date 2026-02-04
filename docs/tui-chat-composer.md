@@ -220,9 +220,11 @@ There are three distinct “Enter becomes newline” mechanisms:
   `newline_should_insert_instead_of_submit(now)` inserts `\n` into the textarea and calls
   `extend_window(now)` so a slightly-late Enter keeps behaving like “newline” rather than “submit”.
 - **Immediately after a plain char** (very fast `Char` → `Enter`): `newline_should_insert_instead_of_submit(now)`
-  also treats Enter as “newline” when the last plain char was seen within `PASTE_BURST_CHAR_INTERVAL`,
-  even if we haven’t started buffering or entered the suppression window yet. This prevents “submit
-  mid-paste” on terminals that emit very short multiline pastes as key events.
+  also treats Enter as “newline” when the last plain char was seen very recently, even if we
+  haven’t started buffering or entered the suppression window yet. This prevents “submit mid-paste”
+  on terminals that emit very short multiline pastes as key events. On Windows, the single-ASCII-
+  char case tolerates a slightly slower initial gap (up to `PASTE_BURST_ACTIVE_IDLE_TIMEOUT`) to
+  handle terminals that pause briefly before emitting the first newline in a multiline paste.
 
 All of the above are disabled inside slash-command context (command popup is active or the first line begins
 with `/`) so Enter keeps its normal “submit/execute” semantics while composing commands.
