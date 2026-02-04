@@ -66,8 +66,8 @@ pub struct ThreadMetadata {
     pub model_provider: String,
     /// The working directory for the thread.
     pub cwd: PathBuf,
-    /// A best-effort thread title.
-    pub title: String,
+    /// Thread name.
+    pub name: String,
     /// The sandbox policy (stringified enum).
     pub sandbox_policy: String,
     /// The approval mode (stringified enum).
@@ -163,7 +163,7 @@ impl ThreadMetadataBuilder {
                 .clone()
                 .unwrap_or_else(|| default_provider.to_string()),
             cwd: self.cwd.clone(),
-            title: String::new(),
+            name: String::new(),
             sandbox_policy,
             approval_mode,
             tokens_used: 0,
@@ -201,8 +201,8 @@ impl ThreadMetadata {
         if self.cwd != other.cwd {
             diffs.push("cwd");
         }
-        if self.title != other.title {
-            diffs.push("title");
+        if self.name != other.name {
+            diffs.push("name");
         }
         if self.sandbox_policy != other.sandbox_policy {
             diffs.push("sandbox_policy");
@@ -245,7 +245,7 @@ pub(crate) struct ThreadRow {
     source: String,
     model_provider: String,
     cwd: String,
-    title: String,
+    name: String,
     sandbox_policy: String,
     approval_mode: String,
     tokens_used: i64,
@@ -266,7 +266,7 @@ impl ThreadRow {
             source: row.try_get("source")?,
             model_provider: row.try_get("model_provider")?,
             cwd: row.try_get("cwd")?,
-            title: row.try_get("title")?,
+            name: row.try_get("name")?,
             sandbox_policy: row.try_get("sandbox_policy")?,
             approval_mode: row.try_get("approval_mode")?,
             tokens_used: row.try_get("tokens_used")?,
@@ -291,7 +291,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             source,
             model_provider,
             cwd,
-            title,
+            name,
             sandbox_policy,
             approval_mode,
             tokens_used,
@@ -309,7 +309,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             source,
             model_provider,
             cwd: PathBuf::from(cwd),
-            title,
+            name,
             sandbox_policy,
             approval_mode,
             tokens_used,

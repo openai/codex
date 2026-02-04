@@ -14,6 +14,8 @@ use codex_core::ThreadSortKey;
 use codex_core::ThreadsPage;
 use codex_core::find_thread_names_by_ids;
 use codex_core::path_utils;
+use codex_core::state_db;
+use codex_core::state_db::StateDbHandle;
 use codex_protocol::items::TurnItem;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
@@ -107,6 +109,7 @@ pub async fn run_resume_picker(
     codex_home: &Path,
     default_provider: &str,
     show_all: bool,
+    sqlite_enabled: bool,
 ) -> Result<SessionSelection> {
     run_session_picker(
         tui,
@@ -114,6 +117,7 @@ pub async fn run_resume_picker(
         default_provider,
         show_all,
         SessionPickerAction::Resume,
+        sqlite_enabled,
     )
     .await
 }
@@ -123,6 +127,7 @@ pub async fn run_fork_picker(
     codex_home: &Path,
     default_provider: &str,
     show_all: bool,
+    sqlite_enabled: bool,
 ) -> Result<SessionSelection> {
     run_session_picker(
         tui,
@@ -130,6 +135,7 @@ pub async fn run_fork_picker(
         default_provider,
         show_all,
         SessionPickerAction::Fork,
+        sqlite_enabled,
     )
     .await
 }
@@ -140,6 +146,7 @@ async fn run_session_picker(
     default_provider: &str,
     show_all: bool,
     action: SessionPickerAction,
+    sqlite_enabled: bool,
 ) -> Result<SessionSelection> {
     let alt = AltScreenGuard::enter(tui);
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
@@ -183,6 +190,7 @@ async fn run_session_picker(
         filter_cwd,
         action,
     );
+    state.configure_name_lookup(sqlite_enabled).await;
     state.start_initial_load();
     state.request_frame();
 
@@ -261,6 +269,8 @@ struct PickerState {
     filter_cwd: Option<PathBuf>,
     action: SessionPickerAction,
     thread_name_cache: HashMap<ThreadId, Option<String>>,
+    state_db: Option<StateDbHandle>,
+    sqlite_names_enabled: bool,
 }
 
 struct PaginationState {
@@ -377,6 +387,21 @@ impl PickerState {
             filter_cwd,
             action,
             thread_name_cache: HashMap::new(),
+            state_db: None,
+            sqlite_names_enabled: false,
+        }
+    }
+
+    async fn configure_name_lookup(&mut self, sqlite_enabled: bool) {
+        self.sqlite_names_enabled = sqlite_enabled;
+        if sqlite_enabled {
+            self.state_db = state_db::open_if_present(
+                self.codex_home.as_path(),
+                self.default_provider.as_str(),
+            )
+            .await;
+        } else {
+            self.state_db = None;
         }
     }
 
@@ -550,9 +575,13 @@ impl PickerState {
             return;
         }
 
-        let names = find_thread_names_by_ids(&self.codex_home, &missing_ids)
-            .await
-            .unwrap_or_default();
+        let names = if self.sqlite_names_enabled {
+            self.thread_names_from_state_db(&missing_ids).await
+        } else {
+            find_thread_names_by_ids(&self.codex_home, &missing_ids)
+                .await
+                .unwrap_or_default()
+        };
         for thread_id in missing_ids {
             let thread_name = names.get(&thread_id).cloned();
             self.thread_name_cache.insert(thread_id, thread_name);
@@ -574,6 +603,29 @@ impl PickerState {
         if updated {
             self.apply_filter();
         }
+    }
+
+    async fn thread_names_from_state_db(
+        &self,
+        thread_ids: &HashSet<ThreadId>,
+    ) -> HashMap<ThreadId, String> {
+        let Some(state_db) = self.state_db.as_deref() else {
+            return HashMap::new();
+        };
+        let mut names = HashMap::with_capacity(thread_ids.len());
+        for thread_id in thread_ids {
+            let Ok(metadata) = state_db.get_thread(*thread_id).await else {
+                continue;
+            };
+            let Some(metadata) = metadata else {
+                continue;
+            };
+            let name = metadata.name.trim();
+            if !name.is_empty() {
+                names.insert(*thread_id, name.to_string());
+            }
+        }
+        names
     }
 
     fn apply_filter(&mut self) {
@@ -1676,6 +1728,148 @@ mod tests {
 
         let snapshot = terminal.backend().to_string();
         assert_snapshot!("resume_picker_thread_names", snapshot);
+    }
+
+    #[tokio::test]
+    async fn update_thread_names_uses_state_db_when_sqlite_enabled() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let session_index_path = tempdir.path().join("session_index.jsonl");
+        let thread_id =
+            ThreadId::from_string("33333333-3333-3333-3333-333333333333").expect("thread id");
+
+        let session_index_entry = json!({
+            "id": thread_id,
+            "thread_name": "name from session index",
+            "updated_at": "2025-01-01T00:00:00Z",
+        });
+        let mut out = serde_json::to_string(&session_index_entry).expect("session index entry");
+        out.push('\n');
+        std::fs::write(&session_index_path, out).expect("write session index");
+
+        let state_db = codex_state::StateRuntime::init(
+            tempdir.path().to_path_buf(),
+            "openai".to_string(),
+            None,
+        )
+        .await
+        .expect("init state db");
+        let created_at = DateTime::<Utc>::from_timestamp(1_735_689_600, 0).expect("timestamp");
+        let mut metadata = codex_state::ThreadMetadataBuilder::new(
+            thread_id,
+            PathBuf::from("/tmp/state-db-session.jsonl"),
+            created_at,
+            codex_protocol::protocol::SessionSource::Cli,
+        )
+        .build("openai");
+        metadata.name = "name from sqlite".to_string();
+        metadata.has_user_event = true;
+        state_db
+            .upsert_thread(&metadata)
+            .await
+            .expect("upsert thread metadata");
+
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state = PickerState::new(
+            tempdir.path().to_path_buf(),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+            true,
+            None,
+            SessionPickerAction::Resume,
+        );
+        state.configure_name_lookup(true).await;
+
+        let rows = vec![Row {
+            path: PathBuf::from("/tmp/a.jsonl"),
+            preview: String::from("preview"),
+            thread_id: Some(thread_id),
+            thread_name: None,
+            created_at: None,
+            updated_at: None,
+            cwd: None,
+            git_branch: None,
+        }];
+        state.all_rows = rows.clone();
+        state.filtered_rows = rows;
+
+        state.update_thread_names().await;
+
+        assert_eq!(
+            state.filtered_rows[0].thread_name.as_deref(),
+            Some("name from sqlite")
+        );
+    }
+
+    #[tokio::test]
+    async fn update_thread_names_falls_back_to_session_index_when_sqlite_disabled() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let session_index_path = tempdir.path().join("session_index.jsonl");
+        let thread_id =
+            ThreadId::from_string("44444444-4444-4444-4444-444444444444").expect("thread id");
+
+        let session_index_entry = json!({
+            "id": thread_id,
+            "thread_name": "name from session index",
+            "updated_at": "2025-01-01T00:00:00Z",
+        });
+        let mut out = serde_json::to_string(&session_index_entry).expect("session index entry");
+        out.push('\n');
+        std::fs::write(&session_index_path, out).expect("write session index");
+
+        let state_db = codex_state::StateRuntime::init(
+            tempdir.path().to_path_buf(),
+            "openai".to_string(),
+            None,
+        )
+        .await
+        .expect("init state db");
+        let created_at = DateTime::<Utc>::from_timestamp(1_735_689_601, 0).expect("timestamp");
+        let mut metadata = codex_state::ThreadMetadataBuilder::new(
+            thread_id,
+            PathBuf::from("/tmp/state-db-session-disabled.jsonl"),
+            created_at,
+            codex_protocol::protocol::SessionSource::Cli,
+        )
+        .build("openai");
+        metadata.name = "name from sqlite".to_string();
+        metadata.has_user_event = true;
+        state_db
+            .upsert_thread(&metadata)
+            .await
+            .expect("upsert thread metadata");
+
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state = PickerState::new(
+            tempdir.path().to_path_buf(),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+            true,
+            None,
+            SessionPickerAction::Resume,
+        );
+        state.configure_name_lookup(false).await;
+
+        let rows = vec![Row {
+            path: PathBuf::from("/tmp/a.jsonl"),
+            preview: String::from("preview"),
+            thread_id: Some(thread_id),
+            thread_name: None,
+            created_at: None,
+            updated_at: None,
+            cwd: None,
+            git_branch: None,
+        }];
+        state.all_rows = rows.clone();
+        state.filtered_rows = rows;
+
+        state.update_thread_names().await;
+
+        assert_eq!(
+            state.filtered_rows[0].thread_name.as_deref(),
+            Some("name from session index")
+        );
     }
 
     #[test]

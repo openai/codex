@@ -62,8 +62,8 @@ fn apply_event_msg(metadata: &mut ThreadMetadata, event: &EventMsg) {
         }
         EventMsg::UserMessage(user) => {
             metadata.has_user_event = true;
-            if metadata.title.is_empty() {
-                metadata.title = strip_user_message_prefix(user.message.as_str()).to_string();
+            if metadata.name.is_empty() {
+                metadata.name = strip_user_message_prefix(user.message.as_str()).to_string();
             }
         }
         _ => {}
@@ -71,7 +71,7 @@ fn apply_event_msg(metadata: &mut ThreadMetadata, event: &EventMsg) {
 }
 
 fn apply_response_item(_metadata: &mut ThreadMetadata, _item: &ResponseItem) {
-    // Title and has_user_event are derived from EventMsg::UserMessage only.
+    // Thread name and has_user_event are derived from EventMsg::UserMessage only.
 }
 
 fn strip_user_message_prefix(text: &str) -> &str {
@@ -108,7 +108,7 @@ mod tests {
     use uuid::Uuid;
 
     #[test]
-    fn response_item_user_messages_do_not_set_title_or_has_user_event() {
+    fn response_item_user_messages_do_not_set_name_or_has_user_event() {
         let mut metadata = metadata_for_test();
         let item = RolloutItem::ResponseItem(ResponseItem::Message {
             id: None,
@@ -123,11 +123,11 @@ mod tests {
         apply_rollout_item(&mut metadata, &item, "test-provider");
 
         assert_eq!(metadata.has_user_event, false);
-        assert_eq!(metadata.title, "");
+        assert_eq!(metadata.name, "");
     }
 
     #[test]
-    fn event_msg_user_messages_set_title_and_has_user_event() {
+    fn event_msg_user_messages_set_name_and_has_user_event() {
         let mut metadata = metadata_for_test();
         let item = RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
             message: format!("{USER_MESSAGE_BEGIN} actual user request"),
@@ -139,7 +139,7 @@ mod tests {
         apply_rollout_item(&mut metadata, &item, "test-provider");
 
         assert_eq!(metadata.has_user_event, true);
-        assert_eq!(metadata.title, "actual user request");
+        assert_eq!(metadata.name, "actual user request");
     }
 
     fn metadata_for_test() -> ThreadMetadata {
@@ -153,7 +153,7 @@ mod tests {
             source: "cli".to_string(),
             model_provider: "openai".to_string(),
             cwd: PathBuf::from("/tmp"),
-            title: String::new(),
+            name: String::new(),
             sandbox_policy: "read-only".to_string(),
             approval_mode: "on-request".to_string(),
             tokens_used: 1,
@@ -169,11 +169,11 @@ mod tests {
     fn diff_fields_detects_changes() {
         let mut base = metadata_for_test();
         base.id = ThreadId::from_string(&Uuid::now_v7().to_string()).expect("thread id");
-        base.title = "hello".to_string();
+        base.name = "hello".to_string();
         let mut other = base.clone();
         other.tokens_used = 2;
-        other.title = "world".to_string();
+        other.name = "world".to_string();
         let diffs = base.diff_fields(&other);
-        assert_eq!(diffs, vec!["title", "tokens_used"]);
+        assert_eq!(diffs, vec!["name", "tokens_used"]);
     }
 }
