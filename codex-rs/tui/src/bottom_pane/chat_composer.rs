@@ -172,6 +172,13 @@ use super::slash_commands;
 use super::slash_commands::BuiltinCommandFlags;
 use crate::bottom_pane::paste_burst::FlushResult;
 use crate::bottom_pane::prompt_args::parse_slash_name;
+use crate::bottom_pane::prompt_args::prompt_argument_names;
+use crate::bottom_pane::prompt_args::prompt_command_with_arg_placeholders;
+use crate::bottom_pane::prompt_args::prompt_has_numeric_placeholders;
+use crate::key_hint::KeyBindingListExt;
+use crate::keymap::EditorKeymap;
+use crate::keymap::RuntimeKeymap;
+use crate::keymap::primary_binding;
 use crate::render::Insets;
 use crate::render::RectExt;
 use crate::render::renderable::Renderable;
@@ -338,6 +345,13 @@ pub(crate) struct ChatComposer {
     status_line_enabled: bool,
     // Agent label injected into the footer's contextual row when multi-agent mode is active.
     active_agent_label: Option<String>,
+    submit_keys: Vec<KeyBinding>,
+    queue_keys: Vec<KeyBinding>,
+    toggle_shortcuts_keys: Vec<KeyBinding>,
+    editor_keymap: EditorKeymap,
+    footer_external_editor_key: Option<KeyBinding>,
+    footer_edit_previous_key: Option<KeyBinding>,
+    footer_show_transcript_key: Option<KeyBinding>,
 }
 
 #[derive(Clone, Debug)]
@@ -462,6 +476,16 @@ impl ChatComposer {
             status_line_value: None,
             status_line_enabled: false,
             active_agent_label: None,
+            submit_keys: vec![key_hint::plain(KeyCode::Enter)],
+            queue_keys: vec![key_hint::plain(KeyCode::Tab)],
+            toggle_shortcuts_keys: vec![
+                key_hint::plain(KeyCode::Char('?')),
+                key_hint::shift(KeyCode::Char('?')),
+            ],
+            editor_keymap: RuntimeKeymap::defaults().editor,
+            footer_external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
+            footer_edit_previous_key: Some(key_hint::plain(KeyCode::Esc)),
+            footer_show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -532,6 +556,17 @@ impl ChatComposer {
 
     pub fn set_fast_command_enabled(&mut self, enabled: bool) {
         self.fast_command_enabled = enabled;
+    }
+
+    pub(crate) fn set_keymap_bindings(&mut self, keymap: &RuntimeKeymap) {
+        self.submit_keys = keymap.composer.submit.clone();
+        self.queue_keys = keymap.composer.queue.clone();
+        self.toggle_shortcuts_keys = keymap.composer.toggle_shortcuts.clone();
+        self.editor_keymap = keymap.editor.clone();
+        self.textarea.set_keymap_bindings(&self.editor_keymap);
+        self.footer_external_editor_key = primary_binding(&keymap.app.open_external_editor);
+        self.footer_edit_previous_key = primary_binding(&keymap.chat.edit_previous_message);
+        self.footer_show_transcript_key = primary_binding(&keymap.app.open_transcript);
     }
 
     pub fn set_collaboration_mode_indicator(
@@ -1348,7 +1383,7 @@ impl ChatComposer {
         if self.disable_paste_burst {
             // When burst detection is disabled, treat IME/non-ASCII input as normal typing.
             // In particular, do not retro-capture or buffer already-inserted prefix text.
-            self.textarea.input(input);
+            self.textarea.input_with_keymap(input, &self.editor_keymap);
             let text_after = self.textarea.text();
             self.pending_pastes
                 .retain(|(placeholder, _)| text_after.contains(placeholder));
@@ -1405,7 +1440,7 @@ impl ChatComposer {
         if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
             self.handle_paste(pasted);
         }
-        self.textarea.input(input);
+        self.textarea.input_with_keymap(input, &self.editor_keymap);
 
         let text_after = self.textarea.text();
         self.pending_pastes
@@ -2484,6 +2519,15 @@ impl ChatComposer {
         } else {
             self.footer_mode = reset_mode_after_activity(self.footer_mode);
         }
+        if self.queue_keys.is_pressed(key_event) && self.is_task_running {
+            return self.handle_submission(true);
+        }
+
+        if self.submit_keys.is_pressed(key_event) {
+            let should_queue = !self.steer_enabled;
+            return self.handle_submission(should_queue);
+        }
+
         match key_event {
             KeyEvent {
                 code: KeyCode::Char('d'),
@@ -2693,7 +2737,7 @@ impl ChatComposer {
             Some(self.textarea.element_payloads())
         };
 
-        self.textarea.input(input);
+        self.textarea.input_with_keymap(input, &self.editor_keymap);
 
         if let Some(elements_before) = elements_before {
             self.reconcile_deleted_elements(elements_before);
@@ -2761,13 +2805,18 @@ impl ChatComposer {
         }
     }
 
+    /// Handle the dedicated shortcut-overlay toggle key(s).
+    ///
+    /// This only toggles when the composer is empty and no paste burst is in
+    /// progress, so typing/pasting `?` still inserts text instead of opening
+    /// help. The bound key list intentionally supports terminal-variant
+    /// modifier reporting (for example `?` vs `shift-?`).
     fn handle_shortcut_overlay_key(&mut self, key_event: &KeyEvent) -> bool {
         if key_event.kind != KeyEventKind::Press {
             return false;
         }
 
-        let toggles = matches!(key_event.code, KeyCode::Char('?'))
-            && !has_ctrl_or_alt(key_event.modifiers)
+        let toggles = self.toggle_shortcuts_keys.is_pressed(*key_event)
             && self.is_empty()
             && !self.is_in_paste_burst();
 
@@ -4663,6 +4712,30 @@ mod tests {
         assert_eq!(composer.textarea.text(), "h?");
         assert_eq!(composer.footer_mode, FooterMode::ComposerEmpty);
         assert_eq!(composer.footer_mode(), FooterMode::ComposerHasDraft);
+    }
+
+    #[test]
+    fn shift_question_mark_toggles_shortcut_overlay_when_empty() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT));
+        assert_eq!(result, InputResult::None);
+        assert!(needs_redraw, "toggling overlay should request redraw");
+        assert_eq!(composer.footer_mode, FooterMode::ShortcutOverlay);
     }
 
     /// Behavior: while a paste-like burst is being captured, `?` must not toggle the shortcut
