@@ -30,6 +30,9 @@ struct PreparedTrace {
 ///
 /// The request/response wiring mirrors the memory trace summarize E2E flow:
 /// `/v1/memories/trace_summarize` with one output object per input trace.
+///
+/// The caller provides the model selection, reasoning effort, and telemetry context explicitly so
+/// the session-scoped [`ModelClient`] can be reused across turns.
 pub async fn build_memories_from_trace_files(
     client: &ModelClient,
     trace_paths: &[PathBuf],

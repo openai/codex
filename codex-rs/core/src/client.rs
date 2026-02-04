@@ -1,3 +1,17 @@
+//! Session- and turn-scoped helpers for talking to model provider APIs.
+//!
+//! `ModelClient` is intended to live for the lifetime of a Codex session and holds the stable
+//! configuration and state needed to talk to a provider (auth, provider selection, conversation id,
+//! and feature-gated request behavior).
+//!
+//! Per-turn settings (model selection, reasoning controls, telemetry context, web search
+//! eligibility, and turn metadata) are passed explicitly to streaming and unary methods so that the
+//! turn lifetime is visible at the call site.
+//!
+//! A [`ModelClientSession`] is created per turn and is used to stream one or more Responses API
+//! requests during that turn. It caches a Responses WebSocket connection (opened lazily) and
+//! stores per-turn state such as the `x-codex-turn-state` token used for sticky routing.
+
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
@@ -74,6 +88,10 @@ pub const X_CODEX_TURN_METADATA_HEADER: &str = "x-codex-turn-metadata";
 pub const X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER: &str =
     "x-responsesapi-include-timing-metrics";
 
+/// Session-scoped state shared by all [`ModelClient`] clones.
+///
+/// This is intentionally kept minimal so `ModelClient` does not need to hold a full `Config`. Most
+/// configuration is per turn and is passed explicitly to streaming/unary methods.
 #[derive(Debug)]
 struct ModelClientState {
     auth_manager: Option<Arc<AuthManager>>,
@@ -88,11 +106,38 @@ struct ModelClientState {
     disable_websockets: AtomicBool,
 }
 
+/// A session-scoped client for model-provider API calls.
+///
+/// This holds configuration and state that should be shared across turns within a Codex session
+/// (auth, provider selection, conversation id, feature-gated request behavior, and transport
+/// fallback state).
+///
+/// WebSocket fallback is session-scoped: once a turn activates the HTTP fallback, subsequent turns
+/// will also use HTTP for the remainder of the session.
+///
+/// Turn-scoped settings (model selection, reasoning controls, telemetry context, web search
+/// eligibility, and turn metadata) are passed explicitly to the relevant methods to keep turn
+/// lifetime visible at the call site.
+///
+/// This type is cheap to clone.
 #[derive(Debug, Clone)]
 pub struct ModelClient {
     state: Arc<ModelClientState>,
 }
 
+/// A turn-scoped streaming session created from a [`ModelClient`].
+///
+/// The session lazily establishes a Responses WebSocket connection (and reuses it across multiple
+/// requests) and caches per-turn state:
+///
+/// - The last request's input items, so subsequent calls can use `response.append` when the input
+///   is an incremental extension of the previous request.
+/// - The `x-codex-turn-state` sticky-routing token, which must be replayed for all requests within
+///   the same turn.
+///
+/// Create a fresh `ModelClientSession` for each Codex turn. Reusing it across turns would replay
+/// the previous turn's sticky-routing token into the next turn, which violates the client/server
+/// contract and can cause routing bugs.
 pub struct ModelClientSession {
     client: ModelClient,
     connection: Option<ApiWebSocketConnection>,
@@ -112,6 +157,10 @@ pub struct ModelClientSession {
 
 impl ModelClient {
     #[allow(clippy::too_many_arguments)]
+    /// Creates a new session-scoped `ModelClient`.
+    ///
+    /// All arguments are expected to be stable for the lifetime of a Codex session. Per-turn values
+    /// are passed to [`ModelClientSession::stream`] (and other turn-scoped methods) explicitly.
     pub fn new(
         auth_manager: Option<Arc<AuthManager>>,
         conversation_id: ThreadId,
@@ -139,6 +188,10 @@ impl ModelClient {
         }
     }
 
+    /// Creates a fresh turn-scoped streaming session.
+    ///
+    /// This does not open any network connections; the WebSocket connection is established lazily
+    /// when the first WebSocket stream request is issued.
     pub fn new_session(&self) -> ModelClientSession {
         ModelClientSession {
             client: self.clone(),
@@ -152,6 +205,9 @@ impl ModelClient {
     ///
     /// This is a unary call (no streaming) that returns a new list of
     /// `ResponseItem`s representing the compacted transcript.
+    ///
+    /// The model selection and telemetry context are passed explicitly to keep `ModelClient`
+    /// session-scoped.
     pub async fn compact_conversation_history(
         &self,
         prompt: &Prompt,
@@ -193,6 +249,9 @@ impl ModelClient {
     /// Builds memory summaries for each provided normalized trace.
     ///
     /// This is a unary call (no streaming) to `/v1/memories/trace_summarize`.
+    ///
+    /// The model selection, reasoning effort, and telemetry context are passed explicitly to keep
+    /// `ModelClient` session-scoped.
     pub async fn summarize_memory_traces(
         &self,
         traces: Vec<ApiMemoryTrace>,
@@ -625,6 +684,12 @@ impl ModelClientSession {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Streams a single model request within the current turn.
+    ///
+    /// The caller is responsible for passing per-turn settings explicitly (model selection,
+    /// reasoning settings, telemetry context, web search eligibility, and turn metadata). This
+    /// method will prefer the Responses WebSocket transport when enabled and healthy, and will
+    /// fall back to the HTTP Responses API transport otherwise.
     pub async fn stream(
         &mut self,
         prompt: &Prompt,
@@ -668,6 +733,11 @@ impl ModelClientSession {
         }
     }
 
+    /// Permanently disables WebSockets for this Codex session and resets WebSocket state.
+    ///
+    /// This is used after exhausting the provider retry budget, to force subsequent requests onto
+    /// the HTTP transport. Returns `true` if this call activated fallback, or `false` if fallback
+    /// was already active.
     pub(crate) fn try_switch_fallback_transport(&mut self, otel_manager: &OtelManager) -> bool {
         let websocket_enabled = self.responses_websocket_enabled();
         let activated = self.activate_http_fallback(websocket_enabled);
@@ -697,6 +767,14 @@ fn build_api_prompt(prompt: &Prompt, instructions: String, tools_json: Vec<Value
     }
 }
 
+/// Builds the extra headers attached to Responses API requests.
+///
+/// These headers implement Codex-specific conventions:
+///
+/// - `x-codex-beta-features`: comma-separated beta feature keys enabled for the session.
+/// - `x-oai-web-search-eligible`: whether this turn is allowed to use web search.
+/// - `x-codex-turn-state`: sticky routing token captured earlier in the turn.
+/// - `x-codex-turn-metadata`: optional per-turn metadata for observability.
 fn build_responses_headers(
     beta_features_header: Option<&str>,
     web_search_eligible: bool,

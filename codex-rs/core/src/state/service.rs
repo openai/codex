@@ -35,5 +35,6 @@ pub(crate) struct SessionServices {
     pub(crate) skills_manager: Arc<SkillsManager>,
     pub(crate) agent_control: AgentControl,
     pub(crate) state_db: Option<StateDbHandle>,
+    /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,
 }

@@ -675,6 +675,11 @@ pub(crate) struct SessionSettingsUpdate {
 }
 
 impl Session {
+    /// Builds the `x-codex-beta-features` header value for this session.
+    ///
+    /// `ModelClient` is session-scoped and intentionally does not depend on the full `Config`, so
+    /// we precompute the comma-separated list of enabled experimental feature keys at session
+    /// creation time and thread it into the client.
     fn build_model_client_beta_features_header(config: &Config) -> Option<String> {
         let beta_features_header = FEATURES
             .iter()
@@ -3569,6 +3574,8 @@ pub(crate) async fn run_turn(
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
 
     let turn_metadata_header = turn_context.resolve_turn_metadata_header().await;
+    // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
+    // one instance across retries within this turn.
     let mut client_session = sess.services.model_client.new_session();
 
     loop {

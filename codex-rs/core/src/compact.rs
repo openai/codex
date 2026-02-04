@@ -91,6 +91,8 @@ async fn run_compact_task_inner(
     let mut retries = 0;
     let turn_metadata_header = turn_context.resolve_turn_metadata_header().await;
     let mut client_session = sess.services.model_client.new_session();
+    // Reuse one client session so turn-scoped state (sticky routing, websocket append tracking)
+    // survives retries within this compact turn.
 
     // TODO: If we need to guarantee the persisted mode always matches the prompt used for this
     // turn, capture it in TurnContext at creation time. Using SessionConfiguration here avoids
