@@ -10,9 +10,14 @@ use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadStartParams;
+use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
+use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
+use core_test_support::responses;
+use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::TempDir;
@@ -117,6 +122,101 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn thread_fork_additional_skills_roots_apply_to_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Done"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let response_mock = responses::mount_sse_once(&server, body).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let additional_root = TempDir::new()?;
+    let skill_body = "extra skill body";
+    let skill_path = write_skill_at(
+        additional_root.path(),
+        "desktop-extra",
+        "desktop-extra-skill",
+        "desktop extra skill",
+        skill_body,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let fork_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: thread.id.clone(),
+            additional_skills_roots: Some(vec![additional_root.path().to_path_buf()]),
+            ..Default::default()
+        })
+        .await?;
+    let fork_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(fork_id)),
+    )
+    .await??;
+    let ThreadForkResponse {
+        thread: forked_thread,
+        ..
+    } = to_response::<ThreadForkResponse>(fork_resp)?;
+
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: forked_thread.id,
+            input: vec![UserInput::Text {
+                text: "please run $desktop-extra-skill".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let request = response_mock.single_request();
+    let user_texts = request.message_input_texts("user");
+    let skill_path = std::fs::canonicalize(skill_path)?;
+    let skill_path_str = skill_path.to_string_lossy();
+    assert!(
+        user_texts.iter().any(|text| {
+            text.contains("<skill>\n<name>desktop-extra-skill</name>")
+                && text.contains(skill_body)
+                && text.contains(skill_path_str.as_ref())
+        }),
+        "expected skill instructions from additional skills roots in user input, got {user_texts:?}"
+    );
+
+    Ok(())
+}
+
 // Helper to create a config.toml pointing at the mock model server.
 fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
     let config_toml = codex_home.join("config.toml");
@@ -139,4 +239,19 @@ stream_max_retries = 0
 "#
         ),
     )
+}
+
+fn write_skill_at(
+    root: &Path,
+    dir: &str,
+    name: &str,
+    description: &str,
+    body: &str,
+) -> std::io::Result<std::path::PathBuf> {
+    let skill_dir = root.join(dir);
+    std::fs::create_dir_all(&skill_dir)?;
+    let contents = format!("---\nname: {name}\ndescription: {description}\n---\n\n{body}\n");
+    let skill_path = skill_dir.join("SKILL.md");
+    std::fs::write(&skill_path, contents)?;
+    Ok(skill_path)
 }

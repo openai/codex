@@ -8,9 +8,9 @@ export type SkillsListParams = {
  */
 cwds?: Array<string>, 
 /**
- * Experimental: additional skill roots to scan alongside the defaults.
+ * Experimental: additional skill roots to scan alongside the defaults derived from cwds.
  */
-additionalRoots?: Array<string> | null, 
+additionalSkillsRoots?: Array<string> | null, 
 /**
  * When true, bypass the skills cache and re-scan skills from disk.
  */

@@ -23,7 +23,7 @@ fn write_skill(skills_root: &Path, dir: &str, name: &str, description: &str) -> 
 }
 
 #[tokio::test]
-async fn skills_list_includes_additional_roots() -> Result<()> {
+async fn skills_list_includes_additional_skills_roots() -> Result<()> {
     let codex_home = tempfile::tempdir()?;
     let cwd = tempfile::tempdir()?;
     let additional_root = tempfile::tempdir()?;
@@ -40,7 +40,7 @@ async fn skills_list_includes_additional_roots() -> Result<()> {
     let request_id = mcp
         .send_skills_list_request(SkillsListParams {
             cwds: vec![cwd.path().to_path_buf()],
-            additional_roots: Some(vec![additional_root.path().to_path_buf()]),
+            additional_skills_roots: Some(vec![additional_root.path().to_path_buf()]),
             force_reload: true,
         })
         .await?;

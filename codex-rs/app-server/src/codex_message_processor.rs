@@ -1610,6 +1610,7 @@ impl CodexMessageProcessor {
             config,
             base_instructions,
             developer_instructions,
+            additional_skills_roots,
             dynamic_tools,
             mock_experimental_field: _mock_experimental_field,
             experimental_raw_events,
@@ -1685,6 +1686,9 @@ impl CodexMessageProcessor {
                     session_configured,
                     ..
                 } = new_conv;
+                if let Some(additional_roots) = additional_skills_roots {
+                    let _ = thread.submit(Op::SetSkillRoots { additional_roots }).await;
+                }
                 let config_snapshot = thread.config_snapshot().await;
                 let fallback_provider = self.config.model_provider_id.as_str();
 
@@ -2307,6 +2311,7 @@ impl CodexMessageProcessor {
             config: request_overrides,
             base_instructions,
             developer_instructions,
+            additional_skills_roots,
             personality,
         } = params;
 
@@ -2427,9 +2432,13 @@ impl CodexMessageProcessor {
         {
             Ok(NewThread {
                 thread_id,
+                thread,
                 session_configured,
                 ..
             }) => {
+                if let Some(additional_roots) = additional_skills_roots {
+                    let _ = thread.submit(Op::SetSkillRoots { additional_roots }).await;
+                }
                 let SessionConfiguredEvent {
                     rollout_path,
                     initial_messages,
@@ -2513,6 +2522,7 @@ impl CodexMessageProcessor {
             config: cli_overrides,
             base_instructions,
             developer_instructions,
+            additional_skills_roots,
         } = params;
 
         let rollout_path = if let Some(path) = path {
@@ -2615,6 +2625,7 @@ impl CodexMessageProcessor {
 
         let NewThread {
             thread_id,
+            thread,
             session_configured,
             ..
         } = match self
@@ -2641,6 +2652,9 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        if let Some(additional_roots) = additional_skills_roots {
+            let _ = thread.submit(Op::SetSkillRoots { additional_roots }).await;
+        }
 
         let SessionConfiguredEvent {
             rollout_path,
@@ -4031,7 +4045,7 @@ impl CodexMessageProcessor {
     async fn skills_list(&self, request_id: RequestId, params: SkillsListParams) {
         let SkillsListParams {
             cwds,
-            additional_roots,
+            additional_skills_roots,
             force_reload,
         } = params;
         let cwds = if cwds.is_empty() {
@@ -4041,7 +4055,7 @@ impl CodexMessageProcessor {
         };
 
         let skills_manager = self.thread_manager.skills_manager();
-        let additional_roots = additional_roots.unwrap_or_default();
+        let additional_roots = additional_skills_roots.unwrap_or_default();
         let mut data = Vec::new();
         for cwd in cwds {
             let outcome = skills_manager
@@ -4123,7 +4137,7 @@ impl CodexMessageProcessor {
         let TurnStartParams {
             thread_id,
             input,
-            additional_roots,
+            additional_skills_roots,
             cwd,
             approval_policy,
             sandbox_policy,
@@ -4147,7 +4161,7 @@ impl CodexMessageProcessor {
         let mapped_items: Vec<CoreInputItem> =
             input.into_iter().map(V2UserInput::into_core).collect();
 
-        if let Some(additional_roots) = additional_roots {
+        if let Some(additional_roots) = additional_skills_roots {
             let _ = thread.submit(Op::SetSkillRoots { additional_roots }).await;
         }
 

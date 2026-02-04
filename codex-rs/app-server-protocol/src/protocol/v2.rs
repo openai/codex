@@ -1180,6 +1180,9 @@ pub struct ThreadStartParams {
     pub config: Option<HashMap<String, JsonValue>>,
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
+    /// Experimental: additional skill roots to scan for this and subsequent turns.
+    #[ts(optional = nullable)]
+    pub additional_skills_roots: Option<Vec<PathBuf>>,
     pub personality: Option<Personality>,
     pub ephemeral: Option<bool>,
     #[experimental("thread/start.dynamicTools")]
@@ -1258,6 +1261,9 @@ pub struct ThreadResumeParams {
     pub config: Option<HashMap<String, serde_json::Value>>,
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
+    /// Experimental: additional skill roots to scan for this and subsequent turns.
+    #[ts(optional = nullable)]
+    pub additional_skills_roots: Option<Vec<PathBuf>>,
     pub personality: Option<Personality>,
 }
 
@@ -1300,6 +1306,9 @@ pub struct ThreadForkParams {
     pub config: Option<HashMap<String, serde_json::Value>>,
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
+    /// Experimental: additional skill roots to scan for this and subsequent turns.
+    #[ts(optional = nullable)]
+    pub additional_skills_roots: Option<Vec<PathBuf>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1481,9 +1490,9 @@ pub struct SkillsListParams {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cwds: Vec<PathBuf>,
 
-    /// Additional skill roots to scan alongside the defaults derived from cwds.
+    /// Experimental: additional skill roots to scan alongside the defaults derived from cwds.
     #[ts(optional = nullable)]
-    pub additional_roots: Option<Vec<PathBuf>>,
+    pub additional_skills_roots: Option<Vec<PathBuf>>,
 
     /// When true, bypass the skills cache and re-scan skills from disk.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -1832,9 +1841,9 @@ pub enum TurnStatus {
 pub struct TurnStartParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
-    /// Additional skill roots to scan for this and subsequent turns.
+    /// Experimental: additional skill roots to scan for this and subsequent turns.
     #[ts(optional = nullable)]
-    pub additional_roots: Option<Vec<PathBuf>>,
+    pub additional_skills_roots: Option<Vec<PathBuf>>,
     /// Override the working directory for this turn and subsequent turns.
     pub cwd: Option<PathBuf>,
     /// Override the approval policy for this turn and subsequent turns.
@@ -3030,25 +3039,25 @@ mod tests {
         assert_eq!(
             serde_json::to_value(SkillsListParams {
                 cwds: Vec::new(),
-                additional_roots: None,
+                additional_skills_roots: None,
                 force_reload: false,
             })
             .unwrap(),
             json!({
-                "additionalRoots": null,
+                "additionalSkillsRoots": null,
             }),
         );
 
         assert_eq!(
             serde_json::to_value(SkillsListParams {
                 cwds: vec![PathBuf::from("/repo")],
-                additional_roots: Some(vec![PathBuf::from("/opt/skills")]),
+                additional_skills_roots: Some(vec![PathBuf::from("/opt/skills")]),
                 force_reload: true,
             })
             .unwrap(),
             json!({
                 "cwds": ["/repo"],
-                "additionalRoots": ["/opt/skills"],
+                "additionalSkillsRoots": ["/opt/skills"],
                 "forceReload": true,
             }),
         );
