@@ -197,6 +197,7 @@ impl Session {
             false
         };
         drop(active);
+        self.services.agent_control.clear_turn(&turn_context.sub_id);
         if should_close_processes {
             self.close_unified_exec_processes().await;
         }
@@ -215,7 +216,11 @@ impl Session {
         let mut active = self.active_turn.lock().await;
         match active.take() {
             Some(mut at) => {
+                let turn_ids = at.tasks.keys().cloned().collect::<Vec<_>>();
                 at.clear_pending().await;
+                for turn_id in turn_ids {
+                    self.services.agent_control.clear_turn(&turn_id);
+                }
 
                 at.drain_tasks()
             }
