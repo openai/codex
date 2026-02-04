@@ -72,8 +72,8 @@ const DEFAULT_PROJECT_ROOT_MARKERS: &[&str] = &[".git"];
 /// configuration layers in the following order, but a constraint defined in an
 /// earlier layer cannot be overridden by a later layer:
 ///
-/// - admin:    managed preferences (*)
 /// - cloud:    managed cloud requirements
+/// - admin:    managed preferences (*)
 /// - system    `/etc/codex/requirements.toml`
 ///
 /// For backwards compatibility, we also load from
@@ -107,6 +107,11 @@ pub async fn load_config_layers_state(
 ) -> io::Result<ConfigLayerStack> {
     let mut config_requirements_toml = ConfigRequirementsWithSources::default();
 
+    if let Some(requirements) = cloud_requirements.get().await {
+        config_requirements_toml
+            .merge_unset_fields(RequirementSource::CloudRequirements, requirements);
+    }
+
     #[cfg(target_os = "macos")]
     macos::load_managed_admin_requirements_toml(
         &mut config_requirements_toml,
@@ -115,11 +120,6 @@ pub async fn load_config_layers_state(
             .as_deref(),
     )
     .await?;
-
-    if let Some(requirements) = cloud_requirements.get().await {
-        config_requirements_toml
-            .merge_unset_fields(RequirementSource::CloudRequirements, requirements);
-    }
 
     // Honor /etc/codex/requirements.toml.
     if cfg!(unix) {

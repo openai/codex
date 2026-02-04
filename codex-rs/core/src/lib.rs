@@ -161,4 +161,5 @@ pub use codex_protocol::models::ResponseItem;
 pub use compact::content_items_to_text;
 pub use event_mapping::parse_turn_item;
 pub mod compact;
+pub mod memory_trace;
 pub mod otel_init;
