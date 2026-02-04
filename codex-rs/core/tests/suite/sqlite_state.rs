@@ -319,7 +319,7 @@ async fn thread_rename_updates_state_db_name() -> Result<()> {
     });
     let test = builder.build(&server).await?;
 
-    let db_path = test.config.codex_home.join(STATE_DB_FILENAME);
+    let db_path = codex_state::state_db_path(test.config.codex_home.as_path());
     for _ in 0..100 {
         if tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
             break;
