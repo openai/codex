@@ -43,12 +43,9 @@ While commands are running inside the sandbox, here are some scenarios that will
 
 When choosing a `prefix_rule`, request one that will allow you to fulfill similar requests from the user in the future without re-requesting escalation. It should be categorical and reasonably scoped to similar capabilities. You should rarely pass the entire command into `prefix_rule`.
 
-### Banned prefixes
-DO NOT request the following exact prefixes (w/ additional prefixes is fine):
-- ["python3"]
-- ["python"]
-- ["rm", "-rf"]
-- ["rm", "-r"]
+### Banned prefix_rules 
+NEVER provide a prefix_rule argument for destructive commands like rm.
+Do not provide a prefix rule if your command uses a heredoc or herestring.
 
 ### Examples
 Good examples of prefixes:
