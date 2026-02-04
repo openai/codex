@@ -8,12 +8,23 @@ use codex_core::config::ConfigBuilder;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::config_loader::LoaderOverrides;
+use futures::SinkExt;
+use futures::StreamExt;
+use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
+use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
+use crate::message_processor::ConnectionSessionState;
 use crate::message_processor::MessageProcessor;
 use crate::message_processor::MessageProcessorArgs;
+use crate::outgoing_message::ConnectionId;
+use crate::outgoing_message::OutgoingEnvelope;
 use crate::outgoing_message::OutgoingMessage;
 use crate::outgoing_message::OutgoingMessageSender;
 use codex_app_server_protocol::ConfigLayerSource;
@@ -30,7 +41,12 @@ use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::io::{self};
+use tokio::net::TcpListener;
+use tokio::net::TcpStream;
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+use tokio_tungstenite::accept_async;
+use tokio_tungstenite::tungstenite::Message as WebSocketMessage;
 use toml::Value as TomlValue;
 use tracing::debug;
 use tracing::error;
@@ -56,6 +72,84 @@ mod outgoing_message;
 /// is a balance between throughput and memory usage – 128 messages should be
 /// plenty for an interactive CLI.
 const CHANNEL_CAPACITY: usize = 128;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AppServerTransport {
+    Stdio,
+    WebSocket { bind_address: SocketAddr },
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum AppServerTransportParseError {
+    UnsupportedListenUrl(String),
+    InvalidWebSocketListenUrl(String),
+}
+
+impl std::fmt::Display for AppServerTransportParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AppServerTransportParseError::UnsupportedListenUrl(listen_url) => write!(
+                f,
+                "unsupported --listen URL `{listen_url}`; expected `stdio://` or `ws://IP:PORT`"
+            ),
+            AppServerTransportParseError::InvalidWebSocketListenUrl(listen_url) => write!(
+                f,
+                "invalid websocket --listen URL `{listen_url}`; expected `ws://IP:PORT`"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for AppServerTransportParseError {}
+
+impl AppServerTransport {
+    pub const DEFAULT_LISTEN_URL: &'static str = "stdio://";
+
+    pub fn from_listen_url(listen_url: &str) -> Result<Self, AppServerTransportParseError> {
+        if listen_url == Self::DEFAULT_LISTEN_URL {
+            return Ok(Self::Stdio);
+        }
+
+        if let Some(socket_addr) = listen_url.strip_prefix("ws://") {
+            let bind_address = socket_addr.parse::<SocketAddr>().map_err(|_| {
+                AppServerTransportParseError::InvalidWebSocketListenUrl(listen_url.to_string())
+            })?;
+            return Ok(Self::WebSocket { bind_address });
+        }
+
+        Err(AppServerTransportParseError::UnsupportedListenUrl(
+            listen_url.to_string(),
+        ))
+    }
+}
+
+impl FromStr for AppServerTransport {
+    type Err = AppServerTransportParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_listen_url(s)
+    }
+}
+
+#[derive(Debug)]
+enum TransportEvent {
+    ConnectionOpened {
+        connection_id: ConnectionId,
+        writer: mpsc::Sender<OutgoingMessage>,
+    },
+    ConnectionClosed {
+        connection_id: ConnectionId,
+    },
+    IncomingMessage {
+        connection_id: ConnectionId,
+        message: JSONRPCMessage,
+    },
+}
+
+struct ConnectionState {
+    writer: mpsc::Sender<OutgoingMessage>,
+    session: ConnectionSessionState,
+}
 
 fn config_warning_from_error(
     summary: impl Into<String>,
@@ -173,32 +267,39 @@ pub async fn run_main(
     loader_overrides: LoaderOverrides,
     default_analytics_enabled: bool,
 ) -> IoResult<()> {
-    // Set up channels.
-    let (incoming_tx, mut incoming_rx) = mpsc::channel::<JSONRPCMessage>(CHANNEL_CAPACITY);
-    let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingMessage>(CHANNEL_CAPACITY);
+    run_main_with_transport(
+        codex_linux_sandbox_exe,
+        cli_config_overrides,
+        loader_overrides,
+        default_analytics_enabled,
+        AppServerTransport::Stdio,
+    )
+    .await
+}
 
-    // Task: read from stdin, push to `incoming_tx`.
-    let stdin_reader_handle = tokio::spawn({
-        async move {
-            let stdin = io::stdin();
-            let reader = BufReader::new(stdin);
-            let mut lines = reader.lines();
+pub async fn run_main_with_transport(
+    codex_linux_sandbox_exe: Option<PathBuf>,
+    cli_config_overrides: CliConfigOverrides,
+    loader_overrides: LoaderOverrides,
+    default_analytics_enabled: bool,
+    transport: AppServerTransport,
+) -> IoResult<()> {
+    let (transport_event_tx, mut transport_event_rx) =
+        mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
+    let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingEnvelope>(CHANNEL_CAPACITY);
 
-            while let Some(line) = lines.next_line().await.unwrap_or_default() {
-                match serde_json::from_str::<JSONRPCMessage>(&line) {
-                    Ok(msg) => {
-                        if incoming_tx.send(msg).await.is_err() {
-                            // Receiver gone – nothing left to do.
-                            break;
-                        }
-                    }
-                    Err(e) => error!("Failed to deserialize JSONRPCMessage: {e}"),
-                }
-            }
-
-            debug!("stdin reader finished (EOF)");
+    let mut stdio_handles = Vec::<JoinHandle<()>>::new();
+    let mut websocket_accept_handle = None;
+    match transport {
+        AppServerTransport::Stdio => {
+            start_stdio_connection(transport_event_tx.clone(), &mut stdio_handles).await?;
         }
-    });
+        AppServerTransport::WebSocket { bind_address } => {
+            websocket_accept_handle =
+                Some(start_websocket_acceptor(bind_address, transport_event_tx.clone()).await?);
+        }
+    }
+    let shutdown_when_no_connections = matches!(transport, AppServerTransport::Stdio);
 
     // Parse CLI overrides once and derive the base Config eagerly so later
     // components do not need to work with raw TOML values.
@@ -327,15 +428,14 @@ pub async fn run_main(
         }
     }
 
-    // Task: process incoming messages.
     let processor_handle = tokio::spawn({
-        let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
+        let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(outgoing_tx));
         let cli_overrides: Vec<(String, TomlValue)> = cli_kv_overrides.clone();
         let loader_overrides = loader_overrides_for_config_api;
         let mut processor = MessageProcessor::new(MessageProcessorArgs {
             outgoing: outgoing_message_sender,
             codex_linux_sandbox_exe,
-            config: std::sync::Arc::new(config),
+            config: Arc::new(config),
             cli_overrides,
             loader_overrides,
             cloud_requirements: cloud_requirements.clone(),
@@ -343,25 +443,71 @@ pub async fn run_main(
             config_warnings,
         });
         let mut thread_created_rx = processor.thread_created_receiver();
+        let mut connections = HashMap::<ConnectionId, ConnectionState>::new();
         async move {
             let mut listen_for_threads = true;
             loop {
                 tokio::select! {
-                    msg = incoming_rx.recv() => {
-                        let Some(msg) = msg else {
+                    event = transport_event_rx.recv() => {
+                        let Some(event) = event else {
                             break;
                         };
-                        match msg {
-                            JSONRPCMessage::Request(r) => processor.process_request(r).await,
-                            JSONRPCMessage::Response(r) => processor.process_response(r).await,
-                            JSONRPCMessage::Notification(n) => processor.process_notification(n).await,
-                            JSONRPCMessage::Error(e) => processor.process_error(e).await,
+                        match event {
+                            TransportEvent::ConnectionOpened { connection_id, writer } => {
+                                connections.insert(
+                                    connection_id,
+                                    ConnectionState {
+                                        writer,
+                                        session: ConnectionSessionState::default(),
+                                    },
+                                );
+                            }
+                            TransportEvent::ConnectionClosed { connection_id } => {
+                                connections.remove(&connection_id);
+                                if shutdown_when_no_connections && connections.is_empty() {
+                                    break;
+                                }
+                            }
+                            TransportEvent::IncomingMessage { connection_id, message } => {
+                                match message {
+                                    JSONRPCMessage::Request(request) => {
+                                        let Some(connection_state) = connections.get_mut(&connection_id) else {
+                                            warn!("dropping request from unknown connection: {:?}", connection_id);
+                                            continue;
+                                        };
+                                        processor
+                                            .process_request(
+                                                connection_id,
+                                                request,
+                                                &mut connection_state.session,
+                                            )
+                                            .await;
+                                    }
+                                    JSONRPCMessage::Response(response) => {
+                                        processor.process_response(response).await;
+                                    }
+                                    JSONRPCMessage::Notification(notification) => {
+                                        processor.process_notification(notification).await;
+                                    }
+                                    JSONRPCMessage::Error(err) => {
+                                        processor.process_error(err).await;
+                                    }
+                                }
+                            }
                         }
+                    }
+                    envelope = outgoing_rx.recv() => {
+                        let Some(envelope) = envelope else {
+                            break;
+                        };
+                        route_outgoing_envelope(&mut connections, envelope).await;
                     }
                     created = thread_created_rx.recv(), if listen_for_threads => {
                         match created {
                             Ok(thread_id) => {
-                                processor.try_attach_thread_listener(thread_id).await;
+                                if has_initialized_connections(&connections) {
+                                    processor.try_attach_thread_listener(thread_id).await;
+                                }
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                                 // TODO(jif) handle lag.
@@ -382,33 +528,318 @@ pub async fn run_main(
         }
     });
 
-    // Task: write outgoing messages to stdout.
-    let stdout_writer_handle = tokio::spawn(async move {
-        let mut stdout = io::stdout();
-        while let Some(outgoing_message) = outgoing_rx.recv().await {
-            let Ok(value) = serde_json::to_value(outgoing_message) else {
-                error!("Failed to convert OutgoingMessage to JSON value");
-                continue;
-            };
-            match serde_json::to_string(&value) {
-                Ok(mut json) => {
-                    json.push('\n');
-                    if let Err(e) = stdout.write_all(json.as_bytes()).await {
-                        error!("Failed to write to stdout: {e}");
+    drop(transport_event_tx);
+
+    let _ = processor_handle.await;
+
+    if let Some(handle) = websocket_accept_handle {
+        handle.abort();
+    }
+
+    for handle in stdio_handles {
+        let _ = handle.await;
+    }
+
+    Ok(())
+}
+
+async fn start_stdio_connection(
+    transport_event_tx: mpsc::Sender<TransportEvent>,
+    stdio_handles: &mut Vec<JoinHandle<()>>,
+) -> IoResult<()> {
+    let connection_id = ConnectionId(0);
+    let (writer_tx, mut writer_rx) = mpsc::channel::<OutgoingMessage>(CHANNEL_CAPACITY);
+    transport_event_tx
+        .send(TransportEvent::ConnectionOpened {
+            connection_id,
+            writer: writer_tx,
+        })
+        .await
+        .map_err(|_| std::io::Error::new(ErrorKind::BrokenPipe, "processor unavailable"))?;
+
+    let transport_event_tx_for_reader = transport_event_tx.clone();
+    stdio_handles.push(tokio::spawn(async move {
+        let stdin = io::stdin();
+        let reader = BufReader::new(stdin);
+        let mut lines = reader.lines();
+
+        loop {
+            match lines.next_line().await {
+                Ok(Some(line)) => {
+                    if !forward_incoming_message(
+                        &transport_event_tx_for_reader,
+                        connection_id,
+                        &line,
+                    )
+                    .await
+                    {
                         break;
                     }
                 }
-                Err(e) => error!("Failed to serialize JSONRPCMessage: {e}"),
+                Ok(None) => break,
+                Err(err) => {
+                    error!("Failed reading stdin: {err}");
+                    break;
+                }
             }
         }
 
-        info!("stdout writer exited (channel closed)");
-    });
+        let _ = transport_event_tx_for_reader
+            .send(TransportEvent::ConnectionClosed { connection_id })
+            .await;
+        debug!("stdin reader finished (EOF)");
+    }));
 
-    // Wait for all tasks to finish.  The typical exit path is the stdin reader
-    // hitting EOF which, once it drops `incoming_tx`, propagates shutdown to
-    // the processor and then to the stdout task.
-    let _ = tokio::join!(stdin_reader_handle, processor_handle, stdout_writer_handle);
+    stdio_handles.push(tokio::spawn(async move {
+        let mut stdout = io::stdout();
+        while let Some(outgoing_message) = writer_rx.recv().await {
+            let Some(mut json) = serialize_outgoing_message(outgoing_message) else {
+                continue;
+            };
+            json.push('\n');
+            if let Err(err) = stdout.write_all(json.as_bytes()).await {
+                error!("Failed to write to stdout: {err}");
+                break;
+            }
+        }
+        info!("stdout writer exited (channel closed)");
+    }));
 
     Ok(())
+}
+
+async fn start_websocket_acceptor(
+    bind_address: SocketAddr,
+    transport_event_tx: mpsc::Sender<TransportEvent>,
+) -> IoResult<JoinHandle<()>> {
+    let listener = TcpListener::bind(bind_address).await?;
+    let local_addr = listener.local_addr()?;
+    info!("app-server websocket listening on ws://{local_addr}");
+
+    let connection_counter = Arc::new(AtomicU64::new(1));
+    Ok(tokio::spawn(async move {
+        loop {
+            match listener.accept().await {
+                Ok((stream, _peer_addr)) => {
+                    let connection_id =
+                        ConnectionId(connection_counter.fetch_add(1, Ordering::Relaxed));
+                    let transport_event_tx_for_connection = transport_event_tx.clone();
+                    tokio::spawn(async move {
+                        run_websocket_connection(
+                            connection_id,
+                            stream,
+                            transport_event_tx_for_connection,
+                        )
+                        .await;
+                    });
+                }
+                Err(err) => {
+                    error!("failed to accept websocket connection: {err}");
+                }
+            }
+        }
+    }))
+}
+
+async fn run_websocket_connection(
+    connection_id: ConnectionId,
+    stream: TcpStream,
+    transport_event_tx: mpsc::Sender<TransportEvent>,
+) {
+    let websocket_stream = match accept_async(stream).await {
+        Ok(stream) => stream,
+        Err(err) => {
+            warn!("failed to complete websocket handshake: {err}");
+            return;
+        }
+    };
+
+    let (writer_tx, mut writer_rx) = mpsc::channel::<OutgoingMessage>(CHANNEL_CAPACITY);
+    if transport_event_tx
+        .send(TransportEvent::ConnectionOpened {
+            connection_id,
+            writer: writer_tx,
+        })
+        .await
+        .is_err()
+    {
+        return;
+    }
+
+    let (mut websocket_writer, mut websocket_reader) = websocket_stream.split();
+    loop {
+        tokio::select! {
+            outgoing_message = writer_rx.recv() => {
+                let Some(outgoing_message) = outgoing_message else {
+                    break;
+                };
+                let Some(json) = serialize_outgoing_message(outgoing_message) else {
+                    continue;
+                };
+                if websocket_writer.send(WebSocketMessage::Text(json.into())).await.is_err() {
+                    break;
+                }
+            }
+            incoming_message = websocket_reader.next() => {
+                match incoming_message {
+                    Some(Ok(WebSocketMessage::Text(text))) => {
+                        if !forward_incoming_message(&transport_event_tx, connection_id, &text).await {
+                            break;
+                        }
+                    }
+                    Some(Ok(WebSocketMessage::Ping(payload))) => {
+                        if websocket_writer.send(WebSocketMessage::Pong(payload)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(Ok(WebSocketMessage::Pong(_))) => {}
+                    Some(Ok(WebSocketMessage::Close(_))) | None => break,
+                    Some(Ok(WebSocketMessage::Binary(_))) => {
+                        warn!("dropping unsupported binary websocket message");
+                    }
+                    Some(Ok(WebSocketMessage::Frame(_))) => {}
+                    Some(Err(err)) => {
+                        warn!("websocket receive error: {err}");
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    let _ = transport_event_tx
+        .send(TransportEvent::ConnectionClosed { connection_id })
+        .await;
+}
+
+async fn forward_incoming_message(
+    transport_event_tx: &mpsc::Sender<TransportEvent>,
+    connection_id: ConnectionId,
+    payload: &str,
+) -> bool {
+    match serde_json::from_str::<JSONRPCMessage>(payload) {
+        Ok(message) => transport_event_tx
+            .send(TransportEvent::IncomingMessage {
+                connection_id,
+                message,
+            })
+            .await
+            .is_ok(),
+        Err(err) => {
+            error!("Failed to deserialize JSONRPCMessage: {err}");
+            true
+        }
+    }
+}
+
+fn serialize_outgoing_message(outgoing_message: OutgoingMessage) -> Option<String> {
+    let value = match serde_json::to_value(outgoing_message) {
+        Ok(value) => value,
+        Err(err) => {
+            error!("Failed to convert OutgoingMessage to JSON value: {err}");
+            return None;
+        }
+    };
+    match serde_json::to_string(&value) {
+        Ok(json) => Some(json),
+        Err(err) => {
+            error!("Failed to serialize JSONRPCMessage: {err}");
+            None
+        }
+    }
+}
+
+async fn route_outgoing_envelope(
+    connections: &mut HashMap<ConnectionId, ConnectionState>,
+    envelope: OutgoingEnvelope,
+) {
+    match envelope {
+        OutgoingEnvelope::ToConnection {
+            connection_id,
+            message,
+        } => {
+            let Some(connection_state) = connections.get(&connection_id) else {
+                warn!(
+                    "dropping message for disconnected connection: {:?}",
+                    connection_id
+                );
+                return;
+            };
+            if connection_state.writer.send(message).await.is_err() {
+                connections.remove(&connection_id);
+            }
+        }
+        OutgoingEnvelope::Broadcast { message } => {
+            let target_connections: Vec<ConnectionId> = connections
+                .iter()
+                .filter_map(|(connection_id, connection_state)| {
+                    if connection_state.session.initialized {
+                        Some(*connection_id)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            for connection_id in target_connections {
+                let Some(connection_state) = connections.get(&connection_id) else {
+                    continue;
+                };
+                if connection_state.writer.send(message.clone()).await.is_err() {
+                    connections.remove(&connection_id);
+                }
+            }
+        }
+    }
+}
+
+fn has_initialized_connections(connections: &HashMap<ConnectionId, ConnectionState>) -> bool {
+    connections
+        .values()
+        .any(|connection| connection.session.initialized)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn app_server_transport_parses_stdio_listen_url() {
+        let transport = AppServerTransport::from_listen_url(AppServerTransport::DEFAULT_LISTEN_URL)
+            .expect("stdio listen URL should parse");
+        assert_eq!(transport, AppServerTransport::Stdio);
+    }
+
+    #[test]
+    fn app_server_transport_parses_websocket_listen_url() {
+        let transport = AppServerTransport::from_listen_url("ws://127.0.0.1:1234")
+            .expect("websocket listen URL should parse");
+        assert_eq!(
+            transport,
+            AppServerTransport::WebSocket {
+                bind_address: "127.0.0.1:1234".parse().expect("valid socket address"),
+            }
+        );
+    }
+
+    #[test]
+    fn app_server_transport_rejects_invalid_websocket_listen_url() {
+        let err = AppServerTransport::from_listen_url("ws://localhost:1234")
+            .expect_err("hostname bind address should be rejected");
+        assert_eq!(
+            err.to_string(),
+            "invalid websocket --listen URL `ws://localhost:1234`; expected `ws://IP:PORT`"
+        );
+    }
+
+    #[test]
+    fn app_server_transport_rejects_unsupported_listen_url() {
+        let err = AppServerTransport::from_listen_url("http://127.0.0.1:1234")
+            .expect_err("unsupported scheme should fail");
+        assert_eq!(
+            err.to_string(),
+            "unsupported --listen URL `http://127.0.0.1:1234`; expected `stdio://` or `ws://IP:PORT`"
+        );
+    }
 }
