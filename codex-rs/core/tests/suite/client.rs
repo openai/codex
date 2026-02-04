@@ -36,9 +36,8 @@ use codex_protocol::models::WebSearchAction;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
-use core_test_support::responses::ev_completed;
+use core_test_support::load_sse_fixture_with_id;
 use core_test_support::responses::ev_completed_with_tokens;
-use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
@@ -64,6 +63,11 @@ use wiremock::matchers::header_regex;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 use wiremock::matchers::query_param;
+
+/// Build minimal SSE stream with completed marker using the JSON fixture.
+fn sse_completed(id: &str) -> String {
+    load_sse_fixture_with_id("../fixtures/completed_template.json", id)
+}
 
 #[expect(clippy::unwrap_used)]
 fn assert_message_role(request_body: &serde_json::Value, role: &str) {
@@ -255,11 +259,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
 
     // Mock server that will receive the resumed request
     let server = MockServer::start().await;
-    let resp_mock = mount_sse_once(
-        &server,
-        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
-    )
-    .await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
 
     // Configure Codex to resume from our file
     let codex_home = Arc::new(TempDir::new().unwrap());
@@ -377,11 +377,7 @@ async fn includes_conversation_id_and_model_headers_in_request() {
     // Mock server
     let server = MockServer::start().await;
 
-    let resp_mock = mount_sse_once(
-        &server,
-        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
-    )
-    .await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
 
     let mut builder = test_codex().with_auth(CodexAuth::from_api_key("Test API Key"));
     let test = builder
@@ -422,11 +418,7 @@ async fn includes_base_instructions_override_in_request() {
     skip_if_no_network!();
     // Mock server
     let server = MockServer::start().await;
-    let resp_mock = mount_sse_once(
-        &server,
-        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
-    )
-    .await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
 
     let mut builder = test_codex()
         .with_auth(CodexAuth::from_api_key("Test API Key"))
@@ -470,11 +462,7 @@ async fn chatgpt_auth_sends_correct_request() {
     // Mock server
     let server = MockServer::start().await;
 
-    let resp_mock = mount_sse_once(
-        &server,
-        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
-    )
-    .await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
 
     let mut model_provider = built_in_model_providers()["openai"].clone();
     model_provider.base_url = Some(format!("{}/api/codex", server.uri()));
@@ -536,10 +524,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
 
     let first = ResponseTemplate::new(200)
         .insert_header("content-type", "text/event-stream")
-        .set_body_raw(
-            sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
-            "text/event-stream",
-        );
+        .set_body_raw(sse_completed("resp1"), "text/event-stream");
 
     // Expect API key header, no ChatGPT account header required.
     Mock::given(method("POST"))
@@ -605,11 +590,7 @@ async fn includes_user_instructions_message_in_request() {
     skip_if_no_network!();
     let server = MockServer::start().await;
 
-    let resp_mock = mount_sse_once(
-        &server,
-        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
-    )
-    .await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
 
     let mut builder = test_codex()
         .with_auth(CodexAuth::from_api_key("Test API Key"))
@@ -671,11 +652,7 @@ async fn skills_append_to_instructions() {
     skip_if_no_network!();
     let server = MockServer::start().await;
 
-    let resp_mock = mount_sse_once(
-        &server,
-        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
-    )
-    .await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
 
     let codex_home = Arc::new(TempDir::new().unwrap());
     let skill_dir = codex_home.path().join("skills/demo");
@@ -743,11 +720,7 @@ async fn includes_configured_effort_in_request() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
-    let resp_mock = mount_sse_once(
-        &server,
-        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
-    )
-    .await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
     let TestCodex { codex, .. } = test_codex()
         .with_model("gpt-5.1-codex")
         .with_config(|config| {
@@ -788,11 +761,7 @@ async fn includes_no_effort_in_request() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
-    let resp_mock = mount_sse_once(
-        &server,
-        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
-    )
-    .await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
     let TestCodex { codex, .. } = test_codex()
         .with_model("gpt-5.1-codex")
         .build(&server)
@@ -831,11 +800,7 @@ async fn includes_default_reasoning_effort_in_request_when_defined_by_model_info
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
-    let resp_mock = mount_sse_once(
-        &server,
-        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
-    )
-    .await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
     let TestCodex { codex, .. } = test_codex().with_model("gpt-5.1").build(&server).await?;
 
     codex
@@ -870,11 +835,7 @@ async fn user_turn_collaboration_mode_overrides_model_and_effort() -> anyhow::Re
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
-    let resp_mock = mount_sse_once(
-        &server,
-        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
-    )
-    .await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
     let TestCodex {
         codex,
         config,
@@ -932,11 +893,7 @@ async fn configured_reasoning_summary_is_sent() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
-    let resp_mock = mount_sse_once(
-        &server,
-        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
-    )
-    .await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.model_reasoning_summary = ReasoningSummary::Concise;
@@ -976,11 +933,7 @@ async fn reasoning_summary_is_omitted_when_disabled() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
-    let resp_mock = mount_sse_once(
-        &server,
-        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
-    )
-    .await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.model_reasoning_summary = ReasoningSummary::None;
@@ -1019,11 +972,7 @@ async fn includes_default_verbosity_in_request() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
-    let resp_mock = mount_sse_once(
-        &server,
-        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
-    )
-    .await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
     let TestCodex { codex, .. } = test_codex().with_model("gpt-5.1").build(&server).await?;
 
     codex
@@ -1058,11 +1007,7 @@ async fn configured_verbosity_not_sent_for_models_without_support() -> anyhow::R
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
-    let resp_mock = mount_sse_once(
-        &server,
-        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
-    )
-    .await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
     let TestCodex { codex, .. } = test_codex()
         .with_model("gpt-5.1-codex")
         .with_config(|config| {
@@ -1102,11 +1047,7 @@ async fn configured_verbosity_is_sent() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
-    let resp_mock = mount_sse_once(
-        &server,
-        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
-    )
-    .await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
     let TestCodex { codex, .. } = test_codex()
         .with_model("gpt-5.1")
         .with_config(|config| {
@@ -1147,11 +1088,7 @@ async fn includes_developer_instructions_message_in_request() {
     skip_if_no_network!();
     let server = MockServer::start().await;
 
-    let resp_mock = mount_sse_once(
-        &server,
-        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
-    )
-    .await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
     let mut builder = test_codex()
         .with_auth(CodexAuth::from_api_key("Test API Key"))
         .with_config(|config| {
@@ -1633,10 +1570,7 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
     mount_sse_once_match(
         &server,
         body_string_contains("seed turn"),
-        sse(vec![
-            ev_response_created("resp_seed"),
-            ev_completed("resp_seed"),
-        ]),
+        sse_completed("resp_seed"),
     )
     .await;
 
@@ -1722,10 +1656,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
     // First request – must NOT include `previous_response_id`.
     let first = ResponseTemplate::new(200)
         .insert_header("content-type", "text/event-stream")
-        .set_body_raw(
-            sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
-            "text/event-stream",
-        );
+        .set_body_raw(sse_completed("resp1"), "text/event-stream");
 
     // Expect POST to /openai/responses with api-version query param
     Mock::given(method("POST"))
@@ -1806,10 +1737,7 @@ async fn env_var_overrides_loaded_auth() {
     // First request – must NOT include `previous_response_id`.
     let first = ResponseTemplate::new(200)
         .insert_header("content-type", "text/event-stream")
-        .set_body_raw(
-            sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
-            "text/event-stream",
-        );
+        .set_body_raw(sse_completed("resp1"), "text/event-stream");
 
     // Expect POST to /openai/responses with api-version query param
     Mock::given(method("POST"))

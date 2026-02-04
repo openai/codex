@@ -100,7 +100,8 @@ pub(crate) async fn handle_output_item_done(
         Err(FunctionCallError::MissingLocalShellCallId) => {
             let msg = "LocalShellCall without call_id or id";
             ctx.turn_context
-                .otel_manager
+                .client
+                .get_otel_manager()
                 .log_tool_failed("local_shell", msg);
             tracing::error!(msg);
 
