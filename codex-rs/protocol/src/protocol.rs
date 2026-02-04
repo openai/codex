@@ -1880,6 +1880,10 @@ pub struct ExecCommandBeginEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub interaction_input: Option<String>,
+    /// LLM-provided description of what this command does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -1919,6 +1923,10 @@ pub struct ExecCommandEndEvent {
     pub duration: Duration,
     /// Formatted output from the command, as seen by the model.
     pub formatted_output: String,
+    /// LLM-provided description of what this command does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

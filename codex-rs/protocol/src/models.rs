@@ -744,6 +744,10 @@ pub struct ShellToolCallParams {
     pub prefix_rule: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub justification: Option<String>,
+    /// LLM-provided description of what this command does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description: Option<String>,
 }
 
 /// If the `name` of a `ResponseItem::FunctionCall` is `shell_command`, the
@@ -767,6 +771,10 @@ pub struct ShellCommandToolCallParams {
     pub prefix_rule: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub justification: Option<String>,
+    /// LLM-provided description of what this command does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description: Option<String>,
 }
 
 /// Responses API compatible content items that can be returned by a tool call.

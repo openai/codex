@@ -244,6 +244,15 @@ fn create_exec_command_tool(include_prefix_rule: bool) -> ToolSpec {
                 ),
             },
         ),
+        (
+            "description".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "A brief description of what this command does so the user can follow your logic of execution. \
+                     Important that it's clear, short, and communicates both action and intent where relevant.".to_string(),
+                ),
+            },
+        ),
     ]);
     properties.extend(create_approval_parameters(include_prefix_rule));
 
@@ -329,6 +338,15 @@ fn create_shell_tool(include_prefix_rule: bool) -> ToolSpec {
                 description: Some("The timeout for the command in milliseconds".to_string()),
             },
         ),
+        (
+            "description".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "A brief description of what this command does so the user can follow your logic of execution. \
+                     Important that it's clear, short, and communicates both action and intent where relevant.".to_string(),
+                ),
+            },
+        ),
     ]);
     properties.extend(create_approval_parameters(include_prefix_rule));
 
@@ -392,12 +410,21 @@ fn create_shell_command_tool(include_prefix_rule: bool) -> ToolSpec {
                 description: Some("The timeout for the command in milliseconds".to_string()),
             },
         ),
+        (
+            "description".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "A brief description of what this command does so the user can follow your logic of execution. \
+                     Important that it's clear, short, and communicates both action and intent where relevant.".to_string(),
+                ),
+            },
+        ),
     ]);
     properties.extend(create_approval_parameters(include_prefix_rule));
 
     let description = if cfg!(windows) {
         r#"Runs a Powershell command (Windows) and returns its output.
-        
+
 Examples of valid command strings:
 
 - ls -a (show hidden): "Get-ChildItem -Force"

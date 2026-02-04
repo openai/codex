@@ -120,6 +120,7 @@ impl ToolRouter {
                             sandbox_permissions: Some(SandboxPermissions::UseDefault),
                             prefix_rule: None,
                             justification: None,
+                            description: None,
                         };
                         Ok(Some(ToolCall {
                             tool_name: "local_shell".to_string(),

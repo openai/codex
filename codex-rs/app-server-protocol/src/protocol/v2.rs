@@ -2089,6 +2089,8 @@ pub enum ThreadItem {
         id: String,
         /// The command to be executed.
         command: String,
+        /// LLM-provided description of what this command does.
+        description: Option<String>,
         /// The command's working directory.
         cwd: PathBuf,
         /// Identifier for the underlying PTY process (when available).

@@ -98,6 +98,7 @@ impl SessionTask for UserShellCommandTask {
                     parsed_cmd: parsed_cmd.clone(),
                     source: ExecCommandSource::UserShell,
                     interaction_input: None,
+                    description: None,
                 }),
             )
             .await;
@@ -164,6 +165,7 @@ impl SessionTask for UserShellCommandTask {
                             exit_code: -1,
                             duration: Duration::ZERO,
                             formatted_output: aborted_message,
+                            description: None,
                         }),
                     )
                     .await;
@@ -190,6 +192,7 @@ impl SessionTask for UserShellCommandTask {
                                 &output,
                                 turn_context.truncation_policy,
                             ),
+                            description: None,
                         }),
                     )
                     .await;
@@ -235,6 +238,7 @@ impl SessionTask for UserShellCommandTask {
                                 &exec_output,
                                 turn_context.truncation_policy,
                             ),
+                            description: None,
                         }),
                     )
                     .await;
