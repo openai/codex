@@ -75,7 +75,7 @@ impl SessionTask for UserShellCommandTask {
         // Execute the user's script under their default shell when known; this
         // allows commands that use shell features (pipes, &&, redirects, etc.).
         // We do not source rc files or otherwise reformat the script.
-        let use_login_shell = true;
+        let use_login_shell = turn_context.shell_environment_policy.use_profile;
         let session_shell = session.user_shell();
         let display_command = session_shell.derive_exec_args(&self.command, use_login_shell);
         let exec_command =

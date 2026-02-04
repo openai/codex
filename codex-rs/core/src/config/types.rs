@@ -640,7 +640,7 @@ impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
             .into_iter()
             .map(|s| EnvironmentVariablePattern::new_case_insensitive(&s))
             .collect();
-        let use_profile = toml.experimental_use_profile.unwrap_or(false);
+        let use_profile = toml.experimental_use_profile.unwrap_or(true);
 
         Self {
             inherit,
@@ -661,7 +661,7 @@ impl Default for ShellEnvironmentPolicy {
             exclude: Vec::new(),
             r#set: HashMap::new(),
             include_only: Vec::new(),
-            use_profile: false,
+            use_profile: true,
         }
     }
 }

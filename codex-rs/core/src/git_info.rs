@@ -732,6 +732,18 @@ mod tests {
     #[tokio::test]
     async fn test_recent_commits_non_git_directory_returns_empty() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        // If the temp dir is created inside an existing git repo (e.g. workspace), skip.
+        if std::process::Command::new("git")
+            .arg("-C")
+            .arg(temp_dir.path())
+            .arg("rev-parse")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            return;
+        }
+
         let entries = recent_commits(temp_dir.path(), 10).await;
         assert!(entries.is_empty(), "expected no commits outside a git repo");
     }
@@ -842,6 +854,18 @@ mod tests {
     #[tokio::test]
     async fn test_collect_git_info_non_git_directory() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        // If the temp dir is created inside an existing git repo (e.g. workspace), skip.
+        if std::process::Command::new("git")
+            .arg("-C")
+            .arg(temp_dir.path())
+            .arg("rev-parse")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            return;
+        }
+
         let result = collect_git_info(temp_dir.path()).await;
         assert!(result.is_none());
     }
@@ -1058,6 +1082,18 @@ mod tests {
     #[test]
     fn resolve_root_git_project_for_trust_returns_none_outside_repo() {
         let tmp = TempDir::new().expect("tempdir");
+        // If the temp dir is created inside an existing git repo (e.g. workspace), skip.
+        if std::process::Command::new("git")
+            .arg("-C")
+            .arg(tmp.path())
+            .arg("rev-parse")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            return;
+        }
+
         assert!(resolve_root_git_project_for_trust(tmp.path()).is_none());
     }
 

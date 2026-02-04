@@ -478,7 +478,48 @@ mod tests {
 
     fn normalize_diff_for_test(input: &str, root: &Path) -> String {
         let root_str = root.display().to_string().replace('\\', "/");
-        let replaced = input.replace(&root_str, "<TMP>");
+        let mut replaced = input.replace(&root_str, "<TMP>");
+
+        // If absolute replacement didn't work (likely due to git root relativization),
+        // try to match a suffix of the root path.
+        if replaced == input {
+            let components: Vec<_> = root.components().collect();
+            for i in 1..components.len() {
+                let suffix_path: std::path::PathBuf = components[i..].iter().collect();
+                let suffix_str = suffix_path.display().to_string().replace('\\', "/");
+                // Ensure we don't match overly short segments/slashes
+                if suffix_str.len() > 3 && input.contains(&suffix_str) {
+                    replaced = input.replace(&suffix_str, "<TMP>");
+                    break;
+                }
+            }
+        }
+
+        // If still not replaced, try matching the temp dir basename (e.g., .tmpXXXXXX)
+        // This handles the case where git relativized paths from a parent git root
+        if replaced == input {
+            if let Some(basename) = root.file_name().and_then(|s| s.to_str()) {
+                // Look for patterns like "basename/filename" and replace with "<TMP>/filename"
+                let pattern = format!("{}/", basename);
+                if input.contains(&pattern) {
+                    // Find all occurrences and replace, but keep track of what comes before
+                    let mut result = String::new();
+                    let mut remaining = input;
+                    while let Some(pos) = remaining.find(&pattern) {
+                        // Find where this path segment starts (after a space or at line start)
+                        let segment_start = remaining[..pos].rfind(|c: char| c == ' ' || c == '\n' || c == 'a' || c == 'b')
+                            .map(|p| p + 1)
+                            .unwrap_or(0);
+                        result.push_str(&remaining[..segment_start]);
+                        result.push_str("<TMP>/");
+                        remaining = &remaining[pos + pattern.len()..];
+                    }
+                    result.push_str(remaining);
+                    replaced = result;
+                }
+            }
+        }
+
         // Split into blocks on lines starting with "diff --git ", sort blocks for determinism, and rejoin
         let mut blocks: Vec<String> = Vec::new();
         let mut current = String::new();

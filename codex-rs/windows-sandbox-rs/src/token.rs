@@ -42,6 +42,8 @@ const LUA_TOKEN: u32 = 0x04;
 const WRITE_RESTRICTED: u32 = 0x08;
 const GENERIC_ALL: u32 = 0x1000_0000;
 const WIN_WORLD_SID: i32 = 1;
+const WIN_AUTHENTICATED_USER_SID: i32 = 17;
+const WIN_BUILTIN_USERS_SID: i32 = 26;
 const SE_GROUP_LOGON_ID: u32 = 0xC0000000;
 
 #[repr(C)]
@@ -106,16 +108,23 @@ unsafe fn set_default_dacl(h_token: HANDLE, sids: &[*mut c_void]) -> Result<()> 
 }
 
 pub unsafe fn world_sid() -> Result<Vec<u8>> {
+    well_known_sid(WIN_WORLD_SID)
+}
+
+pub unsafe fn authenticated_users_sid() -> Result<Vec<u8>> {
+    well_known_sid(WIN_AUTHENTICATED_USER_SID)
+}
+
+pub unsafe fn builtin_users_sid() -> Result<Vec<u8>> {
+    well_known_sid(WIN_BUILTIN_USERS_SID)
+}
+
+unsafe fn well_known_sid(id: i32) -> Result<Vec<u8>> {
     let mut size: u32 = 0;
-    CreateWellKnownSid(
-        WIN_WORLD_SID,
-        std::ptr::null_mut(),
-        std::ptr::null_mut(),
-        &mut size,
-    );
+    CreateWellKnownSid(id, std::ptr::null_mut(), std::ptr::null_mut(), &mut size);
     let mut buf: Vec<u8> = vec![0u8; size as usize];
     let ok = CreateWellKnownSid(
-        WIN_WORLD_SID,
+        id,
         std::ptr::null_mut(),
         buf.as_mut_ptr() as *mut c_void,
         &mut size,
@@ -165,6 +174,36 @@ pub unsafe fn get_current_token_for_restriction() -> Result<HANDLE> {
         return Err(anyhow!("OpenProcessToken failed: {}", GetLastError()));
     }
     Ok(h)
+}
+
+pub unsafe fn get_token_user_sid_bytes(h_token: HANDLE) -> Result<Vec<u8>> {
+    let mut needed: u32 = 0;
+    GetTokenInformation(h_token, windows_sys::Win32::Security::TokenUser, std::ptr::null_mut(), 0, &mut needed);
+    if needed == 0 {
+        return Err(anyhow!("GetTokenInformation(TokenUser) failed: 0 needed"));
+    }
+    let mut buf: Vec<u8> = vec![0u8; needed as usize];
+    let ok = GetTokenInformation(
+        h_token,
+        windows_sys::Win32::Security::TokenUser,
+        buf.as_mut_ptr() as *mut c_void,
+        needed,
+        &mut needed,
+    );
+    if ok == 0 {
+        return Err(anyhow!("GetTokenInformation(TokenUser) failed: {}", GetLastError()));
+    }
+    let user_info = buf.as_ptr() as *const windows_sys::Win32::Security::TOKEN_USER;
+    let sid = (*user_info).User.Sid;
+    let sid_len = GetLengthSid(sid);
+    if sid_len == 0 {
+        return Err(anyhow!("GetLengthSid failed for User SID"));
+    }
+    let mut out = vec![0u8; sid_len as usize];
+    if CopySid(sid_len, out.as_mut_ptr() as *mut c_void, sid) == 0 {
+        return Err(anyhow!("CopySid failed for User SID"));
+    }
+    Ok(out)
 }
 
 pub unsafe fn get_logon_sid_bytes(h_token: HANDLE) -> Result<Vec<u8>> {
@@ -288,7 +327,16 @@ pub unsafe fn create_readonly_token_with_cap(
     psid_capability: *mut c_void,
 ) -> Result<(HANDLE, *mut c_void)> {
     let base = get_current_token_for_restriction()?;
-    let res = create_readonly_token_with_cap_from(base, psid_capability);
+    let res = create_readonly_token_with_caps_from_base(&[psid_capability]);
+    CloseHandle(base);
+    res.map(|h| (h, psid_capability))
+}
+
+pub unsafe fn create_readonly_token_with_caps_from_base(
+    psid_capabilities: &[*mut c_void],
+) -> Result<HANDLE> {
+    let base = get_current_token_for_restriction()?;
+    let res = create_token_with_caps_from(base, psid_capabilities);
     CloseHandle(base);
     res
 }
@@ -338,19 +386,26 @@ unsafe fn create_token_with_caps_from(
     let psid_logon = logon_sid_bytes.as_mut_ptr() as *mut c_void;
     let mut everyone = world_sid()?;
     let psid_everyone = everyone.as_mut_ptr() as *mut c_void;
+    let mut authenticated_users = authenticated_users_sid()?;
+    let psid_authenticated_users = authenticated_users.as_mut_ptr() as *mut c_void;
+    let mut builtin_users = builtin_users_sid()?;
+    let psid_builtin_users = builtin_users.as_mut_ptr() as *mut c_void;
+    let mut user_sid_bytes = get_token_user_sid_bytes(base_token)?;
+    let psid_user = user_sid_bytes.as_mut_ptr() as *mut c_void;
 
-    // Exact order: Capabilities..., Logon, Everyone
+    // Restricted list includes: Capabilities..., Logon, Everyone, Authenticated Users, Builtin Users, Token User
     let mut entries: Vec<SID_AND_ATTRIBUTES> =
-        vec![std::mem::zeroed(); psid_capabilities.len() + 2];
+        vec![std::mem::zeroed(); psid_capabilities.len() + 5];
     for (i, psid) in psid_capabilities.iter().enumerate() {
         entries[i].Sid = *psid;
         entries[i].Attributes = 0;
     }
-    let logon_idx = psid_capabilities.len();
-    entries[logon_idx].Sid = psid_logon;
-    entries[logon_idx].Attributes = 0;
-    entries[logon_idx + 1].Sid = psid_everyone;
-    entries[logon_idx + 1].Attributes = 0;
+    let offset = psid_capabilities.len();
+    entries[offset].Sid = psid_logon;
+    entries[offset + 1].Sid = psid_everyone;
+    entries[offset + 2].Sid = psid_authenticated_users;
+    entries[offset + 3].Sid = psid_builtin_users;
+    entries[offset + 4].Sid = psid_user;
 
     let mut new_token: HANDLE = 0;
     let flags = DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED;
@@ -369,12 +424,50 @@ unsafe fn create_token_with_caps_from(
         return Err(anyhow!("CreateRestrictedToken failed: {}", GetLastError()));
     }
 
-    let mut dacl_sids: Vec<*mut c_void> = Vec::with_capacity(psid_capabilities.len() + 2);
+    let mut dacl_sids: Vec<*mut c_void> = Vec::with_capacity(psid_capabilities.len() + 5);
     dacl_sids.push(psid_logon);
     dacl_sids.push(psid_everyone);
+    dacl_sids.push(psid_authenticated_users);
+    dacl_sids.push(psid_builtin_users);
+    dacl_sids.push(psid_user);
     dacl_sids.extend_from_slice(psid_capabilities);
     set_default_dacl(new_token, &dacl_sids)?;
 
     enable_single_privilege(new_token, "SeChangeNotifyPrivilege")?;
     Ok(new_token)
+}
+
+pub unsafe fn resolve_sid(name: &str) -> Result<Vec<u8>> {
+    use windows_sys::Win32::Security::LookupAccountNameW;
+    use windows_sys::Win32::Security::SID_NAME_USE;
+    use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
+
+    let name_w = to_wide(std::ffi::OsStr::new(name));
+    let mut sid_buffer = vec![0u8; 68];
+    let mut sid_len: u32 = sid_buffer.len() as u32;
+    let mut domain: Vec<u16> = Vec::new();
+    let mut domain_len: u32 = 0;
+    let mut use_type: SID_NAME_USE = 0;
+    loop {
+        let ok = LookupAccountNameW(
+            std::ptr::null(),
+            name_w.as_ptr(),
+            sid_buffer.as_mut_ptr() as *mut c_void,
+            &mut sid_len,
+            domain.as_mut_ptr() as *mut u16,
+            &mut domain_len,
+            &mut use_type,
+        );
+        if ok != 0 {
+            sid_buffer.truncate(sid_len as usize);
+            return Ok(sid_buffer);
+        }
+        let err = GetLastError();
+        if err == ERROR_INSUFFICIENT_BUFFER {
+            sid_buffer.resize(sid_len as usize, 0);
+            domain.resize(domain_len as usize, 0);
+            continue;
+        }
+        return Err(anyhow!("LookupAccountNameW failed for {name}: {err}"));
+    }
 }

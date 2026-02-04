@@ -61,9 +61,8 @@ impl ShellHandler {
 }
 
 impl ShellCommandHandler {
-    fn base_command(shell: &Shell, command: &str, login: Option<bool>) -> Vec<String> {
-        let use_login_shell = login.unwrap_or(true);
-        shell.derive_exec_args(command, use_login_shell)
+    fn base_command(shell: &Shell, command: &str, login: bool) -> Vec<String> {
+        shell.derive_exec_args(command, login)
     }
 
     fn to_exec_params(
@@ -73,7 +72,10 @@ impl ShellCommandHandler {
         thread_id: ThreadId,
     ) -> ExecParams {
         let shell = session.user_shell();
-        let command = Self::base_command(shell.as_ref(), &params.command, params.login);
+        let use_login_shell = params
+            .login
+            .unwrap_or(turn_context.shell_environment_policy.use_profile);
+        let command = Self::base_command(shell.as_ref(), &params.command, use_login_shell);
 
         ExecParams {
             command,
@@ -181,7 +183,10 @@ impl ToolHandler for ShellCommandHandler {
         serde_json::from_str::<ShellCommandToolCallParams>(arguments)
             .map(|params| {
                 let shell = invocation.session.user_shell();
-                let command = Self::base_command(shell.as_ref(), &params.command, params.login);
+                let use_login_shell = params
+                    .login
+                    .unwrap_or(invocation.turn.shell_environment_policy.use_profile);
+                let command = Self::base_command(shell.as_ref(), &params.command, use_login_shell);
                 !is_known_safe_command(&command)
             })
             .unwrap_or(true)
@@ -460,14 +465,14 @@ mod tests {
         };
 
         let login_command =
-            ShellCommandHandler::base_command(&shell, "echo login shell", Some(true));
+            ShellCommandHandler::base_command(&shell, "echo login shell", true);
         assert_eq!(
             login_command,
             shell.derive_exec_args("echo login shell", true)
         );
 
         let non_login_command =
-            ShellCommandHandler::base_command(&shell, "echo non login shell", Some(false));
+            ShellCommandHandler::base_command(&shell, "echo non login shell", false);
         assert_eq!(
             non_login_command,
             shell.derive_exec_args("echo non login shell", false)
