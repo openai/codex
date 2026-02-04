@@ -620,7 +620,9 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use crate::bottom_pane::popup_consts::standard_popup_hint_line;
+    use crossterm::event::KeyCode;
     use insta::assert_snapshot;
+    use pretty_assertions::assert_eq;
     use ratatui::layout::Rect;
     use tokio::sync::mpsc::unbounded_channel;
 
@@ -680,6 +682,15 @@ mod tests {
             })
             .collect();
         lines.join("\n")
+    }
+
+    fn description_col(rendered: &str, item_marker: &str, description: &str) -> usize {
+        let line = rendered
+            .lines()
+            .find(|line| line.contains(item_marker) && line.contains(description))
+            .expect("expected rendered line to contain row marker and description");
+        line.find(description)
+            .expect("expected rendered line to contain description")
     }
 
     #[test]
@@ -954,6 +965,54 @@ mod tests {
         assert_snapshot!(
             "list_selection_narrow_width_preserves_rows",
             render_lines_with_width(&view, 24)
+        );
+    }
+
+    #[test]
+    fn stable_desc_column_does_not_shift_when_scrolling() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut items: Vec<SelectionItem> = (1..=8)
+            .map(|idx| SelectionItem {
+                name: format!("Item {idx}"),
+                description: Some(format!("desc {idx}")),
+                dismiss_on_select: true,
+                ..Default::default()
+            })
+            .collect();
+        items.push(SelectionItem {
+            name: "Item 9 with an intentionally much longer name".to_string(),
+            description: Some("desc 9".to_string()),
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+
+        let mut view = ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Debug".to_string()),
+                items,
+                stable_desc_col: true,
+                ..Default::default()
+            },
+            tx,
+        );
+
+        let before_scroll = render_lines_with_width(&view, 96);
+        for _ in 0..8 {
+            view.handle_key_event(KeyEvent::from(KeyCode::Down));
+        }
+        let after_scroll = render_lines_with_width(&view, 96);
+
+        assert!(
+            after_scroll.contains("9. Item 9 with an intentionally much longer name"),
+            "expected the scrolled view to include the longer row:\n{after_scroll}"
+        );
+
+        let before_col = description_col(&before_scroll, "8. Item 8", "desc 8");
+        let after_col = description_col(&after_scroll, "8. Item 8", "desc 8");
+        assert_eq!(
+            before_col, after_col,
+            "description column changed across scroll:\nbefore:\n{before_scroll}\nafter:\n{after_scroll}"
         );
     }
 }
