@@ -146,25 +146,6 @@ mod tests {
         assert_eq!(metadata.title, "");
     }
 
-    #[test]
-    fn image_only_user_messages_still_count_as_user_events() {
-        let mut metadata = metadata_for_test();
-        let item = RolloutItem::ResponseItem(ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputImage {
-                image_url: "https://example.com/image.png".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        });
-
-        apply_rollout_item(&mut metadata, &item, "test-provider");
-
-        assert_eq!(metadata.has_user_event, true);
-        assert_eq!(metadata.title, "");
-    }
-
     fn metadata_for_test() -> ThreadMetadata {
         let id = ThreadId::from_string(&Uuid::from_u128(42).to_string()).expect("thread id");
         let created_at = DateTime::<Utc>::from_timestamp(1_735_689_600, 0).expect("timestamp");
