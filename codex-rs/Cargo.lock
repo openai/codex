@@ -1564,6 +1564,7 @@ dependencies = [
  "libc",
  "maplit",
  "multimap",
+ "notify",
  "once_cell",
  "openssl-sys",
  "opentelemetry_sdk",

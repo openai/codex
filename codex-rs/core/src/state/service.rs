@@ -5,6 +5,7 @@ use crate::RolloutRecorder;
 use crate::agent::AgentControl;
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::exec_policy::ExecPolicyManager;
+use crate::file_watcher::FileWatcher;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::models_manager::manager::ModelsManager;
 use crate::skills::SkillsManager;
@@ -33,6 +34,7 @@ pub(crate) struct SessionServices {
     pub(crate) otel_manager: OtelManager,
     pub(crate) tool_approvals: Mutex<ApprovalStore>,
     pub(crate) skills_manager: Arc<SkillsManager>,
+    pub(crate) file_watcher: Arc<FileWatcher>,
     pub(crate) agent_control: AgentControl,
     pub(crate) state_db: Option<StateDbHandle>,
     pub(crate) transport_manager: TransportManager,

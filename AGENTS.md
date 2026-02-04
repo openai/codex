@@ -13,7 +13,6 @@ In the codex-rs folder where the rust code lives:
 - Use method references over closures when possible per https://rust-lang.github.io/rust-clippy/master/index.html#redundant_closure_for_method_calls
 - When possible, make `match` statements exhaustive and avoid wildcard arms.
 - When writing tests, prefer comparing the equality of entire objects over fields one by one.
-- When making a change that adds or changes an API, ensure that the documentation in the `docs/` folder is up to date if applicable.
 - If you change `ConfigToml` or nested config types, run `just write-config-schema` to update `codex-rs/core/config.schema.json`.
 
 Run `just fmt` (in `codex-rs` directory) automatically after you have finished making Rust code changes; do not ask for approval to run it. Additionally, run the tests:
