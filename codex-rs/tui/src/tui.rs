@@ -472,12 +472,22 @@ impl Tui {
             let mut area = terminal.viewport_area;
             area.height = height.min(size.height);
             area.width = size.width;
+            area = reserve_history_row_if_needed(
+                area,
+                size.height,
+                !self.pending_history_lines.is_empty(),
+            );
             // If the viewport has expanded, scroll everything else up to make room.
             if area.bottom() > size.height {
                 terminal
                     .backend_mut()
                     .scroll_region_up(0..area.top(), area.bottom() - size.height)?;
                 area.y = size.height - area.height;
+                area = reserve_history_row_if_needed(
+                    area,
+                    size.height,
+                    !self.pending_history_lines.is_empty(),
+                );
             }
             if area != terminal.viewport_area {
                 // TODO(nornagon): probably this could be collapsed with the clear + set_viewport_area above.
@@ -532,5 +542,44 @@ impl Tui {
             }
         }
         Ok(None)
+    }
+}
+
+fn reserve_history_row_if_needed(
+    mut area: Rect,
+    screen_height: u16,
+    has_pending_history_lines: bool,
+) -> Rect {
+    // When inserting history lines, we need at least one row above the viewport so
+    // insert_history_lines can set a non-empty scroll region and avoid scrolling the
+    // viewport itself. This prevents visible corruption in bottom-pane popups when the
+    // viewport would otherwise occupy the full screen.
+    if has_pending_history_lines && screen_height > 1 && area.y == 0 && area.height == screen_height
+    {
+        area.y = 1;
+        area.height = screen_height.saturating_sub(1);
+    }
+    area
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reserve_history_row_if_needed;
+    use pretty_assertions::assert_eq;
+    use ratatui::layout::Rect;
+
+    #[test]
+    fn reserves_one_row_when_history_pending_and_viewport_is_fullscreen() {
+        let area = Rect::new(0, 0, 80, 24);
+        let adjusted = reserve_history_row_if_needed(area, 24, true);
+        assert_eq!(adjusted.y, 1);
+        assert_eq!(adjusted.height, 23);
+    }
+
+    #[test]
+    fn does_not_adjust_when_no_history_pending() {
+        let area = Rect::new(0, 0, 80, 24);
+        let adjusted = reserve_history_row_if_needed(area, 24, false);
+        assert_eq!(adjusted, area);
     }
 }
