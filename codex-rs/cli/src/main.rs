@@ -95,7 +95,7 @@ enum Subcommand {
     /// Remove stored authentication credentials.
     Logout(LogoutCommand),
 
-    /// Manage secrets.
+    /// [experimental] Manage secrets.
     Secrets(SecretsCli),
 
     /// [experimental] Run Codex as an MCP server and manage MCP servers.
@@ -550,6 +550,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             mcp_cli.run().await?;
         }
         Some(Subcommand::Secrets(mut secrets_cli)) => {
+            eprintln!(
+                "Warning: `codex secrets` is experimental and may change in future releases."
+            );
             prepend_config_flags(
                 &mut secrets_cli.config_overrides,
                 root_config_overrides.clone(),
