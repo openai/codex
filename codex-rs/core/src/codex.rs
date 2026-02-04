@@ -212,6 +212,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
@@ -484,6 +485,15 @@ pub(crate) struct Session {
 pub(crate) struct TurnContext {
     pub(crate) sub_id: String,
     pub(crate) client: ModelClient,
+    pub(crate) config: Arc<Config>,
+    pub(crate) auth_manager: Option<Arc<AuthManager>>,
+    pub(crate) model_info: ModelInfo,
+    pub(crate) otel_manager: OtelManager,
+    pub(crate) provider: ModelProviderInfo,
+    pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
+    pub(crate) reasoning_summary: ReasoningSummaryConfig,
+    pub(crate) session_source: SessionSource,
+    pub(crate) transport_manager: TransportManager,
     /// The session's current working directory. All relative paths provided by
     /// the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
@@ -507,6 +517,13 @@ pub(crate) struct TurnContext {
     turn_metadata_header: OnceCell<Option<String>>,
 }
 impl TurnContext {
+    pub(crate) fn model_context_window(&self) -> Option<i64> {
+        let effective_context_window_percent = self.model_info.effective_context_window_percent;
+        self.model_info.context_window.map(|context_window| {
+            context_window.saturating_mul(effective_context_window_percent) / 100
+        })
+    }
+
     pub(crate) fn resolve_path(&self, path: Option<String>) -> PathBuf {
         path.as_ref()
             .map(PathBuf::from)
@@ -694,10 +711,17 @@ impl Session {
         sub_id: String,
         transport_manager: TransportManager,
     ) -> TurnContext {
+        let reasoning_effort = session_configuration.collaboration_mode.reasoning_effort();
+        let reasoning_summary = session_configuration.model_reasoning_summary;
         let otel_manager = otel_manager.clone().with_model(
             session_configuration.collaboration_mode.model(),
             model_info.slug.as_str(),
         );
+        let session_source = session_configuration.session_source.clone();
+        let auth_manager_for_context = auth_manager.clone();
+        let provider_for_context = provider.clone();
+        let transport_manager_for_context = transport_manager.clone();
+        let otel_manager_for_context = otel_manager.clone();
         let per_turn_config = Arc::new(per_turn_config);
         let client = ModelClient::new(
             per_turn_config.clone(),
@@ -705,10 +729,10 @@ impl Session {
             model_info.clone(),
             otel_manager,
             provider,
-            session_configuration.collaboration_mode.reasoning_effort(),
-            session_configuration.model_reasoning_summary,
+            reasoning_effort,
+            reasoning_summary,
             conversation_id,
-            session_configuration.session_source.clone(),
+            session_source.clone(),
             transport_manager,
         );
 
@@ -722,6 +746,15 @@ impl Session {
         TurnContext {
             sub_id,
             client,
+            config: per_turn_config.clone(),
+            auth_manager: auth_manager_for_context,
+            model_info: model_info.clone(),
+            otel_manager: otel_manager_for_context,
+            provider: provider_for_context,
+            reasoning_effort,
+            reasoning_summary,
+            session_source,
+            transport_manager: transport_manager_for_context,
             cwd,
             developer_instructions: session_configuration.developer_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
@@ -1100,7 +1133,7 @@ impl Session {
                         None
                     }
                 }) {
-                    let curr = turn_context.client.get_model();
+                    let curr = turn_context.model_info.slug.as_str();
                     if prev != curr {
                         warn!(
                             "resuming session with different model: previous={prev}, current={curr}"
@@ -1378,8 +1411,8 @@ impl Session {
         if let Some(personality) = next.personality
             && next.personality != previous.personality
         {
-            let model_info = next.client.get_model_info();
-            let personality_message = Self::personality_message_for(&model_info, personality);
+            let model_info = &next.model_info;
+            let personality_message = Self::personality_message_for(model_info, personality);
             personality_message.map(|personality_message| {
                 DeveloperInstructions::personality_spec_message(personality_message).into()
             })
@@ -1943,7 +1976,7 @@ impl Session {
         if self.features.enabled(Feature::Personality)
             && let Some(personality) = turn_context.personality
         {
-            let model_info = turn_context.client.get_model_info();
+            let model_info = turn_context.model_info.clone();
             let has_baked_personality = model_info.supports_personality()
                 && base_instructions == model_info.get_model_instructions(Some(personality));
             if !has_baked_personality
@@ -1996,10 +2029,8 @@ impl Session {
         {
             let mut state = self.state.lock().await;
             if let Some(token_usage) = token_usage {
-                state.update_token_info_from_usage(
-                    token_usage,
-                    turn_context.client.get_model_context_window(),
-                );
+                state
+                    .update_token_info_from_usage(token_usage, turn_context.model_context_window());
             }
         }
         self.send_token_count_event(turn_context).await;
@@ -2030,7 +2061,7 @@ impl Session {
             };
 
             if info.model_context_window.is_none() {
-                info.model_context_window = turn_context.client.get_model_context_window();
+                info.model_context_window = turn_context.model_context_window();
             }
 
             state.set_token_info(Some(info));
@@ -2088,7 +2119,7 @@ impl Session {
     }
 
     pub(crate) async fn set_total_tokens_full(&self, turn_context: &TurnContext) {
-        if let Some(context_window) = turn_context.client.get_model_context_window() {
+        if let Some(context_window) = turn_context.model_context_window() {
             let mut state = self.state.lock().await;
             state.set_token_usage_full(context_window);
         }
@@ -2702,10 +2733,7 @@ mod handlers {
             // new_turn_with_sub_id already emits the error event.
             return;
         };
-        current_context
-            .client
-            .get_otel_manager()
-            .user_prompt(&items);
+        current_context.otel_manager.user_prompt(&items);
 
         // Attempt to inject input into current task
         if let Err(items) = sess.inject_input(items).await {
@@ -3247,7 +3275,7 @@ async fn spawn_review_thread(
     let model = config
         .review_model
         .clone()
-        .unwrap_or_else(|| parent_turn_context.client.get_model());
+        .unwrap_or_else(|| parent_turn_context.model_info.slug.clone());
     let review_model_info = sess
         .services
         .models_manager
@@ -3266,8 +3294,8 @@ async fn spawn_review_thread(
     });
 
     let review_prompt = resolved.prompt.clone();
-    let provider = parent_turn_context.client.get_provider();
-    let auth_manager = parent_turn_context.client.get_auth_manager();
+    let provider = parent_turn_context.provider.clone();
+    let auth_manager = parent_turn_context.auth_manager.clone();
     let model_info = review_model_info.clone();
 
     // Build per‑turn client with the requested model/family.
@@ -3277,9 +3305,16 @@ async fn spawn_review_thread(
     per_turn_config.web_search_mode = Some(review_web_search_mode);
 
     let otel_manager = parent_turn_context
-        .client
-        .get_otel_manager()
+        .otel_manager
+        .clone()
         .with_model(model.as_str(), review_model_info.slug.as_str());
+    let auth_manager_for_context = auth_manager.clone();
+    let provider_for_context = provider.clone();
+    let otel_manager_for_context = otel_manager.clone();
+    let reasoning_effort = per_turn_config.model_reasoning_effort;
+    let reasoning_summary = per_turn_config.model_reasoning_summary;
+    let session_source = parent_turn_context.session_source.clone();
+    let transport_manager = parent_turn_context.transport_manager.clone();
 
     let per_turn_config = Arc::new(per_turn_config);
     let client = ModelClient::new(
@@ -3288,16 +3323,25 @@ async fn spawn_review_thread(
         model_info.clone(),
         otel_manager,
         provider,
-        per_turn_config.model_reasoning_effort,
-        per_turn_config.model_reasoning_summary,
+        reasoning_effort,
+        reasoning_summary,
         sess.conversation_id,
-        parent_turn_context.client.get_session_source(),
-        parent_turn_context.client.transport_manager(),
+        session_source.clone(),
+        transport_manager.clone(),
     );
 
     let review_turn_context = TurnContext {
         sub_id: sub_id.to_string(),
         client,
+        config: per_turn_config,
+        auth_manager: auth_manager_for_context,
+        model_info: model_info.clone(),
+        otel_manager: otel_manager_for_context,
+        provider: provider_for_context,
+        reasoning_effort,
+        reasoning_summary,
+        session_source,
+        transport_manager,
         tools_config,
         ghost_snapshot: parent_turn_context.ghost_snapshot.clone(),
         developer_instructions: None,
@@ -3414,12 +3458,12 @@ pub(crate) async fn run_turn(
         return None;
     }
 
-    let model_info = turn_context.client.get_model_info();
+    let model_info = turn_context.model_info.clone();
     let auto_compact_limit = model_info.auto_compact_token_limit().unwrap_or(i64::MAX);
     let total_usage_tokens = sess.get_total_token_usage().await;
 
     let event = EventMsg::TurnStarted(TurnStartedEvent {
-        model_context_window: turn_context.client.get_model_context_window(),
+        model_context_window: turn_context.model_context_window(),
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, event).await;
@@ -3438,7 +3482,7 @@ pub(crate) async fn run_turn(
         || (HashMap::new(), HashMap::new()),
         |outcome| build_skill_name_counts(&outcome.skills, &outcome.disabled_paths),
     );
-    let connector_slug_counts = if turn_context.client.config().features.enabled(Feature::Apps) {
+    let connector_slug_counts = if turn_context.config.features.enabled(Feature::Apps) {
         let mcp_tools = match sess
             .services
             .mcp_connection_manager
@@ -3467,7 +3511,7 @@ pub(crate) async fn run_turn(
     });
     let explicit_app_paths = collect_explicit_app_paths(&input);
 
-    let config = turn_context.client.config();
+    let config = turn_context.config.clone();
     if config
         .features
         .enabled(Feature::SkillEnvVarDependencyPrompt)
@@ -3484,9 +3528,9 @@ pub(crate) async fn run_turn(
     )
     .await;
 
-    let otel_manager = turn_context.client.get_otel_manager();
+    let otel_manager = turn_context.otel_manager.clone();
     let thread_id = sess.conversation_id.to_string();
-    let tracking = build_track_events_context(turn_context.client.get_model(), thread_id);
+    let tracking = build_track_events_context(turn_context.model_info.slug.clone(), thread_id);
     let SkillInjections {
         items: skill_items,
         warnings: skill_warnings,
@@ -3639,7 +3683,7 @@ pub(crate) async fn run_turn(
 }
 
 async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) {
-    if should_use_remote_compact_task(sess.as_ref(), &turn_context.client.get_provider()) {
+    if should_use_remote_compact_task(sess.as_ref(), &turn_context.provider) {
         run_inline_remote_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await;
     } else {
         run_inline_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await;
@@ -3748,7 +3792,7 @@ struct SamplingRequestToolSelection<'a> {
     skip_all,
     fields(
         turn_id = %turn_context.sub_id,
-        model = %turn_context.client.get_model(),
+        model = %turn_context.model_info.slug,
         cwd = %turn_context.cwd.display()
     )
 )]
@@ -3769,7 +3813,7 @@ async fn run_sampling_request(
         .list_all_tools()
         .or_cancel(&cancellation_token)
         .await?;
-    let connectors_for_tools = if turn_context.client.config().features.enabled(Feature::Apps) {
+    let connectors_for_tools = if turn_context.config.features.enabled(Feature::Apps) {
         let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
         Some(filter_connectors_for_input(
             connectors,
@@ -3794,10 +3838,7 @@ async fn run_sampling_request(
         turn_context.dynamic_tools.as_slice(),
     ));
 
-    let model_supports_parallel = turn_context
-        .client
-        .get_model_info()
-        .supports_parallel_tool_calls;
+    let model_supports_parallel = turn_context.model_info.supports_parallel_tool_calls;
 
     let base_instructions = sess.get_base_instructions().await;
 
@@ -3845,7 +3886,7 @@ async fn run_sampling_request(
         }
 
         // Use the configured provider-specific stream retry budget.
-        let max_retries = turn_context.client.get_provider().stream_max_retries();
+        let max_retries = turn_context.provider.stream_max_retries();
         if retries >= max_retries && client_session.try_switch_fallback_transport() {
             sess.send_event(
                 &turn_context,
@@ -4291,7 +4332,7 @@ async fn drain_in_flight(
     skip_all,
     fields(
         turn_id = %turn_context.sub_id,
-        model = %turn_context.client.get_model()
+        model = %turn_context.model_info.slug
     )
 )]
 async fn try_run_sampling_request(
@@ -4308,11 +4349,11 @@ async fn try_run_sampling_request(
         cwd: turn_context.cwd.clone(),
         approval_policy: turn_context.approval_policy,
         sandbox_policy: turn_context.sandbox_policy.clone(),
-        model: turn_context.client.get_model(),
+        model: turn_context.model_info.slug.clone(),
         personality: turn_context.personality,
         collaboration_mode: Some(collaboration_mode),
-        effort: turn_context.client.get_reasoning_effort(),
-        summary: turn_context.client.get_reasoning_summary(),
+        effort: turn_context.reasoning_effort,
+        summary: turn_context.reasoning_summary,
         user_instructions: turn_context.user_instructions.clone(),
         developer_instructions: turn_context.developer_instructions.clone(),
         final_output_json_schema: turn_context.final_output_json_schema.clone(),
@@ -4320,10 +4361,10 @@ async fn try_run_sampling_request(
     });
 
     feedback_tags!(
-        model = turn_context.client.get_model(),
+        model = turn_context.model_info.slug.clone(),
         approval_policy = turn_context.approval_policy,
         sandbox_policy = turn_context.sandbox_policy,
-        effort = turn_context.client.get_reasoning_effort(),
+        effort = turn_context.reasoning_effort,
         auth_mode = sess.services.auth_manager.get_auth_mode(),
         features = sess.features.enabled_features(),
     );

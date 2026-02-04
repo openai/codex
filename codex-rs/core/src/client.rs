@@ -153,61 +153,6 @@ impl ModelClient {
 }
 
 impl ModelClient {
-    pub fn get_model_context_window(&self) -> Option<i64> {
-        let model_info = &self.state.model_info;
-        let effective_context_window_percent = model_info.effective_context_window_percent;
-        model_info.context_window.map(|context_window| {
-            context_window.saturating_mul(effective_context_window_percent) / 100
-        })
-    }
-
-    pub fn config(&self) -> Arc<Config> {
-        Arc::clone(&self.state.config)
-    }
-
-    pub fn provider(&self) -> &ModelProviderInfo {
-        &self.state.provider
-    }
-
-    pub fn get_provider(&self) -> ModelProviderInfo {
-        self.state.provider.clone()
-    }
-
-    pub fn get_otel_manager(&self) -> OtelManager {
-        self.state.otel_manager.clone()
-    }
-
-    pub fn get_session_source(&self) -> SessionSource {
-        self.state.session_source.clone()
-    }
-
-    pub(crate) fn transport_manager(&self) -> TransportManager {
-        self.state.transport_manager.clone()
-    }
-
-    /// Returns the currently configured model slug.
-    pub fn get_model(&self) -> String {
-        self.state.model_info.slug.clone()
-    }
-
-    pub fn get_model_info(&self) -> ModelInfo {
-        self.state.model_info.clone()
-    }
-
-    /// Returns the current reasoning effort setting.
-    pub fn get_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
-        self.state.effort
-    }
-
-    /// Returns the current reasoning summary setting.
-    pub fn get_reasoning_summary(&self) -> ReasoningSummaryConfig {
-        self.state.summary
-    }
-
-    pub fn get_auth_manager(&self) -> Option<Arc<AuthManager>> {
-        self.state.auth_manager.clone()
-    }
-
     /// Compacts the current conversation history using the Compact endpoint.
     ///
     /// This is a unary call (no streaming) that returns a new list of

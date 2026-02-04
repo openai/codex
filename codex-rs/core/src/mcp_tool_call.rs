@@ -120,8 +120,7 @@ pub(crate) async fn handle_mcp_tool_call(
 
         let status = if result.is_ok() { "ok" } else { "error" };
         turn_context
-            .client
-            .get_otel_manager()
+            .otel_manager
             .counter("codex.mcp.call", 1, &[("status", status)]);
 
         return ResponseInputItem::McpToolCallOutput { call_id, result };
@@ -153,8 +152,7 @@ pub(crate) async fn handle_mcp_tool_call(
 
     let status = if result.is_ok() { "ok" } else { "error" };
     turn_context
-        .client
-        .get_otel_manager()
+        .otel_manager
         .counter("codex.mcp.call", 1, &[("status", status)]);
 
     ResponseInputItem::McpToolCallOutput { call_id, result }
