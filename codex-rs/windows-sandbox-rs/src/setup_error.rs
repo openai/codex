@@ -65,6 +65,8 @@ pub enum SetupErrorCode {
     HelperSandboxLockFailed,
     /// Helper failed for an unmapped or unexpected reason.
     HelperUnknownError,
+    /// The setup helper executable was not found on disk.
+    OrchestratorHelperNotFound,
 }
 
 impl SetupErrorCode {
@@ -77,6 +79,7 @@ impl SetupErrorCode {
             Self::OrchestratorHelperLaunchCanceled => "orchestrator_helper_launch_canceled",
             Self::OrchestratorHelperExitNonzero => "orchestrator_helper_exit_nonzero",
             Self::OrchestratorHelperReportReadFailed => "orchestrator_helper_report_read_failed",
+            Self::OrchestratorHelperNotFound => "orchestrator_helper_not_found",
             Self::HelperRequestArgsFailed => "helper_request_args_failed",
             Self::HelperSandboxDirCreateFailed => "helper_sandbox_dir_create_failed",
             Self::HelperLogFailed => "helper_log_failed",

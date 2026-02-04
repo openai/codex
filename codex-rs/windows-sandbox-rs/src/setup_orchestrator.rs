@@ -311,16 +311,27 @@ fn quote_arg(arg: &str) -> String {
     out
 }
 
-fn find_setup_exe() -> PathBuf {
+fn find_setup_exe() -> Result<PathBuf, anyhow::Error> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let candidate = dir.join("codex-windows-sandbox-setup.exe");
             if candidate.exists() {
-                return candidate;
+                return Ok(candidate);
             }
         }
     }
-    PathBuf::from("codex-windows-sandbox-setup.exe")
+    let fallback = PathBuf::from("codex-windows-sandbox-setup.exe");
+    if fallback.exists() {
+        Ok(fallback)
+    } else {
+        Err(failure(
+            SetupErrorCode::OrchestratorHelperNotFound,
+            "Windows Sandbox setup helper (codex-windows-sandbox-setup.exe) not found. \
+             If you are using the VS Code extension, please ensure it is correctly installed \
+             or point 'chatgpt.cliExecutable' to a full Codex installation."
+                .to_string(),
+        ))
+    }
 }
 
 fn report_helper_failure(
@@ -353,7 +364,7 @@ fn run_setup_exe(
     use windows_sys::Win32::UI::Shell::ShellExecuteExW;
     use windows_sys::Win32::UI::Shell::SEE_MASK_NOCLOSEPROCESS;
     use windows_sys::Win32::UI::Shell::SHELLEXECUTEINFOW;
-    let exe = find_setup_exe();
+    let exe = find_setup_exe()?;
     let payload_json = serde_json::to_string(payload).map_err(|err| {
         failure(
             SetupErrorCode::OrchestratorPayloadSerializeFailed,

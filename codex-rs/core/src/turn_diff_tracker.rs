@@ -313,10 +313,13 @@ impl TurnDiffTracker {
             aggregated.push_str(&format!("new mode {current_mode}\n"));
         }
 
-        let left_text = left_bytes.and_then(|b| std::str::from_utf8(b).ok());
-        let right_text = right_bytes
+        let left_text_owned = left_bytes.and_then(|b| std::str::from_utf8(b).ok().map(|s| s.replace("\r\n", "\n")));
+        let right_text_owned = right_bytes
             .as_deref()
-            .and_then(|b| std::str::from_utf8(b).ok());
+            .and_then(|b| std::str::from_utf8(b).ok().map(|s| s.replace("\r\n", "\n")));
+        
+        let left_text = left_text_owned.as_deref();
+        let right_text = right_text_owned.as_deref();
 
         let can_text_diff = matches!(
             (left_text, right_text, is_add, is_delete),
