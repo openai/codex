@@ -178,7 +178,7 @@ async fn responses_websocket_emits_rate_limit_events() {
     .await;
 
     let harness = websocket_harness(&server).await;
-    let mut session = harness.client.new_session();
+    let mut session = harness.client.new_session(None);
     let prompt = prompt_with_input(vec![message_item("hello")]);
 
     let mut stream = session
