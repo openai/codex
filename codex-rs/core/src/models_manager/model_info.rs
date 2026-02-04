@@ -181,6 +181,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
                     personality_default: Some("".to_string()),
                     personality_friendly: Some(GPT_5_2_CODEX_PERSONALITY_FRIENDLY.to_string()),
                     personality_pragmatic: Some(GPT_5_2_CODEX_PERSONALITY_PRAGMATIC.to_string()),
+                    personality_none: None,
                 }),
             }),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
@@ -224,6 +225,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
                     personality_default: Some("".to_string()),
                     personality_friendly: Some(GPT_5_2_CODEX_PERSONALITY_FRIENDLY.to_string()),
                     personality_pragmatic: Some(GPT_5_2_CODEX_PERSONALITY_PRAGMATIC.to_string()),
+                    personality_none: None,
                 }),
             }),
         )

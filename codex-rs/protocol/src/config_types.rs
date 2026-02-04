@@ -98,6 +98,7 @@ pub enum WindowsSandboxLevel {
 pub enum Personality {
     Friendly,
     Pragmatic,
+    None,
 }
 
 #[derive(

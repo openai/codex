@@ -2328,6 +2328,7 @@ impl App {
         match personality {
             Personality::Friendly => "Friendly",
             Personality::Pragmatic => "Pragmatic",
+            Personality::None => "None",
         }
     }
 
