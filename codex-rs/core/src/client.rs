@@ -7,6 +7,10 @@ use crate::api_bridge::map_api_error;
 use crate::auth::UnauthorizedRecovery;
 use codex_api::CompactClient as ApiCompactClient;
 use codex_api::CompactionInput as ApiCompactionInput;
+use codex_api::MemoriesClient as ApiMemoriesClient;
+use codex_api::MemoryTrace as ApiMemoryTrace;
+use codex_api::MemoryTraceSummarizeInput as ApiMemoryTraceSummarizeInput;
+use codex_api::MemoryTraceSummaryOutput as ApiMemoryTraceSummaryOutput;
 use codex_api::Prompt as ApiPrompt;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
@@ -153,61 +157,6 @@ impl ModelClient {
 }
 
 impl ModelClient {
-    pub fn get_model_context_window(&self) -> Option<i64> {
-        let model_info = &self.state.model_info;
-        let effective_context_window_percent = model_info.effective_context_window_percent;
-        model_info.context_window.map(|context_window| {
-            context_window.saturating_mul(effective_context_window_percent) / 100
-        })
-    }
-
-    pub fn config(&self) -> Arc<Config> {
-        Arc::clone(&self.state.config)
-    }
-
-    pub fn provider(&self) -> &ModelProviderInfo {
-        &self.state.provider
-    }
-
-    pub fn get_provider(&self) -> ModelProviderInfo {
-        self.state.provider.clone()
-    }
-
-    pub fn get_otel_manager(&self) -> OtelManager {
-        self.state.otel_manager.clone()
-    }
-
-    pub fn get_session_source(&self) -> SessionSource {
-        self.state.session_source.clone()
-    }
-
-    pub(crate) fn transport_manager(&self) -> TransportManager {
-        self.state.transport_manager.clone()
-    }
-
-    /// Returns the currently configured model slug.
-    pub fn get_model(&self) -> String {
-        self.state.model_info.slug.clone()
-    }
-
-    pub fn get_model_info(&self) -> ModelInfo {
-        self.state.model_info.clone()
-    }
-
-    /// Returns the current reasoning effort setting.
-    pub fn get_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
-        self.state.effort
-    }
-
-    /// Returns the current reasoning summary setting.
-    pub fn get_reasoning_summary(&self) -> ReasoningSummaryConfig {
-        self.state.summary
-    }
-
-    pub fn get_auth_manager(&self) -> Option<Arc<AuthManager>> {
-        self.state.auth_manager.clone()
-    }
-
     /// Compacts the current conversation history using the Compact endpoint.
     ///
     /// This is a unary call (no streaming) that returns a new list of
@@ -238,6 +187,55 @@ impl ModelClient {
             instructions: &instructions,
         };
 
+        let extra_headers = self.build_subagent_headers();
+        client
+            .compact_input(&payload, extra_headers)
+            .await
+            .map_err(map_api_error)
+    }
+
+    /// Builds memory summaries for each provided normalized trace.
+    ///
+    /// This is a unary call (no streaming) to `/v1/memories/trace_summarize`.
+    pub async fn summarize_memory_traces(
+        &self,
+        traces: Vec<ApiMemoryTrace>,
+    ) -> Result<Vec<ApiMemoryTraceSummaryOutput>> {
+        if traces.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let auth_manager = self.state.auth_manager.clone();
+        let auth = match auth_manager.as_ref() {
+            Some(manager) => manager.auth().await,
+            None => None,
+        };
+        let api_provider = self
+            .state
+            .provider
+            .to_api_provider(auth.as_ref().map(CodexAuth::internal_auth_mode))?;
+        let api_auth = auth_provider_from_auth(auth, &self.state.provider)?;
+        let transport = ReqwestTransport::new(build_reqwest_client());
+        let request_telemetry = self.build_request_telemetry();
+        let client = ApiMemoriesClient::new(transport, api_provider, api_auth)
+            .with_telemetry(Some(request_telemetry));
+
+        let payload = ApiMemoryTraceSummarizeInput {
+            model: self.state.model_info.slug.clone(),
+            traces,
+            reasoning: self.state.effort.map(|effort| Reasoning {
+                effort: Some(effort),
+                summary: None,
+            }),
+        };
+
+        client
+            .trace_summarize_input(&payload, self.build_subagent_headers())
+            .await
+            .map_err(map_api_error)
+    }
+
+    fn build_subagent_headers(&self) -> ApiHeaderMap {
         let mut extra_headers = ApiHeaderMap::new();
         if let SessionSource::SubAgent(sub) = &self.state.session_source {
             let subagent = match sub {
@@ -250,10 +248,7 @@ impl ModelClient {
                 extra_headers.insert("x-openai-subagent", val);
             }
         }
-        client
-            .compact_input(&payload, extra_headers)
-            .await
-            .map_err(map_api_error)
+        extra_headers
     }
 }
 
