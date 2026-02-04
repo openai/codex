@@ -255,6 +255,9 @@ impl ModelsManager {
 
     /// Attempt to satisfy the refresh from the cache when it matches the provider and TTL.
     async fn try_load_cache(&self) -> bool {
+        if self.provider.skip_models_cache {
+            return false;
+        }
         let _timer =
             codex_otel::start_global_timer("codex.remote_models.load_cache.duration_ms", &[]);
         let client_version = crate::models_manager::client_version_to_whole();
@@ -430,6 +433,7 @@ mod tests {
             stream_idle_timeout_ms: Some(5_000),
             requires_openai_auth: false,
             supports_websockets: false,
+            skip_models_cache: false,
         }
     }
 

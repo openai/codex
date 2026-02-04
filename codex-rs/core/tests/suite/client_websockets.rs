@@ -390,6 +390,7 @@ fn websocket_provider(server: &WebSocketTestServer) -> ModelProviderInfo {
         stream_idle_timeout_ms: Some(5_000),
         requires_openai_auth: false,
         supports_websockets: true,
+        skip_models_cache: false,
     }
 }
 
