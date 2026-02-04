@@ -179,7 +179,20 @@ fn resolve_true_command() -> String {
     "true".to_string()
 }
 
+/// Run a short-lived bubblewrap preflight in a child process and capture stderr.
+///
+/// Strategy:
+/// - This is used only by `preflight_proc_mount_support`, which runs `/bin/true`
+///   under bubblewrap with `--proc /proc`.
+/// - The goal is to detect environments where mounting `/proc` fails (for
+///   example, restricted containers), so we can retry the real run with
+///   `--no-proc`.
+/// - We capture stderr from that preflight to match known mount-failure text.
+///   We do not stream it because this is a one-shot probe with a trivial
+///   command, and reads are bounded to a fixed max size.
 fn run_bwrap_in_child_capture_stderr(argv: Vec<String>) -> String {
+    const MAX_PREFLIGHT_STDERR_BYTES: u64 = 64 * 1024;
+
     let mut pipe_fds = [0; 2];
     let pipe_res = unsafe { libc::pipe2(pipe_fds.as_mut_ptr(), libc::O_CLOEXEC) };
     if pipe_res < 0 {
@@ -215,10 +228,11 @@ fn run_bwrap_in_child_capture_stderr(argv: Vec<String>) -> String {
         libc::close(write_fd);
     }
 
-    let mut stderr = String::new();
     // SAFETY: `read_fd` is a valid owned fd in the parent.
     let mut read_file = unsafe { File::from_raw_fd(read_fd) };
-    if let Err(err) = read_file.read_to_string(&mut stderr) {
+    let mut stderr_bytes = Vec::new();
+    let mut limited_reader = (&mut read_file).take(MAX_PREFLIGHT_STDERR_BYTES);
+    if let Err(err) = limited_reader.read_to_end(&mut stderr_bytes) {
         panic!("failed to read bubblewrap stderr: {err}");
     }
 
@@ -229,7 +243,7 @@ fn run_bwrap_in_child_capture_stderr(argv: Vec<String>) -> String {
         panic!("waitpid failed for bubblewrap child: {err}");
     }
 
-    stderr
+    String::from_utf8_lossy(&stderr_bytes).into_owned()
 }
 
 fn is_proc_mount_failure(stderr: &str) -> bool {
