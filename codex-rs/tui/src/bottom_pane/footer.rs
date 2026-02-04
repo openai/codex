@@ -723,10 +723,14 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     if change_mode.width() > 0 {
         ordered.push(change_mode);
     }
-    ordered.push(Line::from(""));
     ordered.push(show_transcript);
 
-    build_columns(ordered)
+    let mut lines = build_columns(ordered);
+    lines.push(Line::from(""));
+    lines.push(Line::from(
+        "[tui.keymap] customize shortcuts in ~/.codex/config.toml",
+    ));
+    lines
 }
 
 fn build_columns(entries: Vec<Line<'static>>) -> Vec<Line<'static>> {
