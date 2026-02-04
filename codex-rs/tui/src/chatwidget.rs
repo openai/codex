@@ -5742,6 +5742,7 @@ impl ChatWidget {
             items,
             is_searchable: true,
             search_placeholder: Some("Type to search apps".to_string()),
+            stable_desc_col: true,
             ..Default::default()
         });
     }

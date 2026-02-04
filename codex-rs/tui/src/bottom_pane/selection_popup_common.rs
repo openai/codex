@@ -151,21 +151,36 @@ fn compute_desc_col(
     start_idx: usize,
     visible_items: usize,
     content_width: u16,
+    use_all_rows_for_desc_col: bool,
 ) -> usize {
-    let visible_range = start_idx..(start_idx + visible_items);
-    let max_name_width = rows_all
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| visible_range.contains(i))
-        .map(|(_, r)| {
-            let mut spans: Vec<Span> = vec![r.name.clone().into()];
-            if r.disabled_reason.is_some() {
-                spans.push(" (disabled)".dim());
-            }
-            Line::from(spans).width()
-        })
-        .max()
-        .unwrap_or(0);
+    let max_name_width = if use_all_rows_for_desc_col {
+        rows_all
+            .iter()
+            .map(|r| {
+                let mut spans: Vec<Span> = vec![r.name.clone().into()];
+                if r.disabled_reason.is_some() {
+                    spans.push(" (disabled)".dim());
+                }
+                Line::from(spans).width()
+            })
+            .max()
+            .unwrap_or(0)
+    } else {
+        let visible_range = start_idx..(start_idx + visible_items);
+        rows_all
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| visible_range.contains(i))
+            .map(|(_, r)| {
+                let mut spans: Vec<Span> = vec![r.name.clone().into()];
+                if r.disabled_reason.is_some() {
+                    spans.push(" (disabled)".dim());
+                }
+                Line::from(spans).width()
+            })
+            .max()
+            .unwrap_or(0)
+    };
     let mut desc_col = max_name_width.saturating_add(2);
     if (desc_col as u16) >= content_width {
         desc_col = content_width.saturating_sub(1) as usize;
@@ -268,13 +283,14 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
 
 /// Render a list of rows using the provided ScrollState, with shared styling
 /// and behavior for selection popups.
-pub(crate) fn render_rows(
+fn render_rows_inner(
     area: Rect,
     buf: &mut Buffer,
     rows_all: &[GenericDisplayRow],
     state: &ScrollState,
     max_results: usize,
     empty_message: &str,
+    use_all_rows_for_desc_col: bool,
 ) {
     if rows_all.is_empty() {
         if area.height > 0 {
@@ -301,7 +317,13 @@ pub(crate) fn render_rows(
         }
     }
 
-    let desc_col = compute_desc_col(rows_all, start_idx, visible_items, area.width);
+    let desc_col = compute_desc_col(
+        rows_all,
+        start_idx,
+        visible_items,
+        area.width,
+        use_all_rows_for_desc_col,
+    );
 
     // Render items, wrapping descriptions and aligning wrapped lines under the
     // shared description column. Stop when we run out of vertical space.
@@ -358,6 +380,38 @@ pub(crate) fn render_rows(
     }
 }
 
+/// Render a list of rows using the provided ScrollState, with shared styling
+/// and behavior for selection popups.
+pub(crate) fn render_rows(
+    area: Rect,
+    buf: &mut Buffer,
+    rows_all: &[GenericDisplayRow],
+    state: &ScrollState,
+    max_results: usize,
+    empty_message: &str,
+) {
+    render_rows_inner(
+        area,
+        buf,
+        rows_all,
+        state,
+        max_results,
+        empty_message,
+        false,
+    );
+}
+
+pub(crate) fn render_rows_stable_desc_col(
+    area: Rect,
+    buf: &mut Buffer,
+    rows_all: &[GenericDisplayRow],
+    state: &ScrollState,
+    max_results: usize,
+    empty_message: &str,
+) {
+    render_rows_inner(area, buf, rows_all, state, max_results, empty_message, true);
+}
+
 /// Render rows as a single line each (no wrapping), truncating overflow with an ellipsis.
 pub(crate) fn render_rows_single_line(
     area: Rect,
@@ -390,7 +444,7 @@ pub(crate) fn render_rows_single_line(
         }
     }
 
-    let desc_col = compute_desc_col(rows_all, start_idx, visible_items, area.width);
+    let desc_col = compute_desc_col(rows_all, start_idx, visible_items, area.width, false);
 
     let mut cur_y = area.y;
     for (i, row) in rows_all
@@ -439,6 +493,25 @@ pub(crate) fn measure_rows_height(
     max_results: usize,
     width: u16,
 ) -> u16 {
+    measure_rows_height_inner(rows_all, state, max_results, width, false)
+}
+
+pub(crate) fn measure_rows_height_stable_desc_col(
+    rows_all: &[GenericDisplayRow],
+    state: &ScrollState,
+    max_results: usize,
+    width: u16,
+) -> u16 {
+    measure_rows_height_inner(rows_all, state, max_results, width, true)
+}
+
+fn measure_rows_height_inner(
+    rows_all: &[GenericDisplayRow],
+    state: &ScrollState,
+    max_results: usize,
+    width: u16,
+    use_all_rows_for_desc_col: bool,
+) -> u16 {
     if rows_all.is_empty() {
         return 1; // placeholder "no matches" line
     }
@@ -458,7 +531,13 @@ pub(crate) fn measure_rows_height(
         }
     }
 
-    let desc_col = compute_desc_col(rows_all, start_idx, visible_items, content_width);
+    let desc_col = compute_desc_col(
+        rows_all,
+        start_idx,
+        visible_items,
+        content_width,
+        use_all_rows_for_desc_col,
+    );
 
     use crate::wrapping::RtOptions;
     use crate::wrapping::word_wrap_line;

@@ -25,7 +25,9 @@ use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::measure_rows_height;
+use super::selection_popup_common::measure_rows_height_stable_desc_col;
 use super::selection_popup_common::render_rows;
+use super::selection_popup_common::render_rows_stable_desc_col;
 use unicode_width::UnicodeWidthStr;
 
 /// One selectable item in the generic selection list.
@@ -54,6 +56,7 @@ pub(crate) struct SelectionViewParams {
     pub items: Vec<SelectionItem>,
     pub is_searchable: bool,
     pub search_placeholder: Option<String>,
+    pub stable_desc_col: bool,
     pub header: Box<dyn Renderable>,
     pub initial_selected_idx: Option<usize>,
 }
@@ -68,6 +71,7 @@ impl Default for SelectionViewParams {
             items: Vec::new(),
             is_searchable: false,
             search_placeholder: None,
+            stable_desc_col: false,
             header: Box::new(()),
             initial_selected_idx: None,
         }
@@ -84,6 +88,7 @@ pub(crate) struct ListSelectionView {
     is_searchable: bool,
     search_query: String,
     search_placeholder: Option<String>,
+    stable_desc_col: bool,
     filtered_indices: Vec<usize>,
     last_selected_actual_idx: Option<usize>,
     header: Box<dyn Renderable>,
@@ -116,6 +121,7 @@ impl ListSelectionView {
             } else {
                 None
             },
+            stable_desc_col: params.stable_desc_col,
             filtered_indices: Vec::new(),
             last_selected_actual_idx: None,
             header,
@@ -434,12 +440,21 @@ impl Renderable for ListSelectionView {
         // Build the same display rows used by the renderer so wrapping math matches.
         let rows = self.build_rows();
         let rows_width = Self::rows_width(width);
-        let rows_height = measure_rows_height(
-            &rows,
-            &self.state,
-            MAX_POPUP_ROWS,
-            rows_width.saturating_add(1),
-        );
+        let rows_height = if self.stable_desc_col {
+            measure_rows_height_stable_desc_col(
+                &rows,
+                &self.state,
+                MAX_POPUP_ROWS,
+                rows_width.saturating_add(1),
+            )
+        } else {
+            measure_rows_height(
+                &rows,
+                &self.state,
+                MAX_POPUP_ROWS,
+                rows_width.saturating_add(1),
+            )
+        };
 
         // Subtract 4 for the padding on the left and right of the header.
         let mut height = self.header.desired_height(width.saturating_sub(4));
@@ -483,12 +498,21 @@ impl Renderable for ListSelectionView {
             .desired_height(outer_content_area.width.saturating_sub(4));
         let rows = self.build_rows();
         let rows_width = Self::rows_width(outer_content_area.width);
-        let rows_height = measure_rows_height(
-            &rows,
-            &self.state,
-            MAX_POPUP_ROWS,
-            rows_width.saturating_add(1),
-        );
+        let rows_height = if self.stable_desc_col {
+            measure_rows_height_stable_desc_col(
+                &rows,
+                &self.state,
+                MAX_POPUP_ROWS,
+                rows_width.saturating_add(1),
+            )
+        } else {
+            measure_rows_height(
+                &rows,
+                &self.state,
+                MAX_POPUP_ROWS,
+                rows_width.saturating_add(1),
+            )
+        };
         let [header_area, _, search_area, list_area] = Layout::vertical([
             Constraint::Max(header_height),
             Constraint::Max(1),
@@ -529,14 +553,25 @@ impl Renderable for ListSelectionView {
                 width: rows_width.max(1),
                 height: list_area.height,
             };
-            render_rows(
-                render_area,
-                buf,
-                &rows,
-                &self.state,
-                render_area.height as usize,
-                "no matches",
-            );
+            if self.stable_desc_col {
+                render_rows_stable_desc_col(
+                    render_area,
+                    buf,
+                    &rows,
+                    &self.state,
+                    render_area.height as usize,
+                    "no matches",
+                );
+            } else {
+                render_rows(
+                    render_area,
+                    buf,
+                    &rows,
+                    &self.state,
+                    render_area.height as usize,
+                    "no matches",
+                );
+            }
         }
 
         if footer_area.height > 0 {
