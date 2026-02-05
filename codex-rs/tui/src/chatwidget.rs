@@ -1528,6 +1528,8 @@ impl ChatWidget {
     fn on_exec_command_begin(&mut self, ev: ExecCommandBeginEvent) {
         self.flush_answer_stream_with_separator();
         if is_unified_exec_source(ev.source) {
+            // Unified exec may be parsed as Unknown; keep the working indicator visible regardless.
+            self.bottom_pane.ensure_status_indicator();
             self.track_unified_exec_process_begin(&ev);
             if !is_standard_tool_call(&ev.parsed_cmd) {
                 return;
