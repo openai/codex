@@ -465,6 +465,10 @@ impl Codex {
     pub(crate) fn state_db(&self) -> Option<state_db::StateDbHandle> {
         self.session.state_db()
     }
+
+    pub async fn set_dependency_env(&self, values: HashMap<String, String>) {
+        self.session.set_dependency_env(values).await;
+    }
 }
 
 /// Context for an initialized model agent

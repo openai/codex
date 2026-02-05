@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use crate::agent::AgentStatus;
 use crate::codex::Codex;
 use crate::error::Result as CodexResult;
@@ -72,5 +73,9 @@ impl CodexThread {
 
     pub async fn config_snapshot(&self) -> ThreadConfigSnapshot {
         self.codex.thread_config_snapshot().await
+    }
+
+    pub async fn set_dependency_env(&self, values: HashMap<String, String>) {
+        self.codex.set_dependency_env(values).await;
     }
 }

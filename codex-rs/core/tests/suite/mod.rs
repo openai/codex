@@ -69,6 +69,7 @@ mod collaboration_instructions;
 mod compact;
 mod compact_remote;
 mod compact_resume_fork;
+mod dependency_env;
 mod deprecation_notice;
 mod exec;
 mod exec_policy;

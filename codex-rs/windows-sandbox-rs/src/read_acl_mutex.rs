@@ -12,6 +12,7 @@ use windows_sys::Win32::System::Threading::MUTEX_ALL_ACCESS;
 
 use super::to_wide;
 
+#[allow(dead_code)]
 const READ_ACL_MUTEX_NAME: &str = "Local\\CodexSandboxReadAcl";
 const SETUP_REFRESH_MUTEX_NAME: &str = "Local\\CodexSandboxSetupRefresh";
 
@@ -28,6 +29,7 @@ impl Drop for NamedMutexGuard {
     }
 }
 
+#[allow(dead_code)]
 fn mutex_exists(name: &str) -> Result<bool> {
     let name_w = to_wide(OsStr::new(name));
     let handle = unsafe { OpenMutexW(MUTEX_ALL_ACCESS, 0, name_w.as_ptr()) };
@@ -62,14 +64,17 @@ fn acquire_mutex(name: &str) -> Result<Option<NamedMutexGuard>> {
     Ok(Some(NamedMutexGuard { handle }))
 }
 
+#[allow(dead_code)]
 pub fn read_acl_mutex_exists() -> Result<bool> {
     mutex_exists(READ_ACL_MUTEX_NAME)
 }
 
+#[allow(dead_code)]
 pub fn acquire_read_acl_mutex() -> Result<Option<NamedMutexGuard>> {
     acquire_mutex(READ_ACL_MUTEX_NAME)
 }
 
+#[allow(dead_code)]
 pub fn setup_refresh_mutex_exists() -> Result<bool> {
     mutex_exists(SETUP_REFRESH_MUTEX_NAME)
 }

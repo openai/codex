@@ -130,8 +130,9 @@ impl ToolHandler for ShellHandler {
             ToolPayload::Function { arguments } => {
                 let params: ShellToolCallParams = parse_arguments(&arguments)?;
                 let prefix_rule = params.prefix_rule.clone();
-                let exec_params =
+                let mut exec_params =
                     Self::to_exec_params(&params, turn.as_ref(), session.conversation_id);
+                exec_params.env.extend(session.dependency_env().await);
                 Self::run_exec_like(RunExecLikeArgs {
                     tool_name: tool_name.clone(),
                     exec_params,
@@ -145,8 +146,9 @@ impl ToolHandler for ShellHandler {
                 .await
             }
             ToolPayload::LocalShell { params } => {
-                let exec_params =
+                let mut exec_params =
                     Self::to_exec_params(&params, turn.as_ref(), session.conversation_id);
+                exec_params.env.extend(session.dependency_env().await);
                 Self::run_exec_like(RunExecLikeArgs {
                     tool_name: tool_name.clone(),
                     exec_params,
@@ -211,12 +213,13 @@ impl ToolHandler for ShellCommandHandler {
 
         let params: ShellCommandToolCallParams = parse_arguments(&arguments)?;
         let prefix_rule = params.prefix_rule.clone();
-        let exec_params = Self::to_exec_params(
+        let mut exec_params = Self::to_exec_params(
             &params,
             session.as_ref(),
             turn.as_ref(),
             session.conversation_id,
         );
+        exec_params.env.extend(session.dependency_env().await);
         ShellHandler::run_exec_like(RunExecLikeArgs {
             tool_name,
             exec_params,
