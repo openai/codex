@@ -107,6 +107,8 @@ use codex_app_server_protocol::SkillsRemoteWriteResponse;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
+use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
+use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
 use codex_app_server_protocol::ThreadForkParams;
@@ -477,6 +479,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadCompactStart { request_id, params } => {
                 self.thread_compact_start(request_id, params).await;
+            }
+            ClientRequest::ThreadBackgroundTerminalsClean { request_id, params } => {
+                self.thread_background_terminals_clean(request_id, params)
+                    .await;
             }
             ClientRequest::ThreadRollback { request_id, params } => {
                 self.thread_rollback(request_id, params).await;
@@ -2186,6 +2192,37 @@ impl CodexMessageProcessor {
             Err(err) => {
                 self.send_internal_error(request_id, format!("failed to start compaction: {err}"))
                     .await;
+            }
+        }
+    }
+
+    async fn thread_background_terminals_clean(
+        &self,
+        request_id: RequestId,
+        params: ThreadBackgroundTerminalsCleanParams,
+    ) {
+        let ThreadBackgroundTerminalsCleanParams { thread_id } = params;
+
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match thread.submit(Op::CleanBackgroundTerminals).await {
+            Ok(_) => {
+                self.outgoing
+                    .send_response(request_id, ThreadBackgroundTerminalsCleanResponse {})
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to clean background terminals: {err}"),
+                )
+                .await;
             }
         }
     }

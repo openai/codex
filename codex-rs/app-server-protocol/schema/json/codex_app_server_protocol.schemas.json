@@ -629,6 +629,30 @@
             },
             "method": {
               "enum": [
+                "thread/backgroundTerminals/clean"
+              ],
+              "title": "Thread/backgroundTerminals/cleanRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadBackgroundTerminalsCleanParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/backgroundTerminals/cleanRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/rollback"
               ],
               "title": "Thread/rollbackRequestMethod",
@@ -14040,6 +14064,24 @@
       "ThreadArchiveResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "ThreadArchiveResponse",
+        "type": "object"
+      },
+      "ThreadBackgroundTerminalsCleanParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadBackgroundTerminalsCleanParams",
+        "type": "object"
+      },
+      "ThreadBackgroundTerminalsCleanResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadBackgroundTerminalsCleanResponse",
         "type": "object"
       },
       "ThreadCompactStartParams": {

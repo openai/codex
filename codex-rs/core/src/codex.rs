@@ -2583,6 +2583,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::Interrupt => {
                 handlers::interrupt(&sess).await;
             }
+            Op::CleanBackgroundTerminals => {
+                handlers::clean_background_terminals(&sess).await;
+            }
             Op::OverrideTurnContext {
                 cwd,
                 approval_policy,
@@ -2770,6 +2773,10 @@ mod handlers {
 
     pub async fn interrupt(sess: &Arc<Session>) {
         sess.interrupt_task().await;
+    }
+
+    pub async fn clean_background_terminals(sess: &Arc<Session>) {
+        sess.close_unified_exec_processes().await;
     }
 
     pub async fn override_turn_context(

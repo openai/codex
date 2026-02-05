@@ -516,12 +516,16 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     // Track whether a fatal error was reported by the server so we can
     // exit with a non-zero status for automation-friendly signaling.
     let mut error_seen = false;
+    let mut shutdown_requested = false;
     while let Some(envelope) = rx.recv().await {
         let ThreadEventEnvelope {
             thread_id,
             thread,
             event,
         } = envelope;
+        if shutdown_requested && !matches!(&event.msg, EventMsg::ShutdownComplete) {
+            continue;
+        }
         if let EventMsg::ElicitationRequest(ev) = &event.msg {
             // Automatically cancel elicitation requests in exec mode.
             thread
@@ -545,6 +549,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         match shutdown {
             CodexStatus::Running => continue,
             CodexStatus::InitiateShutdown => {
+                shutdown_requested = true;
                 thread.submit(Op::Shutdown).await?;
             }
             CodexStatus::Shutdown if thread_id == primary_thread_id => break,

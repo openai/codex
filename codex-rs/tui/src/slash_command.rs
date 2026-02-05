@@ -43,6 +43,7 @@ pub enum SlashCommand {
     Feedback,
     Rollout,
     Ps,
+    Clean,
     Personality,
     TestApproval,
 }
@@ -68,6 +69,7 @@ impl SlashCommand {
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Statusline => "configure which items appear in the status line",
             SlashCommand::Ps => "list background terminals",
+            SlashCommand::Clean => "stop all background terminals",
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Personality => "choose a communication style for Codex",
             SlashCommand::Plan => "switch to Plan mode",
@@ -124,6 +126,7 @@ impl SlashCommand {
             | SlashCommand::Status
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
+            | SlashCommand::Clean
             | SlashCommand::Mcp
             | SlashCommand::Apps
             | SlashCommand::Feedback
