@@ -334,20 +334,6 @@ impl ModelClientSession {
                 .swap(true, Ordering::Relaxed)
     }
 
-    fn switch_to_http_fallback_silent(&mut self, otel_manager: &OtelManager) {
-        let websocket_enabled = self.responses_websocket_enabled();
-        if self.activate_http_fallback(websocket_enabled) {
-            otel_manager.counter(
-                "codex.transport.fallback_to_http",
-                1,
-                &[("from_wire_api", "responses_websocket")],
-            );
-        }
-
-        self.connection = None;
-        self.websocket_last_items.clear();
-    }
-
     fn responses_websocket_enabled(&self) -> bool {
         self.client.state.provider.supports_websockets
             && self.client.state.enable_responses_websockets
@@ -735,7 +721,7 @@ impl ModelClientSession {
                     {
                         WebsocketStreamOutcome::Stream(stream) => return Ok(stream),
                         WebsocketStreamOutcome::FallbackToHttp => {
-                            self.switch_to_http_fallback_silent(otel_manager);
+                            self.try_switch_fallback_transport(otel_manager);
                         }
                     }
                 }
