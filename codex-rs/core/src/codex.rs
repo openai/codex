@@ -1176,7 +1176,7 @@ impl Session {
                 {
                     let mut state = self.state.lock().await;
                     state.initial_context_seeded = false;
-                    state.pending_resume_previous_model = None;
+                    state.pending_resume_model_instructions_item = None;
                 }
 
                 // If resuming, warn when the last recorded model differs from the current one.
@@ -1194,8 +1194,15 @@ impl Session {
                     )
                     .await;
 
-                    let mut state = self.state.lock().await;
-                    state.pending_resume_previous_model = Some(prev.to_string());
+                    let model_instructions = turn_context
+                        .model_info
+                        .get_model_instructions(turn_context.personality);
+                    if !model_instructions.is_empty() {
+                        let mut state = self.state.lock().await;
+                        state.pending_resume_model_instructions_item = Some(
+                            DeveloperInstructions::model_switch_message(model_instructions).into(),
+                        );
+                    }
                 }
 
                 // Always add response items to conversation history
@@ -1279,9 +1286,9 @@ impl Session {
         })
     }
 
-    async fn take_pending_resume_previous_model(&self) -> Option<String> {
+    async fn take_pending_resume_model_instructions_item(&self) -> Option<ResponseItem> {
         let mut state = self.state.lock().await;
-        state.pending_resume_previous_model.take()
+        state.pending_resume_model_instructions_item.take()
     }
 
     pub(crate) async fn update_settings(
@@ -1534,21 +1541,6 @@ impl Session {
         }
 
         Some(DeveloperInstructions::model_switch_message(model_instructions).into())
-    }
-
-    fn is_model_switch_item(item: &ResponseItem) -> bool {
-        let ResponseItem::Message { role, content, .. } = item else {
-            return false;
-        };
-        if role != "developer" {
-            return false;
-        }
-        content.iter().any(|part| match part {
-            ContentItem::InputText { text, .. } | ContentItem::OutputText { text } => {
-                text.contains("<model_switch>")
-            }
-            _ => false,
-        })
     }
 
     fn build_settings_update_items(
@@ -2757,7 +2749,6 @@ mod handlers {
     use codex_protocol::config_types::Settings;
     use codex_protocol::dynamic_tools::DynamicToolResponse;
     use codex_protocol::mcp::RequestId as ProtocolRequestId;
-    use codex_protocol::models::DeveloperInstructions;
     use codex_protocol::user_input::UserInput;
     use codex_rmcp_client::ElicitationAction;
     use codex_rmcp_client::ElicitationResponse;
@@ -2854,21 +2845,8 @@ mod handlers {
             sess.seed_initial_context_if_needed(&current_context).await;
             let mut update_items =
                 sess.build_settings_update_items(previous_context.as_ref(), &current_context);
-            if let Some(previous_model) = sess.take_pending_resume_previous_model().await {
-                let model_switch_already_present =
-                    update_items.iter().any(Session::is_model_switch_item);
-                if !model_switch_already_present
-                    && previous_model != current_context.model_info.slug
-                {
-                    let model_instructions = current_context
-                        .model_info
-                        .get_model_instructions(current_context.personality);
-                    if !model_instructions.is_empty() {
-                        update_items.push(
-                            DeveloperInstructions::model_switch_message(model_instructions).into(),
-                        );
-                    }
-                }
+            if let Some(item) = sess.take_pending_resume_model_instructions_item().await {
+                update_items.push(item);
             }
             if !update_items.is_empty() {
                 sess.record_conversation_items(&current_context, &update_items)
