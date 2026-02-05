@@ -62,6 +62,10 @@ async fn insert_state_db_thread(
         codex_state::StateRuntime::init(home.to_path_buf(), TEST_PROVIDER.to_string(), None)
             .await
             .expect("state db should initialize");
+    runtime
+        .mark_backfill_complete(None)
+        .await
+        .expect("backfill should be complete");
     let created_at = chrono::Utc
         .with_ymd_and_hms(2025, 1, 3, 12, 0, 0)
         .single()
@@ -280,6 +284,10 @@ async fn find_thread_path_repairs_missing_db_row_after_filesystem_fallback() {
         codex_state::StateRuntime::init(home.to_path_buf(), TEST_PROVIDER.to_string(), None)
             .await
             .expect("state db should initialize");
+    _runtime
+        .mark_backfill_complete(None)
+        .await
+        .expect("backfill should be complete");
 
     let found = crate::rollout::find_thread_path_by_id_str(home, &uuid.to_string())
         .await

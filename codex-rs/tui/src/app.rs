@@ -1056,6 +1056,7 @@ impl App {
                 ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
             }
             SessionSelection::Fork(path) => {
+                otel_manager.counter("codex.thread.fork", 1, &[("source", "cli_subcommand")]);
                 let forked = thread_manager
                     .fork_thread(usize::MAX, config.clone(), path.clone())
                     .await
@@ -1433,6 +1434,8 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::ForkCurrentSession => {
+                self.otel_manager
+                    .counter("codex.thread.fork", 1, &[("source", "slash_command")]);
                 let summary = session_summary(
                     self.chat_widget.token_usage(),
                     self.chat_widget.thread_id(),
