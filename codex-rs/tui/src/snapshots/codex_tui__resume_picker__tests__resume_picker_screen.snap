@@ -2,9 +2,9 @@
 source: tui/src/resume_picker.rs
 expression: snapshot
 ---
-Resume a previous session  Sort: Creation
+Resume a previous session  Sort: Created at
 Type to search
-  Updated  Branch  CWD  Conversation
+  Created at  Updated at  Branch  CWD  Conversation
 No sessions yet
 
 

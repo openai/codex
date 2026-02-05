@@ -239,8 +239,8 @@ async fn run_session_picker(
 /// Returns the human-readable column header for the given sort key.
 fn sort_key_label(sort_key: ThreadSortKey) -> &'static str {
     match sort_key {
-        ThreadSortKey::CreatedAt => "Creation",
-        ThreadSortKey::UpdatedAt => "Last updated",
+        ThreadSortKey::CreatedAt => "Created at",
+        ThreadSortKey::UpdatedAt => "Updated at",
     }
 }
 
@@ -928,7 +928,7 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all);
 
         // Column headers and list
-        render_column_headers(frame, columns, &metrics);
+        render_column_headers(frame, columns, &metrics, state.sort_key);
         render_list(frame, list, state, &metrics);
 
         // Hint line
@@ -979,11 +979,13 @@ fn render_list(
     let labels = &metrics.labels;
     let mut y = area.y;
 
+    let visibility = column_visibility(area.width, metrics, state.sort_key);
+    let max_created_width = metrics.max_created_width;
     let max_updated_width = metrics.max_updated_width;
     let max_branch_width = metrics.max_branch_width;
     let max_cwd_width = metrics.max_cwd_width;
 
-    for (idx, (row, (updated_label, branch_label, cwd_label))) in rows[start..end]
+    for (idx, (row, (created_label, updated_label, branch_label, cwd_label))) in rows[start..end]
         .iter()
         .zip(labels[start..end].iter())
         .enumerate()
@@ -991,12 +993,17 @@ fn render_list(
         let is_sel = start + idx == state.selected;
         let marker = if is_sel { "> ".bold() } else { "  ".into() };
         let marker_width = 2usize;
-        let updated_span = if max_updated_width == 0 {
-            None
+        let created_span = if visibility.show_created {
+            Some(Span::from(format!("{created_label:<max_created_width$}")).dim())
         } else {
-            Some(Span::from(format!("{updated_label:<max_updated_width$}")).dim())
+            None
         };
-        let branch_span = if max_branch_width == 0 {
+        let updated_span = if visibility.show_updated {
+            Some(Span::from(format!("{updated_label:<max_updated_width$}")).dim())
+        } else {
+            None
+        };
+        let branch_span = if !visibility.show_branch {
             None
         } else if branch_label.is_empty() {
             Some(
@@ -1010,7 +1017,7 @@ fn render_list(
         } else {
             Some(Span::from(format!("{branch_label:<max_branch_width$}")).cyan())
         };
-        let cwd_span = if max_cwd_width == 0 {
+        let cwd_span = if !visibility.show_cwd {
             None
         } else if cwd_label.is_empty() {
             Some(
@@ -1027,21 +1034,31 @@ fn render_list(
 
         let mut preview_width = area.width as usize;
         preview_width = preview_width.saturating_sub(marker_width);
-        if max_updated_width > 0 {
+        if visibility.show_created {
+            preview_width = preview_width.saturating_sub(max_created_width + 2);
+        }
+        if visibility.show_updated {
             preview_width = preview_width.saturating_sub(max_updated_width + 2);
         }
-        if max_branch_width > 0 {
+        if visibility.show_branch {
             preview_width = preview_width.saturating_sub(max_branch_width + 2);
         }
-        if max_cwd_width > 0 {
+        if visibility.show_cwd {
             preview_width = preview_width.saturating_sub(max_cwd_width + 2);
         }
-        let add_leading_gap = max_updated_width == 0 && max_branch_width == 0 && max_cwd_width == 0;
+        let add_leading_gap = !visibility.show_created
+            && !visibility.show_updated
+            && !visibility.show_branch
+            && !visibility.show_cwd;
         if add_leading_gap {
             preview_width = preview_width.saturating_sub(2);
         }
         let preview = truncate_text(row.display_preview(), preview_width);
         let mut spans: Vec<Span> = vec![marker];
+        if let Some(created) = created_span {
+            spans.push(created);
+            spans.push("  ".into());
+        }
         if let Some(updated) = updated_span {
             spans.push(updated);
             spans.push("  ".into());
@@ -1143,26 +1160,45 @@ fn format_updated_label(row: &Row) -> String {
     }
 }
 
+fn format_created_label(row: &Row) -> String {
+    match (row.created_at, row.updated_at) {
+        (Some(created), _) => human_time_ago(created),
+        (None, Some(updated)) => human_time_ago(updated),
+        (None, None) => "-".to_string(),
+    }
+}
+
 fn render_column_headers(
     frame: &mut crate::custom_terminal::Frame,
     area: Rect,
     metrics: &ColumnMetrics,
+    sort_key: ThreadSortKey,
 ) {
     if area.height == 0 {
         return;
     }
 
     let mut spans: Vec<Span> = vec!["  ".into()];
-    if metrics.max_updated_width > 0 {
+    let visibility = column_visibility(area.width, metrics, sort_key);
+    if visibility.show_created {
         let label = format!(
             "{text:<width$}",
-            text = "Updated",
+            text = "Created at",
+            width = metrics.max_created_width
+        );
+        spans.push(Span::from(label).bold());
+        spans.push("  ".into());
+    }
+    if visibility.show_updated {
+        let label = format!(
+            "{text:<width$}",
+            text = "Updated at",
             width = metrics.max_updated_width
         );
         spans.push(Span::from(label).bold());
         spans.push("  ".into());
     }
-    if metrics.max_branch_width > 0 {
+    if visibility.show_branch {
         let label = format!(
             "{text:<width$}",
             text = "Branch",
@@ -1171,7 +1207,7 @@ fn render_column_headers(
         spans.push(Span::from(label).bold());
         spans.push("  ".into());
     }
-    if metrics.max_cwd_width > 0 {
+    if visibility.show_cwd {
         let label = format!(
             "{text:<width$}",
             text = "CWD",
@@ -1189,11 +1225,25 @@ fn render_column_headers(
 /// Widths are measured in Unicode display width (not byte length) so columns
 /// align correctly when labels contain non-ASCII characters.
 struct ColumnMetrics {
+    max_created_width: usize,
     max_updated_width: usize,
     max_branch_width: usize,
     max_cwd_width: usize,
-    /// (updated_label, branch_label, cwd_label) per row.
-    labels: Vec<(String, String, String)>,
+    /// (created_label, updated_label, branch_label, cwd_label) per row.
+    labels: Vec<(String, String, String, String)>,
+}
+
+/// Determines which columns to render given available terminal width.
+///
+/// When the terminal is narrow, only one timestamp column is shown (whichever
+/// matches the current sort key). Branch and CWD are hidden if their max
+/// widths are zero (no data to show).
+#[derive(Debug, PartialEq, Eq)]
+struct ColumnVisibility {
+    show_created: bool,
+    show_updated: bool,
+    show_branch: bool,
+    show_cwd: bool,
 }
 
 fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
@@ -1216,8 +1266,9 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
         format!("…{tail}")
     }
 
-    let mut labels: Vec<(String, String, String)> = Vec::with_capacity(rows.len());
-    let mut max_updated_width = UnicodeWidthStr::width("Updated");
+    let mut labels: Vec<(String, String, String, String)> = Vec::with_capacity(rows.len());
+    let mut max_created_width = UnicodeWidthStr::width("Created at");
+    let mut max_updated_width = UnicodeWidthStr::width("Updated at");
     let mut max_branch_width = UnicodeWidthStr::width("Branch");
     let mut max_cwd_width = if include_cwd {
         UnicodeWidthStr::width("CWD")
@@ -1226,6 +1277,7 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
     };
 
     for row in rows {
+        let created = format_created_label(row);
         let updated = format_updated_label(row);
         let branch_raw = row.git_branch.clone().unwrap_or_default();
         let branch = right_elide(&branch_raw, 24);
@@ -1239,17 +1291,71 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
         } else {
             String::new()
         };
+        max_created_width = max_created_width.max(UnicodeWidthStr::width(created.as_str()));
         max_updated_width = max_updated_width.max(UnicodeWidthStr::width(updated.as_str()));
         max_branch_width = max_branch_width.max(UnicodeWidthStr::width(branch.as_str()));
         max_cwd_width = max_cwd_width.max(UnicodeWidthStr::width(cwd.as_str()));
-        labels.push((updated, branch, cwd));
+        labels.push((created, updated, branch, cwd));
     }
 
     ColumnMetrics {
+        max_created_width,
         max_updated_width,
         max_branch_width,
         max_cwd_width,
         labels,
+    }
+}
+
+/// Computes which columns fit in the available width.
+///
+/// The algorithm reserves at least `MIN_PREVIEW_WIDTH` characters for the
+/// conversation preview. If both timestamp columns don't fit, only the one
+/// matching the current sort key is shown.
+fn column_visibility(
+    area_width: u16,
+    metrics: &ColumnMetrics,
+    sort_key: ThreadSortKey,
+) -> ColumnVisibility {
+    const MIN_PREVIEW_WIDTH: usize = 10;
+
+    let show_branch = metrics.max_branch_width > 0;
+    let show_cwd = metrics.max_cwd_width > 0;
+
+    // Calculate remaining width after all optional columns.
+    let mut preview_width = area_width as usize;
+    preview_width = preview_width.saturating_sub(2); // marker
+    if metrics.max_created_width > 0 {
+        preview_width = preview_width.saturating_sub(metrics.max_created_width + 2);
+    }
+    if metrics.max_updated_width > 0 {
+        preview_width = preview_width.saturating_sub(metrics.max_updated_width + 2);
+    }
+    if show_branch {
+        preview_width = preview_width.saturating_sub(metrics.max_branch_width + 2);
+    }
+    if show_cwd {
+        preview_width = preview_width.saturating_sub(metrics.max_cwd_width + 2);
+    }
+
+    // If preview would be too narrow, hide the non-active timestamp column.
+    let show_both = preview_width >= MIN_PREVIEW_WIDTH;
+    let show_created = if show_both {
+        metrics.max_created_width > 0
+    } else {
+        sort_key == ThreadSortKey::CreatedAt
+    };
+    let show_updated = if show_both {
+        metrics.max_updated_width > 0
+    } else {
+        sort_key == ThreadSortKey::UpdatedAt
+    };
+
+    ColumnVisibility {
+        show_created,
+        show_updated,
+        show_branch,
+        show_cwd,
     }
 }
 
@@ -1586,7 +1692,7 @@ mod tests {
             let area = frame.area();
             let segments =
                 Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(area);
-            render_column_headers(&mut frame, segments[0], &metrics);
+            render_column_headers(&mut frame, segments[0], &metrics, state.sort_key);
             render_list(&mut frame, segments[1], &state, &metrics);
         }
         terminal.flush().expect("flush");
@@ -1734,14 +1840,14 @@ mod tests {
                     "  ".into(),
                     "Sort:".dim(),
                     " ".into(),
-                    "Creation".magenta(),
+                    "Created at".magenta(),
                 ]),
                 header,
             );
 
             frame.render_widget_ref(Line::from("Type to search".dim()), search);
 
-            render_column_headers(&mut frame, columns, &metrics);
+            render_column_headers(&mut frame, columns, &metrics, state.sort_key);
             render_list(&mut frame, list, &state, &metrics);
 
             let hint_line: Line = vec![
@@ -1855,7 +1961,7 @@ mod tests {
             let area = frame.area();
             let segments =
                 Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(area);
-            render_column_headers(&mut frame, segments[0], &metrics);
+            render_column_headers(&mut frame, segments[0], &metrics, state.sort_key);
             render_list(&mut frame, segments[1], &state, &metrics);
         }
         terminal.flush().expect("flush");
@@ -1963,6 +2069,50 @@ mod tests {
         let guard = recorded_requests.lock().unwrap();
         assert_eq!(guard.len(), 1);
         assert!(guard[0].search_token.is_none());
+    }
+
+    #[test]
+    fn column_visibility_hides_extra_date_column_when_narrow() {
+        let metrics = ColumnMetrics {
+            max_created_width: 8,
+            max_updated_width: 12,
+            max_branch_width: 0,
+            max_cwd_width: 0,
+            labels: Vec::new(),
+        };
+
+        let created = column_visibility(30, &metrics, ThreadSortKey::CreatedAt);
+        assert_eq!(
+            created,
+            ColumnVisibility {
+                show_created: true,
+                show_updated: false,
+                show_branch: false,
+                show_cwd: false,
+            }
+        );
+
+        let updated = column_visibility(30, &metrics, ThreadSortKey::UpdatedAt);
+        assert_eq!(
+            updated,
+            ColumnVisibility {
+                show_created: false,
+                show_updated: true,
+                show_branch: false,
+                show_cwd: false,
+            }
+        );
+
+        let wide = column_visibility(40, &metrics, ThreadSortKey::CreatedAt);
+        assert_eq!(
+            wide,
+            ColumnVisibility {
+                show_created: true,
+                show_updated: true,
+                show_branch: false,
+                show_cwd: false,
+            }
+        );
     }
 
     #[tokio::test]
