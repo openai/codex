@@ -4679,18 +4679,19 @@ mod tests {
     #[tokio::test]
     async fn reconstruct_history_refreshes_developer_instructions_for_replacement_history() {
         let (session, turn_context) = make_session_and_context().await;
+        let summary_item = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "summary".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        };
         let rollout_items = vec![RolloutItem::Compacted(CompactedItem {
             message: String::new(),
             replacement_history: Some(vec![
-                ResponseItem::Message {
-                    id: None,
-                    role: "user".to_string(),
-                    content: vec![ContentItem::InputText {
-                        text: "summary".to_string(),
-                    }],
-                    end_turn: None,
-                    phase: None,
-                },
+                summary_item.clone(),
                 ResponseItem::Message {
                     id: None,
                     role: "developer".to_string(),
@@ -4721,27 +4722,9 @@ mod tests {
         });
         assert!(!has_stale_message);
 
-        let summary_position = reconstructed.iter().position(|item| {
-            matches!(
-                item,
-                ResponseItem::Message { role, content, .. }
-                    if role == "user"
-                        && content.iter().any(|part| matches!(
-                            part,
-                            ContentItem::InputText { text } if text == "summary"
-                        ))
-            )
-        });
-        let summary_position = summary_position.expect("summary should be present");
-        let initial_context = session.build_initial_context(&turn_context).await;
-        let expected_developer_messages: Vec<ResponseItem> = initial_context
-            .into_iter()
-            .filter(
-                |item| matches!(item, ResponseItem::Message { role, .. } if role == "developer"),
-            )
-            .collect();
-        let actual_after_summary = reconstructed[summary_position + 1..].to_vec();
-        assert_eq!(actual_after_summary, expected_developer_messages);
+        let mut expected = session.build_initial_context(&turn_context).await;
+        expected.push(summary_item);
+        assert_eq!(reconstructed, expected);
     }
 
     #[tokio::test]
