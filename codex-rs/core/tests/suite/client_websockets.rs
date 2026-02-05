@@ -120,7 +120,11 @@ async fn responses_websocket_includes_timing_metrics_header_when_runtime_metrics
             "type": "responsesapi.websocket_timing",
             "timing_metrics": {
                 "responses_duration_excl_engine_and_client_tool_time_ms": 120,
-                "engine_service_total_ms": 450
+                "engine_service_total_ms": 450,
+                "engine_iapi_ttft_total_ms": 310,
+                "engine_service_ttft_total_ms": 340,
+                "engine_iapi_tbt_across_engine_calls_ms": 220,
+                "engine_service_tbt_across_engine_calls_ms": 260
             }
         }),
         ev_completed("resp-1"),
@@ -147,6 +151,10 @@ async fn responses_websocket_includes_timing_metrics_header_when_runtime_metrics
         .expect("runtime metrics summary");
     assert_eq!(summary.responses_api_overhead_ms, 120);
     assert_eq!(summary.responses_api_inference_time_ms, 450);
+    assert_eq!(summary.responses_api_engine_iapi_ttft_ms, 310);
+    assert_eq!(summary.responses_api_engine_service_ttft_ms, 340);
+    assert_eq!(summary.responses_api_engine_iapi_tbt_ms, 220);
+    assert_eq!(summary.responses_api_engine_service_tbt_ms, 260);
 
     server.shutdown().await;
 }
