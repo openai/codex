@@ -1853,9 +1853,12 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
 #[tokio::test(flavor = "current_thread")]
 #[cfg(unix)]
 async fn heredoc_execpolicy_amendment_skips_future_approvals() -> Result<()> {
+    // Expected to fail currently: the approved amendment saves `["python3"]`, but heredoc
+    // scripts are evaluated via the wrapper command (`$SHELL -lc ...`), so the saved rule
+    // does not match the second run and approval is still requested.
     let server = start_mock_server().await;
-    let approval_policy = AskForApproval::UnlessTrusted;
-    let sandbox_policy = SandboxPolicy::ReadOnly;
+    let approval_policy = AskForApproval::OnRequest;
+    let sandbox_policy = SandboxPolicy::new_workspace_write_policy();
     let sandbox_policy_for_config = sandbox_policy.clone();
     let mut builder = test_codex().with_config(move |config| {
         config.approval_policy = Constrained::allow_any(approval_policy);
@@ -1981,11 +1984,11 @@ PY"#;
 #[tokio::test(flavor = "current_thread")]
 #[cfg(unix)]
 async fn heredoc_execpolicy_preconfigured_skips_approval_and_succeeds() -> Result<()> {
-    // Expected to fail currently: heredoc (`<<`) is not parsed as a plain shell command,
-    // so execpolicy falls back to matching the wrapper (`$SHELL -lc ...`), not `["python3"]`.
+    // Expected to succeed: heredoc scripts are evaluated against the shell wrapper command,
+    // so preconfiguring allow for `[$SHELL, "-lc"]` skips approval.
     let server = start_mock_server().await;
-    let approval_policy = AskForApproval::UnlessTrusted;
-    let sandbox_policy = SandboxPolicy::ReadOnly;
+    let approval_policy = AskForApproval::OnRequest;
+    let sandbox_policy = SandboxPolicy::new_workspace_write_policy();
     let sandbox_policy_for_config = sandbox_policy.clone();
     let mut builder = test_codex().with_config(move |config| {
         config.approval_policy = Constrained::allow_any(approval_policy);
@@ -2006,9 +2009,12 @@ async fn heredoc_execpolicy_preconfigured_skips_approval_and_succeeds() -> Resul
     });
     let test = builder.build(&server).await?;
 
-    let command = r#"python3 <<'PY'
-print("hello")
-PY"#;
+    let outside_path = env::current_dir()
+        .expect("current dir should be available")
+        .join("python-touch-outside-execpolicy.txt");
+    let _ = fs::remove_file(&outside_path);
+    let command =
+        format!("python3 <<'PY'\nfrom pathlib import Path\nPath({outside_path:?}).touch()\nPY");
 
     let call_id = "heredoc-preconfigured";
     let args = json!({
@@ -2047,18 +2053,24 @@ PY"#;
 
     let output = parse_result(&results.single_request().function_call_output(call_id));
     assert_eq!(output.exit_code.unwrap_or(0), 0);
+    assert!(
+        outside_path.exists(),
+        "expected outside path to exist: {}",
+        outside_path.display()
+    );
+    let _ = fs::remove_file(outside_path);
 
     Ok(())
 }
 
 #[tokio::test(flavor = "current_thread")]
 #[cfg(unix)]
-async fn touch_execpolicy_preconfigured_allows_outside_workspace_write() -> Result<()> {
+async fn heredoc_touch_execpolicy_preconfigured_allows_outside_workspace_write() -> Result<()> {
     // Expected to succeed: `touch ...` is parsed as a plain shell command, so the
     // preconfigured allow rule `["touch"]` matches and skips approval.
     let server = start_mock_server().await;
-    let approval_policy = AskForApproval::UnlessTrusted;
-    let sandbox_policy = SandboxPolicy::DangerFullAccess;
+    let approval_policy = AskForApproval::OnRequest;
+    let sandbox_policy = SandboxPolicy::new_workspace_write_policy();
     let sandbox_policy_for_config = sandbox_policy.clone();
     let mut builder = test_codex().with_config(move |config| {
         config.approval_policy = Constrained::allow_any(approval_policy);
