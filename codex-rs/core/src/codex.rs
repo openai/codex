@@ -5846,7 +5846,7 @@ mod tests {
     #[tokio::test]
     async fn model_change_appends_model_instructions_developer_message() {
         let (session, previous_context, _rx) = make_session_and_context_with_rx().await;
-        let previous_model = previous_context.client.get_model().to_string();
+        let previous_model = previous_context.model_info.slug.clone();
         let config = session.get_config().await;
         let available_models = session
             .services
@@ -5890,8 +5890,7 @@ mod tests {
             content: vec![ContentItem::InputText {
                 text: DeveloperInstructions::model_switch_message(
                     next_context
-                        .client
-                        .get_model_info()
+                        .model_info
                         .get_model_instructions(next_context.personality),
                 )
                 .into_text(),
