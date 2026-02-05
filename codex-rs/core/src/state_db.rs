@@ -391,6 +391,53 @@ pub async fn reconcile_rollout(
     }
 }
 
+/// Repair a thread's rollout path after filesystem fallback succeeds.
+pub async fn read_repair_rollout_path(
+    context: Option<&codex_state::StateRuntime>,
+    thread_id: Option<ThreadId>,
+    archived_only: Option<bool>,
+    rollout_path: &Path,
+) {
+    let Some(ctx) = context else {
+        return;
+    };
+
+    if let Some(thread_id) = thread_id
+        && let Ok(Some(mut metadata)) = ctx.get_thread(thread_id).await
+    {
+        metadata.rollout_path = rollout_path.to_path_buf();
+        if let Some(archived_only) = archived_only {
+            if archived_only && metadata.archived_at.is_none() {
+                metadata.archived_at = Some(metadata.updated_at);
+            } else if !archived_only {
+                metadata.archived_at = None;
+            }
+        }
+        if let Err(err) = ctx.upsert_thread(&metadata).await {
+            warn!(
+                "state db read-repair upsert failed for {}: {err}",
+                rollout_path.display()
+            );
+        } else {
+            return;
+        }
+    }
+
+    let default_provider = crate::rollout::list::read_session_meta_line(rollout_path)
+        .await
+        .ok()
+        .and_then(|meta| meta.meta.model_provider)
+        .unwrap_or_default();
+    reconcile_rollout(
+        Some(ctx),
+        rollout_path,
+        default_provider.as_str(),
+        None,
+        &[],
+    )
+    .await;
+}
+
 /// Apply rollout items incrementally to SQLite.
 pub async fn apply_rollout_items(
     context: Option<&codex_state::StateRuntime>,

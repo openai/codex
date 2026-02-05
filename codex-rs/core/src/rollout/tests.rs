@@ -250,7 +250,31 @@ async fn find_thread_path_falls_back_when_db_path_is_stale() {
     let found = crate::rollout::find_thread_path_by_id_str(home, &uuid.to_string())
         .await
         .expect("lookup should succeed");
-    assert_eq!(found, Some(fs_rollout_path));
+    assert_eq!(found, Some(fs_rollout_path.clone()));
+    assert_state_db_rollout_path(home, thread_id, Some(fs_rollout_path.as_path())).await;
+}
+
+#[tokio::test]
+async fn find_thread_path_repairs_missing_db_row_after_filesystem_fallback() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+    let uuid = Uuid::from_u128(303);
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+    let ts = "2025-01-03T13-00-00";
+    write_session_file(home, ts, uuid, 1, Some(SessionSource::Cli)).unwrap();
+    let fs_rollout_path = home.join(format!("sessions/2025/01/03/rollout-{ts}-{uuid}.jsonl"));
+
+    // Create an empty state DB so lookup takes the DB-first path and then falls back to files.
+    let _runtime =
+        codex_state::StateRuntime::init(home.to_path_buf(), TEST_PROVIDER.to_string(), None)
+            .await
+            .expect("state db should initialize");
+
+    let found = crate::rollout::find_thread_path_by_id_str(home, &uuid.to_string())
+        .await
+        .expect("lookup should succeed");
+    assert_eq!(found, Some(fs_rollout_path.clone()));
+    assert_state_db_rollout_path(home, thread_id, Some(fs_rollout_path.as_path())).await;
 }
 
 #[test]
@@ -261,6 +285,22 @@ fn rollout_date_parts_extracts_directory_components() {
         parts,
         Some(("2025".to_string(), "03".to_string(), "01".to_string()))
     );
+}
+
+async fn assert_state_db_rollout_path(
+    home: &Path,
+    thread_id: ThreadId,
+    expected_path: Option<&Path>,
+) {
+    let runtime =
+        codex_state::StateRuntime::init(home.to_path_buf(), TEST_PROVIDER.to_string(), None)
+            .await
+            .expect("state db should initialize");
+    let path = runtime
+        .find_rollout_path_by_id(thread_id, Some(false))
+        .await
+        .expect("state db lookup should succeed");
+    assert_eq!(path.as_deref(), expected_path);
 }
 
 fn write_session_file(

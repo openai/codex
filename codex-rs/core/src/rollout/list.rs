@@ -1088,9 +1088,10 @@ async fn find_thread_path_by_id_str_in_subdir(
         ARCHIVED_SESSIONS_SUBDIR => Some(true),
         _ => None,
     };
+    let thread_id = ThreadId::from_string(id_str).ok();
     let state_db_ctx = state_db::open_if_present(codex_home, "").await;
     if let Some(state_db_ctx) = state_db_ctx.as_deref()
-        && let Ok(thread_id) = ThreadId::from_string(id_str)
+        && let Some(thread_id) = thread_id
         && let Some(db_path) = state_db::find_rollout_path_by_id(
             Some(state_db_ctx),
             thread_id,
@@ -1128,9 +1129,16 @@ async fn find_thread_path_by_id_str_in_subdir(
         .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
 
     let found = results.matches.into_iter().next().map(|m| m.full_path());
-    if found.is_some() {
+    if let Some(found_path) = found.as_ref() {
         tracing::error!("state db missing rollout path for thread {id_str}");
         state_db::record_discrepancy("find_thread_path_by_id_str_in_subdir", "falling_back");
+        state_db::read_repair_rollout_path(
+            state_db_ctx.as_deref(),
+            thread_id,
+            archived_only,
+            found_path.as_path(),
+        )
+        .await;
     }
 
     Ok(found)
