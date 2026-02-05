@@ -39,6 +39,8 @@ use tempfile::TempDir;
 use tracing_test::traced_test;
 
 const MODEL: &str = "gpt-5.2-codex";
+const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
+const OPENAI_BETA_RESPONSES_WEBSOCKETS: &str = "responses_websockets=2026-02-04";
 
 struct WebsocketTestHarness {
     _codex_home: TempDir,
@@ -74,6 +76,11 @@ async fn responses_websocket_streams_request() {
     assert_eq!(body["model"].as_str(), Some(MODEL));
     assert_eq!(body["stream"], serde_json::Value::Bool(true));
     assert_eq!(body["input"].as_array().map(Vec::len), Some(1));
+    let handshake = server.single_handshake();
+    assert_eq!(
+        handshake.header(OPENAI_BETA_HEADER),
+        Some(OPENAI_BETA_RESPONSES_WEBSOCKETS.to_string())
+    );
 
     server.shutdown().await;
 }
