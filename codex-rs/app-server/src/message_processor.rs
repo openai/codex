@@ -236,6 +236,12 @@ impl MessageProcessor {
                     self.outgoing.send_error(request_id, error).await;
                     return;
                 } else {
+                    // TODO(maxj): Revisit capability scoping for `experimental_api_enabled`.
+                    // Current behavior is per-connection. Reviewer feedback notes this can
+                    // create odd cross-client behavior (for example dynamic tool calls on a
+                    // shared thread when another connected client did not opt into
+                    // experimental API). Proposed direction is instance-global first-write-wins
+                    // with initialize-time mismatch rejection.
                     session.experimental_api_enabled = params
                         .capabilities
                         .as_ref()

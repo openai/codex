@@ -565,7 +565,8 @@ impl CodexMessageProcessor {
                 });
             }
             ClientRequest::ExperimentalFeatureList { request_id, params } => {
-                self.experimental_feature_list(request_id, params).await;
+                self.experimental_feature_list(to_connection_request_id(request_id), params)
+                    .await;
             }
             ClientRequest::CollaborationModeList { request_id, params } => {
                 let outgoing = self.outgoing.clone();
@@ -3247,7 +3248,7 @@ impl CodexMessageProcessor {
 
     async fn experimental_feature_list(
         &self,
-        request_id: RequestId,
+        request_id: ConnectionRequestId,
         params: ExperimentalFeatureListParams,
     ) {
         let ExperimentalFeatureListParams { cursor, limit } = params;
