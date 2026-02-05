@@ -266,8 +266,17 @@ pub(crate) fn process_compacted_history(
 
     let initial_context = initial_context_for_reinjection(initial_context);
 
-    // Re-inject canonical context from the current session since we stripped from the pre-compaction history.
-    compacted_history.extend(initial_context);
+    // Re-inject canonical context from the current session since we stripped it
+    // from the pre-compaction history. Keep it right before the last user
+    // message so older user messages remain earlier in the transcript.
+    if let Some(last_user_index) = compacted_history
+        .iter()
+        .rposition(|item| matches!(item, ResponseItem::Message { role, .. } if role == "user"))
+    {
+        compacted_history.splice(last_user_index..last_user_index, initial_context);
+    } else {
+        compacted_history.extend(initial_context);
+    }
 
     compacted_history
 }
@@ -694,15 +703,6 @@ mod tests {
         let expected = vec![
             ResponseItem::Message {
                 id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "summary".to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-            ResponseItem::Message {
-                id: None,
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText {
                     text: "fresh permissions".to_string(),
@@ -724,6 +724,15 @@ mod tests {
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText {
                     text: "fresh personality".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "summary".to_string(),
                 }],
                 end_turn: None,
                 phase: None,
@@ -786,15 +795,6 @@ mod tests {
         let expected = vec![
             ResponseItem::Message {
                 id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "summary".to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-            ResponseItem::Message {
-                id: None,
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText {
                     text: "fresh permissions".to_string(),
@@ -824,7 +824,17 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<turn_aborted>\n  <turn_id>turn-1</turn_id>\n  <reason>interrupted</reason>\n</turn_aborted>".to_string(),
+                    text: "<turn_aborted>\n  <turn_id>turn-1</turn_id>\n  <reason>interrupted</reason>\n</turn_aborted>"
+                        .to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "summary".to_string(),
                 }],
                 end_turn: None,
                 phase: None,
@@ -900,7 +910,14 @@ mod tests {
         let refreshed = process_compacted_history(compacted_history, &initial_context);
         let reinjected_context_tokens: usize = refreshed
             .iter()
-            .skip(1)
+            .filter(|item| {
+                !matches!(
+                    item,
+                    ResponseItem::Message { role, content, .. }
+                        if role == "user"
+                            && content_items_to_text(content).as_deref() == Some("summary")
+                )
+            })
             .map(estimate_response_item_tokens)
             .sum();
         assert!(
@@ -1014,9 +1031,65 @@ mod tests {
         let expected = vec![
             ResponseItem::Message {
                 id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "fresh developer instructions".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
                     text: "summary".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ];
+        assert_eq!(refreshed, expected);
+    }
+
+    #[test]
+    fn process_compacted_history_inserts_context_before_last_user_message_only() {
+        let compacted_history = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "older user".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "latest user".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ];
+        let initial_context = vec![ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "fresh permissions".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }];
+
+        let refreshed = process_compacted_history(compacted_history, &initial_context);
+        let expected = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "older user".to_string(),
                 }],
                 end_turn: None,
                 phase: None,
@@ -1025,7 +1098,16 @@ mod tests {
                 id: None,
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "fresh developer instructions".to_string(),
+                    text: "fresh permissions".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "latest user".to_string(),
                 }],
                 end_turn: None,
                 phase: None,
