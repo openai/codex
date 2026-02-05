@@ -259,10 +259,10 @@ fn sandbox_tag(policy: &SandboxPolicy, windows_sandbox_level: WindowsSandboxLeve
     if matches!(policy, SandboxPolicy::ExternalSandbox { .. }) {
         return "external";
     }
-    if cfg!(target_os = "windows") {
-        if matches!(windows_sandbox_level, WindowsSandboxLevel::Elevated) {
-            return "windows_elevated";
-        }
+    if cfg!(target_os = "windows")
+        && matches!(windows_sandbox_level, WindowsSandboxLevel::Elevated)
+    {
+        return "windows_elevated";
     }
 
     get_platform_sandbox(windows_sandbox_level != WindowsSandboxLevel::Disabled)
