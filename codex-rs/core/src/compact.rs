@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::ModelProviderInfo;
 use crate::Prompt;
+use crate::client::ModelClientSession;
 use crate::client_common::ResponseEvent;
 use crate::codex::Session;
 use crate::codex::TurnContext;
@@ -19,6 +20,7 @@ use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::truncate_text;
 use crate::util::backoff;
+use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
@@ -87,6 +89,10 @@ async fn run_compact_task_inner(
 
     let max_retries = turn_context.provider.stream_max_retries();
     let mut retries = 0;
+    let turn_metadata_header = turn_context.resolve_turn_metadata_header().await;
+    let mut client_session = sess.services.model_client.new_session();
+    // Reuse one client session so turn-scoped state (sticky routing, websocket append tracking)
+    // survives retries within this compact turn.
 
     // TODO: If we need to guarantee the persisted mode always matches the prompt used for this
     // turn, capture it in TurnContext at creation time. Using SessionConfiguration here avoids
@@ -119,7 +125,14 @@ async fn run_compact_task_inner(
             personality: turn_context.personality,
             ..Default::default()
         };
-        let attempt_result = drain_to_completed(&sess, turn_context.as_ref(), &prompt).await;
+        let attempt_result = drain_to_completed(
+            &sess,
+            turn_context.as_ref(),
+            &mut client_session,
+            turn_metadata_header.as_deref(),
+            &prompt,
+        )
+        .await;
 
         match attempt_result {
             Ok(()) => {
@@ -335,11 +348,25 @@ fn build_compacted_history_with_limit(
 async fn drain_to_completed(
     sess: &Session,
     turn_context: &TurnContext,
+    client_session: &mut ModelClientSession,
+    turn_metadata_header: Option<&str>,
     prompt: &Prompt,
 ) -> CodexResult<()> {
-    let turn_metadata_header = turn_context.resolve_turn_metadata_header().await;
-    let mut client_session = turn_context.client.new_session(turn_metadata_header);
-    let mut stream = client_session.stream(prompt).await?;
+    let web_search_eligible = !matches!(
+        turn_context.config.web_search_mode,
+        Some(WebSearchMode::Disabled)
+    );
+    let mut stream = client_session
+        .stream(
+            prompt,
+            &turn_context.model_info,
+            &turn_context.otel_manager,
+            turn_context.reasoning_effort,
+            turn_context.reasoning_summary,
+            web_search_eligible,
+            turn_metadata_header,
+        )
+        .await?;
     loop {
         let maybe_event = stream.next().await;
         let Some(event) = maybe_event else {

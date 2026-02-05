@@ -1,3 +1,4 @@
+use codex_protocol::models::FunctionCallOutputBody;
 use std::collections::VecDeque;
 use std::ffi::OsStr;
 use std::fs::FileType;
@@ -102,8 +103,7 @@ impl ToolHandler for ListDirHandler {
         output.push(format!("Absolute path: {}", path.display()));
         output.extend(entries);
         Ok(ToolOutput::Function {
-            content: output.join("\n"),
-            content_items: None,
+            body: FunctionCallOutputBody::Text(output.join("\n")),
             success: Some(true),
         })
     }

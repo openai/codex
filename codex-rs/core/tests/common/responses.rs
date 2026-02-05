@@ -375,6 +375,10 @@ pub fn sse(events: Vec<Value>) -> String {
     out
 }
 
+pub fn sse_completed(id: &str) -> String {
+    sse(vec![ev_response_created(id), ev_completed(id)])
+}
+
 /// Convenience: SSE event for a completed response with a specific id.
 pub fn ev_completed(id: &str) -> Value {
     serde_json::json!({

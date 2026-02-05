@@ -1,3 +1,4 @@
+use codex_protocol::models::FunctionCallOutputBody;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 
@@ -146,8 +147,7 @@ impl ToolHandler for ReadFileHandler {
             }
         };
         Ok(ToolOutput::Function {
-            content: collected.join("\n"),
-            content_items: None,
+            body: FunctionCallOutputBody::Text(collected.join("\n")),
             success: Some(true),
         })
     }
