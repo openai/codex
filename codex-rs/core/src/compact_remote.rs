@@ -24,7 +24,7 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
 
 pub(crate) async fn run_remote_compact_task(sess: Arc<Session>, turn_context: Arc<TurnContext>) {
     let start_event = EventMsg::TurnStarted(TurnStartedEvent {
-        model_context_window: turn_context.client.get_model_context_window(),
+        model_context_window: turn_context.model_context_window(),
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, start_event).await;
@@ -76,9 +76,14 @@ async fn run_remote_compact_task_inner_impl(
         output_schema: None,
     };
 
-    let mut new_history = turn_context
-        .client
-        .compact_conversation_history(&prompt)
+    let mut new_history = sess
+        .services
+        .model_client
+        .compact_conversation_history(
+            &prompt,
+            &turn_context.model_info,
+            &turn_context.otel_manager,
+        )
         .await?;
 
     if !ghost_snapshots.is_empty() {
@@ -104,7 +109,7 @@ fn trim_function_call_history_to_fit_context_window(
     turn_context: &TurnContext,
 ) -> usize {
     let mut deleted_items = 0usize;
-    let Some(context_window) = turn_context.client.get_model_context_window() else {
+    let Some(context_window) = turn_context.model_context_window() else {
         return deleted_items;
     };
 

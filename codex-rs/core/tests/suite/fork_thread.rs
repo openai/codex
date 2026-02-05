@@ -6,6 +6,9 @@ use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
 use codex_protocol::items::TurnItem;
 use codex_protocol::user_input::UserInput;
+use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_response_created;
+use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
@@ -15,18 +18,13 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
-/// Build minimal SSE stream with completed marker using the JSON fixture.
-fn sse_completed(id: &str) -> String {
-    core_test_support::load_sse_fixture_with_id("../fixtures/completed_template.json", id)
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fork_thread_twice_drops_to_first_message() {
     skip_if_no_network!();
 
     // Start a mock server that completes three turns.
     let server = MockServer::start().await;
-    let sse = sse_completed("resp");
+    let sse = sse(vec![ev_response_created("resp"), ev_completed("resp")]);
     let first = ResponseTemplate::new(200)
         .insert_header("content-type", "text/event-stream")
         .set_body_raw(sse.clone(), "text/event-stream");

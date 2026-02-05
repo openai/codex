@@ -89,6 +89,8 @@ pub enum Feature {
     WebSearchCached,
     /// Gate the execpolicy enforcement for shell/unified exec.
     ExecPolicy,
+    /// Use the bubblewrap-based Linux sandbox pipeline.
+    UseLinuxSandboxBwrap,
     /// Allow the model to request approval and propose exec rules.
     RequestRule,
     /// Enable Windows sandbox (restricted token) on Windows.
@@ -407,6 +409,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::UnifiedExec,
+        key: "unified_exec",
+        stage: Stage::Stable,
+        default_enabled: !cfg!(windows),
+    },
+    FeatureSpec {
         id: Feature::WebSearchRequest,
         key: "web_search_request",
         stage: Stage::Deprecated,
@@ -419,16 +427,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     // Experimental program. Rendered in the `/experimental` menu for users.
-    FeatureSpec {
-        id: Feature::UnifiedExec,
-        key: "unified_exec",
-        stage: Stage::Experimental {
-            name: "Background terminal",
-            menu_description: "Run long-running terminal commands in the background.",
-            announcement: "NEW! Try Background terminals for long-running commands. Enable in /experimental!",
-        },
-        default_enabled: false,
-    },
     FeatureSpec {
         id: Feature::ShellSnapshot,
         key: "shell_snapshot",
@@ -468,6 +466,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "exec_policy",
         stage: Stage::UnderDevelopment,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::UseLinuxSandboxBwrap,
+        key: "use_linux_sandbox_bwrap",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::RequestRule,
