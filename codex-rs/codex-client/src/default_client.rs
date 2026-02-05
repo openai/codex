@@ -111,10 +111,41 @@ impl CodexRequestBuilder {
     }
 
     pub async fn send(self) -> Result<Response, reqwest::Error> {
+        let residency_header = self
+            .builder
+            .try_clone()
+            .and_then(|builder| builder.build().ok())
+            .and_then(|request| {
+                request
+                    .headers()
+                    .get("x-openai-internal-codex-residency")
+                    .and_then(|value| value.to_str().ok())
+                    .map(std::borrow::ToOwned::to_owned)
+            });
         let headers = trace_headers();
 
         match self.builder.headers(headers).send().await {
             Ok(response) => {
+                if is_codex_responses_path(&self.url) && response.status().as_u16() == 401 {
+                    let cf_ray = response
+                        .headers()
+                        .get("cf-ray")
+                        .and_then(|value| value.to_str().ok());
+                    let auth_error = response
+                        .headers()
+                        .get("x-openai-authorization-error")
+                        .and_then(|value| value.to_str().ok());
+                    tracing::info!(
+                        method = %self.method,
+                        url = %self.url,
+                        status = %response.status(),
+                        residency_header_present = residency_header.is_some(),
+                        residency_header_value = ?residency_header,
+                        cf_ray,
+                        auth_error,
+                        "Codex responses request returned unauthorized"
+                    );
+                }
                 tracing::debug!(
                     method = %self.method,
                     url = %self.url,
@@ -139,6 +170,11 @@ impl CodexRequestBuilder {
             }
         }
     }
+}
+
+fn is_codex_responses_path(url: &str) -> bool {
+    url.contains("/backend-api/codex/responses")
+        || url.contains("/chat/backend/api/codex/responses")
 }
 
 struct HeaderMapInjector<'a>(&'a mut HeaderMap);
