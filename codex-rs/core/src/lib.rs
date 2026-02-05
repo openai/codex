@@ -32,6 +32,7 @@ pub mod exec;
 pub mod exec_env;
 mod exec_policy;
 pub mod features;
+pub mod file_ignore;
 mod file_watcher;
 mod flags;
 pub mod git_info;

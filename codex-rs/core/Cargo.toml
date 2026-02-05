@@ -107,7 +107,7 @@ tree-sitter-bash = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4", "v5"] }
 which = { workspace = true }
-wildmatch = { workspace = true }
+wildmatch.workspace = true
 zip = { workspace = true }
 
 [features]

@@ -8,6 +8,7 @@ use tokio::process::Command;
 use tokio::time::timeout;
 
 use crate::function_tool::FunctionCallError;
+use crate::file_ignore::FileIgnore;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -82,8 +83,9 @@ impl ToolHandler for GrepFilesHandler {
             }
         });
 
+        let file_ignore = invocation.session.services.file_ignore.read().await;
         let search_results =
-            run_rg_search(pattern, include.as_deref(), &search_path, limit, &turn.cwd).await?;
+            run_rg_search(pattern, include.as_deref(), &search_path, limit, &turn.cwd, &*file_ignore).await?;
 
         if search_results.is_empty() {
             Ok(ToolOutput::Function {
@@ -112,6 +114,7 @@ async fn run_rg_search(
     search_path: &Path,
     limit: usize,
     cwd: &Path,
+    file_ignore: &FileIgnore,
 ) -> Result<Vec<String>, FunctionCallError> {
     let mut command = Command::new("rg");
     command
@@ -124,6 +127,16 @@ async fn run_rg_search(
 
     if let Some(glob) = include {
         command.arg("--glob").arg(glob);
+    }
+
+    // Add ignore files
+    for ignore_file in file_ignore.ignore_files() {
+        command.arg("--ignore-file").arg(ignore_file);
+    }
+
+    // Add default deny patterns as exclusions
+    for pattern in file_ignore.default_patterns() {
+        command.arg("-g").arg(format!("!{pattern}"));
     }
 
     command.arg("--").arg(search_path);
@@ -175,6 +188,7 @@ mod tests {
     use super::*;
     use std::process::Command as StdCommand;
     use tempfile::tempdir;
+    use crate::file_ignore::FileIgnore;
 
     #[test]
     fn parses_basic_results() {
@@ -207,7 +221,8 @@ mod tests {
         std::fs::write(dir.join("match_two.txt"), "alpha delta").unwrap();
         std::fs::write(dir.join("other.txt"), "omega").unwrap();
 
-        let results = run_rg_search("alpha", None, dir, 10, dir).await?;
+        let ignore = FileIgnore::new();
+        let results = run_rg_search("alpha", None, dir, 10, dir, &ignore).await?;
         assert_eq!(results.len(), 2);
         assert!(results.iter().any(|path| path.ends_with("match_one.txt")));
         assert!(results.iter().any(|path| path.ends_with("match_two.txt")));
@@ -224,7 +239,8 @@ mod tests {
         std::fs::write(dir.join("match_one.rs"), "alpha beta gamma").unwrap();
         std::fs::write(dir.join("match_two.txt"), "alpha delta").unwrap();
 
-        let results = run_rg_search("alpha", Some("*.rs"), dir, 10, dir).await?;
+        let ignore = FileIgnore::new();
+        let results = run_rg_search("alpha", Some("*.rs"), dir, 10, dir, &ignore).await?;
         assert_eq!(results.len(), 1);
         assert!(results.iter().all(|path| path.ends_with("match_one.rs")));
         Ok(())
@@ -241,7 +257,8 @@ mod tests {
         std::fs::write(dir.join("two.txt"), "alpha two").unwrap();
         std::fs::write(dir.join("three.txt"), "alpha three").unwrap();
 
-        let results = run_rg_search("alpha", None, dir, 2, dir).await?;
+        let ignore = FileIgnore::new();
+        let results = run_rg_search("alpha", None, dir, 2, dir, &ignore).await?;
         assert_eq!(results.len(), 2);
         Ok(())
     }
@@ -255,7 +272,8 @@ mod tests {
         let dir = temp.path();
         std::fs::write(dir.join("one.txt"), "omega").unwrap();
 
-        let results = run_rg_search("alpha", None, dir, 5, dir).await?;
+        let ignore = FileIgnore::new();
+        let results = run_rg_search("alpha", None, dir, 5, dir, &ignore).await?;
         assert!(results.is_empty());
         Ok(())
     }

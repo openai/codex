@@ -6,6 +6,7 @@ use crate::agent::AgentControl;
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::client::ModelClient;
 use crate::exec_policy::ExecPolicyManager;
+use crate::file_ignore::FileIgnore;
 use crate::file_watcher::FileWatcher;
 use crate::hooks::Hooks;
 use crate::mcp_connection_manager::McpConnectionManager;
@@ -29,6 +30,7 @@ pub(crate) struct SessionServices {
     pub(crate) user_shell: Arc<crate::shell::Shell>,
     pub(crate) show_raw_agent_reasoning: bool,
     pub(crate) exec_policy: ExecPolicyManager,
+    pub(crate) file_ignore: Arc<RwLock<FileIgnore>>,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: Arc<ModelsManager>,
     pub(crate) otel_manager: OtelManager,

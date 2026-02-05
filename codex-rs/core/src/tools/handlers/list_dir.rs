@@ -12,6 +12,7 @@ use tokio::fs;
 
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
+use crate::file_ignore::FileIgnore;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
@@ -98,7 +99,18 @@ impl ToolHandler for ListDirHandler {
             ));
         }
 
-        let entries = list_dir_slice(&path, offset, limit, depth).await?;
+        {
+            let file_ignore = invocation.session.services.file_ignore.read().await;
+            if file_ignore.is_denied(&path) {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "access to {} is denied by ignore patterns",
+                    path.display()
+                )));
+            }
+        }
+
+        let file_ignore = invocation.session.services.file_ignore.read().await;
+        let entries = list_dir_slice(&path, offset, limit, depth, &*file_ignore).await?;
         let mut output = Vec::with_capacity(entries.len() + 1);
         output.push(format!("Absolute path: {}", path.display()));
         output.extend(entries);
@@ -114,9 +126,10 @@ async fn list_dir_slice(
     offset: usize,
     limit: usize,
     depth: usize,
+    file_ignore: &FileIgnore,
 ) -> Result<Vec<String>, FunctionCallError> {
     let mut entries = Vec::new();
-    collect_entries(path, Path::new(""), depth, &mut entries).await?;
+    collect_entries(path, Path::new(""), depth, &mut entries, file_ignore).await?;
 
     if entries.is_empty() {
         return Ok(Vec::new());
@@ -153,6 +166,7 @@ async fn collect_entries(
     relative_prefix: &Path,
     depth: usize,
     entries: &mut Vec<DirEntry>,
+    file_ignore: &FileIgnore,
 ) -> Result<(), FunctionCallError> {
     let mut queue = VecDeque::new();
     queue.push_back((dir_path.to_path_buf(), relative_prefix.to_path_buf(), depth));
@@ -167,6 +181,11 @@ async fn collect_entries(
         while let Some(entry) = read_dir.next_entry().await.map_err(|err| {
             FunctionCallError::RespondToModel(format!("failed to read directory: {err}"))
         })? {
+            let entry_path = entry.path();
+            if file_ignore.is_denied(&entry_path) {
+                continue;
+            }
+
             let file_type = entry.file_type().await.map_err(|err| {
                 FunctionCallError::RespondToModel(format!("failed to inspect entry: {err}"))
             })?;
@@ -209,7 +228,7 @@ async fn collect_entries(
 }
 
 fn format_entry_name(path: &Path) -> String {
-    let normalized = path.to_string_lossy().replace("\\", "/");
+    let normalized = path.to_string_lossy().replace("\", "/");
     if normalized.len() > MAX_ENTRY_LENGTH {
         take_bytes_at_char_boundary(&normalized, MAX_ENTRY_LENGTH).to_string()
     } else {
@@ -273,6 +292,7 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
+    use crate::file_ignore::FileIgnore;
 
     #[tokio::test]
     async fn lists_directory_entries() {
@@ -306,7 +326,8 @@ mod tests {
             symlink(dir_path.join("entry.txt"), &link_path).expect("create symlink");
         }
 
-        let entries = list_dir_slice(dir_path, 1, 20, 3)
+        let file_ignore = FileIgnore::new();
+        let entries = list_dir_slice(dir_path, 1, 20, 3, &file_ignore)
             .await
             .expect("list directory");
 
@@ -340,7 +361,8 @@ mod tests {
             .await
             .expect("create sub dir");
 
-        let err = list_dir_slice(dir_path, 10, 1, 2)
+        let file_ignore = FileIgnore::new();
+        let err = list_dir_slice(dir_path, 10, 1, 2, &file_ignore)
             .await
             .expect_err("offset exceeds entries");
         assert_eq!(
@@ -367,7 +389,8 @@ mod tests {
             .await
             .expect("write deeper");
 
-        let entries_depth_one = list_dir_slice(dir_path, 1, 10, 1)
+        let file_ignore = FileIgnore::new();
+        let entries_depth_one = list_dir_slice(dir_path, 1, 10, 1, &file_ignore)
             .await
             .expect("list depth 1");
         assert_eq!(
@@ -375,7 +398,7 @@ mod tests {
             vec!["nested/".to_string(), "root.txt".to_string(),]
         );
 
-        let entries_depth_two = list_dir_slice(dir_path, 1, 20, 2)
+        let entries_depth_two = list_dir_slice(dir_path, 1, 20, 2, &file_ignore)
             .await
             .expect("list depth 2");
         assert_eq!(
@@ -388,7 +411,7 @@ mod tests {
             ]
         );
 
-        let entries_depth_three = list_dir_slice(dir_path, 1, 30, 3)
+        let entries_depth_three = list_dir_slice(dir_path, 1, 30, 3, &file_ignore)
             .await
             .expect("list depth 3");
         assert_eq!(
@@ -420,7 +443,8 @@ mod tests {
             .await
             .expect("write b child");
 
-        let first_page = list_dir_slice(dir_path, 1, 2, 2)
+        let file_ignore = FileIgnore::new();
+        let first_page = list_dir_slice(dir_path, 1, 2, 2, &file_ignore)
             .await
             .expect("list page one");
         assert_eq!(
@@ -432,7 +456,7 @@ mod tests {
             ]
         );
 
-        let second_page = list_dir_slice(dir_path, 3, 2, 2)
+        let second_page = list_dir_slice(dir_path, 3, 2, 2, &file_ignore)
             .await
             .expect("list page two");
         assert_eq!(
@@ -455,7 +479,8 @@ mod tests {
             .await
             .expect("write gamma");
 
-        let entries = list_dir_slice(dir_path, 2, usize::MAX, 1)
+        let file_ignore = FileIgnore::new();
+        let entries = list_dir_slice(dir_path, 2, usize::MAX, 1, &file_ignore)
             .await
             .expect("list without overflow");
         assert_eq!(
@@ -476,7 +501,8 @@ mod tests {
                 .expect("write file");
         }
 
-        let entries = list_dir_slice(dir_path, 1, 25, 1)
+        let file_ignore = FileIgnore::new();
+        let entries = list_dir_slice(dir_path, 1, 25, 1, &file_ignore)
             .await
             .expect("list directory");
         assert_eq!(entries.len(), 26);
@@ -498,7 +524,8 @@ mod tests {
         tokio::fs::write(nested.join("child.txt"), b"child").await?;
         tokio::fs::write(deeper.join("grandchild.txt"), b"deep").await?;
 
-        let entries_depth_three = list_dir_slice(dir_path, 1, 3, 3).await?;
+        let file_ignore = FileIgnore::new();
+        let entries_depth_three = list_dir_slice(dir_path, 1, 3, 3, &file_ignore).await?;
         assert_eq!(
             entries_depth_three,
             vec![

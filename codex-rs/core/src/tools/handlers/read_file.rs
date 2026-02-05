@@ -139,6 +139,16 @@ impl ToolHandler for ReadFileHandler {
             ));
         }
 
+        {
+            let file_ignore = invocation.session.services.file_ignore.read().await;
+            if file_ignore.is_denied(&path) {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "access to {} is denied by ignore patterns",
+                    path.display()
+                )));
+            }
+        }
+
         let collected = match mode {
             ReadMode::Slice => slice::read(&path, offset, limit).await?,
             ReadMode::Indentation => {

@@ -24,6 +24,7 @@ use crate::features::FEATURES;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::features::maybe_push_unstable_features_warning;
+use crate::file_ignore::FileIgnore;
 use crate::hooks::HookEvent;
 use crate::hooks::HookEventAfterAgent;
 use crate::hooks::Hooks;
@@ -1010,6 +1011,10 @@ impl Session {
         session_configuration.thread_name = thread_name.clone();
         let state = SessionState::new(session_configuration.clone());
 
+        let mut file_ignore = FileIgnore::new();
+        file_ignore.load(&config).await;
+        let file_ignore = Arc::new(RwLock::new(file_ignore));
+
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
@@ -1023,6 +1028,7 @@ impl Session {
             user_shell: Arc::new(default_shell),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             exec_policy,
+            file_ignore,
             auth_manager: Arc::clone(&auth_manager),
             otel_manager,
             models_manager: Arc::clone(&models_manager),
@@ -3289,7 +3295,7 @@ mod handlers {
             };
             sess.send_event_raw(event).await;
             return;
-        };
+        }
 
         let codex_home = sess.codex_home().await;
         if let Err(e) =
