@@ -84,6 +84,7 @@ mod live_cli;
 mod live_reload;
 mod model_info_overrides;
 mod model_overrides;
+mod model_switching;
 mod model_tools;
 mod models_cache_ttl;
 mod models_etag_responses;
