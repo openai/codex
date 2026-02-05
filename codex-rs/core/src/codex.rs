@@ -1686,6 +1686,17 @@ impl Session {
             .map(|task| Arc::clone(&task.turn_context))
     }
 
+    async fn active_turn_context_and_cancellation_token(
+        &self,
+    ) -> Option<(Arc<TurnContext>, CancellationToken)> {
+        let active = self.active_turn.lock().await;
+        let (_, task) = active.as_ref()?.tasks.first()?;
+        Some((
+            Arc::clone(&task.turn_context),
+            task.cancellation_token.child_token(),
+        ))
+    }
+
     pub(crate) async fn record_execpolicy_amendment_message(
         &self,
         sub_id: &str,
@@ -2716,7 +2727,9 @@ mod handlers {
     use crate::tasks::CompactTask;
     use crate::tasks::RegularTask;
     use crate::tasks::UndoTask;
+    use crate::tasks::UserShellCommandMode;
     use crate::tasks::UserShellCommandTask;
+    use crate::tasks::execute_user_shell_command;
     use codex_protocol::custom_prompts::CustomPrompt;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::ErrorEvent;
@@ -2863,6 +2876,23 @@ mod handlers {
         command: String,
         previous_context: &mut Option<Arc<TurnContext>>,
     ) {
+        if let Some((turn_context, cancellation_token)) =
+            sess.active_turn_context_and_cancellation_token().await
+        {
+            let session = Arc::clone(sess);
+            tokio::spawn(async move {
+                execute_user_shell_command(
+                    session,
+                    turn_context,
+                    command,
+                    cancellation_token,
+                    UserShellCommandMode::ActiveTurnAuxiliary,
+                )
+                .await;
+            });
+            return;
+        }
+
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
         sess.spawn_task(
             Arc::clone(&turn_context),
@@ -4807,6 +4837,7 @@ mod tests {
     use codex_app_server_protocol::AuthMode;
     use codex_protocol::models::BaseInstructions;
     use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseInputItem;
     use codex_protocol::models::ResponseItem;
     use std::path::Path;
     use std::time::Duration;
@@ -6042,6 +6073,50 @@ mod tests {
         }
         // No extra events should be emitted after an abort.
         assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn task_finish_persists_leftover_pending_input() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+        let input = vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }];
+        sess.spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: false,
+            },
+        )
+        .await;
+
+        sess.inject_response_items(vec![ResponseInputItem::Message {
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "late pending input".to_string(),
+            }],
+        }])
+        .await
+        .expect("inject pending input into active turn");
+
+        sess.on_task_finished(Arc::clone(&tc), None).await;
+
+        let history = sess.clone_history().await;
+        let expected = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "late pending input".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        };
+        assert!(
+            history.raw_items().iter().any(|item| item == &expected),
+            "expected pending input to be persisted into history on turn completion"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

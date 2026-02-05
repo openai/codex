@@ -1,5 +1,6 @@
 use anyhow::Context;
 use codex_core::features::Feature;
+use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::ExecCommandSource;
@@ -7,6 +8,8 @@ use codex_core::protocol::ExecOutputStream;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TurnAbortReason;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
@@ -23,6 +26,8 @@ use core_test_support::wait_for_event_match;
 use regex_lite::escape;
 use std::path::PathBuf;
 use tempfile::TempDir;
+use tokio::time::Duration;
+use tokio::time::timeout;
 
 #[tokio::test]
 async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
@@ -117,6 +122,115 @@ async fn user_shell_cmd_can_be_interrupted() {
         unreachable!()
     };
     assert_eq!(ev.reason, TurnAbortReason::Interrupted);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_shell_command_does_not_replace_active_turn() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_model("gpt-5.1");
+    let fixture = builder.build(&server).await?;
+
+    let call_id = "active-turn-shell-call";
+    let args = if cfg!(windows) {
+        serde_json::json!({
+            "command": "Start-Sleep -Seconds 2; Write-Output model-shell",
+            "timeout_ms": 10_000,
+        })
+    } else {
+        serde_json::json!({
+            "command": "sleep 2; echo model-shell",
+            "timeout_ms": 10_000,
+        })
+    };
+    let first = sse(vec![
+        ev_response_created("resp-1"),
+        ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+        ev_completed("resp-1"),
+    ]);
+    let second = sse(vec![
+        ev_assistant_message("msg-1", "done"),
+        ev_completed("resp-2"),
+    ]);
+    let mock = responses::mount_sse_sequence(&server, vec![first, second]).await;
+
+    fixture
+        .codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "run model shell command".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: fixture.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: fixture.session_configured.model.clone(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    let _ = wait_for_event_match(&fixture.codex, |ev| match ev {
+        EventMsg::ExecCommandBegin(event) if event.source == ExecCommandSource::Agent => {
+            Some(event.clone())
+        }
+        _ => None,
+    })
+    .await;
+
+    #[cfg(windows)]
+    let user_shell_command = "Write-Output user-shell".to_string();
+    #[cfg(not(windows))]
+    let user_shell_command = "printf user-shell".to_string();
+    fixture
+        .codex
+        .submit(Op::RunUserShellCommand {
+            command: user_shell_command,
+        })
+        .await?;
+
+    let mut saw_replaced_abort = false;
+    let mut saw_user_shell_end = false;
+    let mut saw_turn_complete = false;
+    for _ in 0..200 {
+        let event = timeout(Duration::from_secs(20), fixture.codex.next_event())
+            .await
+            .context("timed out waiting for event")?
+            .context("event stream ended unexpectedly")?;
+        match event.msg {
+            EventMsg::TurnAborted(ev) if ev.reason == TurnAbortReason::Replaced => {
+                saw_replaced_abort = true;
+            }
+            EventMsg::ExecCommandEnd(ev) if ev.source == ExecCommandSource::UserShell => {
+                saw_user_shell_end = true;
+            }
+            EventMsg::TurnComplete(_) => {
+                saw_turn_complete = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    assert!(saw_turn_complete, "expected turn to complete");
+    assert!(
+        saw_user_shell_end,
+        "expected user shell command to finish while turn was active"
+    );
+    assert!(
+        !saw_replaced_abort,
+        "user shell command should not replace the active turn"
+    );
+
+    assert_eq!(
+        mock.requests().len(),
+        2,
+        "active turn should continue and issue the follow-up model request"
+    );
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
