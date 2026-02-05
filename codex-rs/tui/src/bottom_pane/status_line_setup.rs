@@ -147,7 +147,7 @@ impl StatusLineItem {
             StatusLineItem::ContextRemaining => "18% left",
             StatusLineItem::ContextUsed => "82% used",
             StatusLineItem::FiveHourLimit => "5h 100%",
-            StatusLineItem::WeeklyLimit => "7d 98%",
+            StatusLineItem::WeeklyLimit => "weekly 98%",
             StatusLineItem::CodexVersion => "v0.93.0",
             StatusLineItem::ContextWindowSize => "258K",
             StatusLineItem::UsedTokens => "27.3K used",
