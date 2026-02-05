@@ -15,7 +15,7 @@
 - [Skills](#skills)
 - [Apps](#apps)
 - [Auth endpoints](#auth-endpoints)
-- [Adding an experimental field](#adding-an-experimental-field)
+- [Experimental API Opt-in](#experimental-api-opt-in)
 
 ## Protocol
 
@@ -97,6 +97,7 @@ Example (from OpenAI's official VSCode extension):
 - `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
 - `model/list` — list available models (with reasoning effort options and optional `upgrade` model ids).
+- `experimentalFeature/list` — list experimental feature flags with metadata (flag name, display name, description, announcement, enabled/default-enabled) and cursor pagination.
 - `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination).
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
 - `skills/remote/read` — list public remote skills (**under development; do not call from production clients yet**).
@@ -127,6 +128,7 @@ Start a fresh thread when you need a new Codex conversation.
     "approvalPolicy": "never",
     "sandbox": "workspaceWrite",
     "personality": "friendly",
+    // Experimental: requires opt-in
     "dynamicTools": [
         {
             "name": "lookup_ticket",
@@ -151,6 +153,8 @@ Start a fresh thread when you need a new Codex conversation.
 } }
 { "method": "thread/started", "params": { "thread": { … } } }
 ```
+
+Valid `personality` values are `"friendly"`, `"pragmatic"`, and `"none"`. When `"none"` is selected, the personality placeholder is replaced with an empty string.
 
 To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape matches `thread/start`, and no additional notifications are emitted. You can also pass the same configuration overrides supported by `thread/start`, such as `personality`:
 
@@ -559,6 +563,41 @@ Order of messages:
 
 UI guidance for IDEs: surface an approval dialog as soon as the request arrives. The turn will proceed after the server receives a response to the approval request. The terminal `item/completed` notification will be sent with the appropriate status.
 
+### Dynamic tool calls (experimental)
+
+`dynamicTools` on `thread/start` and the corresponding `item/tool/call` request/response flow are experimental APIs. To enable them, set `initialize.params.capabilities.experimentalApi = true`.
+
+When a dynamic tool is invoked during a turn, the server sends an `item/tool/call` JSON-RPC request to the client:
+
+```json
+{
+  "method": "item/tool/call",
+  "id": 60,
+  "params": {
+    "threadId": "thr_123",
+    "turnId": "turn_123",
+    "callId": "call_123",
+    "tool": "lookup_ticket",
+    "arguments": { "id": "ABC-123" }
+  }
+}
+```
+
+The client must respond with content items. Use `inputText` for text and `inputImage` for image URLs/data URLs:
+
+```json
+{
+  "id": 60,
+  "result": {
+    "contentItems": [
+      { "type": "inputText", "text": "Ticket ABC-123 is open." },
+      { "type": "inputImage", "imageUrl": "data:image/png;base64,AAA" }
+    ],
+    "success": true
+  }
+}
+```
+
 ## Skills
 
 Invoke a skill by including `$<skill-name>` in the text input. Add a `skill` input item (recommended) so the backend injects full skill instructions instead of relying on the model to resolve the name.
@@ -794,7 +833,67 @@ Field notes:
 - `windowDurationMins` is the quota window length.
 - `resetsAt` is a Unix timestamp (seconds) for the next reset.
 
-## Adding an experimental field
+## Experimental API Opt-in
+
+Some app-server methods and fields are intentionally gated behind an experimental capability with no backwards-compatible guarantees. This lets clients choose between:
+
+- Stable surface only (default): no opt-in, no experimental methods/fields exposed.
+- Experimental surface: opt in during `initialize`.
+
+### Generating stable vs experimental client schemas
+
+`codex app-server` schema generation defaults to the stable API surface (experimental fields and methods filtered out). Pass `--experimental` to include experimental methods/fields in generated TypeScript or JSON schema:
+
+```bash
+# Stable-only output (default)
+codex app-server generate-ts --out DIR
+codex app-server generate-json-schema --out DIR
+
+# Include experimental API surface
+codex app-server generate-ts --out DIR --experimental
+codex app-server generate-json-schema --out DIR --experimental
+```
+
+### How clients opt in at runtime
+
+Set `capabilities.experimentalApi` to `true` in your single `initialize` request:
+
+```json
+{
+  "method": "initialize",
+  "id": 1,
+  "params": {
+    "clientInfo": {
+      "name": "my_client",
+      "title": "My Client",
+      "version": "0.1.0"
+    },
+    "capabilities": {
+      "experimentalApi": true
+    }
+  }
+}
+```
+
+Then send the standard `initialized` notification and proceed normally.
+
+Notes:
+
+- If `capabilities` is omitted, `experimentalApi` is treated as `false`.
+- This setting is negotiated once at initialization time for the process lifetime (re-initializing is rejected with `"Already initialized"`).
+
+### What happens without opt-in
+
+If a request uses an experimental method or sets an experimental field without opting in, app-server rejects it with a JSON-RPC error. The message is:
+
+`<descriptor> requires experimentalApi capability`
+
+Examples of descriptor strings:
+
+- `mock/experimentalMethod` (method-level gate)
+- `thread/start.mockExperimentalField` (field-level gate)
+
+### For maintainers: Adding experimental fields and methods
 Use this checklist when introducing a field/method that should only be available when the client opts into experimental APIs.
 
 At runtime, clients must send `initialize` with `capabilities.experimentalApi = true` to use experimental methods or fields.

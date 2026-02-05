@@ -1,3 +1,4 @@
+use crate::TelemetryAuthMode;
 use crate::metrics::names::API_CALL_COUNT_METRIC;
 use crate::metrics::names::API_CALL_DURATION_METRIC;
 use crate::metrics::names::RESPONSES_API_INFERENCE_TIME_DURATION_METRIC;
@@ -15,7 +16,6 @@ use chrono::SecondsFormat;
 use chrono::Utc;
 use codex_api::ApiError;
 use codex_api::ResponseEvent;
-use codex_app_server_protocol::AuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ResponseItem;
@@ -57,7 +57,7 @@ impl OtelManager {
         slug: &str,
         account_id: Option<String>,
         account_email: Option<String>,
-        auth_mode: Option<AuthMode>,
+        auth_mode: Option<TelemetryAuthMode>,
         log_user_prompts: bool,
         terminal_type: String,
         session_source: SessionSource,
@@ -566,11 +566,12 @@ impl OtelManager {
         );
     }
 
-    pub async fn log_tool_result<F, Fut, E>(
+    pub async fn log_tool_result_with_tags<F, Fut, E>(
         &self,
         tool_name: &str,
         call_id: &str,
         arguments: &str,
+        extra_tags: &[(&str, &str)],
         f: F,
     ) -> Result<(String, bool), E>
     where
@@ -587,13 +588,14 @@ impl OtelManager {
             Err(error) => (Cow::Owned(error.to_string()), false),
         };
 
-        self.tool_result(
+        self.tool_result_with_tags(
             tool_name,
             call_id,
             arguments,
             duration,
             success,
             output.as_ref(),
+            extra_tags,
         );
 
         result
@@ -619,7 +621,8 @@ impl OtelManager {
         );
     }
 
-    pub fn tool_result(
+    #[allow(clippy::too_many_arguments)]
+    pub fn tool_result_with_tags(
         &self,
         tool_name: &str,
         call_id: &str,
@@ -627,18 +630,15 @@ impl OtelManager {
         duration: Duration,
         success: bool,
         output: &str,
+        extra_tags: &[(&str, &str)],
     ) {
         let success_str = if success { "true" } else { "false" };
-        self.counter(
-            TOOL_CALL_COUNT_METRIC,
-            1,
-            &[("tool", tool_name), ("success", success_str)],
-        );
-        self.record_duration(
-            TOOL_CALL_DURATION_METRIC,
-            duration,
-            &[("tool", tool_name), ("success", success_str)],
-        );
+        let mut tags = Vec::with_capacity(2 + extra_tags.len());
+        tags.push(("tool", tool_name));
+        tags.push(("success", success_str));
+        tags.extend_from_slice(extra_tags);
+        self.counter(TOOL_CALL_COUNT_METRIC, 1, &tags);
+        self.record_duration(TOOL_CALL_DURATION_METRIC, duration, &tags);
         tracing::event!(
             tracing::Level::INFO,
             event.name = "codex.tool_result",

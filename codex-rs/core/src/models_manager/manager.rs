@@ -61,7 +61,7 @@ impl ModelsManager {
         let cache_path = codex_home.join(MODEL_CACHE_FILE);
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
         Self {
-            local_models: builtin_model_presets(auth_manager.get_internal_auth_mode()),
+            local_models: builtin_model_presets(auth_manager.auth_mode()),
             remote_models: RwLock::new(Self::load_remote_models_from_file().unwrap_or_default()),
             auth_manager,
             etag: RwLock::new(None),
@@ -175,7 +175,7 @@ impl ModelsManager {
         refresh_strategy: RefreshStrategy,
     ) -> CoreResult<()> {
         if !config.features.enabled(Feature::RemoteModels)
-            || self.auth_manager.get_internal_auth_mode() == Some(AuthMode::ApiKey)
+            || self.auth_manager.auth_mode() == Some(AuthMode::ApiKey)
         {
             return Ok(());
         }
@@ -204,7 +204,7 @@ impl ModelsManager {
         let _timer =
             codex_otel::start_global_timer("codex.remote_models.fetch_update.duration_ms", &[]);
         let auth = self.auth_manager.auth().await;
-        let auth_mode = self.auth_manager.get_internal_auth_mode();
+        let auth_mode = self.auth_manager.auth_mode();
         let api_provider = self.provider.to_api_provider(auth_mode)?;
         let api_auth = auth_provider_from_auth(auth.clone(), &self.provider)?;
         let transport = ReqwestTransport::new(build_reqwest_client());
@@ -275,10 +275,7 @@ impl ModelsManager {
         let remote_presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
         let existing_presets = self.local_models.clone();
         let mut merged_presets = ModelPreset::merge(remote_presets, existing_presets);
-        let chatgpt_mode = matches!(
-            self.auth_manager.get_internal_auth_mode(),
-            Some(AuthMode::Chatgpt)
-        );
+        let chatgpt_mode = matches!(self.auth_manager.auth_mode(), Some(AuthMode::Chatgpt));
         merged_presets = ModelPreset::filter_by_auth(merged_presets, chatgpt_mode);
 
         for preset in &mut merged_presets {
@@ -322,7 +319,7 @@ impl ModelsManager {
         let cache_path = codex_home.join(MODEL_CACHE_FILE);
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
         Self {
-            local_models: builtin_model_presets(auth_manager.get_internal_auth_mode()),
+            local_models: builtin_model_presets(auth_manager.auth_mode()),
             remote_models: RwLock::new(Self::load_remote_models_from_file().unwrap_or_default()),
             auth_manager,
             etag: RwLock::new(None),

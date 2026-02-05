@@ -1568,6 +1568,7 @@ dependencies = [
  "libc",
  "maplit",
  "multimap",
+ "notify",
  "once_cell",
  "openssl-sys",
  "opentelemetry_sdk",
@@ -1801,7 +1802,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
- "which",
 ]
 
 [[package]]
@@ -1921,9 +1921,9 @@ version = "0.0.0"
 dependencies = [
  "chrono",
  "codex-api",
- "codex-app-server-protocol",
  "codex-protocol",
  "codex-utils-absolute-path",
+ "codex-utils-string",
  "eventsource-stream",
  "http 1.4.0",
  "opentelemetry",
@@ -1931,6 +1931,7 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry-semantic-conventions",
  "opentelemetry_sdk",
+ "os_info",
  "pretty_assertions",
  "reqwest",
  "serde",
@@ -2248,6 +2249,9 @@ dependencies = [
 [[package]]
 name = "codex-utils-string"
 version = "0.0.0"
+dependencies = [
+ "pretty_assertions",
+]
 
 [[package]]
 name = "codex-windows-sandbox"

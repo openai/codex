@@ -11,6 +11,7 @@ use crate::protocol::McpInvocation;
 use crate::protocol::McpToolCallBeginEvent;
 use crate::protocol::McpToolCallEndEvent;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::AskForApproval;
@@ -46,9 +47,8 @@ pub(crate) async fn handle_mcp_tool_call(
                 return ResponseInputItem::FunctionCallOutput {
                     call_id: call_id.clone(),
                     output: FunctionCallOutputPayload {
-                        content: format!("err: {e}"),
+                        body: FunctionCallOutputBody::Text(format!("err: {e}")),
                         success: Some(false),
-                        ..Default::default()
                     },
                 };
             }

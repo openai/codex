@@ -99,6 +99,12 @@ impl Default for ConfigRequirements {
     }
 }
 
+impl ConfigRequirements {
+    pub fn exec_policy_source(&self) -> Option<&RequirementSource> {
+        self.exec_policy.as_ref().map(|policy| &policy.source)
+    }
+}
+
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum McpServerIdentity {

@@ -1,3 +1,4 @@
+use codex_protocol::models::FunctionCallOutputBody;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
@@ -91,8 +92,7 @@ impl ToolHandler for TestSyncHandler {
         }
 
         Ok(ToolOutput::Function {
-            content: "ok".to_string(),
-            content_items: None,
+            body: FunctionCallOutputBody::Text("ok".to_string()),
             success: Some(true),
         })
     }
