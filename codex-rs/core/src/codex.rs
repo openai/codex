@@ -1176,32 +1176,26 @@ impl Session {
                 {
                     let mut state = self.state.lock().await;
                     state.initial_context_seeded = false;
+                    state.pending_resume_previous_model = None;
                 }
 
                 // If resuming, warn when the last recorded model differs from the current one.
-                if let Some(prev) = rollout_items.iter().rev().find_map(|it| {
-                    if let RolloutItem::TurnContext(ctx) = it {
-                        Some(ctx.model.as_str())
-                    } else {
-                        None
-                    }
-                }) {
-                    let curr = turn_context.model_info.slug.as_str();
-                    if prev != curr {
-                        warn!(
-                            "resuming session with different model: previous={prev}, current={curr}"
-                        );
-                        self.send_event(
-                            &turn_context,
-                            EventMsg::Warning(WarningEvent {
-                                message: format!(
-                                    "This session was recorded with model `{prev}` but is resuming with `{curr}`. \
+                let curr = turn_context.model_info.slug.as_str();
+                if let Some(prev) = Self::last_resumed_model_mismatch(&rollout_items, curr) {
+                    warn!("resuming session with different model: previous={prev}, current={curr}");
+                    self.send_event(
+                        &turn_context,
+                        EventMsg::Warning(WarningEvent {
+                            message: format!(
+                                "This session was recorded with model `{prev}` but is resuming with `{curr}`. \
                          Consider switching back to `{prev}` as it may affect Codex performance."
-                                ),
-                            }),
-                        )
-                            .await;
-                    }
+                            ),
+                        }),
+                    )
+                    .await;
+
+                    let mut state = self.state.lock().await;
+                    state.pending_resume_previous_model = Some(prev.to_string());
                 }
 
                 // Always add response items to conversation history
@@ -1260,11 +1254,34 @@ impl Session {
         }
     }
 
+    fn last_resumed_model_mismatch<'a>(
+        rollout_items: &'a [RolloutItem],
+        current: &str,
+    ) -> Option<&'a str> {
+        let previous = rollout_items.iter().rev().find_map(|it| {
+            if let RolloutItem::TurnContext(ctx) = it {
+                Some(ctx.model.as_str())
+            } else {
+                None
+            }
+        })?;
+        if previous == current {
+            None
+        } else {
+            Some(previous)
+        }
+    }
+
     fn last_token_info_from_rollout(rollout_items: &[RolloutItem]) -> Option<TokenUsageInfo> {
         rollout_items.iter().rev().find_map(|item| match item {
             RolloutItem::EventMsg(EventMsg::TokenCount(ev)) => ev.info.clone(),
             _ => None,
         })
+    }
+
+    async fn take_pending_resume_previous_model(&self) -> Option<String> {
+        let mut state = self.state.lock().await;
+        state.pending_resume_previous_model.take()
     }
 
     pub(crate) async fn update_settings(
@@ -1517,6 +1534,21 @@ impl Session {
         }
 
         Some(DeveloperInstructions::model_switch_message(model_instructions).into())
+    }
+
+    fn is_model_switch_item(item: &ResponseItem) -> bool {
+        let ResponseItem::Message { role, content, .. } = item else {
+            return false;
+        };
+        if role != "developer" {
+            return false;
+        }
+        content.iter().any(|part| match part {
+            ContentItem::InputText { text, .. } | ContentItem::OutputText { text } => {
+                text.contains("<model_switch>")
+            }
+            _ => false,
+        })
     }
 
     fn build_settings_update_items(
@@ -2725,6 +2757,7 @@ mod handlers {
     use codex_protocol::config_types::Settings;
     use codex_protocol::dynamic_tools::DynamicToolResponse;
     use codex_protocol::mcp::RequestId as ProtocolRequestId;
+    use codex_protocol::models::DeveloperInstructions;
     use codex_protocol::user_input::UserInput;
     use codex_rmcp_client::ElicitationAction;
     use codex_rmcp_client::ElicitationResponse;
@@ -2819,8 +2852,24 @@ mod handlers {
         // Attempt to inject input into current task
         if let Err(items) = sess.inject_input(items).await {
             sess.seed_initial_context_if_needed(&current_context).await;
-            let update_items =
+            let mut update_items =
                 sess.build_settings_update_items(previous_context.as_ref(), &current_context);
+            if let Some(previous_model) = sess.take_pending_resume_previous_model().await {
+                let model_switch_already_present =
+                    update_items.iter().any(Session::is_model_switch_item);
+                if !model_switch_already_present
+                    && previous_model != current_context.model_info.slug
+                {
+                    let model_instructions = current_context
+                        .model_info
+                        .get_model_instructions(current_context.personality);
+                    if !model_instructions.is_empty() {
+                        update_items.push(
+                            DeveloperInstructions::model_switch_message(model_instructions).into(),
+                        );
+                    }
+                }
+            }
             if !update_items.is_empty() {
                 sess.record_conversation_items(&current_context, &update_items)
                     .await;
