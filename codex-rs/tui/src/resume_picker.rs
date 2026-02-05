@@ -1327,13 +1327,13 @@ mod tests {
     use super::*;
     use chrono::Duration;
     use codex_protocol::ThreadId;
-    use codex_protocol::models::ContentItem;
-    use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::RolloutLine;
     use codex_protocol::protocol::SessionMeta;
     use codex_protocol::protocol::SessionMetaLine;
     use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::UserMessageEvent;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyModifiers;
@@ -1433,15 +1433,12 @@ mod tests {
             };
             let user_line = RolloutLine {
                 timestamp: ts.to_rfc3339(),
-                item: RolloutItem::ResponseItem(ResponseItem::Message {
-                    id: None,
-                    role: String::from("user"),
-                    content: vec![ContentItem::InputText {
-                        text: preview.to_string(),
-                    }],
-                    end_turn: None,
-                    phase: None,
-                }),
+                item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                    message: preview.to_string(),
+                    images: None,
+                    text_elements: Vec::new(),
+                    local_images: Vec::new(),
+                })),
             };
             let meta_json = serde_json::to_string(&meta_line).expect("serialize meta");
             let user_json = serde_json::to_string(&user_line).expect("serialize user");
