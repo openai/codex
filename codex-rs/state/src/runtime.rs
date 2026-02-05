@@ -38,7 +38,7 @@ use std::time::Duration;
 use tracing::warn;
 
 pub const STATE_DB_FILENAME: &str = "state";
-pub const STATE_DB_VERSION: u32 = 2;
+pub const STATE_DB_VERSION: u32 = 3;
 
 const METRIC_DB_INIT: &str = "codex.db.init";
 
@@ -91,6 +91,80 @@ impl StateRuntime {
         self.codex_home.as_path()
     }
 
+    /// Get persisted rollout metadata backfill state.
+    pub async fn get_backfill_state(&self) -> anyhow::Result<crate::BackfillState> {
+        self.ensure_backfill_state_row().await?;
+        let row = sqlx::query(
+            r#"
+SELECT status, last_watermark, last_success_at
+FROM backfill_state
+WHERE id = 1
+            "#,
+        )
+        .fetch_one(self.pool.as_ref())
+        .await?;
+        crate::BackfillState::try_from_row(&row)
+    }
+
+    /// Mark rollout metadata backfill as running.
+    pub async fn mark_backfill_running(&self) -> anyhow::Result<()> {
+        self.ensure_backfill_state_row().await?;
+        sqlx::query(
+            r#"
+UPDATE backfill_state
+SET status = ?, updated_at = ?
+WHERE id = 1
+            "#,
+        )
+        .bind(crate::BackfillStatus::Running.as_str())
+        .bind(Utc::now().timestamp())
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(())
+    }
+
+    /// Persist rollout metadata backfill progress.
+    pub async fn checkpoint_backfill(&self, watermark: &str) -> anyhow::Result<()> {
+        self.ensure_backfill_state_row().await?;
+        sqlx::query(
+            r#"
+UPDATE backfill_state
+SET status = ?, last_watermark = ?, updated_at = ?
+WHERE id = 1
+            "#,
+        )
+        .bind(crate::BackfillStatus::Running.as_str())
+        .bind(watermark)
+        .bind(Utc::now().timestamp())
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(())
+    }
+
+    /// Mark rollout metadata backfill as complete.
+    pub async fn mark_backfill_complete(&self, last_watermark: Option<&str>) -> anyhow::Result<()> {
+        self.ensure_backfill_state_row().await?;
+        let now = Utc::now().timestamp();
+        sqlx::query(
+            r#"
+UPDATE backfill_state
+SET
+    status = ?,
+    last_watermark = COALESCE(?, last_watermark),
+    last_success_at = ?,
+    updated_at = ?
+WHERE id = 1
+            "#,
+        )
+        .bind(crate::BackfillStatus::Complete.as_str())
+        .bind(last_watermark)
+        .bind(now)
+        .bind(now)
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(())
+    }
+
     /// Load thread metadata by id using the underlying database.
     pub async fn get_thread(&self, id: ThreadId) -> anyhow::Result<Option<crate::ThreadMetadata>> {
         let row = sqlx::query(
@@ -103,11 +177,12 @@ SELECT
     source,
     model_provider,
     cwd,
+    cli_version,
     title,
     sandbox_policy,
     approval_mode,
     tokens_used,
-    has_user_event,
+    first_user_message,
     archived_at,
     git_sha,
     git_branch,
@@ -221,11 +296,12 @@ SELECT
     source,
     model_provider,
     cwd,
+    cli_version,
     title,
     sandbox_policy,
     approval_mode,
     tokens_used,
-    has_user_event,
+    first_user_message,
     archived_at,
     git_sha,
     git_branch,
@@ -375,17 +451,18 @@ INSERT INTO threads (
     source,
     model_provider,
     cwd,
+    cli_version,
     title,
     sandbox_policy,
     approval_mode,
     tokens_used,
-    has_user_event,
+    first_user_message,
     archived,
     archived_at,
     git_sha,
     git_branch,
     git_origin_url
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
@@ -393,11 +470,12 @@ ON CONFLICT(id) DO UPDATE SET
     source = excluded.source,
     model_provider = excluded.model_provider,
     cwd = excluded.cwd,
+    cli_version = excluded.cli_version,
     title = excluded.title,
     sandbox_policy = excluded.sandbox_policy,
     approval_mode = excluded.approval_mode,
     tokens_used = excluded.tokens_used,
-    has_user_event = excluded.has_user_event,
+    first_user_message = excluded.first_user_message,
     archived = excluded.archived,
     archived_at = excluded.archived_at,
     git_sha = excluded.git_sha,
@@ -412,11 +490,12 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.source.as_str())
         .bind(metadata.model_provider.as_str())
         .bind(metadata.cwd.display().to_string())
+        .bind(metadata.cli_version.as_str())
         .bind(metadata.title.as_str())
         .bind(metadata.sandbox_policy.as_str())
         .bind(metadata.approval_mode.as_str())
         .bind(metadata.tokens_used)
-        .bind(metadata.has_user_event)
+        .bind(metadata.first_user_message.as_deref().unwrap_or_default())
         .bind(metadata.archived_at.is_some())
         .bind(metadata.archived_at.map(datetime_to_epoch_seconds))
         .bind(metadata.git_sha.as_deref())
@@ -637,6 +716,22 @@ ON CONFLICT(thread_id, position) DO NOTHING
         }
         self.upsert_thread(&metadata).await
     }
+
+    async fn ensure_backfill_state_row(&self) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"
+INSERT INTO backfill_state (id, status, last_watermark, last_success_at, updated_at)
+VALUES (?, ?, NULL, NULL, ?)
+ON CONFLICT(id) DO NOTHING
+            "#,
+        )
+        .bind(1_i64)
+        .bind(crate::BackfillStatus::Pending.as_str())
+        .bind(Utc::now().timestamp())
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(())
+    }
 }
 
 fn push_log_filters<'a>(builder: &mut QueryBuilder<'a, Sqlite>, query: &'a LogQuery) {
@@ -810,7 +905,7 @@ fn push_thread_filters<'a>(
     } else {
         builder.push(" AND archived = 0");
     }
-    builder.push(" AND has_user_event = 1");
+    builder.push(" AND first_user_message <> ''");
     if !allowed_sources.is_empty() {
         builder.push(" AND source IN (");
         let mut separated = builder.separated(", ");
@@ -889,7 +984,10 @@ mod tests {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |duration| duration.as_nanos());
-        std::env::temp_dir().join(format!("codex-state-runtime-test-{nanos}"))
+        std::env::temp_dir().join(format!(
+            "codex-state-runtime-test-{nanos}-{}",
+            Uuid::new_v4()
+        ))
     }
 
     #[tokio::test]
@@ -963,6 +1061,59 @@ mod tests {
                 .expect("check numeric path"),
             true
         );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn backfill_state_persists_progress_and_completion() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let initial = runtime
+            .get_backfill_state()
+            .await
+            .expect("get initial backfill state");
+        assert_eq!(initial.status, crate::BackfillStatus::Pending);
+        assert_eq!(initial.last_watermark, None);
+        assert_eq!(initial.last_success_at, None);
+
+        runtime
+            .mark_backfill_running()
+            .await
+            .expect("mark backfill running");
+        runtime
+            .checkpoint_backfill("sessions/2026/01/27/rollout-a.jsonl")
+            .await
+            .expect("checkpoint backfill");
+
+        let running = runtime
+            .get_backfill_state()
+            .await
+            .expect("get running backfill state");
+        assert_eq!(running.status, crate::BackfillStatus::Running);
+        assert_eq!(
+            running.last_watermark,
+            Some("sessions/2026/01/27/rollout-a.jsonl".to_string())
+        );
+        assert_eq!(running.last_success_at, None);
+
+        runtime
+            .mark_backfill_complete(Some("sessions/2026/01/28/rollout-b.jsonl"))
+            .await
+            .expect("mark backfill complete");
+        let completed = runtime
+            .get_backfill_state()
+            .await
+            .expect("get completed backfill state");
+        assert_eq!(completed.status, crate::BackfillStatus::Complete);
+        assert_eq!(
+            completed.last_watermark,
+            Some("sessions/2026/01/28/rollout-b.jsonl".to_string())
+        );
+        assert!(completed.last_success_at.is_some());
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -1245,11 +1396,12 @@ mod tests {
             source: "cli".to_string(),
             model_provider: "test-provider".to_string(),
             cwd,
+            cli_version: "0.0.0".to_string(),
             title: String::new(),
             sandbox_policy: crate::extract::enum_to_string(&SandboxPolicy::ReadOnly),
             approval_mode: crate::extract::enum_to_string(&AskForApproval::OnRequest),
             tokens_used: 0,
-            has_user_event: true,
+            first_user_message: Some("hello".to_string()),
             archived_at: None,
             git_sha: None,
             git_branch: None,

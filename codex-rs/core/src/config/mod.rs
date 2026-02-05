@@ -224,6 +224,9 @@ pub struct Config {
     /// - `never`: Never use alternate screen (inline mode, preserves scrollback).
     pub tui_alternate_screen: AltScreenMode,
 
+    /// Ordered list of status line item identifiers for the TUI.
+    pub tui_status_line: Option<Vec<String>>,
+
     /// The directory that should be treated as the current working directory
     /// for the session. All relative paths inside the business-logic layer are
     /// resolved against this path.
@@ -1550,7 +1553,7 @@ impl Config {
             .or_else(|| {
                 features
                     .enabled(Feature::Personality)
-                    .then_some(Personality::Friendly)
+                    .then_some(Personality::Pragmatic)
             });
 
         let experimental_compact_prompt_path = config_profile
@@ -1712,6 +1715,7 @@ impl Config {
                 .as_ref()
                 .map(|t| t.alternate_screen)
                 .unwrap_or_default(),
+            tui_status_line: cfg.tui.as_ref().and_then(|t| t.status_line.clone()),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);
@@ -1947,6 +1951,7 @@ persistence = "none"
                 show_tooltips: true,
                 experimental_mode: None,
                 alternate_screen: AltScreenMode::Auto,
+                status_line: None,
             }
         );
     }
@@ -3870,7 +3875,7 @@ model_verbosity = "high"
                 model_reasoning_summary: ReasoningSummary::Detailed,
                 model_supports_reasoning_summaries: None,
                 model_verbosity: None,
-                personality: Some(Personality::Friendly),
+                personality: Some(Personality::Pragmatic),
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 base_instructions: None,
                 developer_instructions: None,
@@ -3897,6 +3902,7 @@ model_verbosity = "high"
                 analytics_enabled: Some(true),
                 feedback_enabled: true,
                 tui_alternate_screen: AltScreenMode::Auto,
+                tui_status_line: None,
                 otel: OtelConfig::default(),
             },
             o3_profile_config
@@ -3956,7 +3962,7 @@ model_verbosity = "high"
             model_reasoning_summary: ReasoningSummary::default(),
             model_supports_reasoning_summaries: None,
             model_verbosity: None,
-            personality: Some(Personality::Friendly),
+            personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
             developer_instructions: None,
@@ -3983,6 +3989,7 @@ model_verbosity = "high"
             analytics_enabled: Some(true),
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
+            tui_status_line: None,
             otel: OtelConfig::default(),
         };
 
@@ -4057,7 +4064,7 @@ model_verbosity = "high"
             model_reasoning_summary: ReasoningSummary::default(),
             model_supports_reasoning_summaries: None,
             model_verbosity: None,
-            personality: Some(Personality::Friendly),
+            personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
             developer_instructions: None,
@@ -4084,6 +4091,7 @@ model_verbosity = "high"
             analytics_enabled: Some(false),
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
+            tui_status_line: None,
             otel: OtelConfig::default(),
         };
 
@@ -4144,7 +4152,7 @@ model_verbosity = "high"
             model_reasoning_summary: ReasoningSummary::Detailed,
             model_supports_reasoning_summaries: None,
             model_verbosity: Some(Verbosity::High),
-            personality: Some(Personality::Friendly),
+            personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
             developer_instructions: None,
@@ -4171,6 +4179,7 @@ model_verbosity = "high"
             analytics_enabled: Some(true),
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
+            tui_status_line: None,
             otel: OtelConfig::default(),
         };
 

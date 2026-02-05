@@ -2,6 +2,7 @@ use super::*;
 use crate::truncate;
 use crate::truncate::TruncationPolicy;
 use codex_git::GhostCommit;
+use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -101,6 +102,10 @@ fn reasoning_with_encrypted_content(len: usize) -> ResponseItem {
 
 fn truncate_exec_output(content: &str) -> String {
     truncate::truncate_text(content, TruncationPolicy::Tokens(EXEC_FORMAT_MAX_TOKENS))
+}
+
+fn approx_token_count_for_text(text: &str) -> i64 {
+    i64::try_from(text.len().saturating_add(3) / 4).unwrap_or(i64::MAX)
 }
 
 #[test]
@@ -248,6 +253,28 @@ fn get_history_for_prompt_drops_ghost_commits() {
     let history = create_history_with_items(items);
     let filtered = history.for_prompt();
     assert_eq!(filtered, vec![]);
+}
+
+#[test]
+fn estimate_token_count_with_base_instructions_uses_provided_text() {
+    let history = create_history_with_items(vec![assistant_msg("hello from history")]);
+    let short_base = BaseInstructions {
+        text: "short".to_string(),
+    };
+    let long_base = BaseInstructions {
+        text: "x".repeat(1_000),
+    };
+
+    let short_estimate = history
+        .estimate_token_count_with_base_instructions(&short_base)
+        .expect("token estimate");
+    let long_estimate = history
+        .estimate_token_count_with_base_instructions(&long_base)
+        .expect("token estimate");
+
+    let expected_delta = approx_token_count_for_text(&long_base.text)
+        - approx_token_count_for_text(&short_base.text);
+    assert_eq!(long_estimate - short_estimate, expected_delta);
 }
 
 #[test]
