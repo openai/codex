@@ -828,22 +828,37 @@ impl ChatWidget {
             self.submit_user_message(user_message);
         }
         if let Some(forked_from_id) = forked_from_id {
-            self.emit_forked_session_event(forked_from_id);
+            self.emit_forked_thread_event(forked_from_id);
         }
         if !self.suppress_session_configured_redraw {
             self.request_redraw();
         }
     }
 
-    fn emit_forked_session_event(&self, forked_from_id: ThreadId) {
+    fn emit_forked_thread_event(&self, forked_from_id: ThreadId) {
         let app_event_tx = self.app_event_tx.clone();
         let codex_home = self.config.codex_home.clone();
         tokio::spawn(async move {
-            let send_id = || {
+            let forked_from_id_text = forked_from_id.to_string();
+            let send_name_and_id = |name: String| {
                 let line: Line<'static> = vec![
                     "• ".dim(),
-                    "Session forked from ".into(),
-                    forked_from_id.to_string().cyan(),
+                    "Thread forked from ".into(),
+                    name.cyan(),
+                    " (".into(),
+                    forked_from_id_text.clone().cyan(),
+                    ")".into(),
+                ]
+                .into();
+                app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    PlainHistoryCell::new(vec![line]),
+                )));
+            };
+            let send_id_only = || {
+                let line: Line<'static> = vec![
+                    "• ".dim(),
+                    "Thread forked from ".into(),
+                    forked_from_id_text.clone().cyan(),
                 ]
                 .into();
                 app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
@@ -853,16 +868,12 @@ impl ChatWidget {
 
             match find_thread_name_by_id(&codex_home, &forked_from_id).await {
                 Ok(Some(name)) if !name.trim().is_empty() => {
-                    let line: Line<'static> =
-                        vec!["• ".dim(), "Session forked from ".into(), name.cyan()].into();
-                    app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                        PlainHistoryCell::new(vec![line]),
-                    )));
+                    send_name_and_id(name);
                 }
-                Ok(_) => send_id(),
+                Ok(_) => send_id_only(),
                 Err(err) => {
-                    tracing::warn!("Failed to read forked session name: {err}");
-                    send_id();
+                    tracing::warn!("Failed to read forked thread name: {err}");
+                    send_id_only();
                 }
             }
         });
