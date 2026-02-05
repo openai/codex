@@ -2518,13 +2518,21 @@ mod tests {
     use codex_core::config::ConfigOverrides;
     use codex_core::models_manager::manager::ModelsManager;
     use codex_core::protocol::AskForApproval;
+    use codex_core::protocol::CodexErrorInfo;
+    use codex_core::protocol::ErrorEvent;
     use codex_core::protocol::Event;
     use codex_core::protocol::EventMsg;
+    use codex_core::protocol::ModelVisibleState;
     use codex_core::protocol::SandboxPolicy;
     use codex_core::protocol::SessionConfiguredEvent;
     use codex_core::protocol::SessionSource;
+    use codex_core::protocol::ThreadRolledBackEvent;
     use codex_otel::OtelManager;
     use codex_protocol::ThreadId;
+    use codex_protocol::config_types::CollaborationMode;
+    use codex_protocol::config_types::CollaborationModeMask;
+    use codex_protocol::config_types::ModeKind;
+    use codex_protocol::config_types::Settings;
     use codex_protocol::user_input::TextElement;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
@@ -2697,6 +2705,50 @@ mod tests {
             rx,
             op_rx,
         )
+    }
+
+    fn next_user_turn(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
+        loop {
+            match op_rx.try_recv() {
+                Ok(op @ Op::UserTurn { .. }) => return op,
+                Ok(_) => continue,
+                Err(TryRecvError::Empty) => panic!("expected Op::UserTurn but queue was empty"),
+                Err(TryRecvError::Disconnected) => {
+                    panic!("expected Op::UserTurn but channel closed")
+                }
+            }
+        }
+    }
+
+    fn plan_mask() -> CollaborationModeMask {
+        CollaborationModeMask {
+            name: "Plan".to_string(),
+            mode: Some(ModeKind::Plan),
+            model: None,
+            reasoning_effort: None,
+            developer_instructions: None,
+        }
+    }
+
+    fn code_mask() -> CollaborationModeMask {
+        CollaborationModeMask {
+            name: "Code".to_string(),
+            mode: Some(ModeKind::Code),
+            model: None,
+            reasoning_effort: None,
+            developer_instructions: None,
+        }
+    }
+
+    fn collaboration_mode(mode: ModeKind) -> CollaborationMode {
+        CollaborationMode {
+            mode,
+            settings: Settings {
+                model: "gpt-test".to_string(),
+                reasoning_effort: None,
+                developer_instructions: None,
+            },
+        }
     }
 
     fn test_otel_manager(config: &Config, model: &str) -> OtelManager {
@@ -2905,6 +2957,7 @@ mod tests {
                 message: text.to_string(),
                 text_elements,
                 local_image_paths,
+                collaboration_mode: None,
             }) as Arc<dyn HistoryCell>
         };
         let agent_cell = |text: &str| -> Arc<dyn HistoryCell> {
@@ -3008,6 +3061,427 @@ mod tests {
         }
 
         assert_eq!(rollback_turns, Some(1));
+    }
+
+    #[tokio::test]
+    async fn backtrack_to_plan_preserves_plan_mode_on_submit() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        app.chat_widget
+            .set_feature_enabled(Feature::CollaborationModes, true);
+
+        let plan_mask = plan_mask();
+        let code_mask = code_mask();
+
+        let thread_id = ThreadId::new();
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::ReadOnly,
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+
+        app.chat_widget.set_collaboration_mask(code_mask.clone());
+
+        app.transcript_cells = vec![
+            Arc::new(UserHistoryCell {
+                message: "plan".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+                collaboration_mode: Some(plan_mask),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("plan response")],
+                true,
+            )) as Arc<dyn HistoryCell>,
+            Arc::new(UserHistoryCell {
+                message: "code".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+                collaboration_mode: Some(code_mask),
+            }) as Arc<dyn HistoryCell>,
+        ];
+
+        app.backtrack.base_id = Some(thread_id);
+        app.backtrack.primed = true;
+        app.backtrack.nth_user_message = 0;
+
+        let selection = app
+            .confirm_backtrack_from_main()
+            .expect("backtrack selection");
+        app.apply_backtrack_rollback(selection);
+
+        assert_eq!(
+            app.chat_widget.active_collaboration_mode_kind(),
+            ModeKind::Code
+        );
+
+        app.handle_backtrack_event(&EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 1,
+            model_visible_state: Some(ModelVisibleState {
+                collaboration_mode: Some(collaboration_mode(ModeKind::Plan)),
+            }),
+        }));
+
+        assert_eq!(
+            app.chat_widget.active_collaboration_mode_kind(),
+            ModeKind::Plan
+        );
+
+        app.chat_widget
+            .set_composer_text("follow-up".to_string(), Vec::new(), Vec::new());
+        app.chat_widget
+            .handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+        let op = next_user_turn(&mut op_rx);
+        let Op::UserTurn {
+            collaboration_mode, ..
+        } = op
+        else {
+            panic!("expected Op::UserTurn");
+        };
+        let collaboration_mode = collaboration_mode.expect("expected collaboration mode");
+        assert_eq!(collaboration_mode.mode, ModeKind::Plan);
+    }
+
+    #[tokio::test]
+    async fn backtrack_plan_then_shift_tab_sends_code_mode() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        app.chat_widget
+            .set_feature_enabled(Feature::CollaborationModes, true);
+
+        let plan_mask = plan_mask();
+        let code_mask = code_mask();
+
+        let thread_id = ThreadId::new();
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::ReadOnly,
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+
+        app.chat_widget.set_collaboration_mask(code_mask.clone());
+
+        app.transcript_cells = vec![
+            Arc::new(UserHistoryCell {
+                message: "plan".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+                collaboration_mode: Some(plan_mask),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("plan response")],
+                true,
+            )) as Arc<dyn HistoryCell>,
+            Arc::new(UserHistoryCell {
+                message: "code".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+                collaboration_mode: Some(code_mask),
+            }) as Arc<dyn HistoryCell>,
+        ];
+
+        app.backtrack.base_id = Some(thread_id);
+        app.backtrack.primed = true;
+        app.backtrack.nth_user_message = 0;
+
+        let selection = app
+            .confirm_backtrack_from_main()
+            .expect("backtrack selection");
+        app.apply_backtrack_rollback(selection);
+
+        assert_eq!(
+            app.chat_widget.active_collaboration_mode_kind(),
+            ModeKind::Code
+        );
+
+        app.handle_backtrack_event(&EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 1,
+            model_visible_state: Some(ModelVisibleState {
+                collaboration_mode: Some(collaboration_mode(ModeKind::Plan)),
+            }),
+        }));
+
+        assert_eq!(
+            app.chat_widget.active_collaboration_mode_kind(),
+            ModeKind::Plan
+        );
+
+        app.chat_widget
+            .handle_key_event(KeyEvent::from(KeyCode::BackTab));
+        assert_eq!(
+            app.chat_widget.active_collaboration_mode_kind(),
+            ModeKind::Code
+        );
+
+        app.chat_widget
+            .set_composer_text("follow-up".to_string(), Vec::new(), Vec::new());
+        app.chat_widget
+            .handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+        let op = next_user_turn(&mut op_rx);
+        let Op::UserTurn {
+            collaboration_mode, ..
+        } = op
+        else {
+            panic!("expected Op::UserTurn");
+        };
+        let collaboration_mode = collaboration_mode.expect("expected collaboration mode");
+        assert_eq!(collaboration_mode.mode, ModeKind::Code);
+    }
+
+    #[tokio::test]
+    async fn backtrack_missing_mode_data_preserves_current_mode() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        app.chat_widget
+            .set_feature_enabled(Feature::CollaborationModes, true);
+
+        let plan_mask = plan_mask();
+        let thread_id = ThreadId::new();
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::ReadOnly,
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+
+        app.chat_widget.set_collaboration_mask(plan_mask.clone());
+
+        app.transcript_cells = vec![
+            Arc::new(UserHistoryCell {
+                message: "custom".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+                collaboration_mode: None,
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("custom response")],
+                true,
+            )) as Arc<dyn HistoryCell>,
+            Arc::new(UserHistoryCell {
+                message: "plan".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+                collaboration_mode: Some(plan_mask),
+            }) as Arc<dyn HistoryCell>,
+        ];
+
+        app.backtrack.base_id = Some(thread_id);
+        app.backtrack.primed = true;
+        app.backtrack.nth_user_message = 0;
+
+        let selection = app
+            .confirm_backtrack_from_main()
+            .expect("backtrack selection");
+        app.apply_backtrack_rollback(selection);
+
+        assert_eq!(
+            app.chat_widget.active_collaboration_mode_kind(),
+            ModeKind::Plan
+        );
+
+        app.chat_widget
+            .set_composer_text("follow-up".to_string(), Vec::new(), Vec::new());
+        app.chat_widget
+            .handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+        let op = next_user_turn(&mut op_rx);
+        let Op::UserTurn {
+            collaboration_mode, ..
+        } = op
+        else {
+            panic!("expected Op::UserTurn");
+        };
+        let collaboration_mode = collaboration_mode.expect("expected collaboration mode");
+        assert_eq!(collaboration_mode.mode, ModeKind::Plan);
+    }
+
+    #[tokio::test]
+    async fn backtrack_success_applies_authoritative_mode_from_core() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        app.chat_widget
+            .set_feature_enabled(Feature::CollaborationModes, true);
+
+        let plan_mask = plan_mask();
+        let code_mask = code_mask();
+
+        let thread_id = ThreadId::new();
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::ReadOnly,
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+
+        app.chat_widget.set_collaboration_mask(code_mask.clone());
+
+        app.transcript_cells = vec![
+            Arc::new(UserHistoryCell {
+                message: "plan".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+                collaboration_mode: Some(plan_mask),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("plan response")],
+                true,
+            )) as Arc<dyn HistoryCell>,
+            Arc::new(UserHistoryCell {
+                message: "code".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+                collaboration_mode: Some(code_mask),
+            }) as Arc<dyn HistoryCell>,
+        ];
+
+        app.backtrack.base_id = Some(thread_id);
+        app.backtrack.primed = true;
+        app.backtrack.nth_user_message = 0;
+        let selection = app
+            .confirm_backtrack_from_main()
+            .expect("backtrack selection");
+        app.apply_backtrack_rollback(selection);
+        assert_eq!(
+            app.chat_widget.active_collaboration_mode_kind(),
+            ModeKind::Code
+        );
+
+        app.handle_backtrack_event(&EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 1,
+            model_visible_state: Some(ModelVisibleState {
+                collaboration_mode: Some(collaboration_mode(ModeKind::Plan)),
+            }),
+        }));
+
+        assert_eq!(
+            app.chat_widget.active_collaboration_mode_kind(),
+            ModeKind::Plan
+        );
+        assert!(app.backtrack.pending_rollback.is_none());
+    }
+
+    #[tokio::test]
+    async fn backtrack_failed_keeps_current_collaboration_mode() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        app.chat_widget
+            .set_feature_enabled(Feature::CollaborationModes, true);
+
+        let plan_mask = plan_mask();
+        let code_mask = code_mask();
+
+        let thread_id = ThreadId::new();
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::ReadOnly,
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+
+        app.chat_widget.set_collaboration_mask(code_mask.clone());
+
+        app.transcript_cells = vec![
+            Arc::new(UserHistoryCell {
+                message: "plan".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+                collaboration_mode: Some(plan_mask),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("plan response")],
+                true,
+            )) as Arc<dyn HistoryCell>,
+            Arc::new(UserHistoryCell {
+                message: "code".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+                collaboration_mode: Some(code_mask),
+            }) as Arc<dyn HistoryCell>,
+        ];
+
+        app.backtrack.base_id = Some(thread_id);
+        app.backtrack.primed = true;
+        app.backtrack.nth_user_message = 0;
+
+        let selection = app
+            .confirm_backtrack_from_main()
+            .expect("backtrack selection");
+        app.apply_backtrack_rollback(selection);
+
+        assert_eq!(
+            app.chat_widget.active_collaboration_mode_kind(),
+            ModeKind::Code
+        );
+
+        app.handle_backtrack_event(&EventMsg::Error(ErrorEvent {
+            message: "rollback rejected".to_string(),
+            codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
+        }));
+
+        assert_eq!(
+            app.chat_widget.active_collaboration_mode_kind(),
+            ModeKind::Code
+        );
+        assert!(app.backtrack.pending_rollback.is_none());
     }
 
     #[tokio::test]

@@ -111,6 +111,7 @@ use crate::config::resolve_web_search_mode_for_turn;
 use crate::config::types::McpServerConfig;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::context_manager::ContextManager;
+use crate::context_manager::is_user_turn_boundary;
 use crate::environment_context::EnvironmentContext;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
@@ -186,6 +187,7 @@ use crate::skills::injection::app_id_from_path;
 use crate::skills::injection::tool_kind_for_path;
 use crate::skills::resolve_skill_dependencies_for_turn;
 use crate::state::ActiveTurn;
+use crate::state::PendingModelVisibleStateSync;
 use crate::state::SessionServices;
 use crate::state::SessionState;
 use crate::state_db;
@@ -1212,6 +1214,14 @@ impl Session {
                     self.record_into_history(&reconstructed_history, &turn_context)
                         .await;
                 }
+                let user_turns = Self::user_turn_count(&reconstructed_history);
+                let turn_context_history =
+                    Self::reconstruct_turn_context_history_from_rollout(&rollout_items);
+                {
+                    let mut state = self.state.lock().await;
+                    state.set_turn_context_history(turn_context_history);
+                    state.reset_turn_context_history(user_turns);
+                }
 
                 // Seed usage info from the recorded rollout so UIs can show token counts
                 // immediately on resume/fork.
@@ -1232,6 +1242,14 @@ impl Session {
                 if !reconstructed_history.is_empty() {
                     self.record_into_history(&reconstructed_history, &turn_context)
                         .await;
+                }
+                let user_turns = Self::user_turn_count(&reconstructed_history);
+                let turn_context_history =
+                    Self::reconstruct_turn_context_history_from_rollout(&rollout_items);
+                {
+                    let mut state = self.state.lock().await;
+                    state.set_turn_context_history(turn_context_history);
+                    state.reset_turn_context_history(user_turns);
                 }
 
                 // Seed usage info from the recorded rollout so UIs can show token counts
@@ -1488,17 +1506,35 @@ impl Session {
 
     fn build_collaboration_mode_update_item(
         &self,
-        previous: Option<&Arc<TurnContext>>,
-        next: &TurnContext,
+        previous_collaboration_mode: &CollaborationMode,
+        next_collaboration_mode: Option<&CollaborationMode>,
+        pending_model_visible_state_sync: &PendingModelVisibleStateSync,
+        initial_context_seeded_this_turn: bool,
     ) -> Option<ResponseItem> {
-        let prev = previous?;
-        if prev.collaboration_mode != next.collaboration_mode {
-            // If the next mode has empty developer instructions, this returns None and we emit no
-            // update, so prior collaboration instructions remain in the prompt history.
-            Some(DeveloperInstructions::from_collaboration_mode(&next.collaboration_mode)?.into())
-        } else {
-            None
+        let next_mode = next_collaboration_mode?;
+        if initial_context_seeded_this_turn
+            && matches!(
+                pending_model_visible_state_sync,
+                PendingModelVisibleStateSync::None
+            )
+        {
+            return None;
         }
+
+        let should_emit = match pending_model_visible_state_sync {
+            PendingModelVisibleStateSync::None => previous_collaboration_mode != next_mode,
+            PendingModelVisibleStateSync::Snapshot(snapshot) => {
+                snapshot.collaboration_mode.as_ref() != Some(next_mode)
+            }
+            PendingModelVisibleStateSync::ForceEmitAll => true,
+        };
+        if !should_emit {
+            return None;
+        }
+
+        // If the next mode has empty developer instructions, this returns None and we emit no
+        // update, so prior collaboration instructions remain in the prompt history.
+        Some(DeveloperInstructions::from_collaboration_mode(next_mode)?.into())
     }
 
     fn build_model_instructions_update_item(
@@ -1523,6 +1559,10 @@ impl Session {
         &self,
         previous_context: Option<&Arc<TurnContext>>,
         current_context: &TurnContext,
+        previous_collaboration_mode: &CollaborationMode,
+        next_collaboration_mode: Option<&CollaborationMode>,
+        pending_model_visible_state_sync: &PendingModelVisibleStateSync,
+        initial_context_seeded_this_turn: bool,
     ) -> Vec<ResponseItem> {
         let mut update_items = Vec::new();
         if let Some(env_item) =
@@ -1535,9 +1575,12 @@ impl Session {
         {
             update_items.push(permissions_item);
         }
-        if let Some(collaboration_mode_item) =
-            self.build_collaboration_mode_update_item(previous_context, current_context)
-        {
+        if let Some(collaboration_mode_item) = self.build_collaboration_mode_update_item(
+            previous_collaboration_mode,
+            next_collaboration_mode,
+            pending_model_visible_state_sync,
+            initial_context_seeded_this_turn,
+        ) {
             update_items.push(collaboration_mode_item);
         }
         if let Some(model_instructions_item) =
@@ -1942,6 +1985,122 @@ impl Session {
         history.raw_items().to_vec()
     }
 
+    fn reconstruct_turn_context_history_from_rollout(
+        rollout_items: &[RolloutItem],
+    ) -> Vec<Option<TurnContextItem>> {
+        let mut history_items = Vec::new();
+        let mut awaiting_turn_context = false;
+        let mut turn_context_history = Vec::new();
+        for item in rollout_items {
+            match item {
+                RolloutItem::ResponseItem(response_item) => {
+                    history_items.push(response_item.clone());
+                    if is_user_turn_boundary(response_item) {
+                        turn_context_history.push(None);
+                        awaiting_turn_context = true;
+                    }
+                }
+                RolloutItem::TurnContext(ctx) => {
+                    if awaiting_turn_context {
+                        if let Some(last) = turn_context_history.last_mut() {
+                            *last = Some(ctx.clone());
+                        } else {
+                            turn_context_history.push(Some(ctx.clone()));
+                        }
+                        awaiting_turn_context = false;
+                    }
+                }
+                RolloutItem::Compacted(compacted) => {
+                    if let Some(replacement) = &compacted.replacement_history {
+                        history_items = replacement.clone();
+                        // Remote compaction can reorder messages, so drop contexts to avoid
+                        // misalignment.
+                        turn_context_history = vec![None; Session::user_turn_count(&history_items)];
+                    } else {
+                        let user_messages = collect_user_messages(&history_items);
+                        history_items = compact::build_compacted_history(
+                            Vec::new(),
+                            &user_messages,
+                            &compacted.message,
+                        );
+                        turn_context_history = Self::rebuild_turn_context_history_after_compaction(
+                            turn_context_history,
+                            &history_items,
+                        );
+                    }
+                    awaiting_turn_context = false;
+                }
+                RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+                    Self::drop_last_n_user_turns_from_items(&mut history_items, rollback.num_turns);
+                    let drop = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
+                    let new_len = turn_context_history.len().saturating_sub(drop);
+                    turn_context_history.truncate(new_len);
+                    awaiting_turn_context = false;
+                }
+                _ => {}
+            }
+        }
+        turn_context_history
+    }
+
+    fn rebuild_turn_context_history_after_compaction(
+        previous: Vec<Option<TurnContextItem>>,
+        compacted_history: &[ResponseItem],
+    ) -> Vec<Option<TurnContextItem>> {
+        let user_messages = collect_user_messages(compacted_history);
+        let retained = user_messages.len();
+        let mut updated = Self::take_last_with_padding(previous, retained);
+        updated.push(None);
+        updated
+    }
+
+    fn take_last_with_padding(
+        mut history: Vec<Option<TurnContextItem>>,
+        retained: usize,
+    ) -> Vec<Option<TurnContextItem>> {
+        if retained == 0 {
+            return Vec::new();
+        }
+        if history.len() >= retained {
+            history.split_off(history.len() - retained)
+        } else {
+            let mut padded = Vec::with_capacity(retained);
+            padded.resize_with(retained - history.len(), || None);
+            padded.append(&mut history);
+            padded
+        }
+    }
+
+    fn drop_last_n_user_turns_from_items(items: &mut Vec<ResponseItem>, num_turns: u32) {
+        if num_turns == 0 {
+            return;
+        }
+
+        let user_positions: Vec<usize> = items
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, item)| is_user_turn_boundary(item).then_some(idx))
+            .collect();
+        let Some(&first_user_idx) = user_positions.first() else {
+            return;
+        };
+
+        let n_from_end = usize::try_from(num_turns).unwrap_or(usize::MAX);
+        let cut_idx = if n_from_end >= user_positions.len() {
+            first_user_idx
+        } else {
+            user_positions[user_positions.len() - n_from_end]
+        };
+        items.truncate(cut_idx);
+    }
+
+    fn user_turn_count(items: &[ResponseItem]) -> usize {
+        items
+            .iter()
+            .filter(|item| is_user_turn_boundary(item))
+            .count()
+    }
+
     /// Append ResponseItems to the in-memory conversation history only.
     pub(crate) async fn record_into_history(
         &self,
@@ -1949,6 +2108,7 @@ impl Session {
         turn_context: &TurnContext,
     ) {
         let mut state = self.state.lock().await;
+        state.record_user_turn_placeholders(items);
         state.record_items(items.iter(), turn_context.truncation_policy);
     }
 
@@ -1970,15 +2130,17 @@ impl Session {
     }
 
     pub(crate) async fn replace_history(&self, items: Vec<ResponseItem>) {
+        let user_turns = Self::user_turn_count(&items);
         let mut state = self.state.lock().await;
         state.replace_history(items);
+        state.reset_turn_context_history(user_turns);
     }
 
-    pub(crate) async fn seed_initial_context_if_needed(&self, turn_context: &TurnContext) {
+    pub(crate) async fn seed_initial_context_if_needed(&self, turn_context: &TurnContext) -> bool {
         {
             let mut state = self.state.lock().await;
             if state.initial_context_seeded {
-                return;
+                return false;
             }
             state.initial_context_seeded = true;
         }
@@ -1987,6 +2149,7 @@ impl Session {
         self.record_conversation_items(turn_context, &initial_context)
             .await;
         self.flush_rollout().await;
+        true
     }
 
     async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {
@@ -2233,6 +2396,23 @@ impl Session {
         // those spans, and `record_response_item_and_emit_turn_item` would drop them.
         self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
             .await;
+        let collaboration_mode = self.current_collaboration_mode().await;
+        let turn_context_item = TurnContextItem {
+            cwd: turn_context.cwd.clone(),
+            approval_policy: turn_context.approval_policy,
+            sandbox_policy: turn_context.sandbox_policy.clone(),
+            model: turn_context.client.get_model(),
+            personality: turn_context.personality,
+            collaboration_mode: Some(collaboration_mode),
+            effort: turn_context.client.get_reasoning_effort(),
+            summary: turn_context.client.get_reasoning_summary(),
+            user_instructions: turn_context.user_instructions.clone(),
+            developer_instructions: turn_context.developer_instructions.clone(),
+            final_output_json_schema: turn_context.final_output_json_schema.clone(),
+            truncation_policy: Some(turn_context.truncation_policy.into()),
+        };
+        let mut state = self.state.lock().await;
+        state.set_last_turn_context(turn_context_item);
         let turn_item = TurnItem::UserMessage(UserMessageItem::new(input));
         self.emit_turn_item_started(turn_context, &turn_item).await;
         self.emit_turn_item_completed(turn_context, turn_item).await;
@@ -2707,6 +2887,7 @@ mod handlers {
     use codex_protocol::protocol::ListRemoteSkillsResponseEvent;
     use codex_protocol::protocol::ListSkillsResponseEvent;
     use codex_protocol::protocol::McpServerRefreshConfig;
+    use codex_protocol::protocol::ModelVisibleState;
     use codex_protocol::protocol::Op;
     use codex_protocol::protocol::RemoteSkillDownloadedEvent;
     use codex_protocol::protocol::RemoteSkillSummary;
@@ -2716,6 +2897,7 @@ mod handlers {
     use codex_protocol::protocol::ThreadNameUpdatedEvent;
     use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
+    use codex_protocol::protocol::TurnContextItem;
     use codex_protocol::protocol::WarningEvent;
     use codex_protocol::request_user_input::RequestUserInputResponse;
 
@@ -2733,6 +2915,9 @@ mod handlers {
     use tracing::info;
     use tracing::warn;
 
+    use crate::state::PendingModelVisibleStateSync;
+    use crate::state::SessionState;
+
     pub async fn interrupt(sess: &Arc<Session>) {
         sess.interrupt_task().await;
     }
@@ -2742,6 +2927,15 @@ mod handlers {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) {
+        let (previous_collaboration_mode, initial_context_seeded) = {
+            let state = sess.state.lock().await;
+            (
+                state.session_configuration.collaboration_mode.clone(),
+                state.initial_context_seeded,
+            )
+        };
+        let next_collaboration_mode = updates.collaboration_mode.clone();
+
         if let Err(err) = sess.update_settings(updates).await {
             sess.send_event_raw(Event {
                 id: sub_id,
@@ -2751,6 +2945,26 @@ mod handlers {
                 }),
             })
             .await;
+            return;
+        }
+
+        if !initial_context_seeded {
+            return;
+        }
+
+        if let Some(next_mode) = next_collaboration_mode
+            && next_mode != previous_collaboration_mode
+        {
+            let mut state = sess.state.lock().await;
+            if !matches!(
+                state.pending_model_visible_state_sync,
+                PendingModelVisibleStateSync::ForceEmitAll
+            ) {
+                state.pending_model_visible_state_sync =
+                    PendingModelVisibleStateSync::Snapshot(ModelVisibleState {
+                        collaboration_mode: Some(previous_collaboration_mode),
+                    });
+            }
         }
     }
 
@@ -2810,6 +3024,17 @@ mod handlers {
             _ => unreachable!(),
         };
 
+        let previous_collaboration_mode = sess
+            .state
+            .lock()
+            .await
+            .session_configuration
+            .collaboration_mode
+            .clone();
+        let mut next_collaboration_mode = updates.collaboration_mode.clone();
+        if next_collaboration_mode.is_none() {
+            next_collaboration_mode = Some(previous_collaboration_mode.clone());
+        }
         let Ok(current_context) = sess.new_turn_with_sub_id(sub_id, updates).await else {
             // new_turn_with_sub_id already emits the error event.
             return;
@@ -2818,9 +3043,21 @@ mod handlers {
 
         // Attempt to inject input into current task
         if let Err(items) = sess.inject_input(items).await {
-            sess.seed_initial_context_if_needed(&current_context).await;
-            let update_items =
-                sess.build_settings_update_items(previous_context.as_ref(), &current_context);
+            let initial_context_seeded_this_turn =
+                sess.seed_initial_context_if_needed(&current_context).await;
+            let has_model_visible_state_update = next_collaboration_mode.is_some();
+            let pending_model_visible_state_sync = {
+                let mut state = sess.state.lock().await;
+                state.take_pending_model_visible_state_sync(has_model_visible_state_update)
+            };
+            let update_items = sess.build_settings_update_items(
+                previous_context.as_ref(),
+                &current_context,
+                &previous_collaboration_mode,
+                next_collaboration_mode.as_ref(),
+                &pending_model_visible_state_sync,
+                initial_context_seeded_this_turn,
+            );
             if !update_items.is_empty() {
                 sess.record_conversation_items(&current_context, &update_items)
                     .await;
@@ -3184,17 +3421,35 @@ mod handlers {
 
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
 
+        let existing_turn_context_history = {
+            let state = sess.state.lock().await;
+            state.turn_context_history.clone()
+        };
+
         let mut history = sess.clone_history().await;
         history.drop_last_n_user_turns(num_turns);
 
         // Replace with the raw items. We don't want to replace with a normalized
         // version of the history.
+        let user_turns = Session::user_turn_count(history.raw_items());
         sess.replace_history(history.raw_items().to_vec()).await;
+        let model_visible_state = {
+            let mut state = sess.state.lock().await;
+            apply_rollback_turn_context_history(
+                &mut state,
+                existing_turn_context_history,
+                num_turns,
+                user_turns,
+            )
+        };
         sess.recompute_token_usage(turn_context.as_ref()).await;
 
         sess.send_event_raw_flushed(Event {
             id: turn_context.sub_id.clone(),
-            msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns }),
+            msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+                num_turns,
+                model_visible_state: Some(model_visible_state),
+            }),
         })
         .await;
     }
@@ -3263,6 +3518,67 @@ mod handlers {
             }),
         })
         .await;
+    }
+
+    /// Apply turn-context history updates after rollback.
+    ///
+    /// Truncates the stored history by the requested rollback depth, then pads to match the
+    /// surviving user-turn count. Also updates rollback sync state for model-visible settings
+    /// and returns the authoritative model-visible state after rollback.
+    fn apply_rollback_turn_context_history(
+        state: &mut SessionState,
+        existing_turn_context_history: Vec<Option<TurnContextItem>>,
+        num_turns: u32,
+        user_turns: usize,
+    ) -> ModelVisibleState {
+        let mut updated_turn_context_history = existing_turn_context_history;
+        let truncated_len = updated_turn_context_history
+            .len()
+            .saturating_sub(num_turns as usize);
+        updated_turn_context_history.truncate(truncated_len);
+        if updated_turn_context_history.len() < user_turns {
+            let padding = user_turns - updated_turn_context_history.len();
+            let mut new_history = Vec::with_capacity(user_turns);
+            new_history.resize_with(padding, || None);
+            new_history.append(&mut updated_turn_context_history);
+            updated_turn_context_history = new_history;
+        }
+        state.set_turn_context_history(updated_turn_context_history);
+
+        let rollback_snapshot = if state.turn_context_history.len() == user_turns {
+            state
+                .turn_context_history
+                .last()
+                .and_then(Option::as_ref)
+                .and_then(model_visible_state_from_turn_context)
+        } else {
+            None
+        };
+
+        if let Some(model_visible_state) = rollback_snapshot
+            && let Some(collaboration_mode) = model_visible_state.collaboration_mode.clone()
+        {
+            state.session_configuration.collaboration_mode = collaboration_mode;
+            state.pending_model_visible_state_sync =
+                PendingModelVisibleStateSync::Snapshot(model_visible_state);
+        } else {
+            state.pending_model_visible_state_sync = PendingModelVisibleStateSync::ForceEmitAll;
+        }
+
+        ModelVisibleState {
+            collaboration_mode: Some(state.session_configuration.collaboration_mode.clone()),
+        }
+    }
+
+    fn model_visible_state_from_turn_context(
+        turn_context: &TurnContextItem,
+    ) -> Option<ModelVisibleState> {
+        turn_context
+            .collaboration_mode
+            .clone()
+            .map(|collaboration_mode| ModelVisibleState {
+                collaboration_mode: Some(collaboration_mode),
+            })
     }
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
@@ -4763,12 +5079,14 @@ mod tests {
     use crate::protocol::CompactedItem;
     use crate::protocol::CreditsSnapshot;
     use crate::protocol::InitialHistory;
+    use crate::protocol::ModelVisibleState;
     use crate::protocol::RateLimitSnapshot;
     use crate::protocol::RateLimitWindow;
     use crate::protocol::ResumedHistory;
     use crate::protocol::TokenCountEvent;
     use crate::protocol::TokenUsage;
     use crate::protocol::TokenUsageInfo;
+    use crate::state::PendingModelVisibleStateSync;
     use crate::state::TaskKind;
     use crate::tasks::SessionTask;
     use crate::tasks::SessionTaskContext;
@@ -4783,6 +5101,7 @@ mod tests {
     use codex_app_server_protocol::AppInfo;
     use codex_app_server_protocol::AuthMode;
     use codex_protocol::models::ContentItem;
+    use codex_protocol::models::DeveloperInstructions;
     use codex_protocol::models::ResponseItem;
     use std::path::Path;
     use std::time::Duration;
@@ -4801,16 +5120,31 @@ mod tests {
         expects_apply_patch_instructions: bool,
     }
 
+    fn message(role: &str, content: Vec<ContentItem>) -> ResponseItem {
+        serde_json::from_value(json!({
+            "type": "message",
+            "role": role,
+            "content": content,
+        }))
+        .expect("message should deserialize")
+    }
+
     fn user_message(text: &str) -> ResponseItem {
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
+        message(
+            "user",
+            vec![ContentItem::InputText {
                 text: text.to_string(),
             }],
-            end_turn: None,
-            phase: None,
-        }
+        )
+    }
+
+    fn assistant_message(text: &str) -> ResponseItem {
+        message(
+            "assistant",
+            vec![ContentItem::OutputText {
+                text: text.to_string(),
+            }],
+        )
     }
 
     fn make_connector(id: &str, name: &str) -> AppInfo {
@@ -5084,46 +5418,14 @@ mod tests {
             .await;
 
         let turn_1 = vec![
-            ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "turn 1 user".to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-            ResponseItem::Message {
-                id: None,
-                role: "assistant".to_string(),
-                content: vec![ContentItem::OutputText {
-                    text: "turn 1 assistant".to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
+            user_message("turn 1 user"),
+            assistant_message("turn 1 assistant"),
         ];
         sess.record_into_history(&turn_1, tc.as_ref()).await;
 
         let turn_2 = vec![
-            ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "turn 2 user".to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-            ResponseItem::Message {
-                id: None,
-                role: "assistant".to_string(),
-                content: vec![ContentItem::OutputText {
-                    text: "turn 2 assistant".to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
+            user_message("turn 2 user"),
+            assistant_message("turn 2 assistant"),
         ];
         sess.record_into_history(&turn_2, tc.as_ref()).await;
 
@@ -5141,6 +5443,490 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn thread_rollback_restores_collaboration_mode_from_turn_context_history() {
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
+
+        let initial_context = sess.build_initial_context(tc.as_ref()).await;
+        sess.record_into_history(&initial_context, tc.as_ref())
+            .await;
+
+        let base_mode = sess.current_collaboration_mode().await;
+        let plan_mode = CollaborationMode {
+            mode: ModeKind::Plan,
+            settings: base_mode.settings.clone(),
+        };
+        let code_mode = CollaborationMode {
+            mode: ModeKind::Code,
+            settings: base_mode.settings.clone(),
+        };
+
+        {
+            let mut state = sess.state.lock().await;
+            state.session_configuration.collaboration_mode = plan_mode.clone();
+        }
+        let input1 = vec![UserInput::Text {
+            text: "turn 1".to_string(),
+            text_elements: Vec::new(),
+        }];
+        let response_item1: ResponseItem = ResponseInputItem::from(input1.clone()).into();
+        sess.record_user_prompt_and_emit_turn_item(tc.as_ref(), &input1, response_item1)
+            .await;
+
+        {
+            let mut state = sess.state.lock().await;
+            state.session_configuration.collaboration_mode = code_mode.clone();
+        }
+        let input2 = vec![UserInput::Text {
+            text: "turn 2".to_string(),
+            text_elements: Vec::new(),
+        }];
+        let response_item2: ResponseItem = ResponseInputItem::from(input2.clone()).into();
+        sess.record_user_prompt_and_emit_turn_item(tc.as_ref(), &input2, response_item2)
+            .await;
+
+        handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+        let rollback_event = wait_for_thread_rolled_back(&rx).await;
+        assert_eq!(rollback_event.num_turns, 1);
+        assert_eq!(
+            rollback_event.model_visible_state,
+            Some(ModelVisibleState {
+                collaboration_mode: Some(plan_mode.clone()),
+            })
+        );
+
+        let current_mode = sess.current_collaboration_mode().await;
+        assert_eq!(current_mode.mode, ModeKind::Plan);
+
+        let pending_model_visible_state_sync = {
+            let mut state = sess.state.lock().await;
+            state.take_pending_model_visible_state_sync(true)
+        };
+        assert_eq!(
+            pending_model_visible_state_sync,
+            PendingModelVisibleStateSync::Snapshot(ModelVisibleState {
+                collaboration_mode: Some(plan_mode),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn thread_rollback_left_pads_turn_context_history() {
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
+
+        let initial_context = sess.build_initial_context(tc.as_ref()).await;
+        sess.record_into_history(&initial_context, tc.as_ref())
+            .await;
+
+        let base_mode = sess.current_collaboration_mode().await;
+        let plan_mode = CollaborationMode {
+            mode: ModeKind::Plan,
+            settings: base_mode.settings.clone(),
+        };
+        let code_mode = CollaborationMode {
+            mode: ModeKind::Code,
+            settings: base_mode.settings.clone(),
+        };
+
+        for (idx, collaboration_mode) in
+            [base_mode.clone(), base_mode, plan_mode.clone(), code_mode]
+                .into_iter()
+                .enumerate()
+        {
+            {
+                let mut state = sess.state.lock().await;
+                state.session_configuration.collaboration_mode = collaboration_mode;
+            }
+            let input = vec![UserInput::Text {
+                text: format!("turn {}", idx + 1),
+                text_elements: Vec::new(),
+            }];
+            let response_item: ResponseItem = ResponseInputItem::from(input.clone()).into();
+            sess.record_user_prompt_and_emit_turn_item(tc.as_ref(), &input, response_item)
+                .await;
+        }
+
+        {
+            let mut state = sess.state.lock().await;
+            let existing = state.turn_context_history.len();
+            let trimmed = state
+                .turn_context_history
+                .split_off(existing.saturating_sub(2));
+            state.set_turn_context_history(trimmed);
+        }
+
+        handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+        let rollback_event = wait_for_thread_rolled_back(&rx).await;
+        assert_eq!(rollback_event.num_turns, 1);
+        assert_eq!(
+            rollback_event.model_visible_state,
+            Some(ModelVisibleState {
+                collaboration_mode: Some(plan_mode.clone()),
+            })
+        );
+
+        let current_mode = sess.current_collaboration_mode().await;
+        assert_eq!(current_mode.mode, ModeKind::Plan);
+
+        let pending_model_visible_state_sync = {
+            let mut state = sess.state.lock().await;
+            state.take_pending_model_visible_state_sync(true)
+        };
+        assert_eq!(
+            pending_model_visible_state_sync,
+            PendingModelVisibleStateSync::Snapshot(ModelVisibleState {
+                collaboration_mode: Some(plan_mode),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn thread_rollback_missing_turn_context_forces_collaboration_instructions() {
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
+
+        let initial_context = sess.build_initial_context(tc.as_ref()).await;
+        sess.record_into_history(&initial_context, tc.as_ref())
+            .await;
+
+        let base_mode = sess.current_collaboration_mode().await;
+        let collaboration_mode = CollaborationMode {
+            mode: ModeKind::Custom,
+            settings: Settings {
+                model: base_mode.settings.model.clone(),
+                reasoning_effort: base_mode.settings.reasoning_effort,
+                developer_instructions: Some("rollback instructions".to_string()),
+            },
+        };
+        {
+            let mut state = sess.state.lock().await;
+            state.session_configuration.collaboration_mode = collaboration_mode.clone();
+        }
+
+        let user_turn = vec![user_message("turn without turn context")];
+        sess.record_into_history(&user_turn, tc.as_ref()).await;
+
+        handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+        let rollback_event = wait_for_thread_rolled_back(&rx).await;
+        assert_eq!(rollback_event.num_turns, 1);
+        assert_eq!(
+            rollback_event.model_visible_state,
+            Some(ModelVisibleState {
+                collaboration_mode: Some(collaboration_mode.clone()),
+            })
+        );
+
+        let pending_model_visible_state_sync = {
+            let mut state = sess.state.lock().await;
+            state.take_pending_model_visible_state_sync(true)
+        };
+        assert_eq!(
+            pending_model_visible_state_sync,
+            PendingModelVisibleStateSync::ForceEmitAll
+        );
+
+        let current_context = sess.new_default_turn_with_sub_id("sub-2".to_string()).await;
+        let previous_collaboration_mode = {
+            let state = sess.state.lock().await;
+            state.session_configuration.collaboration_mode.clone()
+        };
+        let update_items = sess.build_settings_update_items(
+            None,
+            &current_context,
+            &previous_collaboration_mode,
+            Some(&previous_collaboration_mode),
+            &pending_model_visible_state_sync,
+            false,
+        );
+        let expected_item: ResponseItem =
+            DeveloperInstructions::from_collaboration_mode(&previous_collaboration_mode)
+                .expect("expected collaboration instructions")
+                .into();
+        assert!(update_items.contains(&expected_item));
+    }
+
+    #[tokio::test]
+    async fn first_turn_skips_collaboration_update_after_initial_context_seed() {
+        let (sess, tc) = make_session_and_context().await;
+
+        let previous_collaboration_mode = tc.collaboration_mode.clone();
+        let next_collaboration_mode = CollaborationMode {
+            mode: ModeKind::Custom,
+            settings: Settings {
+                model: previous_collaboration_mode.settings.model.clone(),
+                reasoning_effort: previous_collaboration_mode.settings.reasoning_effort,
+                developer_instructions: Some("keep this in initial context only".to_string()),
+            },
+        };
+
+        {
+            let mut state = sess.state.lock().await;
+            state.initial_context_seeded = false;
+            state.session_configuration.collaboration_mode = next_collaboration_mode.clone();
+        }
+
+        let initial_context_seeded_this_turn = sess.seed_initial_context_if_needed(&tc).await;
+        assert!(initial_context_seeded_this_turn);
+
+        let update_items = sess.build_settings_update_items(
+            None,
+            &tc,
+            &previous_collaboration_mode,
+            Some(&next_collaboration_mode),
+            &PendingModelVisibleStateSync::None,
+            initial_context_seeded_this_turn,
+        );
+        let expected_item: ResponseItem =
+            DeveloperInstructions::from_collaboration_mode(&next_collaboration_mode)
+                .expect("expected collaboration instructions")
+                .into();
+        assert!(!update_items.contains(&expected_item));
+    }
+
+    #[tokio::test]
+    async fn first_turn_still_emits_collaboration_update_for_force_sync() {
+        let (sess, tc) = make_session_and_context().await;
+
+        let previous_collaboration_mode = tc.collaboration_mode.clone();
+        let next_collaboration_mode = CollaborationMode {
+            mode: ModeKind::Custom,
+            settings: Settings {
+                model: previous_collaboration_mode.settings.model.clone(),
+                reasoning_effort: previous_collaboration_mode.settings.reasoning_effort,
+                developer_instructions: Some("force emit this update".to_string()),
+            },
+        };
+
+        {
+            let mut state = sess.state.lock().await;
+            state.initial_context_seeded = false;
+            state.session_configuration.collaboration_mode = next_collaboration_mode.clone();
+        }
+
+        let initial_context_seeded_this_turn = sess.seed_initial_context_if_needed(&tc).await;
+        assert!(initial_context_seeded_this_turn);
+
+        let update_items = sess.build_settings_update_items(
+            None,
+            &tc,
+            &previous_collaboration_mode,
+            Some(&next_collaboration_mode),
+            &PendingModelVisibleStateSync::ForceEmitAll,
+            initial_context_seeded_this_turn,
+        );
+        let expected_item: ResponseItem =
+            DeveloperInstructions::from_collaboration_mode(&next_collaboration_mode)
+                .expect("expected collaboration instructions")
+                .into();
+        assert!(update_items.contains(&expected_item));
+    }
+
+    #[test]
+    fn reconstruct_turn_context_history_handles_compaction() {
+        let collaboration_mode = CollaborationMode {
+            mode: ModeKind::Plan,
+            settings: Settings {
+                model: "gpt-test".to_string(),
+                reasoning_effort: None,
+                developer_instructions: None,
+            },
+        };
+        let model = collaboration_mode.settings.model.clone();
+        let expected_mode = collaboration_mode.clone();
+        let turn_context = TurnContextItem {
+            cwd: PathBuf::from("/tmp"),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            model,
+            personality: None,
+            collaboration_mode: Some(collaboration_mode),
+            effort: None,
+            summary: ReasoningSummaryConfig::Auto,
+            user_instructions: None,
+            developer_instructions: None,
+            final_output_json_schema: None,
+            truncation_policy: None,
+        };
+        let user = user_message("first user");
+        let assistant = assistant_message("assistant reply");
+        let compacted = RolloutItem::Compacted(CompactedItem {
+            message: format!("{}\nsummary", compact::SUMMARY_PREFIX),
+            replacement_history: None,
+        });
+
+        let rollout_items = vec![
+            RolloutItem::ResponseItem(user),
+            RolloutItem::TurnContext(turn_context),
+            RolloutItem::ResponseItem(assistant),
+            compacted,
+        ];
+        let history = Session::reconstruct_turn_context_history_from_rollout(&rollout_items);
+        let modes: Vec<Option<CollaborationMode>> = history
+            .iter()
+            .map(|item| item.as_ref().and_then(|ctx| ctx.collaboration_mode.clone()))
+            .collect();
+
+        assert_eq!(history.len(), 2);
+        assert_eq!(modes, vec![Some(expected_mode), None]);
+    }
+
+    #[test]
+    fn user_turn_count_ignores_non_turn_user_messages() {
+        let items = vec![
+            user_message("<user_instructions>do the thing</user_instructions>"),
+            user_message(
+                "# AGENTS.md instructions for project\n\n<INSTRUCTIONS>\nrule\n</INSTRUCTIONS>",
+            ),
+            user_message(
+                "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
+            ),
+            user_message("<user_shell_command>echo 42</user_shell_command>"),
+            user_message("real user turn"),
+        ];
+
+        assert_eq!(Session::user_turn_count(&items), 1);
+    }
+
+    #[test]
+    fn reconstruct_turn_context_history_ignores_non_turn_user_messages() {
+        let collaboration_mode = CollaborationMode {
+            mode: ModeKind::Plan,
+            settings: Settings {
+                model: "gpt-test".to_string(),
+                reasoning_effort: None,
+                developer_instructions: None,
+            },
+        };
+        let model = collaboration_mode.settings.model.clone();
+        let turn_context = TurnContextItem {
+            cwd: PathBuf::from("/tmp"),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            model,
+            personality: None,
+            collaboration_mode: Some(collaboration_mode),
+            effort: None,
+            summary: ReasoningSummaryConfig::Auto,
+            user_instructions: None,
+            developer_instructions: None,
+            final_output_json_schema: None,
+            truncation_policy: None,
+        };
+        let rollout_items = vec![
+            RolloutItem::ResponseItem(user_message(
+                "<user_instructions>do the thing</user_instructions>",
+            )),
+            RolloutItem::ResponseItem(user_message(
+                "# AGENTS.md instructions for project\n\n<INSTRUCTIONS>\nrule\n</INSTRUCTIONS>",
+            )),
+            RolloutItem::ResponseItem(user_message("real user turn")),
+            RolloutItem::TurnContext(turn_context),
+        ];
+
+        let history = Session::reconstruct_turn_context_history_from_rollout(&rollout_items);
+        let modes: Vec<Option<ModeKind>> = history
+            .iter()
+            .map(|item| {
+                item.as_ref()
+                    .and_then(|ctx| ctx.collaboration_mode.as_ref().map(|mode| mode.mode))
+            })
+            .collect();
+
+        assert_eq!(modes, vec![Some(ModeKind::Plan)]);
+    }
+
+    #[test]
+    fn drop_last_n_user_turns_from_items_ignores_non_turn_user_messages() {
+        let mut items = vec![
+            user_message("<environment_context>ctx</environment_context>"),
+            user_message("<user_instructions>do the thing</user_instructions>"),
+            user_message("turn 1 user"),
+            assistant_message("turn 1 assistant"),
+            user_message("turn 2 user"),
+            assistant_message("turn 2 assistant"),
+        ];
+
+        Session::drop_last_n_user_turns_from_items(&mut items, 2);
+
+        assert_eq!(
+            items,
+            vec![
+                user_message("<environment_context>ctx</environment_context>"),
+                user_message("<user_instructions>do the thing</user_instructions>"),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn thread_rollback_ignores_stale_turn_context() {
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
+
+        let initial_context = sess.build_initial_context(tc.as_ref()).await;
+        sess.record_into_history(&initial_context, tc.as_ref())
+            .await;
+
+        let base_mode = sess.current_collaboration_mode().await;
+        let plan_mode = CollaborationMode {
+            mode: ModeKind::Plan,
+            settings: base_mode.settings.clone(),
+        };
+        let code_mode = CollaborationMode {
+            mode: ModeKind::Code,
+            settings: base_mode.settings.clone(),
+        };
+
+        {
+            let mut state = sess.state.lock().await;
+            state.session_configuration.collaboration_mode = plan_mode.clone();
+        }
+        let input1 = vec![UserInput::Text {
+            text: "turn 1".to_string(),
+            text_elements: Vec::new(),
+        }];
+        let response_item1: ResponseItem = ResponseInputItem::from(input1.clone()).into();
+        sess.record_user_prompt_and_emit_turn_item(tc.as_ref(), &input1, response_item1)
+            .await;
+
+        let turn_2 = vec![user_message("turn 2")];
+        sess.record_into_history(&turn_2, tc.as_ref()).await;
+
+        {
+            let mut state = sess.state.lock().await;
+            state.session_configuration.collaboration_mode = code_mode.clone();
+        }
+        let input3 = vec![UserInput::Text {
+            text: "turn 3".to_string(),
+            text_elements: Vec::new(),
+        }];
+        let response_item3: ResponseItem = ResponseInputItem::from(input3.clone()).into();
+        sess.record_user_prompt_and_emit_turn_item(tc.as_ref(), &input3, response_item3)
+            .await;
+
+        handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+        let rollback_event = wait_for_thread_rolled_back(&rx).await;
+        pretty_assertions::assert_eq!(rollback_event.num_turns, 1);
+        assert_eq!(
+            rollback_event.model_visible_state,
+            Some(ModelVisibleState {
+                collaboration_mode: Some(code_mode.clone()),
+            })
+        );
+
+        let (collaboration_mode, pending_model_visible_state_sync) = {
+            let mut state = sess.state.lock().await;
+            let pending = state.take_pending_model_visible_state_sync(true);
+            (
+                state.session_configuration.collaboration_mode.clone(),
+                pending,
+            )
+        };
+
+        pretty_assertions::assert_eq!(collaboration_mode, code_mode);
+        assert_eq!(
+            pending_model_visible_state_sync,
+            PendingModelVisibleStateSync::ForceEmitAll
+        );
+    }
+
+    #[tokio::test]
     async fn thread_rollback_clears_history_when_num_turns_exceeds_existing_turns() {
         let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
@@ -5148,15 +5934,7 @@ mod tests {
         sess.record_into_history(&initial_context, tc.as_ref())
             .await;
 
-        let turn_1 = vec![ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "turn 1 user".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        }];
+        let turn_1 = vec![user_message("turn 1 user")];
         sess.record_into_history(&turn_1, tc.as_ref()).await;
 
         handlers::thread_rollback(&sess, "sub-1".to_string(), 99).await;
@@ -6121,27 +6899,11 @@ mod tests {
         }
         live_history.record_items(initial_context.iter(), turn_context.truncation_policy);
 
-        let user1 = ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "first user".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        };
+        let user1 = user_message("first user");
         live_history.record_items(std::iter::once(&user1), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(user1.clone()));
 
-        let assistant1 = ResponseItem::Message {
-            id: None,
-            role: "assistant".to_string(),
-            content: vec![ContentItem::OutputText {
-                text: "assistant reply one".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        };
+        let assistant1 = assistant_message("assistant reply one");
         live_history.record_items(std::iter::once(&assistant1), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(assistant1.clone()));
 
@@ -6159,27 +6921,11 @@ mod tests {
             replacement_history: None,
         }));
 
-        let user2 = ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "second user".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        };
+        let user2 = user_message("second user");
         live_history.record_items(std::iter::once(&user2), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(user2.clone()));
 
-        let assistant2 = ResponseItem::Message {
-            id: None,
-            role: "assistant".to_string(),
-            content: vec![ContentItem::OutputText {
-                text: "assistant reply two".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        };
+        let assistant2 = assistant_message("assistant reply two");
         live_history.record_items(std::iter::once(&assistant2), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(assistant2.clone()));
 
@@ -6197,27 +6943,11 @@ mod tests {
             replacement_history: None,
         }));
 
-        let user3 = ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "third user".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        };
+        let user3 = user_message("third user");
         live_history.record_items(std::iter::once(&user3), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(user3));
 
-        let assistant3 = ResponseItem::Message {
-            id: None,
-            role: "assistant".to_string(),
-            content: vec![ContentItem::OutputText {
-                text: "assistant reply three".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        };
+        let assistant3 = assistant_message("assistant reply three");
         live_history.record_items(std::iter::once(&assistant3), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(assistant3));
 

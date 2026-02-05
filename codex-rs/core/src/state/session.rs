@@ -1,20 +1,38 @@
 //! Session-wide mutable state.
 
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::ModelVisibleState;
+use codex_protocol::protocol::TurnContextItem;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
 use crate::codex::SessionConfiguration;
 use crate::context_manager::ContextManager;
+use crate::context_manager::is_user_turn_boundary;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 use crate::truncate::TruncationPolicy;
 
+/// One-shot synchronization state for model-visible settings after rollback/backtrack.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) enum PendingModelVisibleStateSync {
+    /// No synchronization is pending.
+    #[default]
+    None,
+    /// Compare the next submitted model-visible state against this rollback snapshot.
+    Snapshot(ModelVisibleState),
+    /// Snapshot is missing/unreliable, so emit all tracked model-visible updates once.
+    ForceEmitAll,
+}
+
 /// Persistent, session-scoped state previously stored directly on `Session`.
 pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
     pub(crate) history: ContextManager,
+    pub(crate) turn_context_history: Vec<Option<TurnContextItem>>,
+    /// Pending one-shot sync for model-visible state after rollback/backtrack.
+    pub(crate) pending_model_visible_state_sync: PendingModelVisibleStateSync,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
     pub(crate) server_reasoning_included: bool,
     pub(crate) dependency_env: HashMap<String, String>,
@@ -33,6 +51,8 @@ impl SessionState {
         Self {
             session_configuration,
             history,
+            turn_context_history: Vec::new(),
+            pending_model_visible_state_sync: PendingModelVisibleStateSync::None,
             latest_rate_limits: None,
             server_reasoning_included: false,
             dependency_env: HashMap::new(),
@@ -48,6 +68,69 @@ impl SessionState {
         I::Item: std::ops::Deref<Target = ResponseItem>,
     {
         self.history.record_items(items, policy);
+    }
+
+    /// Keep `turn_context_history` aligned with user turns even when no TurnContextItem exists
+    /// yet (e.g., legacy rollouts or model-sourced user messages). We push a `None` placeholder
+    /// for each user message so later rollback/backtrack logic can safely index the latest
+    /// user turn and optionally fill the slot with a TurnContextItem.
+    pub(crate) fn record_user_turn_placeholders(&mut self, items: &[ResponseItem]) {
+        for item in items {
+            if is_user_turn_boundary(item) {
+                self.turn_context_history.push(None);
+            }
+        }
+    }
+
+    pub(crate) fn set_last_turn_context(&mut self, turn_context: TurnContextItem) {
+        if let Some(last) = self.turn_context_history.last_mut()
+            && last.is_none()
+        {
+            *last = Some(turn_context);
+            return;
+        }
+        self.turn_context_history.push(Some(turn_context));
+    }
+
+    /// Trim or left-pad `turn_context_history` to align with the current number of user turns.
+    ///
+    /// When history is replaced (e.g., during replay/rollback), we need the last N entries
+    /// corresponding to the surviving user turns. If the stored list is shorter than the
+    /// user-turn count, we pad with `None` so indices remain aligned.
+    pub(crate) fn reset_turn_context_history(&mut self, user_turn_count: usize) {
+        let existing_len = self.turn_context_history.len();
+        if existing_len >= user_turn_count {
+            let start = existing_len - user_turn_count;
+            self.turn_context_history = self.turn_context_history.split_off(start);
+        } else {
+            let mut new_history = Vec::with_capacity(user_turn_count);
+            let padding = user_turn_count - existing_len;
+            new_history.resize_with(padding, || None);
+            new_history.append(&mut self.turn_context_history);
+            self.turn_context_history = new_history;
+        }
+    }
+
+    pub(crate) fn set_turn_context_history(
+        &mut self,
+        turn_context_history: Vec<Option<TurnContextItem>>,
+    ) {
+        self.turn_context_history = turn_context_history;
+    }
+
+    /// Consume pending model-visible state sync only when a model-visible update is being built.
+    ///
+    /// If the next operation does not carry any model-visible update, keep the pending sync for a
+    /// later turn that does.
+    pub(crate) fn take_pending_model_visible_state_sync(
+        &mut self,
+        has_model_visible_state_update: bool,
+    ) -> PendingModelVisibleStateSync {
+        if has_model_visible_state_update {
+            std::mem::take(&mut self.pending_model_visible_state_sync)
+        } else {
+            PendingModelVisibleStateSync::None
+        }
     }
 
     pub(crate) fn clone_history(&self) -> ContextManager {

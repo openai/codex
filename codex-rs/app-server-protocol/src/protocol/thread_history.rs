@@ -490,7 +490,10 @@ mod tests {
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "A2".into(),
             }),
-            EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 1 }),
+            EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+                num_turns: 1,
+                model_visible_state: None,
+            }),
             EventMsg::UserMessage(UserMessageEvent {
                 message: "Third".into(),
                 images: None,
@@ -565,7 +568,10 @@ mod tests {
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "A2".into(),
             }),
-            EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 99 }),
+            EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+                num_turns: 99,
+                model_visible_state: None,
+            }),
         ];
 
         let turns = build_turns_from_event_msgs(&events);

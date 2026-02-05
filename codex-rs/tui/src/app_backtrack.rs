@@ -37,6 +37,7 @@ use codex_core::protocol::CodexErrorInfo;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
+use codex_core::protocol::ThreadRolledBackEvent;
 use codex_protocol::ThreadId;
 use codex_protocol::user_input::TextElement;
 use color_eyre::eyre::Result;
@@ -453,13 +454,14 @@ impl App {
 
     pub(crate) fn handle_backtrack_event(&mut self, event: &EventMsg) {
         match event {
-            EventMsg::ThreadRolledBack(_) => self.finish_pending_backtrack(),
+            EventMsg::ThreadRolledBack(rollback) => self.finish_pending_backtrack(rollback),
             EventMsg::Error(ErrorEvent {
                 codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
                 ..
             }) => {
-                // Core rejected the rollback; clear the guard so the user can retry.
-                self.backtrack.pending_rollback = None;
+                let Some(_pending) = self.backtrack.pending_rollback.take() else {
+                    return;
+                };
             }
             _ => {}
         }
@@ -469,7 +471,7 @@ impl App {
     ///
     /// We ignore events that do not correspond to the currently active thread to avoid applying
     /// stale updates after a session switch.
-    fn finish_pending_backtrack(&mut self) {
+    fn finish_pending_backtrack(&mut self, rollback: &ThreadRolledBackEvent) {
         let Some(pending) = self.backtrack.pending_rollback.take() else {
             return;
         };
@@ -477,6 +479,12 @@ impl App {
             // Ignore rollbacks targeting a prior thread.
             return;
         }
+
+        if let Some(model_visible_state) = rollback.model_visible_state.as_ref() {
+            self.chat_widget
+                .apply_model_visible_state(model_visible_state);
+        }
+
         self.trim_transcript_for_backtrack(pending.selection.nth_user_message);
         self.backtrack_render_pending = true;
     }
@@ -492,6 +500,7 @@ impl App {
                 .and_then(|idx| self.transcript_cells.get(idx))
                 .and_then(|cell| cell.as_any().downcast_ref::<UserHistoryCell>())
                 .map(|cell| {
+                    let _historical_mode = cell.collaboration_mode.as_ref();
                     (
                         cell.message.clone(),
                         cell.text_elements.clone(),
@@ -574,6 +583,7 @@ mod tests {
                 message: "first user".to_string(),
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
+                collaboration_mode: None,
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("assistant")], true))
                 as Arc<dyn HistoryCell>,
@@ -592,6 +602,7 @@ mod tests {
                 message: "first".to_string(),
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
+                collaboration_mode: None,
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("after")], false))
                 as Arc<dyn HistoryCell>,
@@ -622,6 +633,7 @@ mod tests {
                 message: "first".to_string(),
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
+                collaboration_mode: None,
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("between")], false))
                 as Arc<dyn HistoryCell>,
@@ -629,6 +641,7 @@ mod tests {
                 message: "second".to_string(),
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
+                collaboration_mode: None,
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("tail")], false))
                 as Arc<dyn HistoryCell>,

@@ -1473,7 +1473,7 @@ mod tests {
         overlay.submit_answers();
 
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(Op::UserInputAnswer { id, response, .. }) = event else {
+        let AppEvent::CodexOp(Op::UserInputAnswer { id, response }) = event else {
             panic!("expected UserInputAnswer");
         };
         assert_eq!(id, "turn-1");
