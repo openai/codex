@@ -455,7 +455,7 @@ async fn turn_start_accepts_personality_override_v2() -> Result<()> {
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
-            personality: Some(Personality::Pragmatic),
+            personality: Some(Personality::Friendly),
             ..Default::default()
         })
         .await?;
@@ -560,7 +560,7 @@ async fn turn_start_change_personality_mid_thread_v2() -> Result<()> {
                 text: "Hello again".to_string(),
                 text_elements: Vec::new(),
             }],
-            personality: Some(Personality::Pragmatic),
+            personality: Some(Personality::Friendly),
             ..Default::default()
         })
         .await?;

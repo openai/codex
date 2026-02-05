@@ -233,7 +233,7 @@ async fn config_personality_none_sends_no_personality() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn default_personality_is_friendly_without_config_toml() -> anyhow::Result<()> {
+async fn default_personality_is_pragmatic_without_config_toml() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -269,7 +269,7 @@ async fn default_personality_is_friendly_without_config_toml() -> anyhow::Result
     let request = resp_mock.single_request();
     let instructions_text = request.instructions_text();
     assert!(
-        instructions_text.contains(LOCAL_FRIENDLY_TEMPLATE),
+        instructions_text.contains(LOCAL_PRAGMATIC_TEMPLATE),
         "expected default friendly template, got: {instructions_text:?}"
     );
 
