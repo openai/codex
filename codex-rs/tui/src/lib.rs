@@ -413,7 +413,7 @@ async fn run_ratatui_app(
     initial_config: Config,
     overrides: ConfigOverrides,
     cli_kv_overrides: Vec<(String, toml::Value)>,
-    cloud_requirements: CloudRequirementsLoader,
+    mut cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
 ) -> color_eyre::Result<AppExitInfo> {
     color_eyre::install()?;
@@ -470,9 +470,10 @@ async fn run_ratatui_app(
         should_show_onboarding(login_status, &initial_config, should_show_trust_screen_flag);
 
     let config = if should_show_onboarding {
+        let show_login_screen = should_show_login_screen(login_status, &initial_config);
         let onboarding_result = run_onboarding_app(
             OnboardingScreenArgs {
-                show_login_screen: should_show_login_screen(login_status, &initial_config),
+                show_login_screen,
                 show_trust_screen: should_show_trust_screen_flag,
                 login_status,
                 auth_manager: auth_manager.clone(),
@@ -493,9 +494,19 @@ async fn run_ratatui_app(
                 exit_reason: ExitReason::UserRequested,
             });
         }
-        // If the user made an explicit trust decision, reload config so current
-        // process state reflects what was persisted to config.toml.
-        if onboarding_result.directory_trust_decision.is_some() {
+        // If this onboarding run included the login step, always refresh cloud requirements and
+        // rebuild config. This avoids missing newly available cloud requirements due to login
+        // status detection edge cases.
+        if show_login_screen {
+            cloud_requirements = cloud_requirements_loader(
+                auth_manager.clone(),
+                initial_config.chatgpt_base_url.clone(),
+            );
+        }
+
+        // If the user made an explicit trust decision, or we showed the login flow, reload config
+        // so current process state reflects persisted trust/auth changes.
+        if onboarding_result.directory_trust_decision.is_some() || show_login_screen {
             load_config_or_exit(
                 cli_kv_overrides.clone(),
                 overrides.clone(),
@@ -668,6 +679,7 @@ async fn run_ratatui_app(
         }
         _ => config,
     };
+    set_default_client_residency_requirement(config.enforce_residency.value());
     let active_profile = config.active_profile.clone();
     let should_show_trust_screen = should_show_trust_screen(&config);
 
