@@ -3,6 +3,7 @@ use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement as UserTextElement;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -26,6 +27,7 @@ fn is_word_separator(ch: char) -> bool {
 #[derive(Debug, Clone)]
 struct TextElement {
     range: Range<usize>,
+    id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -87,7 +89,10 @@ impl TextArea {
                 if start >= end {
                     continue;
                 }
-                self.elements.push(TextElement { range: start..end });
+                self.elements.push(TextElement {
+                    range: start..end,
+                    id: None,
+                });
             }
             self.elements.sort_by_key(|e| e.range.start);
         }
@@ -242,6 +247,11 @@ impl TextArea {
     }
 
     pub fn input(&mut self, event: KeyEvent) {
+        // Only process key presses or repeats; ignore releases to avoid inserting
+        // characters on key-up events when modifiers are no longer reported.
+        if !matches!(event.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+            return;
+        }
         match event {
             // Some terminals (or configurations) send Control key chords as
             // C0 control characters without reporting the CONTROL modifier.
@@ -844,6 +854,70 @@ impl TextArea {
         self.set_cursor(end);
     }
 
+    pub fn insert_named_element(&mut self, text: &str, id: String) {
+        let start = self.clamp_pos_for_insertion(self.cursor_pos);
+        self.insert_str_at(start, text);
+        let end = start + text.len();
+        self.add_element_with_id(start..end, Some(id));
+        // Place cursor at end of inserted element
+        self.set_cursor(end);
+    }
+
+    pub fn replace_element_by_id(&mut self, id: &str, text: &str) -> bool {
+        if let Some(idx) = self
+            .elements
+            .iter()
+            .position(|e| e.id.as_deref() == Some(id))
+        {
+            let range = self.elements[idx].range.clone();
+            self.replace_range_raw(range, text);
+            self.elements.retain(|e| e.id.as_deref() != Some(id));
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Update the element's text in place, preserving its id so callers can
+    /// update it again later (e.g. recording -> transcribing -> final).
+    #[allow(dead_code)]
+    pub fn update_named_element_by_id(&mut self, id: &str, text: &str) -> bool {
+        if let Some(elem_idx) = self
+            .elements
+            .iter()
+            .position(|e| e.id.as_deref() == Some(id))
+        {
+            let old_range = self.elements[elem_idx].range.clone();
+            let start = old_range.start;
+            self.replace_range_raw(old_range, text);
+            // After replace_range_raw, the old element entry was removed if fully overlapped.
+            // Re-add an updated element with the same id and new range.
+            let new_end = start + text.len();
+            self.add_element_with_id(start..new_end, Some(id.to_string()));
+            true
+        } else {
+            false
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn named_element_range(&self, id: &str) -> Option<std::ops::Range<usize>> {
+        self.elements
+            .iter()
+            .find(|e| e.id.as_deref() == Some(id))
+            .map(|e| e.range.clone())
+    }
+
+    fn add_element_with_id(&mut self, range: Range<usize>, id: Option<String>) {
+        let elem = TextElement { range, id };
+        self.elements.push(elem);
+        self.elements.sort_by_key(|e| e.range.start);
+    }
+
+    fn add_element(&mut self, range: Range<usize>) {
+        self.add_element_with_id(range, None);
+    }
+
     /// Mark an existing text range as an atomic element without changing the text.
     ///
     /// This is used to convert already-typed tokens (like `/plan`) into elements
@@ -868,8 +942,7 @@ impl TextArea {
         {
             return;
         }
-        self.elements.push(TextElement { range: start..end });
-        self.elements.sort_by_key(|e| e.range.start);
+        self.add_element_with_id(start..end, None);
     }
 
     pub fn remove_element_range(&mut self, range: Range<usize>) -> bool {
@@ -882,12 +955,6 @@ impl TextArea {
         self.elements
             .retain(|elem| elem.range.start != start || elem.range.end != end);
         len_before != self.elements.len()
-    }
-
-    fn add_element(&mut self, range: Range<usize>) {
-        let elem = TextElement { range };
-        self.elements.push(elem);
-        self.elements.sort_by_key(|e| e.range.start);
     }
 
     fn find_element_containing(&self, pos: usize) -> Option<usize> {
