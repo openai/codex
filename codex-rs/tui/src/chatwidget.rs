@@ -1867,7 +1867,10 @@ impl ChatWidget {
     /// Runs a commit tick for the current stream queue snapshot.
     ///
     /// `scope` controls whether this call may commit in smooth mode or only when catch-up
-    /// is currently active.
+    /// is currently active. While lines are actively streaming we hide the status row to avoid
+    /// duplicate "in progress" affordances, but once all stream controllers go idle for this
+    /// turn we restore the status row if the task is still running so users keep a live
+    /// spinner/shimmer signal between preamble output and subsequent tool activity.
     fn run_commit_tick_with_scope(&mut self, scope: CommitTickScope) {
         let now = Instant::now();
         let outcome = run_commit_tick(
@@ -1883,6 +1886,10 @@ impl ChatWidget {
         }
 
         if outcome.has_controller && outcome.all_idle {
+            if self.bottom_pane.is_task_running() {
+                self.bottom_pane.ensure_status_indicator();
+                self.set_status_header(self.current_status_header.clone());
+            }
             self.app_event_tx.send(AppEvent::StopCommitAnimation);
         }
     }
