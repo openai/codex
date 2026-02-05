@@ -1,8 +1,7 @@
 use crate::auth::AuthProvider;
-use crate::auth::add_auth_headers;
+use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
 use crate::provider::Provider;
-use crate::telemetry::run_with_request_telemetry;
 use codex_client::HttpTransport;
 use codex_client::RequestTelemetry;
 use codex_protocol::openai_models::ModelInfo;
@@ -13,29 +12,29 @@ use http::header::ETAG;
 use std::sync::Arc;
 
 pub struct ModelsClient<T: HttpTransport, A: AuthProvider> {
-    transport: T,
-    provider: Provider,
-    auth: A,
-    request_telemetry: Option<Arc<dyn RequestTelemetry>>,
+    session: EndpointSession<T, A>,
 }
 
 impl<T: HttpTransport, A: AuthProvider> ModelsClient<T, A> {
     pub fn new(transport: T, provider: Provider, auth: A) -> Self {
         Self {
-            transport,
-            provider,
-            auth,
-            request_telemetry: None,
+            session: EndpointSession::new(transport, provider, auth),
         }
     }
 
-    pub fn with_telemetry(mut self, request: Option<Arc<dyn RequestTelemetry>>) -> Self {
-        self.request_telemetry = request;
-        self
+    pub fn with_telemetry(self, request: Option<Arc<dyn RequestTelemetry>>) -> Self {
+        Self {
+            session: self.session.with_request_telemetry(request),
+        }
     }
 
-    fn path(&self) -> &'static str {
+    fn path() -> &'static str {
         "models"
+    }
+
+    fn append_client_version_query(req: &mut codex_client::Request, client_version: &str) {
+        let separator = if req.url.contains('?') { '&' } else { '?' };
+        req.url = format!("{}{}client_version={client_version}", req.url, separator);
     }
 
     pub async fn list_models(
@@ -43,23 +42,12 @@ impl<T: HttpTransport, A: AuthProvider> ModelsClient<T, A> {
         client_version: &str,
         extra_headers: HeaderMap,
     ) -> Result<(Vec<ModelInfo>, Option<String>), ApiError> {
-        let builder = || {
-            let mut req = self.provider.build_request(Method::GET, self.path());
-            req.headers.extend(extra_headers.clone());
-
-            let separator = if req.url.contains('?') { '&' } else { '?' };
-            req.url = format!("{}{}client_version={client_version}", req.url, separator);
-
-            add_auth_headers(&self.auth, req)
-        };
-
-        let resp = run_with_request_telemetry(
-            self.provider.retry.to_policy(),
-            self.request_telemetry.clone(),
-            builder,
-            |req| self.transport.execute(req),
-        )
-        .await?;
+        let resp = self
+            .session
+            .execute_with(Method::GET, Self::path(), extra_headers, None, |req| {
+                Self::append_client_version_query(req, client_version);
+            })
+            .await?;
 
         let header_etag = resp
             .headers
@@ -83,7 +71,6 @@ impl<T: HttpTransport, A: AuthProvider> ModelsClient<T, A> {
 mod tests {
     use super::*;
     use crate::provider::RetryConfig;
-    use crate::provider::WireApi;
     use async_trait::async_trait;
     use codex_client::Request;
     use codex_client::Response;
@@ -149,7 +136,6 @@ mod tests {
             name: "test".to_string(),
             base_url: base_url.to_string(),
             query_params: None,
-            wire: WireApi::Responses,
             headers: HeaderMap::new(),
             retry: RetryConfig {
                 max_attempts: 1,

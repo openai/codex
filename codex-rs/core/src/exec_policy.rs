@@ -248,9 +248,7 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
     // from each layer, so that higher-precedence layers can override
     // rules defined in lower-precedence ones.
     let mut policy_paths = Vec::new();
-    // Include disabled project layers so .codex/rules still applies when
-    // project config.toml is trust-disabled.
-    for layer in config_stack.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true) {
+    for layer in config_stack.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, false) {
         if let Some(config_folder) = layer.config_folder() {
             #[expect(clippy::expect_used)]
             let policy_dir = config_folder.join(RULES_DIR_NAME).expect("safe join");
@@ -280,7 +278,18 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
     let policy = parser.build();
     tracing::debug!("loaded rules from {} files", policy_paths.len());
 
-    Ok(policy)
+    let Some(requirements_policy) = config_stack.requirements().exec_policy.as_deref() else {
+        return Ok(policy);
+    };
+
+    let mut combined_rules = policy.rules().clone();
+    for (program, rules) in requirements_policy.as_ref().rules().iter_all() {
+        for rule in rules {
+            combined_rules.insert(program.clone(), rule.clone());
+        }
+    }
+
+    Ok(Policy::new(combined_rules))
 }
 
 /// If a command is not matched by any execpolicy rule, derive a [`Decision`].
@@ -673,12 +682,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn loads_rules_from_disabled_project_layers() -> anyhow::Result<()> {
+    async fn ignores_rules_from_untrusted_project_layers() -> anyhow::Result<()> {
         let project_dir = tempdir()?;
         let policy_dir = project_dir.path().join(RULES_DIR_NAME);
         fs::create_dir_all(&policy_dir)?;
         fs::write(
-            policy_dir.join("disabled.rules"),
+            policy_dir.join("untrusted.rules"),
             r#"prefix_rule(pattern=["ls"], decision="forbidden")"#,
         )?;
 
@@ -688,7 +697,7 @@ mod tests {
                 dot_codex_folder: project_dot_codex_folder,
             },
             TomlValue::Table(Default::default()),
-            "trust disabled",
+            "marked untrusted",
         )];
         let config_stack = ConfigLayerStack::new(
             layers,
@@ -700,16 +709,14 @@ mod tests {
 
         assert_eq!(
             Evaluation {
-                decision: Decision::Forbidden,
-                matched_rules: vec![RuleMatch::PrefixRuleMatch {
-                    matched_prefix: vec!["ls".to_string()],
-                    decision: Decision::Forbidden,
-                    justification: None,
+                decision: Decision::Allow,
+                matched_rules: vec![RuleMatch::HeuristicsRuleMatch {
+                    command: vec!["ls".to_string()],
+                    decision: Decision::Allow,
                 }],
             },
             policy.check_multiple([vec!["ls".to_string()]].iter(), &|_| Decision::Allow)
         );
-
         Ok(())
     }
 
@@ -1265,6 +1272,30 @@ prefix_rule(
             ExecApprovalRequirement::Skip {
                 bypass_sandbox: true,
                 proposed_execpolicy_amendment: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn dangerous_git_push_requires_approval_in_danger_full_access() {
+        let command = vec_str(&["git", "push", "origin", "+main"]);
+        let manager = ExecPolicyManager::default();
+        let requirement = manager
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                features: &Features::with_defaults(),
+                command: &command,
+                approval_policy: AskForApproval::OnRequest,
+                sandbox_policy: &SandboxPolicy::DangerFullAccess,
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                prefix_rule: None,
+            })
+            .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
             }
         );
     }

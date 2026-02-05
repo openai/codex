@@ -1,6 +1,7 @@
 use anyhow::Result;
 use codex_core::features::Feature;
 use codex_protocol::ThreadId;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
@@ -8,8 +9,6 @@ use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::UserMessageEvent;
-use codex_state::STATE_DB_FILENAME;
-use core_test_support::load_sse_fixture_with_id;
 use core_test_support::responses;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -24,10 +23,6 @@ use tokio::time::Duration;
 use tracing_subscriber::prelude::*;
 use uuid::Uuid;
 
-fn sse_completed(id: &str) -> String {
-    load_sse_fixture_with_id("../fixtures/completed_template.json", id)
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn new_thread_is_recorded_in_state_db() -> Result<()> {
     let server = start_mock_server().await;
@@ -38,7 +33,7 @@ async fn new_thread_is_recorded_in_state_db() -> Result<()> {
 
     let thread_id = test.session_configured.session_id;
     let rollout_path = test.codex.rollout_path().expect("rollout path");
-    let db_path = test.config.codex_home.join(STATE_DB_FILENAME);
+    let db_path = codex_state::state_db_path(test.config.codex_home.as_path());
 
     for _ in 0..100 {
         if tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
@@ -74,6 +69,28 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
     let rollout_rel_path = format!("sessions/2026/01/27/rollout-2026-01-27T12-00-00-{uuid}.jsonl");
     let rollout_rel_path_for_hook = rollout_rel_path.clone();
 
+    let dynamic_tools = vec![
+        DynamicToolSpec {
+            name: "geo_lookup".to_string(),
+            description: "lookup a city".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "required": ["city"],
+                "properties": { "city": { "type": "string" } }
+            }),
+        },
+        DynamicToolSpec {
+            name: "weather_lookup".to_string(),
+            description: "lookup weather".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "required": ["zip"],
+                "properties": { "zip": { "type": "string" } }
+            }),
+        },
+    ];
+    let dynamic_tools_for_hook = dynamic_tools.clone();
+
     let mut builder = test_codex()
         .with_pre_build_hook(move |codex_home| {
             let rollout_path = codex_home.join(&rollout_rel_path_for_hook);
@@ -81,7 +98,6 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
                 .parent()
                 .expect("rollout path should have parent");
             fs::create_dir_all(parent).expect("should create rollout directory");
-
             let session_meta_line = SessionMetaLine {
                 meta: SessionMeta {
                     id: thread_id,
@@ -93,7 +109,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
                     source: SessionSource::default(),
                     model_provider: None,
                     base_instructions: None,
-                    dynamic_tools: None,
+                    dynamic_tools: Some(dynamic_tools_for_hook),
                 },
                 git: None,
             };
@@ -127,7 +143,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
 
     let test = builder.build(&server).await?;
 
-    let db_path = test.config.codex_home.join(STATE_DB_FILENAME);
+    let db_path = codex_state::state_db_path(test.config.codex_home.as_path());
     let rollout_path = test.config.codex_home.join(&rollout_rel_path);
     let default_provider = test.config.model_provider_id.clone();
 
@@ -155,6 +171,17 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
     assert_eq!(metadata.model_provider, default_provider);
     assert!(metadata.has_user_event);
 
+    let mut stored_tools = None;
+    for _ in 0..40 {
+        stored_tools = db.get_dynamic_tools(thread_id).await?;
+        if stored_tools.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let stored_tools = stored_tools.expect("dynamic tools should be stored");
+    assert_eq!(stored_tools, dynamic_tools);
+
     Ok(())
 }
 
@@ -163,7 +190,10 @@ async fn user_messages_persist_in_state_db() -> Result<()> {
     let server = start_mock_server().await;
     mount_sse_sequence(
         &server,
-        vec![sse_completed("resp-1"), sse_completed("resp-2")],
+        vec![
+            responses::sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+            responses::sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
     )
     .await;
 
@@ -172,7 +202,7 @@ async fn user_messages_persist_in_state_db() -> Result<()> {
     });
     let test = builder.build(&server).await?;
 
-    let db_path = test.config.codex_home.join(STATE_DB_FILENAME);
+    let db_path = codex_state::state_db_path(test.config.codex_home.as_path());
     for _ in 0..100 {
         if tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
             break;

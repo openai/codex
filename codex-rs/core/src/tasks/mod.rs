@@ -158,8 +158,7 @@ impl Session {
         };
 
         let timer = turn_context
-            .client
-            .get_otel_manager()
+            .otel_manager
             .start_timer("codex.turn.e2e_duration_ms", &[])
             .ok();
 
@@ -265,6 +264,7 @@ impl Session {
                     ),
                 }],
                 end_turn: None,
+                phase: None,
             };
             self.record_into_history(std::slice::from_ref(&marker), task.turn_context.as_ref())
                 .await;

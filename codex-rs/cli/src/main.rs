@@ -31,6 +31,10 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use supports_color::Stream;
 
+#[cfg(target_os = "macos")]
+mod app_cmd;
+#[cfg(target_os = "macos")]
+mod desktop_app;
 mod mcp_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
@@ -98,12 +102,18 @@ enum Subcommand {
     /// [experimental] Run the app server or related tooling.
     AppServer(AppServerCommand),
 
+    /// Launch the Codex desktop app (downloads the macOS installer if missing).
+    #[cfg(target_os = "macos")]
+    App(app_cmd::AppCommand),
+
     /// Generate shell completion scripts.
     Completion(CompletionCommand),
 
     /// Run commands within a Codex-provided sandbox.
-    #[clap(visible_alias = "debug")]
     Sandbox(SandboxArgs),
+
+    /// Debugging tools.
+    Debug(DebugCommand),
 
     /// Execpolicy tooling.
     #[clap(hide = true)]
@@ -140,6 +150,36 @@ struct CompletionCommand {
     /// Shell to generate completions for
     #[clap(value_enum, default_value_t = Shell::Bash)]
     shell: Shell,
+}
+
+#[derive(Debug, Parser)]
+struct DebugCommand {
+    #[command(subcommand)]
+    subcommand: DebugSubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum DebugSubcommand {
+    /// Tooling: helps debug the app server.
+    AppServer(DebugAppServerCommand),
+}
+
+#[derive(Debug, Parser)]
+struct DebugAppServerCommand {
+    #[command(subcommand)]
+    subcommand: DebugAppServerSubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum DebugAppServerSubcommand {
+    // Send message to app server V2.
+    SendMessageV2(DebugAppServerSendMessageV2Command),
+}
+
+#[derive(Debug, Parser)]
+struct DebugAppServerSendMessageV2Command {
+    #[arg(value_name = "USER_MESSAGE", required = true)]
+    user_message: String,
 }
 
 #[derive(Debug, Parser)]
@@ -303,6 +343,10 @@ struct GenerateTsCommand {
     /// Optional path to the Prettier executable to format generated files
     #[arg(short = 'p', long = "prettier", value_name = "PRETTIER_BIN")]
     prettier: Option<PathBuf>,
+
+    /// Include experimental methods and fields in the generated output
+    #[arg(long = "experimental", default_value_t = false)]
+    experimental: bool,
 }
 
 #[derive(Debug, Args)]
@@ -310,6 +354,10 @@ struct GenerateJsonSchemaCommand {
     /// Output directory where the schema bundle will be written
     #[arg(short = 'o', long = "out", value_name = "DIR")]
     out_dir: PathBuf,
+
+    /// Include experimental methods and fields in the generated output
+    #[arg(long = "experimental", default_value_t = false)]
+    experimental: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -407,6 +455,15 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
 
 fn run_execpolicycheck(cmd: ExecPolicyCheckCommand) -> anyhow::Result<()> {
     cmd.run()
+}
+
+fn run_debug_app_server_command(cmd: DebugAppServerCommand) -> anyhow::Result<()> {
+    match cmd.subcommand {
+        DebugAppServerSubcommand::SendMessageV2(cmd) => {
+            let codex_bin = std::env::current_exe()?;
+            codex_app_server_test_client::send_message_v2(&codex_bin, &[], cmd.user_message, &None)
+        }
+    }
 }
 
 #[derive(Debug, Default, Parser, Clone)]
@@ -539,15 +596,27 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 .await?;
             }
             Some(AppServerSubcommand::GenerateTs(gen_cli)) => {
-                codex_app_server_protocol::generate_ts(
+                let options = codex_app_server_protocol::GenerateTsOptions {
+                    experimental_api: gen_cli.experimental,
+                    ..Default::default()
+                };
+                codex_app_server_protocol::generate_ts_with_options(
                     &gen_cli.out_dir,
                     gen_cli.prettier.as_deref(),
+                    options,
                 )?;
             }
             Some(AppServerSubcommand::GenerateJsonSchema(gen_cli)) => {
-                codex_app_server_protocol::generate_json(&gen_cli.out_dir)?;
+                codex_app_server_protocol::generate_json_with_experimental(
+                    &gen_cli.out_dir,
+                    gen_cli.experimental,
+                )?;
             }
         },
+        #[cfg(target_os = "macos")]
+        Some(Subcommand::App(app_cli)) => {
+            app_cmd::run_app(app_cli).await?;
+        }
         Some(Subcommand::Resume(ResumeCommand {
             session_id,
             last,
@@ -663,6 +732,11 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                     codex_linux_sandbox_exe,
                 )
                 .await?;
+            }
+        },
+        Some(Subcommand::Debug(DebugCommand { subcommand })) => match subcommand {
+            DebugSubcommand::AppServer(cmd) => {
+                run_debug_app_server_command(cmd)?;
             }
         },
         Some(Subcommand::Execpolicy(ExecpolicyCommand { sub })) => match sub {

@@ -101,6 +101,8 @@ pub enum Feature {
     RemoteModels,
     /// Experimental shell snapshotting.
     ShellSnapshot,
+    /// Enable runtime metrics snapshots via a manual reader.
+    RuntimeMetrics,
     /// Persist rollout metadata to a local SQLite database.
     Sqlite,
     /// Append additional AGENTS.md guidance to user instructions.
@@ -119,7 +121,7 @@ pub enum Feature {
     SkillEnvVarDependencyPrompt,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     Steer,
-    /// Enable collaboration modes (Plan, Code, Pair Programming, Execute).
+    /// Enable collaboration modes (Plan, Default).
     CollaborationModes,
     /// Enable personality selection in the TUI.
     Personality,
@@ -356,7 +358,7 @@ fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>
 }
 
 fn web_search_details() -> &'static str {
-    "Set `web_search` to `\"live\"`, `\"cached\"`, or `\"disabled\"` in config.toml."
+    "Set `web_search` to `\"live\"`, `\"cached\"`, or `\"disabled\"` at the top level (or under a profile) in config.toml."
 }
 
 /// Keys accepted in `[features]` tables.
@@ -405,6 +407,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::UnifiedExec,
+        key: "unified_exec",
+        stage: Stage::Stable,
+        default_enabled: !cfg!(windows),
+    },
+    FeatureSpec {
         id: Feature::WebSearchRequest,
         key: "web_search_request",
         stage: Stage::Deprecated,
@@ -418,16 +426,6 @@ pub const FEATURES: &[FeatureSpec] = &[
     },
     // Experimental program. Rendered in the `/experimental` menu for users.
     FeatureSpec {
-        id: Feature::UnifiedExec,
-        key: "unified_exec",
-        stage: Stage::Experimental {
-            name: "Background terminal",
-            menu_description: "Run long-running terminal commands in the background.",
-            announcement: "NEW! Try Background terminals for long-running commands. Enable in /experimental!",
-        },
-        default_enabled: false,
-    },
-    FeatureSpec {
         id: Feature::ShellSnapshot,
         key: "shell_snapshot",
         stage: Stage::Experimental {
@@ -435,6 +433,12 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "Snapshot your shell environment to avoid re-running login scripts for every command.",
             announcement: "NEW! Try shell snapshotting to make your Codex faster. Enable in /experimental!",
         },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RuntimeMetrics,
+        key: "runtime_metrics",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
@@ -464,8 +468,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RequestRule,
         key: "request_rule",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::WindowsSandbox,
@@ -495,11 +499,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::PowershellUtf8,
         key: "powershell_utf8",
         #[cfg(windows)]
-        stage: Stage::Experimental {
-            name: "Powershell UTF-8 support",
-            menu_description: "Enable UTF-8 output in Powershell.",
-            announcement: "Codex now supports UTF-8 output in Powershell. If you are seeing problems, disable in /experimental.",
-        },
+        stage: Stage::Stable,
         #[cfg(windows)]
         default_enabled: true,
         #[cfg(not(windows))]
@@ -516,7 +516,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Collab,
         key: "collab",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Sub-agents",
+            menu_description: "Ask Codex to spawn multiple agents to parallelize the work and win in efficiency.",
+            announcement: "NEW: Sub-agents can now be spawned by Codex. Enable in /experimental and restart Codex!",
+        },
         default_enabled: false,
     },
     FeatureSpec {
@@ -554,14 +558,14 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::CollaborationModes,
         key: "collaboration_modes",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::Personality,
         key: "personality",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::ResponsesWebsockets,

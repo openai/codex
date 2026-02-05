@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
@@ -109,6 +110,73 @@ pub async fn collect_git_info(cwd: &Path) -> Option<GitInfo> {
     Some(git_info)
 }
 
+/// Collect fetch remotes in a multi-root-friendly format: {"origin": "https://..."}.
+pub async fn get_git_remote_urls(cwd: &Path) -> Option<BTreeMap<String, String>> {
+    let is_git_repo = run_git_command_with_timeout(&["rev-parse", "--git-dir"], cwd)
+        .await?
+        .status
+        .success();
+    if !is_git_repo {
+        return None;
+    }
+
+    get_git_remote_urls_assume_git_repo(cwd).await
+}
+
+/// Collect fetch remotes without checking whether `cwd` is in a git repo.
+pub async fn get_git_remote_urls_assume_git_repo(cwd: &Path) -> Option<BTreeMap<String, String>> {
+    let output = run_git_command_with_timeout(&["remote", "-v"], cwd).await?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    parse_git_remote_urls(stdout.as_str())
+}
+
+/// Return the current HEAD commit hash without checking whether `cwd` is in a git repo.
+pub async fn get_head_commit_hash(cwd: &Path) -> Option<String> {
+    let output = run_git_command_with_timeout(&["rev-parse", "HEAD"], cwd).await?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    let hash = stdout.trim();
+    if hash.is_empty() {
+        None
+    } else {
+        Some(hash.to_string())
+    }
+}
+
+fn parse_git_remote_urls(stdout: &str) -> Option<BTreeMap<String, String>> {
+    let mut remotes = BTreeMap::new();
+    for line in stdout.lines() {
+        let Some(fetch_line) = line.strip_suffix(" (fetch)") else {
+            continue;
+        };
+
+        let Some((name, url_part)) = fetch_line
+            .split_once('\t')
+            .or_else(|| fetch_line.split_once(' '))
+        else {
+            continue;
+        };
+
+        let url = url_part.trim_start();
+        if !url.is_empty() {
+            remotes.insert(name.to_string(), url.to_string());
+        }
+    }
+
+    if remotes.is_empty() {
+        None
+    } else {
+        Some(remotes)
+    }
+}
+
 /// A minimal commit summary entry used for pickers (subject + timestamp + sha).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CommitLogEntry {
@@ -185,11 +253,9 @@ pub async fn git_diff_to_remote(cwd: &Path) -> Option<GitDiffToRemote> {
 
 /// Run a git command with a timeout to prevent blocking on large repositories
 async fn run_git_command_with_timeout(args: &[&str], cwd: &Path) -> Option<std::process::Output> {
-    let result = timeout(
-        GIT_COMMAND_TIMEOUT,
-        Command::new("git").args(args).current_dir(cwd).output(),
-    )
-    .await;
+    let mut command = Command::new("git");
+    command.args(args).current_dir(cwd).kill_on_drop(true);
+    let result = timeout(GIT_COMMAND_TIMEOUT, command.output()).await;
 
     match result {
         Ok(Ok(output)) => Some(output),

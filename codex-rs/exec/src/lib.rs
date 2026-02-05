@@ -13,17 +13,17 @@ pub mod exec_events;
 pub use cli::Cli;
 pub use cli::Command;
 pub use cli::ReviewArgs;
+use codex_cloud_requirements::cloud_requirements_loader;
 use codex_common::oss::ensure_oss_provider_ready;
 use codex_common::oss::get_default_model_for_oss_provider;
-use codex_common::oss::ollama_chat_deprecation_notice;
 use codex_core::AuthManager;
 use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_core::NewThread;
-use codex_core::OLLAMA_CHAT_PROVIDER_ID;
 use codex_core::OLLAMA_OSS_PROVIDER_ID;
 use codex_core::ThreadManager;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
@@ -64,6 +64,7 @@ use uuid::Uuid;
 use crate::cli::Command as ExecCommand;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
+use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::default_client::set_default_originator;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::find_thread_path_by_name_str;
@@ -159,40 +160,51 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     // we load config.toml here to determine project state.
     #[allow(clippy::print_stderr)]
-    let config_toml = {
-        let codex_home = match find_codex_home() {
-            Ok(codex_home) => codex_home,
-            Err(err) => {
-                eprintln!("Error finding codex home: {err}");
-                std::process::exit(1);
-            }
-        };
-
-        match load_config_as_toml_with_cli_overrides(
-            &codex_home,
-            &config_cwd,
-            cli_kv_overrides.clone(),
-        )
-        .await
-        {
-            Ok(config_toml) => config_toml,
-            Err(err) => {
-                let config_error = err
-                    .get_ref()
-                    .and_then(|err| err.downcast_ref::<ConfigLoadError>())
-                    .map(ConfigLoadError::config_error);
-                if let Some(config_error) = config_error {
-                    eprintln!(
-                        "Error loading config.toml:\n{}",
-                        format_config_error_with_source(config_error)
-                    );
-                } else {
-                    eprintln!("Error loading config.toml: {err}");
-                }
-                std::process::exit(1);
-            }
+    let codex_home = match find_codex_home() {
+        Ok(codex_home) => codex_home,
+        Err(err) => {
+            eprintln!("Error finding codex home: {err}");
+            std::process::exit(1);
         }
     };
+
+    #[allow(clippy::print_stderr)]
+    let config_toml = match load_config_as_toml_with_cli_overrides(
+        &codex_home,
+        &config_cwd,
+        cli_kv_overrides.clone(),
+    )
+    .await
+    {
+        Ok(config_toml) => config_toml,
+        Err(err) => {
+            let config_error = err
+                .get_ref()
+                .and_then(|err| err.downcast_ref::<ConfigLoadError>())
+                .map(ConfigLoadError::config_error);
+            if let Some(config_error) = config_error {
+                eprintln!(
+                    "Error loading config.toml:\n{}",
+                    format_config_error_with_source(config_error)
+                );
+            } else {
+                eprintln!("Error loading config.toml: {err}");
+            }
+            std::process::exit(1);
+        }
+    };
+
+    let cloud_auth_manager = AuthManager::shared(
+        codex_home.clone(),
+        false,
+        config_toml.cli_auth_credentials_store.unwrap_or_default(),
+    );
+    let chatgpt_base_url = config_toml
+        .chatgpt_base_url
+        .clone()
+        .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
+    // TODO(gt): Make cloud requirements failures blocking once we can fail-closed.
+    let cloud_requirements = cloud_requirements_loader(cloud_auth_manager, chatgpt_base_url);
 
     let model_provider = if oss {
         let resolved = resolve_oss_provider(
@@ -205,7 +217,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             Some(provider)
         } else {
             return Err(anyhow::anyhow!(
-                "No default OSS provider configured. Use --local-provider=provider or set oss_provider to one of: {LMSTUDIO_OSS_PROVIDER_ID}, {OLLAMA_OSS_PROVIDER_ID}, {OLLAMA_CHAT_PROVIDER_ID} in config.toml"
+                "No default OSS provider configured. Use --local-provider=provider or set oss_provider to one of: {LMSTUDIO_OSS_PROVIDER_ID}, {OLLAMA_OSS_PROVIDER_ID} in config.toml"
             ));
         }
     } else {
@@ -237,7 +249,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         codex_linux_sandbox_exe,
         base_instructions: None,
         developer_instructions: None,
-        model_personality: None,
+        personality: None,
         compact_prompt: None,
         include_apply_patch_tool: None,
         show_raw_agent_reasoning: oss.then_some(true),
@@ -246,21 +258,18 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         additional_writable_roots: add_dir,
     };
 
-    let config =
-        Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides).await?;
+    let config = ConfigBuilder::default()
+        .cli_overrides(cli_kv_overrides)
+        .harness_overrides(overrides)
+        .cloud_requirements(cloud_requirements)
+        .build()
+        .await?;
+    set_default_client_residency_requirement(config.enforce_residency.value());
 
     if let Err(err) = enforce_login_restrictions(&config) {
         eprintln!("{err}");
         std::process::exit(1);
     }
-
-    let ollama_chat_support_notice = match ollama_chat_deprecation_notice(&config).await {
-        Ok(notice) => notice,
-        Err(err) => {
-            tracing::warn!(?err, "Failed to detect Ollama wire API");
-            None
-        }
-    };
 
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None, false)
@@ -294,12 +303,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             last_message_file.clone(),
         )),
     };
-    if let Some(notice) = ollama_chat_support_notice {
-        event_processor.process_event(Event {
-            id: String::new(),
-            msg: EventMsg::DeprecationNotice(notice),
-        });
-    }
 
     if oss {
         // We're in the oss section, so provider_id should be Some

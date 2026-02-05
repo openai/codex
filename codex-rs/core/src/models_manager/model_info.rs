@@ -9,6 +9,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationMode;
 use codex_protocol::openai_models::TruncationPolicyConfig;
+use codex_protocol::openai_models::default_input_modalities;
 
 use crate::config::Config;
 use crate::features::Feature;
@@ -66,6 +67,7 @@ macro_rules! model_info {
             auto_compact_token_limit: None,
             effective_context_window_percent: 95,
             experimental_supported_tools: Vec::new(),
+            input_modalities: default_input_modalities(),
         };
 
         $(

@@ -157,12 +157,18 @@ struct ResponseCompletedOutputTokensDetails {
 #[derive(Deserialize, Debug)]
 pub struct ResponsesStreamEvent {
     #[serde(rename = "type")]
-    kind: String,
+    pub(crate) kind: String,
     response: Option<Value>,
     item: Option<Value>,
     delta: Option<String>,
     summary_index: Option<i64>,
     content_index: Option<i64>,
+}
+
+impl ResponsesStreamEvent {
+    pub fn kind(&self) -> &str {
+        &self.kind
+    }
 }
 
 #[derive(Debug)]
@@ -429,6 +435,7 @@ mod tests {
     use super::*;
     use assert_matches::assert_matches;
     use bytes::Bytes;
+    use codex_protocol::models::MessagePhase;
     use codex_protocol::models::ResponseItem;
     use futures::stream;
     use pretty_assertions::assert_eq;
@@ -492,7 +499,8 @@ mod tests {
             "item": {
                 "type": "message",
                 "role": "assistant",
-                "content": [{"type": "output_text", "text": "Hello"}]
+                "content": [{"type": "output_text", "text": "Hello"}],
+                "phase": "commentary"
             }
         })
         .to_string();
@@ -523,8 +531,11 @@ mod tests {
 
         assert_matches!(
             &events[0],
-            Ok(ResponseEvent::OutputItemDone(ResponseItem::Message { role, .. }))
-                if role == "assistant"
+            Ok(ResponseEvent::OutputItemDone(ResponseItem::Message {
+                role,
+                phase: Some(MessagePhase::Commentary),
+                ..
+            })) if role == "assistant"
         );
 
         assert_matches!(

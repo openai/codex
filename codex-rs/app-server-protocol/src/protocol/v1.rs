@@ -33,6 +33,8 @@ use crate::protocol::common::GitSha;
 #[serde(rename_all = "camelCase")]
 pub struct InitializeParams {
     pub client_info: ClientInfo,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<InitializeCapabilities>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
@@ -41,6 +43,15 @@ pub struct ClientInfo {
     pub name: String,
     pub title: Option<String>,
     pub version: String,
+}
+
+/// Client-declared capabilities negotiated during initialize.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct InitializeCapabilities {
+    /// Opt into receiving experimental API methods and fields.
+    #[serde(default)]
+    pub experimental_api: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

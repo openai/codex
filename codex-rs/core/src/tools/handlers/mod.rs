@@ -27,6 +27,7 @@ pub use mcp_resource::McpResourceHandler;
 pub use plan::PlanHandler;
 pub use read_file::ReadFileHandler;
 pub use request_user_input::RequestUserInputHandler;
+pub(crate) use request_user_input::request_user_input_tool_description;
 pub use shell::ShellCommandHandler;
 pub use shell::ShellHandler;
 pub use test_sync::TestSyncHandler;

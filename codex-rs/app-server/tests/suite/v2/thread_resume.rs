@@ -338,6 +338,7 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
             text: history_text.to_string(),
         }],
         end_turn: None,
+        phase: None,
     }];
 
     // Resume with explicit history and override the model.
@@ -402,7 +403,7 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: thread.id.clone(),
             model: Some("gpt-5.2-codex".to_string()),
-            personality: Some(Personality::Friendly),
+            personality: Some(Personality::Pragmatic),
             ..Default::default()
         })
         .await?;
