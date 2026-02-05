@@ -299,9 +299,11 @@ pub(crate) enum AppEvent {
         cwd: PathBuf,
         branch: Option<String>,
     },
+    /// Apply a user-confirmed status-line item ordering/selection.
     StatusLineSetup {
         items: Vec<StatusLineItem>,
     },
+    /// Dismiss the status-line setup UI without changing config.
     StatusLineSetupCancelled,
 }
 

@@ -816,11 +816,22 @@ impl ChatWidget {
         self.set_status(header, None);
     }
 
+    /// Sets the currently rendered footer status-line value and schedules a redraw.
     pub(crate) fn set_status_line(&mut self, status_line: Option<Line<'static>>) {
         self.bottom_pane.set_status_line(status_line);
         self.request_redraw();
     }
 
+    /// Recomputes footer status-line content from config and current runtime state.
+    ///
+    /// This method is the status-line orchestrator: it parses configured item identifiers,
+    /// warns once per session about invalid items, updates whether status-line mode is enabled,
+    /// schedules async git-branch lookup when needed, and renders only values that are currently
+    /// available.
+    ///
+    /// The omission behavior is intentional. If selected items are unavailable (for example before
+    /// a session id exists or before branch lookup completes), those items are skipped without
+    /// placeholders so the line remains compact and stable.
     pub(crate) fn refresh_status_line(&mut self) {
         let (items, invalid_items) = self.status_line_items_with_invalids();
         if self.thread_id.is_some()
@@ -875,10 +886,18 @@ impl ChatWidget {
         self.set_status_line(line);
     }
 
+    /// Records that status-line setup was canceled.
+    ///
+    /// Cancellation is intentionally side-effect free for config state; the existing configuration
+    /// remains active and no persistence is attempted.
     pub(crate) fn cancel_status_line_setup(&self) {
         tracing::info!("Status line setup canceled by user");
     }
 
+    /// Applies status-line item selection from the setup view to in-memory config.
+    ///
+    /// An empty selection is normalized to `None` so the status line is fully disabled and the
+    /// behavior matches an unset `tui.status_line` config value.
     pub(crate) fn setup_status_line(&mut self, items: Vec<StatusLineItem>) {
         tracing::info!("status line setup confirmed with items: {items:#?}");
         let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
@@ -886,6 +905,10 @@ impl ChatWidget {
         self.refresh_status_line();
     }
 
+    /// Stores async git-branch lookup results for the current status-line cwd.
+    ///
+    /// Results are dropped when they target an out-of-date cwd to avoid rendering stale branch
+    /// names after directory changes.
     pub(crate) fn set_status_line_branch(&mut self, cwd: PathBuf, branch: Option<String>) {
         if self.status_line_branch_cwd.as_ref() != Some(&cwd) {
             self.status_line_branch_pending = false;
@@ -896,6 +919,7 @@ impl ChatWidget {
         self.status_line_branch_lookup_complete = true;
     }
 
+    /// Forces a new git-branch lookup when `GitBranch` is part of the configured status line.
     fn request_status_line_branch_refresh(&mut self) {
         let (items, _) = self.status_line_items_with_invalids();
         if items.is_empty() || !items.contains(&StatusLineItem::GitBranch) {
@@ -3964,6 +3988,9 @@ impl ChatWidget {
         self.bottom_pane.show_view(Box::new(view));
     }
 
+    /// Parses configured status-line ids into known items and collects unknown ids.
+    ///
+    /// Unknown ids are deduplicated in insertion order for warning messages.
     fn status_line_items_with_invalids(&self) -> (Vec<StatusLineItem>, Vec<String>) {
         let mut invalid = Vec::new();
         let mut invalid_seen = HashSet::new();
@@ -4014,6 +4041,10 @@ impl ChatWidget {
         })
     }
 
+    /// Resets git-branch cache state when the status-line cwd changes.
+    ///
+    /// The branch cache is keyed by cwd because branch lookup is performed relative to that path.
+    /// Keeping stale branch values across cwd changes would surface incorrect repository context.
     fn sync_status_line_branch_state(&mut self, cwd: &Path) {
         if self
             .status_line_branch_cwd
@@ -4028,6 +4059,10 @@ impl ChatWidget {
         self.status_line_branch_lookup_complete = false;
     }
 
+    /// Starts an async git-branch lookup unless one is already running.
+    ///
+    /// The resulting `StatusLineBranchUpdated` event carries the lookup cwd so callers can reject
+    /// stale completions after directory changes.
     fn request_status_line_branch(&mut self, cwd: PathBuf) {
         if self.status_line_branch_pending {
             return;
@@ -4040,6 +4075,11 @@ impl ChatWidget {
         });
     }
 
+    /// Resolves a display string for one configured status-line item.
+    ///
+    /// Returning `None` means "omit this item for now", not "configuration error". Callers rely on
+    /// this to keep partially available status lines readable while waiting for session, token, or
+    /// git metadata.
     fn status_line_value_for_item(&self, item: &StatusLineItem) -> Option<String> {
         match item {
             StatusLineItem::ModelName => Some(self.model_display_name().to_string()),
