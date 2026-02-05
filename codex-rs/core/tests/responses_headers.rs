@@ -85,7 +85,6 @@ async fn responses_stream_includes_subagent_header_on_review() {
         session_source.clone(),
     );
 
-    let web_search_eligible = !matches!(config.web_search_mode, Some(WebSearchMode::Disabled));
     let client = ModelClient::new(
         None,
         conversation_id,
@@ -111,15 +110,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
     }];
 
     let mut stream = client_session
-        .stream(
-            &prompt,
-            &model_info,
-            &otel_manager,
-            effort,
-            summary,
-            web_search_eligible,
-            None,
-        )
+        .stream(&prompt, &model_info, &otel_manager, effort, summary, None)
         .await
         .expect("stream failed");
     while let Some(event) = stream.next().await {
@@ -196,7 +187,6 @@ async fn responses_stream_includes_subagent_header_on_other() {
         session_source.clone(),
     );
 
-    let web_search_eligible = !matches!(config.web_search_mode, Some(WebSearchMode::Disabled));
     let client = ModelClient::new(
         None,
         conversation_id,
@@ -222,15 +212,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
     }];
 
     let mut stream = client_session
-        .stream(
-            &prompt,
-            &model_info,
-            &otel_manager,
-            effort,
-            summary,
-            web_search_eligible,
-            None,
-        )
+        .stream(&prompt, &model_info, &otel_manager, effort, summary, None)
         .await
         .expect("stream failed");
     while let Some(event) = stream.next().await {
@@ -305,7 +287,6 @@ async fn responses_respects_model_info_overrides_from_config() {
         session_source.clone(),
     );
 
-    let web_search_eligible = !matches!(config.web_search_mode, Some(WebSearchMode::Disabled));
     let client = ModelClient::new(
         None,
         conversation_id,
@@ -331,15 +312,7 @@ async fn responses_respects_model_info_overrides_from_config() {
     }];
 
     let mut stream = client_session
-        .stream(
-            &prompt,
-            &model_info,
-            &otel_manager,
-            effort,
-            summary,
-            web_search_eligible,
-            None,
-        )
+        .stream(&prompt, &model_info, &otel_manager, effort, summary, None)
         .await
         .expect("stream failed");
     while let Some(event) = stream.next().await {

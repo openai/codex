@@ -4,9 +4,9 @@
 //! configuration and state needed to talk to a provider (auth, provider selection, conversation id,
 //! and feature-gated request behavior).
 //!
-//! Per-turn settings (model selection, reasoning controls, telemetry context, web search
-//! eligibility, and turn metadata) are passed explicitly to streaming and unary methods so that the
-//! turn lifetime is visible at the call site.
+//! Per-turn settings (model selection, reasoning controls, telemetry context, and turn metadata)
+//! are passed explicitly to streaming and unary methods so that the turn lifetime is visible at the
+//! call site.
 //!
 //! A [`ModelClientSession`] is created per turn and is used to stream one or more Responses API
 //! requests during that turn. It caches a Responses WebSocket connection (opened lazily) and
@@ -114,9 +114,8 @@ struct ModelClientState {
 /// WebSocket fallback is session-scoped: once a turn activates the HTTP fallback, subsequent turns
 /// will also use HTTP for the remainder of the session.
 ///
-/// Turn-scoped settings (model selection, reasoning controls, telemetry context, web search
-/// eligibility, and turn metadata) are passed explicitly to the relevant methods to keep turn
-/// lifetime visible at the call site.
+/// Turn-scoped settings (model selection, reasoning controls, telemetry context, and turn metadata)
+/// are passed explicitly to the relevant methods to keep turn lifetime visible at the call site.
 ///
 /// This type is cheap to clone.
 #[derive(Debug, Clone)]
@@ -348,7 +347,6 @@ impl ModelClientSession {
         model_info: &ModelInfo,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
-        web_search_eligible: bool,
         turn_metadata_header: Option<&str>,
         compression: Compression,
     ) -> ApiResponsesOptions {
@@ -403,7 +401,6 @@ impl ModelClientSession {
             session_source: Some(self.client.state.session_source.clone()),
             extra_headers: build_responses_headers(
                 self.client.state.beta_features_header.as_deref(),
-                web_search_eligible,
                 Some(&self.turn_state),
                 turn_metadata_header.as_ref(),
             ),
@@ -528,7 +525,6 @@ impl ModelClientSession {
         otel_manager: &OtelManager,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
-        web_search_eligible: bool,
         turn_metadata_header: Option<&str>,
     ) -> Result<ResponseStream> {
         if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
@@ -570,7 +566,6 @@ impl ModelClientSession {
                 model_info,
                 effort,
                 summary,
-                web_search_eligible,
                 turn_metadata_header,
                 compression,
             );
@@ -603,7 +598,6 @@ impl ModelClientSession {
         otel_manager: &OtelManager,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
-        web_search_eligible: bool,
         turn_metadata_header: Option<&str>,
     ) -> Result<ResponseStream> {
         let auth_manager = self.client.state.auth_manager.clone();
@@ -630,7 +624,6 @@ impl ModelClientSession {
                 model_info,
                 effort,
                 summary,
-                web_search_eligible,
                 turn_metadata_header,
                 compression,
             );
@@ -686,9 +679,9 @@ impl ModelClientSession {
     /// Streams a single model request within the current turn.
     ///
     /// The caller is responsible for passing per-turn settings explicitly (model selection,
-    /// reasoning settings, telemetry context, web search eligibility, and turn metadata). This
-    /// method will prefer the Responses WebSocket transport when enabled and healthy, and will
-    /// fall back to the HTTP Responses API transport otherwise.
+    /// reasoning settings, telemetry context, and turn metadata). This method will prefer the
+    /// Responses WebSocket transport when enabled and healthy, and will fall back to the HTTP
+    /// Responses API transport otherwise.
     pub async fn stream(
         &mut self,
         prompt: &Prompt,
@@ -696,7 +689,6 @@ impl ModelClientSession {
         otel_manager: &OtelManager,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
-        web_search_eligible: bool,
         turn_metadata_header: Option<&str>,
     ) -> Result<ResponseStream> {
         let wire_api = self.client.state.provider.wire_api;
@@ -712,7 +704,6 @@ impl ModelClientSession {
                         otel_manager,
                         effort,
                         summary,
-                        web_search_eligible,
                         turn_metadata_header,
                     )
                     .await
@@ -723,7 +714,6 @@ impl ModelClientSession {
                         otel_manager,
                         effort,
                         summary,
-                        web_search_eligible,
                         turn_metadata_header,
                     )
                     .await
@@ -775,7 +765,6 @@ fn build_api_prompt(prompt: &Prompt, instructions: String, tools_json: Vec<Value
 /// - `x-codex-turn-metadata`: optional per-turn metadata for observability.
 fn build_responses_headers(
     beta_features_header: Option<&str>,
-    _web_search_eligible: bool,
     turn_state: Option<&Arc<OnceLock<String>>>,
     turn_metadata_header: Option<&HeaderValue>,
 ) -> ApiHeaderMap {

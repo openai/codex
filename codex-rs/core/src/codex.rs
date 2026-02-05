@@ -4523,10 +4523,6 @@ async fn try_run_sampling_request(
     );
 
     sess.persist_rollout_items(&[rollout_item]).await;
-    let web_search_eligible = !matches!(
-        turn_context.config.web_search_mode,
-        Some(WebSearchMode::Disabled)
-    );
     let mut stream = client_session
         .stream(
             prompt,
@@ -4534,7 +4530,6 @@ async fn try_run_sampling_request(
             &turn_context.otel_manager,
             turn_context.reasoning_effort,
             turn_context.reasoning_summary,
-            web_search_eligible,
             turn_metadata_header,
         )
         .instrument(trace_span!("stream_request"))

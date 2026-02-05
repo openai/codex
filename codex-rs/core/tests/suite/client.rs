@@ -1339,15 +1339,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     });
 
     let mut stream = client_session
-        .stream(
-            &prompt,
-            &model_info,
-            &otel_manager,
-            effort,
-            summary,
-            true,
-            None,
-        )
+        .stream(&prompt, &model_info, &otel_manager, effort, summary, None)
         .await
         .expect("responses stream to start");
 
