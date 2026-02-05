@@ -1,10 +1,14 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
+use std::path::Path;
 use std::path::PathBuf;
 
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::analytics_client::SkillInvocation;
 use crate::analytics_client::TrackEventsContext;
+use crate::connectors;
+use crate::connectors::AppInfo;
 use crate::instructions::SkillInstructions;
 use crate::mentions::build_skill_name_counts;
 use crate::skills::SkillMetadata;
@@ -21,6 +25,7 @@ pub(crate) struct SkillInjections {
 
 pub(crate) async fn build_skill_injections(
     mentioned_skills: &[SkillMetadata],
+    rewritten_contents: &HashMap<PathBuf, String>,
     otel: Option<&OtelManager>,
     analytics_client: &AnalyticsEventsClient,
     tracking: TrackEventsContext,
@@ -36,6 +41,21 @@ pub(crate) async fn build_skill_injections(
     let mut invocations = Vec::new();
 
     for skill in mentioned_skills {
+        if let Some(contents) = rewritten_contents.get(&skill.path) {
+            emit_skill_injected_metric(otel, skill, "ok");
+            invocations.push(SkillInvocation {
+                skill_name: skill.name.clone(),
+                skill_scope: skill.scope,
+                skill_path: skill.path.clone(),
+            });
+            result.items.push(ResponseItem::from(SkillInstructions {
+                name: skill.name.clone(),
+                path: skill.path.to_string_lossy().into_owned(),
+                contents: contents.clone(),
+            }));
+            continue;
+        }
+
         match fs::read_to_string(&skill.path).await {
             Ok(contents) => {
                 emit_skill_injected_metric(otel, skill, "ok");
@@ -67,6 +87,108 @@ pub(crate) async fn build_skill_injections(
     result
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct ExpandedSkillMentions {
+    pub(crate) skills: Vec<SkillMetadata>,
+    pub(crate) explicit_app_paths: Vec<String>,
+    pub(crate) rewritten_contents: HashMap<PathBuf, String>,
+}
+
+pub(crate) async fn expand_skill_mentions(
+    mentioned_skills: &[SkillMetadata],
+    skills: &[SkillMetadata],
+    disabled_paths: &HashSet<PathBuf>,
+    skill_name_counts: &HashMap<String, usize>,
+    skill_name_counts_lower: &HashMap<String, usize>,
+    connector_slug_counts: &HashMap<String, usize>,
+    connectors: &[AppInfo],
+) -> ExpandedSkillMentions {
+    if mentioned_skills.is_empty() {
+        return ExpandedSkillMentions::default();
+    }
+
+    let selection_context = SkillSelectionContext {
+        skills,
+        disabled_paths,
+        skill_name_counts,
+        connector_slug_counts,
+    };
+    let skill_paths_by_name = build_unambiguous_skill_path_map(
+        skills,
+        disabled_paths,
+        skill_name_counts,
+        connector_slug_counts,
+    );
+    let skill_paths_by_normalized_path = build_skill_path_lookup(skills, disabled_paths);
+    let connector_paths_by_slug = build_unambiguous_connector_path_map(
+        connectors,
+        connector_slug_counts,
+        skill_name_counts_lower,
+    );
+    let connector_ids = connectors
+        .iter()
+        .map(|connector| connector.id.clone())
+        .collect::<HashSet<String>>();
+
+    let mut selected = Vec::new();
+    let mut seen_names = HashSet::new();
+    let mut seen_paths = HashSet::new();
+    for skill in mentioned_skills {
+        if disabled_paths.contains(&skill.path) {
+            continue;
+        }
+        if seen_paths.insert(skill.path.clone()) {
+            seen_names.insert(skill.name.clone());
+            selected.push(skill.clone());
+        }
+    }
+
+    let mut queue = VecDeque::from(selected.clone());
+    let mut processed_paths = HashSet::new();
+    let mut explicit_app_paths = HashSet::new();
+    let mut rewritten_contents = HashMap::new();
+
+    while let Some(skill) = queue.pop_front() {
+        if !processed_paths.insert(skill.path.clone()) {
+            continue;
+        }
+
+        let Ok(contents) = fs::read_to_string(&skill.path).await else {
+            continue;
+        };
+
+        let mentions = extract_tool_mentions(&contents);
+        let selected_before = selected.len();
+        select_skills_from_mentions(
+            &selection_context,
+            &mentions,
+            &mut seen_names,
+            &mut seen_paths,
+            &mut selected,
+        );
+        for skill in selected.iter().skip(selected_before) {
+            queue.push_back(skill.clone());
+        }
+
+        let replacement = rewrite_skill_mentions(
+            &contents,
+            &mentions,
+            &skill_paths_by_name,
+            &skill_paths_by_normalized_path,
+            &connector_paths_by_slug,
+            &connector_ids,
+            &mut explicit_app_paths,
+        );
+        rewritten_contents.insert(skill.path.clone(), replacement);
+    }
+
+    ExpandedSkillMentions {
+        skills: selected,
+        explicit_app_paths: explicit_app_paths.into_iter().collect(),
+        rewritten_contents,
+    }
+}
+
 fn emit_skill_injected_metric(otel: Option<&OtelManager>, skill: &SkillMetadata, status: &str) {
     let Some(otel) = otel else {
         return;
@@ -77,6 +199,185 @@ fn emit_skill_injected_metric(otel: Option<&OtelManager>, skill: &SkillMetadata,
         1,
         &[("status", status), ("skill", skill.name.as_str())],
     );
+}
+
+fn build_unambiguous_skill_path_map(
+    skills: &[SkillMetadata],
+    disabled_paths: &HashSet<PathBuf>,
+    skill_name_counts: &HashMap<String, usize>,
+    connector_slug_counts: &HashMap<String, usize>,
+) -> HashMap<String, String> {
+    let mut paths_by_name = HashMap::new();
+    for skill in skills {
+        if disabled_paths.contains(&skill.path) {
+            continue;
+        }
+        let skill_count = skill_name_counts.get(&skill.name).copied().unwrap_or(0);
+        let connector_count = connector_slug_counts
+            .get(&skill.name.to_ascii_lowercase())
+            .copied()
+            .unwrap_or(0);
+        if skill_count == 1 && connector_count == 0 {
+            paths_by_name.insert(skill.name.clone(), canonical_skill_path(&skill.path));
+        }
+    }
+    paths_by_name
+}
+
+fn build_skill_path_lookup(
+    skills: &[SkillMetadata],
+    disabled_paths: &HashSet<PathBuf>,
+) -> HashMap<String, String> {
+    let mut paths_by_normalized_path = HashMap::new();
+    for skill in skills {
+        if disabled_paths.contains(&skill.path) {
+            continue;
+        }
+        let path = skill.path.to_string_lossy().into_owned();
+        paths_by_normalized_path.insert(path, canonical_skill_path(&skill.path));
+    }
+    paths_by_normalized_path
+}
+
+fn build_unambiguous_connector_path_map(
+    connectors: &[AppInfo],
+    connector_slug_counts: &HashMap<String, usize>,
+    skill_name_counts_lower: &HashMap<String, usize>,
+) -> HashMap<String, String> {
+    let mut paths_by_slug = HashMap::new();
+    for connector in connectors {
+        let slug = connectors::connector_mention_slug(connector);
+        let connector_count = connector_slug_counts.get(&slug).copied().unwrap_or(0);
+        let skill_count = skill_name_counts_lower.get(&slug).copied().unwrap_or(0);
+        if connector_count == 1 && skill_count == 0 {
+            paths_by_slug.insert(slug, format!("{APP_PATH_PREFIX}{}", connector.id));
+        }
+    }
+    paths_by_slug
+}
+
+fn rewrite_skill_mentions(
+    text: &str,
+    mentions: &ToolMentions<'_>,
+    skill_paths_by_name: &HashMap<String, String>,
+    skill_paths_by_normalized_path: &HashMap<String, String>,
+    connector_paths_by_slug: &HashMap<String, String>,
+    connector_ids: &HashSet<String>,
+    explicit_app_paths: &mut HashSet<String>,
+) -> String {
+    let mut pending_explicit_app_paths = HashSet::new();
+    for name in mentions.plain_names() {
+        if let Some(path) = connector_paths_by_slug.get(name) {
+            pending_explicit_app_paths.insert(path.clone());
+        }
+    }
+    for path in mentions.paths() {
+        if let Some(connector_id) = app_id_from_path(path)
+            && connector_ids.contains(connector_id)
+        {
+            pending_explicit_app_paths.insert(format!("{APP_PATH_PREFIX}{connector_id}"));
+        }
+    }
+
+    let text_bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0usize;
+    let mut index = 0usize;
+
+    while index < text_bytes.len() {
+        let byte = text_bytes[index];
+
+        if byte == b'['
+            && let Some((name, path, end_index)) =
+                parse_linked_tool_mention(text, text_bytes, index)
+        {
+            if is_common_env_var(name) {
+                index = end_index;
+                continue;
+            }
+
+            let Some(canonical_path) =
+                resolve_linked_mention_path(path, skill_paths_by_normalized_path, connector_ids)
+            else {
+                return text.to_string();
+            };
+
+            out.push_str(&text[cursor..index]);
+            out.push_str(format!("[${name}]({canonical_path})").as_str());
+            cursor = end_index;
+            index = end_index;
+            continue;
+        }
+
+        if byte == b'$' {
+            let name_start = index + 1;
+            let Some(first_name_byte) = text_bytes.get(name_start) else {
+                index += 1;
+                continue;
+            };
+            if !is_mention_name_char(*first_name_byte) {
+                index += 1;
+                continue;
+            }
+
+            let mut name_end = name_start + 1;
+            while let Some(next_byte) = text_bytes.get(name_end)
+                && is_mention_name_char(*next_byte)
+            {
+                name_end += 1;
+            }
+
+            let name = &text[name_start..name_end];
+            if !is_common_env_var(name)
+                && let Some(path) = connector_paths_by_slug
+                    .get(name)
+                    .or_else(|| skill_paths_by_name.get(name))
+            {
+                out.push_str(&text[cursor..index]);
+                out.push_str(format!("[${name}]({path})").as_str());
+                cursor = name_end;
+                index = name_end;
+                continue;
+            }
+            index = name_end;
+            continue;
+        }
+
+        index += 1;
+    }
+
+    explicit_app_paths.extend(pending_explicit_app_paths);
+
+    if cursor == 0 {
+        return text.to_string();
+    }
+
+    out.push_str(&text[cursor..]);
+    out
+}
+
+fn resolve_linked_mention_path(
+    path: &str,
+    skill_paths_by_normalized_path: &HashMap<String, String>,
+    connector_ids: &HashSet<String>,
+) -> Option<String> {
+    match tool_kind_for_path(path) {
+        ToolMentionKind::App => {
+            let connector_id = app_id_from_path(path)?;
+            connector_ids
+                .contains(connector_id)
+                .then(|| format!("{APP_PATH_PREFIX}{connector_id}"))
+        }
+        ToolMentionKind::Skill => {
+            let normalized = normalize_skill_path(path);
+            skill_paths_by_normalized_path.get(normalized).cloned()
+        }
+        ToolMentionKind::Mcp | ToolMentionKind::Other => None,
+    }
+}
+
+fn canonical_skill_path(path: &Path) -> String {
+    format!("{SKILL_PATH_PREFIX}{}", path.to_string_lossy())
 }
 
 /// Collect explicitly mentioned skills from structured and text mentions.
@@ -799,5 +1100,111 @@ mod tests {
         let selected = collect_mentions(&inputs, &skills, &HashSet::new(), &connector_counts);
 
         assert_eq!(selected, Vec::new());
+    }
+
+    #[tokio::test]
+    async fn expand_skill_mentions_parses_mentions_in_invoked_skill_markdown() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let alpha_path = temp.path().join("alpha").join("SKILL.md");
+        let beta_path = temp.path().join("beta").join("SKILL.md");
+        std::fs::create_dir_all(alpha_path.parent().expect("alpha parent"))
+            .expect("create alpha dir");
+        std::fs::create_dir_all(beta_path.parent().expect("beta parent")).expect("create beta dir");
+        std::fs::write(&alpha_path, "Use $beta-skill to complete this task.")
+            .expect("write alpha skill");
+        std::fs::write(&beta_path, "Beta instructions").expect("write beta skill");
+
+        let alpha = make_skill("alpha-skill", alpha_path.to_string_lossy().as_ref());
+        let beta = make_skill("beta-skill", beta_path.to_string_lossy().as_ref());
+        let skills = vec![alpha.clone(), beta.clone()];
+        let mentioned_skills = vec![alpha.clone()];
+        let disabled_paths = HashSet::new();
+        let skill_name_counts = HashMap::from([
+            ("alpha-skill".to_string(), 1usize),
+            ("beta-skill".to_string(), 1usize),
+        ]);
+        let skill_name_counts_lower = HashMap::from([
+            ("alpha-skill".to_string(), 1usize),
+            ("beta-skill".to_string(), 1usize),
+        ]);
+        let connector_slug_counts = HashMap::new();
+        let connectors = Vec::new();
+
+        let expanded = expand_skill_mentions(
+            &mentioned_skills,
+            &skills,
+            &disabled_paths,
+            &skill_name_counts,
+            &skill_name_counts_lower,
+            &connector_slug_counts,
+            &connectors,
+        )
+        .await;
+
+        assert_eq!(expanded.skills, vec![alpha.clone(), beta.clone()]);
+        assert_eq!(expanded.explicit_app_paths, Vec::<String>::new());
+        let expected_rewrite = format!(
+            "Use [$beta-skill](skill://{}) to complete this task.",
+            beta.path.to_string_lossy()
+        );
+        assert_eq!(
+            expanded.rewritten_contents.get(&alpha.path),
+            Some(&expected_rewrite)
+        );
+    }
+
+    #[test]
+    fn rewrite_skill_mentions_rolls_back_all_changes_on_unresolvable_link() {
+        let text = "use $todoist and [$beta](./SKILL.md)";
+        let mentions = extract_tool_mentions(text);
+        let skill_paths_by_name = HashMap::from([(
+            "beta".to_string(),
+            "skill:///Users/example/beta/SKILL.md".to_string(),
+        )]);
+        let skill_paths_by_normalized_path = HashMap::new();
+        let connector_paths_by_slug =
+            HashMap::from([("todoist".to_string(), "app://todoist-id".to_string())]);
+        let connector_ids = HashSet::from(["todoist-id".to_string()]);
+        let mut explicit_app_paths = HashSet::new();
+
+        let rewritten = rewrite_skill_mentions(
+            text,
+            &mentions,
+            &skill_paths_by_name,
+            &skill_paths_by_normalized_path,
+            &connector_paths_by_slug,
+            &connector_ids,
+            &mut explicit_app_paths,
+        );
+
+        assert_eq!(rewritten, text);
+        assert_eq!(explicit_app_paths, HashSet::<String>::new());
+    }
+
+    #[test]
+    fn rewrite_skill_mentions_keeps_unresolvable_linked_name_plain() {
+        let text = "use [$beta](./SKILL.md)";
+        let mentions = extract_tool_mentions(text);
+        let skill_paths_by_name = HashMap::from([(
+            "beta".to_string(),
+            "skill:///Users/example/beta/SKILL.md".to_string(),
+        )]);
+        let skill_paths_by_normalized_path = HashMap::new();
+        let connector_paths_by_slug = HashMap::new();
+        let connector_ids = HashSet::new();
+        let mut explicit_app_paths = HashSet::new();
+
+        let rewritten = rewrite_skill_mentions(
+            text,
+            &mentions,
+            &skill_paths_by_name,
+            &skill_paths_by_normalized_path,
+            &connector_paths_by_slug,
+            &connector_ids,
+            &mut explicit_app_paths,
+        );
+
+        assert_eq!(rewritten, text);
+        assert_eq!(explicit_app_paths, HashSet::<String>::new());
     }
 }
