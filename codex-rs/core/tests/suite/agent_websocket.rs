@@ -9,6 +9,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_test_codex_shell_chain() -> Result<()> {
@@ -63,6 +64,33 @@ async fn websocket_test_codex_shell_chain() -> Result<()> {
         output_item.get("call_id").and_then(Value::as_str),
         Some(call_id)
     );
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_preconnect_happens_on_session_start() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_websocket_server(vec![vec![vec![
+        ev_response_created("resp-1"),
+        ev_completed("resp-1"),
+    ]]])
+    .await;
+
+    let mut builder = test_codex();
+    let test = builder.build_with_websocket_server(&server).await?;
+
+    assert!(
+        server.wait_for_handshakes(1, Duration::from_secs(2)).await,
+        "expected websocket preconnect handshake during session startup"
+    );
+
+    test.submit_turn("hello").await?;
+
+    assert_eq!(server.handshakes().len(), 1);
+    assert_eq!(server.single_connection().len(), 1);
 
     server.shutdown().await;
     Ok(())

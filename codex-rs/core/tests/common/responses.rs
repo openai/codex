@@ -299,6 +299,29 @@ impl WebSocketTestServer {
         self.handshakes.lock().unwrap().clone()
     }
 
+    /// Waits until at least `expected` websocket handshakes have been observed or timeout elapses.
+    ///
+    /// Uses a short bounded polling interval so tests can deterministically wait for background
+    /// preconnect activity without busy-spinning.
+    pub async fn wait_for_handshakes(&self, expected: usize, timeout: Duration) -> bool {
+        if self.handshakes.lock().unwrap().len() >= expected {
+            return true;
+        }
+
+        let deadline = tokio::time::Instant::now() + timeout;
+        let poll_interval = Duration::from_millis(10);
+        loop {
+            if self.handshakes.lock().unwrap().len() >= expected {
+                return true;
+            }
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            let sleep_for = std::cmp::min(poll_interval, deadline.saturating_duration_since(now));
+            tokio::time::sleep(sleep_for).await;
+        }
+    }
     pub fn single_handshake(&self) -> WebSocketHandshake {
         let handshakes = self.handshakes.lock().unwrap();
         if handshakes.len() != 1 {

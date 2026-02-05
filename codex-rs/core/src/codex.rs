@@ -37,6 +37,7 @@ use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::terminal;
 use crate::truncate::TruncationPolicy;
+use crate::turn_metadata::TURN_METADATA_HEADER_TIMEOUT;
 use crate::turn_metadata::build_turn_metadata_header;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
@@ -549,16 +550,18 @@ impl TurnContext {
     }
 
     pub async fn resolve_turn_metadata_header(&self) -> Option<String> {
-        const TURN_METADATA_HEADER_TIMEOUT_MS: u64 = 250;
         match tokio::time::timeout(
-            std::time::Duration::from_millis(TURN_METADATA_HEADER_TIMEOUT_MS),
+            TURN_METADATA_HEADER_TIMEOUT,
             self.build_turn_metadata_header(),
         )
         .await
         {
             Ok(header) => header,
             Err(_) => {
-                warn!("timed out after 250ms while building turn metadata header");
+                warn!(
+                    "timed out after {}ms while building turn metadata header",
+                    TURN_METADATA_HEADER_TIMEOUT.as_millis()
+                );
                 self.turn_metadata_header.get().cloned().flatten()
             }
         }
@@ -1054,6 +1057,14 @@ impl Session {
             services,
             next_internal_sub_id: AtomicU64::new(0),
         });
+
+        // Warm a websocket in the background so the first turn can reuse it.
+        // This performs only connection setup; user input is still sent later via response.create
+        // when submit_turn() runs.
+        sess.services.model_client.pre_establish_connection(
+            sess.services.otel_manager.clone(),
+            session_configuration.cwd.clone(),
+        );
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
