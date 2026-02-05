@@ -183,8 +183,14 @@ impl KeyringStore for DefaultKeyringStore {
     }
 }
 
-pub(crate) const MAX_KEYRING_VALUE_LEN: usize = 512;
+/// Maximum characters per chunk for keyring storage.
+/// Windows Credential Manager has a 2560 UTF-16 code unit limit.
+/// The header chunk format is: `CODEX_CHUNKED:{count}:{first_chunk}`
+/// We use 1200 chars per chunk to ensure even the header chunk (with ~20 char overhead)
+/// stays well under the 2560 limit, with room for UTF-16 encoding expansion.
+pub(crate) const MAX_KEYRING_VALUE_LEN: usize = 1200;
 pub(crate) const CHUNKED_HEADER_PREFIX: &str = "CODEX_CHUNKED:";
+
 
 pub(crate) fn get_chunk_key(account: &str, index: usize) -> String {
     format!("{account}:{index}")
@@ -391,8 +397,9 @@ pub mod tests {
         let service = "test";
         let account = "account";
         
-        // Use a value larger than MAX_KEYRING_VALUE_LEN (1024)
+        // Use a value larger than MAX_KEYRING_VALUE_LEN (1200)
         let large_value = "ABC".repeat(500); // 1500 chars
+
         
         store.save(service, account, &large_value).unwrap();
         
