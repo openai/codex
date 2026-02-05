@@ -764,15 +764,14 @@ impl MultiSelectPickerBuilder {
 
 /// Performs fuzzy matching on an item against a filter string.
 ///
-/// Tries to match against the display name first, then falls back to the
-/// skill name if different. Returns the matching character indices (if
-/// matched on display name) and a score for sorting.
+/// Tries to match against the display name first, then falls back to name if different. Returns
+/// the matching character indices (if matched on display name) and a score for sorting.
 ///
 /// # Arguments
 ///
 /// * `filter` - The search query to match against
 /// * `display_name` - The primary name to match (shown to user)
-/// * `skill_name` - A secondary/canonical name to try if display name doesn't match
+/// * `name` - A secondary/canonical name to try if display name doesn't match
 ///
 /// # Returns
 ///
@@ -782,13 +781,13 @@ impl MultiSelectPickerBuilder {
 pub(crate) fn match_item(
     filter: &str,
     display_name: &str,
-    skill_name: &str,
+    name: &str,
 ) -> Option<(Option<Vec<usize>>, i32)> {
     if let Some((indices, score)) = fuzzy_match(display_name, filter) {
         return Some((Some(indices), score));
     }
-    if display_name != skill_name
-        && let Some((_indices, score)) = fuzzy_match(skill_name, filter)
+    if display_name != name
+        && let Some((_indices, score)) = fuzzy_match(name, filter)
     {
         return Some((None, score));
     }
