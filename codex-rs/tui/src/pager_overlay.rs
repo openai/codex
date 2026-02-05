@@ -17,7 +17,6 @@
 
 use std::io::Result;
 use std::sync::Arc;
-use std::time::Duration;
 
 use crate::chatwidget::ActiveCellTranscriptKey;
 use crate::history_cell::HistoryCell;
@@ -299,7 +298,7 @@ impl PagerView {
             }
         }
         tui.frame_requester()
-            .schedule_frame_in(Duration::from_millis(16));
+            .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
         Ok(())
     }
 

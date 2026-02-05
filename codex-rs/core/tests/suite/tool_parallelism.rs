@@ -77,13 +77,6 @@ fn assert_parallel_duration(actual: Duration) {
     );
 }
 
-fn assert_serial_duration(actual: Duration) {
-    assert!(
-        actual >= Duration::from_millis(500),
-        "expected serial execution to take longer, got {actual:?}"
-    );
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn read_file_tools_run_in_parallel() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
@@ -147,7 +140,7 @@ async fn read_file_tools_run_in_parallel() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn non_parallel_tools_run_serially() -> anyhow::Result<()> {
+async fn shell_tools_run_in_parallel() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -156,6 +149,8 @@ async fn non_parallel_tools_run_serially() -> anyhow::Result<()> {
 
     let shell_args = json!({
         "command": "sleep 0.3",
+        // Avoid user-specific shell startup cost (e.g. zsh profile scripts) in timing assertions.
+        "login": false,
         "timeout_ms": 1_000,
     });
     let args_one = serde_json::to_string(&shell_args)?;
@@ -174,13 +169,13 @@ async fn non_parallel_tools_run_serially() -> anyhow::Result<()> {
     mount_sse_sequence(&server, vec![first_response, second_response]).await;
 
     let duration = run_turn_and_measure(&test, "run shell_command twice").await?;
-    assert_serial_duration(duration);
+    assert_parallel_duration(duration);
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mixed_tools_fall_back_to_serial() -> anyhow::Result<()> {
+async fn mixed_parallel_tools_run_in_parallel() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -208,7 +203,7 @@ async fn mixed_tools_fall_back_to_serial() -> anyhow::Result<()> {
     mount_sse_sequence(&server, vec![first_response, second_response]).await;
 
     let duration = run_turn_and_measure(&test, "mix tools").await?;
-    assert_serial_duration(duration);
+    assert_parallel_duration(duration);
 
     Ok(())
 }

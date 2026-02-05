@@ -158,8 +158,7 @@ impl Session {
         };
 
         let timer = turn_context
-            .client
-            .get_otel_manager()
+            .otel_manager
             .start_timer("codex.turn.e2e_duration_ms", &[])
             .ok();
 

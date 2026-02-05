@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use codex_protocol::models::FunctionCallOutputBody;
 
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
@@ -8,7 +9,41 @@ use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::TUI_VISIBLE_COLLABORATION_MODES;
 use codex_protocol::request_user_input::RequestUserInputArgs;
+
+fn format_allowed_modes() -> String {
+    let mode_names: Vec<&str> = TUI_VISIBLE_COLLABORATION_MODES
+        .into_iter()
+        .filter(|mode| mode.allows_request_user_input())
+        .map(ModeKind::display_name)
+        .collect();
+
+    match mode_names.as_slice() {
+        [] => "no modes".to_string(),
+        [mode] => format!("{mode} mode"),
+        [first, second] => format!("{first} or {second} mode"),
+        [..] => format!("modes: {}", mode_names.join(",")),
+    }
+}
+
+pub(crate) fn request_user_input_unavailable_message(mode: ModeKind) -> Option<String> {
+    if mode.allows_request_user_input() {
+        None
+    } else {
+        let mode_name = mode.display_name();
+        Some(format!(
+            "request_user_input is unavailable in {mode_name} mode"
+        ))
+    }
+}
+
+pub(crate) fn request_user_input_tool_description() -> String {
+    let allowed_modes = format_allowed_modes();
+    format!(
+        "Request user input for one to three short questions and wait for the response. This tool is only available in {allowed_modes}."
+    )
+}
 
 pub struct RequestUserInputHandler;
 
@@ -37,16 +72,8 @@ impl ToolHandler for RequestUserInputHandler {
         };
 
         let mode = session.collaboration_mode().await.mode;
-        if !matches!(mode, ModeKind::Plan | ModeKind::PairProgramming) {
-            let mode_name = match mode {
-                ModeKind::Code => "Code",
-                ModeKind::Execute => "Execute",
-                ModeKind::Custom => "Custom",
-                ModeKind::Plan | ModeKind::PairProgramming => unreachable!(),
-            };
-            return Err(FunctionCallError::RespondToModel(format!(
-                "request_user_input is unavailable in {mode_name} mode"
-            )));
+        if let Some(message) = request_user_input_unavailable_message(mode) {
+            return Err(FunctionCallError::RespondToModel(message));
         }
 
         let mut args: RequestUserInputArgs = parse_arguments(&arguments)?;
@@ -78,9 +105,47 @@ impl ToolHandler for RequestUserInputHandler {
         })?;
 
         Ok(ToolOutput::Function {
-            content,
-            content_items: None,
+            body: FunctionCallOutputBody::Text(content),
             success: Some(true),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn request_user_input_mode_availability_is_plan_only() {
+        assert!(ModeKind::Plan.allows_request_user_input());
+        assert!(!ModeKind::Default.allows_request_user_input());
+        assert!(!ModeKind::Execute.allows_request_user_input());
+        assert!(!ModeKind::PairProgramming.allows_request_user_input());
+    }
+
+    #[test]
+    fn request_user_input_unavailable_messages_use_default_name_for_default_modes() {
+        assert_eq!(request_user_input_unavailable_message(ModeKind::Plan), None);
+        assert_eq!(
+            request_user_input_unavailable_message(ModeKind::Default),
+            Some("request_user_input is unavailable in Default mode".to_string())
+        );
+        assert_eq!(
+            request_user_input_unavailable_message(ModeKind::Execute),
+            Some("request_user_input is unavailable in Execute mode".to_string())
+        );
+        assert_eq!(
+            request_user_input_unavailable_message(ModeKind::PairProgramming),
+            Some("request_user_input is unavailable in Pair Programming mode".to_string())
+        );
+    }
+
+    #[test]
+    fn request_user_input_tool_description_mentions_plan_only() {
+        assert_eq!(
+            request_user_input_tool_description(),
+            "Request user input for one to three short questions and wait for the response. This tool is only available in Plan mode.".to_string()
+        );
     }
 }

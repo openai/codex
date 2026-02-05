@@ -9,6 +9,7 @@ use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
 use crate::tools::handlers::collab::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::collab::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::collab::MIN_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::request_user_input_tool_description;
 use crate::tools::registry::ToolRegistryBuilder;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -623,9 +624,7 @@ fn create_request_user_input_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "request_user_input".to_string(),
-        description:
-            "Request user input for one to three short questions and wait for the response."
-                .to_string(),
+        description: request_user_input_tool_description(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -1258,13 +1257,19 @@ pub(crate) fn build_specs(
 
     match &config.shell_type {
         ConfigShellToolType::Default => {
-            builder.push_spec(create_shell_tool(config.request_rule_enabled));
+            builder.push_spec_with_parallel_support(
+                create_shell_tool(config.request_rule_enabled),
+                true,
+            );
         }
         ConfigShellToolType::Local => {
-            builder.push_spec(ToolSpec::LocalShell {});
+            builder.push_spec_with_parallel_support(ToolSpec::LocalShell {}, true);
         }
         ConfigShellToolType::UnifiedExec => {
-            builder.push_spec(create_exec_command_tool(config.request_rule_enabled));
+            builder.push_spec_with_parallel_support(
+                create_exec_command_tool(config.request_rule_enabled),
+                true,
+            );
             builder.push_spec(create_write_stdin_tool());
             builder.register_handler("exec_command", unified_exec_handler.clone());
             builder.register_handler("write_stdin", unified_exec_handler);
@@ -1273,7 +1278,10 @@ pub(crate) fn build_specs(
             // Do nothing.
         }
         ConfigShellToolType::ShellCommand => {
-            builder.push_spec(create_shell_command_tool(config.request_rule_enabled));
+            builder.push_spec_with_parallel_support(
+                create_shell_command_tool(config.request_rule_enabled),
+                true,
+            );
         }
     }
 
@@ -1679,6 +1687,22 @@ mod tests {
         assert_eq!(&tool_names, &expected_tools,);
     }
 
+    fn assert_default_model_tools(
+        model_slug: &str,
+        features: &Features,
+        web_search_mode: Option<WebSearchMode>,
+        shell_tool: &'static str,
+        expected_tail: &[&str],
+    ) {
+        let mut expected = if features.enabled(Feature::UnifiedExec) {
+            vec!["exec_command", "write_stdin"]
+        } else {
+            vec![shell_tool]
+        };
+        expected.extend(expected_tail);
+        assert_model_tools(model_slug, features, web_search_mode, &expected);
+    }
+
     #[test]
     fn web_search_mode_cached_sets_external_web_access_false() {
         let config = test_config();
@@ -1727,12 +1751,12 @@ mod tests {
     fn test_build_specs_gpt5_codex_default() {
         let mut features = Features::with_defaults();
         features.enable(Feature::CollaborationModes);
-        assert_model_tools(
+        assert_default_model_tools(
             "gpt-5-codex",
             &features,
             Some(WebSearchMode::Cached),
+            "shell_command",
             &[
-                "shell_command",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1749,12 +1773,12 @@ mod tests {
     fn test_build_specs_gpt51_codex_default() {
         let mut features = Features::with_defaults();
         features.enable(Feature::CollaborationModes);
-        assert_model_tools(
+        assert_default_model_tools(
             "gpt-5.1-codex",
             &features,
             Some(WebSearchMode::Cached),
+            "shell_command",
             &[
-                "shell_command",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1819,12 +1843,12 @@ mod tests {
     fn test_codex_mini_defaults() {
         let mut features = Features::with_defaults();
         features.enable(Feature::CollaborationModes);
-        assert_model_tools(
+        assert_default_model_tools(
             "codex-mini-latest",
             &features,
             Some(WebSearchMode::Cached),
+            "local_shell",
             &[
-                "local_shell",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1840,12 +1864,12 @@ mod tests {
     fn test_codex_5_1_mini_defaults() {
         let mut features = Features::with_defaults();
         features.enable(Feature::CollaborationModes);
-        assert_model_tools(
+        assert_default_model_tools(
             "gpt-5.1-codex-mini",
             &features,
             Some(WebSearchMode::Cached),
+            "shell_command",
             &[
-                "shell_command",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1862,12 +1886,12 @@ mod tests {
     fn test_gpt_5_defaults() {
         let mut features = Features::with_defaults();
         features.enable(Feature::CollaborationModes);
-        assert_model_tools(
+        assert_default_model_tools(
             "gpt-5",
             &features,
             Some(WebSearchMode::Cached),
+            "shell",
             &[
-                "shell",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1883,12 +1907,12 @@ mod tests {
     fn test_gpt_5_1_defaults() {
         let mut features = Features::with_defaults();
         features.enable(Feature::CollaborationModes);
-        assert_model_tools(
+        assert_default_model_tools(
             "gpt-5.1",
             &features,
             Some(WebSearchMode::Cached),
+            "shell_command",
             &[
-                "shell_command",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1982,7 +2006,7 @@ mod tests {
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
 
-        assert!(!find_tool(&tools, "exec_command").supports_parallel_tool_calls);
+        assert!(find_tool(&tools, "exec_command").supports_parallel_tool_calls);
         assert!(!find_tool(&tools, "write_stdin").supports_parallel_tool_calls);
         assert!(find_tool(&tools, "grep_files").supports_parallel_tool_calls);
         assert!(find_tool(&tools, "list_dir").supports_parallel_tool_calls);
