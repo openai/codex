@@ -441,6 +441,8 @@ pub(crate) async fn run_onboarding_app(
                     });
                 }
             }
+        } else {
+            break;
         }
     }
     Ok(OnboardingResult {
