@@ -539,9 +539,6 @@ impl CodexMessageProcessor {
             ClientRequest::ExperimentalFeatureList { request_id, params } => {
                 self.experimental_feature_list(request_id, params).await;
             }
-            ClientRequest::ExperimentalFeatureList { request_id, params } => {
-                self.experimental_feature_list(request_id, params).await;
-            }
             ClientRequest::CollaborationModeList { request_id, params } => {
                 let outgoing = self.outgoing.clone();
                 let thread_manager = self.thread_manager.clone();
