@@ -4133,18 +4133,16 @@ impl ChatWidget {
             StatusLineItem::CodexVersion => Some(CODEX_CLI_VERSION.to_string()),
             StatusLineItem::ContextWindowSize => self
                 .status_line_context_window_size()
-                .map(format_tokens_compact),
-            StatusLineItem::TotalInputTokens => Some(format_tokens_compact(
-                self.status_line_total_usage().input_tokens,
+                .map(|cws| format!("{} window", format_tokens_compact(cws))),
+            StatusLineItem::TotalInputTokens => Some(format!(
+                "{} in",
+                format_tokens_compact(self.status_line_total_usage().input_tokens)
             )),
-            StatusLineItem::TotalOutputTokens => Some(format_tokens_compact(
-                self.status_line_total_usage().output_tokens,
+            StatusLineItem::TotalOutputTokens => Some(format!(
+                "{} out",
+                format_tokens_compact(self.status_line_total_usage().output_tokens)
             )),
             StatusLineItem::SessionId => self.thread_id.map(|id| id.to_string()),
-            StatusLineItem::SessionIdPrefix => self
-                .thread_id
-                .map(|id| id.to_string())
-                .map(|id| id.chars().take(8).collect()),
         }
     }
 

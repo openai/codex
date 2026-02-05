@@ -91,9 +91,6 @@ pub(crate) enum StatusLineItem {
 
     /// Full session UUID.
     SessionId,
-
-    /// Shortened session ID prefix (first 8 characters).
-    SessionIdPrefix,
 }
 
 impl StatusLineItem {
@@ -127,9 +124,6 @@ impl StatusLineItem {
             StatusLineItem::SessionId => {
                 "Current session identifier (omitted until session starts)"
             }
-            StatusLineItem::SessionIdPrefix => {
-                "Current session identifier (shortened; omitted until session starts)"
-            }
         }
     }
 
@@ -149,12 +143,11 @@ impl StatusLineItem {
             StatusLineItem::FiveHourLimit => "5h 100%",
             StatusLineItem::WeeklyLimit => "weekly 98%",
             StatusLineItem::CodexVersion => "v0.93.0",
-            StatusLineItem::ContextWindowSize => "258K",
+            StatusLineItem::ContextWindowSize => "258K window",
             StatusLineItem::UsedTokens => "27.3K used",
-            StatusLineItem::TotalInputTokens => "17,588",
-            StatusLineItem::TotalOutputTokens => "265",
+            StatusLineItem::TotalInputTokens => "17,588 in",
+            StatusLineItem::TotalOutputTokens => "265 out",
             StatusLineItem::SessionId => "019c19bd-ceb6-73b0-adc8-8ec0397b85cf",
-            StatusLineItem::SessionIdPrefix => "019c19bd",
         }
     }
 }
