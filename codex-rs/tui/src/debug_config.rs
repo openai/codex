@@ -99,6 +99,14 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
         ));
     }
 
+    if let Some(feedback_enabled) = requirements_toml.feedback_enabled {
+        requirement_lines.push(requirement_line(
+            "feedback_enabled",
+            feedback_enabled.to_string(),
+            requirements.feedback_enabled.source.as_ref(),
+        ));
+    }
+
     if requirement_lines.is_empty() {
         lines.push("  <none>".dim().into());
     } else {
@@ -287,6 +295,10 @@ mod tests {
             Constrained::allow_any(Some(ResidencyRequirement::Us)),
             Some(RequirementSource::CloudRequirements),
         );
+        requirements.feedback_enabled = ConstrainedWithSource::new(
+            Constrained::allow_any(false),
+            Some(RequirementSource::CloudRequirements),
+        );
 
         let requirements_toml = ConfigRequirementsToml {
             allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
@@ -301,6 +313,7 @@ mod tests {
             )])),
             rules: None,
             enforce_residency: Some(ResidencyRequirement::Us),
+            feedback_enabled: Some(false),
         };
 
         let user_file = if cfg!(windows) {
@@ -333,6 +346,7 @@ mod tests {
         );
         assert!(rendered.contains("mcp_servers: docs (source: MDM managed_config.toml (legacy))"));
         assert!(rendered.contains("enforce_residency: us (source: cloud requirements)"));
+        assert!(rendered.contains("feedback_enabled: false (source: cloud requirements)"));
         assert!(!rendered.contains("  - rules:"));
     }
 }

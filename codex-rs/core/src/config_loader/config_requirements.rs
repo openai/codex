@@ -79,6 +79,7 @@ pub struct ConfigRequirements {
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
     pub(crate) exec_policy: Option<Sourced<RequirementsExecPolicy>>,
     pub enforce_residency: ConstrainedWithSource<Option<ResidencyRequirement>>,
+    pub feedback_enabled: ConstrainedWithSource<bool>,
 }
 
 impl Default for ConfigRequirements {
@@ -95,6 +96,7 @@ impl Default for ConfigRequirements {
             mcp_servers: None,
             exec_policy: None,
             enforce_residency: ConstrainedWithSource::new(Constrained::allow_any(None), None),
+            feedback_enabled: ConstrainedWithSource::new(Constrained::allow_any(true), None),
         }
     }
 }
@@ -125,6 +127,7 @@ pub struct ConfigRequirementsToml {
     pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
     pub rules: Option<RequirementsExecPolicyToml>,
     pub enforce_residency: Option<ResidencyRequirement>,
+    pub feedback_enabled: Option<bool>,
 }
 
 /// Value paired with the requirement source it came from, for better error
@@ -156,6 +159,7 @@ pub struct ConfigRequirementsWithSources {
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
     pub rules: Option<Sourced<RequirementsExecPolicyToml>>,
     pub enforce_residency: Option<Sourced<ResidencyRequirement>>,
+    pub feedback_enabled: Option<Sourced<bool>>,
 }
 
 impl ConfigRequirementsWithSources {
@@ -189,6 +193,7 @@ impl ConfigRequirementsWithSources {
                 mcp_servers,
                 rules,
                 enforce_residency,
+                feedback_enabled,
             }
         );
     }
@@ -200,6 +205,7 @@ impl ConfigRequirementsWithSources {
             mcp_servers,
             rules,
             enforce_residency,
+            feedback_enabled,
         } = self;
         ConfigRequirementsToml {
             allowed_approval_policies: allowed_approval_policies.map(|sourced| sourced.value),
@@ -207,6 +213,7 @@ impl ConfigRequirementsWithSources {
             mcp_servers: mcp_servers.map(|sourced| sourced.value),
             rules: rules.map(|sourced| sourced.value),
             enforce_residency: enforce_residency.map(|sourced| sourced.value),
+            feedback_enabled: feedback_enabled.map(|sourced| sourced.value),
         }
     }
 }
@@ -251,6 +258,7 @@ impl ConfigRequirementsToml {
             && self.mcp_servers.is_none()
             && self.rules.is_none()
             && self.enforce_residency.is_none()
+            && self.feedback_enabled.is_none()
     }
 }
 
@@ -264,6 +272,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             mcp_servers,
             rules,
             enforce_residency,
+            feedback_enabled,
         } = toml;
 
         let approval_policy = match allowed_approval_policies {
@@ -380,12 +389,35 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             }
             None => ConstrainedWithSource::new(Constrained::allow_any(None), None),
         };
+        let feedback_enabled = match feedback_enabled {
+            Some(Sourced {
+                value: feedback_enabled,
+                source: requirement_source,
+            }) => {
+                let requirement_source_for_error = requirement_source.clone();
+                let constrained = Constrained::new(feedback_enabled, move |candidate| {
+                    if candidate == &feedback_enabled {
+                        Ok(())
+                    } else {
+                        Err(ConstraintError::InvalidValue {
+                            field_name: "feedback.enabled",
+                            candidate: format!("{candidate:?}"),
+                            allowed: format!("{feedback_enabled:?}"),
+                            requirement_source: requirement_source_for_error.clone(),
+                        })
+                    }
+                })?;
+                ConstrainedWithSource::new(constrained, Some(requirement_source))
+            }
+            None => ConstrainedWithSource::new(Constrained::allow_any(true), None),
+        };
         Ok(ConfigRequirements {
             approval_policy,
             sandbox_policy,
             mcp_servers,
             exec_policy,
             enforce_residency,
+            feedback_enabled,
         })
     }
 }
@@ -413,6 +445,7 @@ mod tests {
             mcp_servers,
             rules,
             enforce_residency,
+            feedback_enabled,
         } = toml;
         ConfigRequirementsWithSources {
             allowed_approval_policies: allowed_approval_policies
@@ -422,6 +455,8 @@ mod tests {
             mcp_servers: mcp_servers.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             rules: rules.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             enforce_residency: enforce_residency
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            feedback_enabled: feedback_enabled
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
         }
     }
@@ -437,7 +472,9 @@ mod tests {
             SandboxModeRequirement::DangerFullAccess,
         ];
         let enforce_residency = ResidencyRequirement::Us;
+        let feedback_enabled = false;
         let enforce_source = source.clone();
+        let feedback_source = source.clone();
 
         // Intentionally constructed without `..Default::default()` so adding a new field to
         // `ConfigRequirementsToml` forces this test to be updated.
@@ -447,6 +484,7 @@ mod tests {
             mcp_servers: None,
             rules: None,
             enforce_residency: Some(enforce_residency),
+            feedback_enabled: Some(feedback_enabled),
         };
 
         target.merge_unset_fields(source.clone(), other);
@@ -462,6 +500,7 @@ mod tests {
                 mcp_servers: None,
                 rules: None,
                 enforce_residency: Some(Sourced::new(enforce_residency, enforce_source)),
+                feedback_enabled: Some(Sourced::new(feedback_enabled, feedback_source)),
             }
         );
     }
@@ -492,6 +531,7 @@ mod tests {
                 mcp_servers: None,
                 rules: None,
                 enforce_residency: None,
+                feedback_enabled: None,
             }
         );
         Ok(())
@@ -530,6 +570,7 @@ mod tests {
                 mcp_servers: None,
                 rules: None,
                 enforce_residency: None,
+                feedback_enabled: None,
             }
         );
         Ok(())
@@ -616,6 +657,7 @@ mod tests {
                 allowed_approval_policies = ["on-request"]
                 allowed_sandbox_modes = ["read-only"]
                 enforce_residency = "us"
+                feedback_enabled = false
             "#,
         )?;
 
@@ -633,6 +675,33 @@ mod tests {
             Some(source_location.clone())
         );
         assert_eq!(requirements.enforce_residency.source, Some(source_location));
+        assert_eq!(
+            requirements.feedback_enabled.source,
+            Some(RequirementSource::CloudRequirements)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_feedback_enabled() -> Result<()> {
+        let toml_str = r#"
+            feedback_enabled = false
+        "#;
+        let config: ConfigRequirementsToml = from_str(toml_str)?;
+        let requirements: ConfigRequirements = with_unknown_source(config).try_into()?;
+
+        assert_eq!(requirements.feedback_enabled.value(), false);
+        assert_eq!(
+            requirements.feedback_enabled.can_set(&true),
+            Err(ConstraintError::InvalidValue {
+                field_name: "feedback.enabled",
+                candidate: "true".into(),
+                allowed: "false".into(),
+                requirement_source: RequirementSource::Unknown,
+            })
+        );
+        assert!(requirements.feedback_enabled.can_set(&false).is_ok());
 
         Ok(())
     }
