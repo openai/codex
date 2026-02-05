@@ -59,6 +59,7 @@ async fn upsert_thread_metadata(codex_home: &Path, thread_id: ThreadId, rollout_
     let runtime = StateRuntime::init(codex_home.to_path_buf(), "test-provider".to_string(), None)
         .await
         .unwrap();
+    runtime.mark_backfill_complete(None).await.unwrap();
     let mut builder = ThreadMetadataBuilder::new(
         thread_id,
         rollout_path,
