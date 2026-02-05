@@ -18,5 +18,5 @@ to_date = "2026-05-10"
 
 [[announcements]]
 content = "**BREAKING NEWS**: `gpt-5.3-codex` is out! Upgrade to `0.98.0` to try it."
-from_date = "2025-02-01"
-to_date = "2025-02-15"
+from_date = "2026-02-01"
+to_date = "2026-02-15"
