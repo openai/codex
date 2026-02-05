@@ -42,10 +42,6 @@ const LOCAL_FRIENDLY_TEMPLATE: &str =
     "You optimize for team morale and being a supportive teammate as much as code quality.";
 const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
 
-fn sse_completed(id: &str) -> String {
-    sse(vec![ev_response_created(id), ev_completed(id)])
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn personality_does_not_mutate_base_instructions_without_template() {
     let codex_home = TempDir::new().expect("create temp dir");
@@ -82,7 +78,11 @@ async fn user_turn_personality_none_does_not_add_update_message() -> anyhow::Res
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
     let mut builder = test_codex()
         .with_model("gpt-5.2-codex")
         .with_config(|config| {
@@ -128,7 +128,11 @@ async fn config_personality_some_sets_instructions_template() -> anyhow::Result<
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
     let mut builder = test_codex()
         .with_model("gpt-5.2-codex")
         .with_config(|config| {
@@ -184,7 +188,10 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
     let server = start_mock_server().await;
     let resp_mock = mount_sse_sequence(
         &server,
-        vec![sse_completed("resp-1"), sse_completed("resp-2")],
+        vec![
+            sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
     )
     .await;
     let mut builder = test_codex()
@@ -280,7 +287,10 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
     let server = start_mock_server().await;
     let resp_mock = mount_sse_sequence(
         &server,
-        vec![sse_completed("resp-1"), sse_completed("resp-2")],
+        vec![
+            sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
     )
     .await;
     let mut builder = test_codex()
@@ -387,7 +397,10 @@ async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()>
     let server = start_mock_server().await;
     let resp_mock = mount_sse_sequence(
         &server,
-        vec![sse_completed("resp-1"), sse_completed("resp-2")],
+        vec![
+            sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
     )
     .await;
     let mut builder = test_codex()
@@ -524,7 +537,11 @@ async fn ignores_remote_personality_if_remote_models_disabled() -> anyhow::Resul
     )
     .await;
 
-    let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
 
     let mut builder = test_codex()
         .with_auth(codex_core::CodexAuth::create_dummy_chatgpt_auth_for_testing())
@@ -640,7 +657,11 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
     )
     .await;
 
-    let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
 
     let mut builder = test_codex()
         .with_auth(codex_core::CodexAuth::create_dummy_chatgpt_auth_for_testing())
@@ -753,7 +774,10 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
 
     let resp_mock = mount_sse_sequence(
         &server,
-        vec![sse_completed("resp-1"), sse_completed("resp-2")],
+        vec![
+            sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
     )
     .await;
 
