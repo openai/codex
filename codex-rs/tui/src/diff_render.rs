@@ -322,7 +322,12 @@ pub(crate) fn display_path_for(path: &Path, cwd: &Path) -> String {
             .map(|p| PathBuf::from_iter([Path::new("~"), p.as_path()]))
             .unwrap_or_else(|| path.to_path_buf())
     };
-    chosen.display().to_string()
+    let s = chosen.display().to_string();
+    if s.contains(' ') {
+        format!("\"{s}\"")
+    } else {
+        s
+    }
 }
 
 fn calculate_add_remove_from_diff(diff: &str) -> (usize, usize) {

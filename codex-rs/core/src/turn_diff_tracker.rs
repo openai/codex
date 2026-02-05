@@ -253,7 +253,7 @@ impl TurnDiffTracker {
         let mut aggregated = String::new();
 
         // Snapshot lightweight fields only.
-        let (baseline_external_path, baseline_mode, left_oid) = {
+        let (baseline_external_path, baseline_mode, mut left_oid) = {
             if let Some(info) = self.baseline_file_info.get(internal_file_name) {
                 (info.path.clone(), info.mode, info.oid.clone())
             } else {
@@ -273,7 +273,7 @@ impl TurnDiffTracker {
         let right_display = self.relative_to_git_root_str(&current_external_path);
 
         // Compute right oid before borrowing baseline content.
-        let right_oid = if let Some(b) = right_bytes.as_ref() {
+        let mut right_oid = if let Some(b) = right_bytes.as_ref() {
             if current_mode == FileMode::Symlink {
                 format!("{:x}", git_blob_sha1_hex_bytes(b))
             } else {
@@ -299,19 +299,8 @@ impl TurnDiffTracker {
             return aggregated;
         }
 
-        aggregated.push_str(&format!("diff --git a/{left_display} b/{right_display}\n"));
-
         let is_add = !left_present && right_bytes.is_some();
         let is_delete = left_present && right_bytes.is_none();
-
-        if is_add {
-            aggregated.push_str(&format!("new file mode {current_mode}\n"));
-        } else if is_delete {
-            aggregated.push_str(&format!("deleted file mode {baseline_mode}\n"));
-        } else if baseline_mode != current_mode {
-            aggregated.push_str(&format!("old mode {baseline_mode}\n"));
-            aggregated.push_str(&format!("new mode {current_mode}\n"));
-        }
 
         let left_text_owned = left_bytes.and_then(|b| std::str::from_utf8(b).ok().map(|s| s.replace("\r\n", "\n")));
         let right_text_owned = right_bytes
@@ -330,7 +319,26 @@ impl TurnDiffTracker {
             (Some(_), Some(_), _, _) | (_, Some(_), true, _) | (Some(_), _, _, true)
         );
 
+        aggregated.push_str(&format!("diff --git a/{left_display} b/{right_display}\n"));
+
+        if is_add {
+            aggregated.push_str(&format!("new file mode {current_mode}\n"));
+        } else if is_delete {
+            aggregated.push_str(&format!("deleted file mode {baseline_mode}\n"));
+        } else if baseline_mode != current_mode {
+            aggregated.push_str(&format!("old mode {baseline_mode}\n"));
+            aggregated.push_str(&format!("new mode {current_mode}\n"));
+        }
+
         if can_text_diff {
+            // Recalculate OIDs based on normalized text content to ensure consistency with the diff body (which is LF).
+            if let Some(text) = left_text {
+                left_oid = format!("{:x}", git_blob_sha1_hex_bytes(text.as_bytes()));
+            }
+            if let Some(text) = right_text {
+                right_oid = format!("{:x}", git_blob_sha1_hex_bytes(text.as_bytes()));
+            }
+
             let l = left_text.unwrap_or("");
             let r = right_text.unwrap_or("");
 
@@ -940,5 +948,48 @@ index {ZERO_OID}..{right_oid}
             )
         };
         assert_eq!(combined, expected_combined);
+    }
+
+    #[test]
+    fn crlf_normalization_consistency() {
+        let mut acc = TurnDiffTracker::new();
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("crlf.txt");
+
+        // 1. Add file with CRLF
+        let add_changes = HashMap::from([(
+            file.clone(),
+            FileChange::Add { content: "line1\r\n".to_string() },
+        )]);
+        acc.on_patch_begin(&add_changes);
+        fs::write(&file, "line1\r\n").unwrap();
+
+        // Verify diff uses LF-hash for OID
+        let diff = acc.get_unified_diff().unwrap().unwrap();
+        let diff = normalize_diff_for_test(&diff, dir.path());
+        let expected_oid = git_blob_sha1_hex("line1\n"); // LF hash
+        assert!(diff.contains(&format!("index {}..{}", ZERO_OID, expected_oid)), "Diff should contain LF hash: {}", diff);
+
+        // 2. Update with CRLF (no semantic change)
+        let update_changes = HashMap::from([(
+            file.clone(),
+            FileChange::Update { unified_diff: "".to_string(), move_path: None },
+        )]);
+        acc.on_patch_begin(&update_changes);
+        fs::write(&file, "line1\r\n").unwrap(); // No change
+
+        // Verify NO diff is produced (normalization works)
+        let no_diff = acc.get_unified_diff().unwrap();
+        assert_eq!(no_diff, None);
+
+        // 3. Update with CRLF (semantic change)
+        acc.on_patch_begin(&update_changes);
+        fs::write(&file, "line1\r\nline2\r\n").unwrap();
+
+        let diff2 = acc.get_unified_diff().unwrap().unwrap();
+        let diff2 = normalize_diff_for_test(&diff2, dir.path());
+        let expected_baseline = git_blob_sha1_hex("line1\n");
+        let expected_current = git_blob_sha1_hex("line1\nline2\n");
+        assert!(diff2.contains(&format!("index {}..{}", expected_baseline, expected_current)), "Diff should container LF hashes: {}", diff2);
     }
 }

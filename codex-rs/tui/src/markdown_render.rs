@@ -431,7 +431,12 @@ where
     fn pop_link(&mut self) {
         if let Some(link) = self.link.take() {
             self.push_span(" (".into());
-            self.push_span(Span::styled(link, self.styles.link));
+            let display_link = if link.contains(' ') {
+                format!("\"{link}\"")
+            } else {
+                link
+            };
+            self.push_span(Span::styled(display_link, self.styles.link));
             self.push_span(")".into());
         }
     }
