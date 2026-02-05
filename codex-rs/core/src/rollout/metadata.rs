@@ -276,9 +276,28 @@ async fn collect_rollout_paths(root: &Path) -> std::io::Result<Vec<PathBuf>> {
                 continue;
             }
         };
-        while let Some(entry) = read_dir.next_entry().await? {
+        loop {
+            let next_entry = match read_dir.next_entry().await {
+                Ok(next_entry) => next_entry,
+                Err(err) => {
+                    warn!(
+                        "failed to read directory entry under {}: {err}",
+                        dir.display()
+                    );
+                    continue;
+                }
+            };
+            let Some(entry) = next_entry else {
+                break;
+            };
             let path = entry.path();
-            let file_type = entry.file_type().await?;
+            let file_type = match entry.file_type().await {
+                Ok(file_type) => file_type,
+                Err(err) => {
+                    warn!("failed to read file type for {}: {err}", path.display());
+                    continue;
+                }
+            };
             if file_type.is_dir() {
                 stack.push(path);
                 continue;
