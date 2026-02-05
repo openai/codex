@@ -136,22 +136,22 @@ pub(crate) async fn execute_user_shell_command(
         )
         .await;
 
-        let exec_env = ExecEnv {
-            command: exec_command.clone(),
-            cwd: cwd.clone(),
-            env: create_env(
-                &turn_context.shell_environment_policy,
-                Some(session.conversation_id),
-            ),
-            // TODO(zhao-oai): Now that we have ExecExpiration::Cancellation, we
-            // should use that instead of an "arbitrarily large" timeout here.
-            expiration: USER_SHELL_TIMEOUT_MS.into(),
-            sandbox: SandboxType::None,
-            windows_sandbox_level: turn_context.windows_sandbox_level,
-            sandbox_permissions: SandboxPermissions::UseDefault,
-            justification: None,
-            arg0: None,
-        };
+    let exec_env = ExecEnv {
+        command: exec_command.clone(),
+        cwd: cwd.clone(),
+        env: create_env(
+            &turn_context.shell_environment_policy,
+            Some(session.conversation_id),
+        ),
+        // TODO(zhao-oai): Now that we have ExecExpiration::Cancellation, we
+        // should use that instead of an "arbitrarily large" timeout here.
+        expiration: USER_SHELL_TIMEOUT_MS.into(),
+        sandbox: SandboxType::None,
+        windows_sandbox_level: turn_context.windows_sandbox_level,
+        sandbox_permissions: SandboxPermissions::UseDefault,
+        justification: None,
+        arg0: None,
+    };
 
     let stdout_stream = Some(StdoutStream {
         sub_id: turn_context.sub_id.clone(),
