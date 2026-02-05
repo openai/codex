@@ -1181,7 +1181,7 @@ impl Session {
 
                 // If resuming, warn when the last recorded model differs from the current one.
                 let curr = turn_context.model_info.slug.as_str();
-                if let Some(prev) = Self::last_resumed_model_mismatch(&rollout_items, curr) {
+                if let Some(prev) = Self::last_model_name(&rollout_items, curr) {
                     warn!("resuming session with different model: previous={prev}, current={curr}");
                     self.send_event(
                         &turn_context,
@@ -1254,10 +1254,7 @@ impl Session {
         }
     }
 
-    fn last_resumed_model_mismatch<'a>(
-        rollout_items: &'a [RolloutItem],
-        current: &str,
-    ) -> Option<&'a str> {
+    fn last_model_name<'a>(rollout_items: &'a [RolloutItem], current: &str) -> Option<&'a str> {
         let previous = rollout_items.iter().rev().find_map(|it| {
             if let RolloutItem::TurnContext(ctx) = it {
                 Some(ctx.model.as_str())
@@ -1521,10 +1518,12 @@ impl Session {
     fn build_model_instructions_update_item(
         &self,
         previous: Option<&Arc<TurnContext>>,
+        resumed_model: Option<&str>,
         next: &TurnContext,
     ) -> Option<ResponseItem> {
-        let prev = previous?;
-        if prev.model_info.slug == next.model_info.slug {
+        let previous_model =
+            resumed_model.or_else(|| previous.map(|prev| prev.model_info.slug.as_str()))?;
+        if previous_model == next.model_info.slug {
             return None;
         }
 
@@ -1536,24 +1535,10 @@ impl Session {
         Some(DeveloperInstructions::model_switch_message(model_instructions).into())
     }
 
-    fn is_model_switch_item(item: &ResponseItem) -> bool {
-        let ResponseItem::Message { role, content, .. } = item else {
-            return false;
-        };
-        if role != "developer" {
-            return false;
-        }
-        content.iter().any(|part| match part {
-            ContentItem::InputText { text, .. } | ContentItem::OutputText { text } => {
-                text.contains("<model_switch>")
-            }
-            _ => false,
-        })
-    }
-
     fn build_settings_update_items(
         &self,
         previous_context: Option<&Arc<TurnContext>>,
+        resumed_model: Option<&str>,
         current_context: &TurnContext,
     ) -> Vec<ResponseItem> {
         let mut update_items = Vec::new();
@@ -1572,9 +1557,11 @@ impl Session {
         {
             update_items.push(collaboration_mode_item);
         }
-        if let Some(model_instructions_item) =
-            self.build_model_instructions_update_item(previous_context, current_context)
-        {
+        if let Some(model_instructions_item) = self.build_model_instructions_update_item(
+            previous_context,
+            resumed_model,
+            current_context,
+        ) {
             update_items.push(model_instructions_item);
         }
         if let Some(personality_item) =
@@ -2852,24 +2839,12 @@ mod handlers {
         // Attempt to inject input into current task
         if let Err(items) = sess.inject_input(items).await {
             sess.seed_initial_context_if_needed(&current_context).await;
-            let mut update_items =
-                sess.build_settings_update_items(previous_context.as_ref(), &current_context);
-            if let Some(previous_model) = sess.take_pending_resume_previous_model().await {
-                let model_switch_already_present =
-                    update_items.iter().any(Session::is_model_switch_item);
-                if !model_switch_already_present
-                    && previous_model != current_context.model_info.slug
-                {
-                    let model_instructions = current_context
-                        .model_info
-                        .get_model_instructions(current_context.personality);
-                    if !model_instructions.is_empty() {
-                        update_items.push(
-                            DeveloperInstructions::model_switch_message(model_instructions).into(),
-                        );
-                    }
-                }
-            }
+            let resumed_model = sess.take_pending_resume_previous_model().await;
+            let update_items = sess.build_settings_update_items(
+                previous_context.as_ref(),
+                resumed_model.as_deref(),
+                &current_context,
+            );
             if !update_items.is_empty() {
                 sess.record_conversation_items(&current_context, &update_items)
                     .await;

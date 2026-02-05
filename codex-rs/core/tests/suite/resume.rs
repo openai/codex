@@ -240,21 +240,25 @@ async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
     let first_resumed = &requests[0];
     assert_eq!(first_resumed.instructions_text(), initial_instructions);
     let first_developer_texts = first_resumed.message_input_texts("developer");
+    let first_model_switch_count = first_developer_texts
+        .iter()
+        .filter(|text| text.contains("<model_switch>"))
+        .count();
     assert!(
-        first_developer_texts
-            .iter()
-            .any(|text| text.contains("<model_switch>")),
+        first_model_switch_count >= 1,
         "expected model switch message on first post-resume turn"
     );
 
     let second_resumed = &requests[1];
     assert_eq!(second_resumed.instructions_text(), initial_instructions);
     let second_developer_texts = second_resumed.message_input_texts("developer");
-    assert!(
-        !second_developer_texts
-            .iter()
-            .any(|text| text.contains("<model_switch>")),
-        "did not expect model switch message after first post-resume turn"
+    let second_model_switch_count = second_developer_texts
+        .iter()
+        .filter(|text| text.contains("<model_switch>"))
+        .count();
+    assert_eq!(
+        second_model_switch_count, 1,
+        "did not expect duplicate model switch message after first post-resume turn"
     );
 
     Ok(())
