@@ -91,6 +91,80 @@ impl StateRuntime {
         self.codex_home.as_path()
     }
 
+    /// Get persisted rollout metadata backfill state.
+    pub async fn get_backfill_state(&self) -> anyhow::Result<crate::BackfillState> {
+        self.ensure_backfill_state_row().await?;
+        let row = sqlx::query(
+            r#"
+SELECT status, last_watermark, last_success_at
+FROM backfill_state
+WHERE id = 1
+            "#,
+        )
+        .fetch_one(self.pool.as_ref())
+        .await?;
+        crate::BackfillState::try_from_row(&row)
+    }
+
+    /// Mark rollout metadata backfill as running.
+    pub async fn mark_backfill_running(&self) -> anyhow::Result<()> {
+        self.ensure_backfill_state_row().await?;
+        sqlx::query(
+            r#"
+UPDATE backfill_state
+SET status = ?, updated_at = ?
+WHERE id = 1
+            "#,
+        )
+        .bind(crate::BackfillStatus::Running.as_str())
+        .bind(Utc::now().timestamp())
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(())
+    }
+
+    /// Persist rollout metadata backfill progress.
+    pub async fn checkpoint_backfill(&self, watermark: &str) -> anyhow::Result<()> {
+        self.ensure_backfill_state_row().await?;
+        sqlx::query(
+            r#"
+UPDATE backfill_state
+SET status = ?, last_watermark = ?, updated_at = ?
+WHERE id = 1
+            "#,
+        )
+        .bind(crate::BackfillStatus::Running.as_str())
+        .bind(watermark)
+        .bind(Utc::now().timestamp())
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(())
+    }
+
+    /// Mark rollout metadata backfill as complete.
+    pub async fn mark_backfill_complete(&self, last_watermark: Option<&str>) -> anyhow::Result<()> {
+        self.ensure_backfill_state_row().await?;
+        let now = Utc::now().timestamp();
+        sqlx::query(
+            r#"
+UPDATE backfill_state
+SET
+    status = ?,
+    last_watermark = COALESCE(?, last_watermark),
+    last_success_at = ?,
+    updated_at = ?
+WHERE id = 1
+            "#,
+        )
+        .bind(crate::BackfillStatus::Complete.as_str())
+        .bind(last_watermark)
+        .bind(now)
+        .bind(now)
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(())
+    }
+
     /// Load thread metadata by id using the underlying database.
     pub async fn get_thread(&self, id: ThreadId) -> anyhow::Result<Option<crate::ThreadMetadata>> {
         let row = sqlx::query(
@@ -637,6 +711,22 @@ ON CONFLICT(thread_id, position) DO NOTHING
         }
         self.upsert_thread(&metadata).await
     }
+
+    async fn ensure_backfill_state_row(&self) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"
+INSERT INTO backfill_state (id, status, last_watermark, last_success_at, updated_at)
+VALUES (?, ?, NULL, NULL, ?)
+ON CONFLICT(id) DO NOTHING
+            "#,
+        )
+        .bind(1_i64)
+        .bind(crate::BackfillStatus::Pending.as_str())
+        .bind(Utc::now().timestamp())
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(())
+    }
 }
 
 fn push_log_filters<'a>(builder: &mut QueryBuilder<'a, Sqlite>, query: &'a LogQuery) {
@@ -889,7 +979,10 @@ mod tests {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |duration| duration.as_nanos());
-        std::env::temp_dir().join(format!("codex-state-runtime-test-{nanos}"))
+        std::env::temp_dir().join(format!(
+            "codex-state-runtime-test-{nanos}-{}",
+            Uuid::new_v4()
+        ))
     }
 
     #[tokio::test]
@@ -963,6 +1056,59 @@ mod tests {
                 .expect("check numeric path"),
             true
         );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn backfill_state_persists_progress_and_completion() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let initial = runtime
+            .get_backfill_state()
+            .await
+            .expect("get initial backfill state");
+        assert_eq!(initial.status, crate::BackfillStatus::Pending);
+        assert_eq!(initial.last_watermark, None);
+        assert_eq!(initial.last_success_at, None);
+
+        runtime
+            .mark_backfill_running()
+            .await
+            .expect("mark backfill running");
+        runtime
+            .checkpoint_backfill("sessions/2026/01/27/rollout-a.jsonl")
+            .await
+            .expect("checkpoint backfill");
+
+        let running = runtime
+            .get_backfill_state()
+            .await
+            .expect("get running backfill state");
+        assert_eq!(running.status, crate::BackfillStatus::Running);
+        assert_eq!(
+            running.last_watermark,
+            Some("sessions/2026/01/27/rollout-a.jsonl".to_string())
+        );
+        assert_eq!(running.last_success_at, None);
+
+        runtime
+            .mark_backfill_complete(Some("sessions/2026/01/28/rollout-b.jsonl"))
+            .await
+            .expect("mark backfill complete");
+        let completed = runtime
+            .get_backfill_state()
+            .await
+            .expect("get completed backfill state");
+        assert_eq!(completed.status, crate::BackfillStatus::Complete);
+        assert_eq!(
+            completed.last_watermark,
+            Some("sessions/2026/01/28/rollout-b.jsonl".to_string())
+        );
+        assert!(completed.last_success_at.is_some());
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }

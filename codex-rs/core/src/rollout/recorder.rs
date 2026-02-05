@@ -19,6 +19,7 @@ use tokio::sync::mpsc::Sender;
 use tokio::sync::mpsc::{self};
 use tokio::sync::oneshot;
 use tracing::info;
+use tracing::trace;
 use tracing::warn;
 
 use super::ARCHIVED_SESSIONS_SUBDIR;
@@ -386,7 +387,7 @@ impl RolloutRecorder {
     pub(crate) async fn load_rollout_items(
         path: &Path,
     ) -> std::io::Result<(Vec<RolloutItem>, Option<ThreadId>, usize)> {
-        info!("Resuming rollout from {path:?}");
+        trace!("Resuming rollout from {path:?}");
         let text = tokio::fs::read_to_string(path).await?;
         if text.trim().is_empty() {
             return Err(IoError::other("empty session file"));
@@ -433,7 +434,7 @@ impl RolloutRecorder {
                     }
                 },
                 Err(e) => {
-                    warn!("failed to parse rollout line: {e}");
+                    trace!("failed to parse rollout line: {e}");
                     parse_errors = parse_errors.saturating_add(1);
                 }
             }

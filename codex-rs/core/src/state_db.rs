@@ -31,11 +31,9 @@ pub(crate) async fn init_if_enabled(
     config: &Config,
     otel: Option<&OtelManager>,
 ) -> Option<StateDbHandle> {
-    let state_path = codex_state::state_db_path(config.codex_home.as_path());
     if !config.features.enabled(Feature::Sqlite) {
         return None;
     }
-    let existed = tokio::fs::try_exists(&state_path).await.unwrap_or(false);
     let runtime = match codex_state::StateRuntime::init(
         config.codex_home.clone(),
         config.model_provider_id.clone(),
@@ -55,7 +53,17 @@ pub(crate) async fn init_if_enabled(
             return None;
         }
     };
-    if !existed {
+    let should_backfill = match runtime.get_backfill_state().await {
+        Ok(state) => state.status != codex_state::BackfillStatus::Complete,
+        Err(err) => {
+            warn!(
+                "failed to read backfill state at {}: {err}",
+                config.codex_home.display()
+            );
+            true
+        }
+    };
+    if should_backfill {
         let runtime_for_backfill = Arc::clone(&runtime);
         let config_for_backfill = config.clone();
         let otel_for_backfill = otel.cloned();
