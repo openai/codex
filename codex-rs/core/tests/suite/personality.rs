@@ -19,12 +19,10 @@ use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
-use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_models_once;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
-use core_test_support::responses::sse;
+use core_test_support::responses::sse_completed;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
@@ -78,11 +76,7 @@ async fn user_turn_personality_none_does_not_add_update_message() -> anyhow::Res
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let resp_mock = mount_sse_once(
-        &server,
-        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
-    )
-    .await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
     let mut builder = test_codex()
         .with_model("gpt-5.2-codex")
         .with_config(|config| {
@@ -128,11 +122,7 @@ async fn config_personality_some_sets_instructions_template() -> anyhow::Result<
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let resp_mock = mount_sse_once(
-        &server,
-        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
-    )
-    .await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
     let mut builder = test_codex()
         .with_model("gpt-5.2-codex")
         .with_config(|config| {
@@ -182,16 +172,118 @@ async fn config_personality_some_sets_instructions_template() -> anyhow::Result<
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_personality_none_sends_no_personality() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let mut builder = test_codex()
+        .with_model("gpt-5.2-codex")
+        .with_config(|config| {
+            config.features.disable(Feature::RemoteModels);
+            config.features.enable(Feature::Personality);
+            config.personality = Some(Personality::None);
+        });
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd_path().to_path_buf(),
+            approval_policy: test.config.approval_policy.value(),
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            model: test.session_configured.model.clone(),
+            effort: test.config.model_reasoning_effort,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let instructions_text = request.instructions_text();
+    assert!(
+        !instructions_text.contains(LOCAL_FRIENDLY_TEMPLATE),
+        "expected no friendly personality template, got: {instructions_text:?}"
+    );
+    assert!(
+        !instructions_text.contains(LOCAL_PRAGMATIC_TEMPLATE),
+        "expected no pragmatic personality template, got: {instructions_text:?}"
+    );
+    assert!(
+        !instructions_text.contains("{{ personality }}"),
+        "expected personality placeholder to be removed, got: {instructions_text:?}"
+    );
+
+    let developer_texts = request.message_input_texts("developer");
+    assert!(
+        !developer_texts
+            .iter()
+            .any(|text| text.contains("<personality_spec>")),
+        "did not expect a personality update message when personality is None"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn default_personality_is_friendly_without_config_toml() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let mut builder = test_codex()
+        .with_model("gpt-5.2-codex")
+        .with_config(|config| {
+            config.features.disable(Feature::RemoteModels);
+            config.features.enable(Feature::Personality);
+        });
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd_path().to_path_buf(),
+            approval_policy: test.config.approval_policy.value(),
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            model: test.session_configured.model.clone(),
+            effort: test.config.model_reasoning_effort,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let instructions_text = request.instructions_text();
+    assert!(
+        instructions_text.contains(LOCAL_FRIENDLY_TEMPLATE),
+        "expected default friendly template, got: {instructions_text:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
     let resp_mock = mount_sse_sequence(
         &server,
-        vec![
-            sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
-            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
-        ],
+        vec![sse_completed("resp-1"), sse_completed("resp-2")],
     )
     .await;
     let mut builder = test_codex()
@@ -287,10 +379,7 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
     let server = start_mock_server().await;
     let resp_mock = mount_sse_sequence(
         &server,
-        vec![
-            sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
-            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
-        ],
+        vec![sse_completed("resp-1"), sse_completed("resp-2")],
     )
     .await;
     let mut builder = test_codex()
@@ -397,10 +486,7 @@ async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()>
     let server = start_mock_server().await;
     let resp_mock = mount_sse_sequence(
         &server,
-        vec![
-            sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
-            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
-        ],
+        vec![sse_completed("resp-1"), sse_completed("resp-2")],
     )
     .await;
     let mut builder = test_codex()
@@ -537,11 +623,7 @@ async fn ignores_remote_personality_if_remote_models_disabled() -> anyhow::Resul
     )
     .await;
 
-    let resp_mock = mount_sse_once(
-        &server,
-        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
-    )
-    .await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
 
     let mut builder = test_codex()
         .with_auth(codex_core::CodexAuth::create_dummy_chatgpt_auth_for_testing())
@@ -657,11 +739,7 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
     )
     .await;
 
-    let resp_mock = mount_sse_once(
-        &server,
-        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
-    )
-    .await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
 
     let mut builder = test_codex()
         .with_auth(codex_core::CodexAuth::create_dummy_chatgpt_auth_for_testing())
@@ -774,10 +852,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
 
     let resp_mock = mount_sse_sequence(
         &server,
-        vec![
-            sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
-            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
-        ],
+        vec![sse_completed("resp-1"), sse_completed("resp-2")],
     )
     .await;
 

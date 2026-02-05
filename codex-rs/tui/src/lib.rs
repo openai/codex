@@ -67,6 +67,7 @@ mod collaboration_modes;
 mod color;
 pub mod custom_terminal;
 mod cwd_prompt;
+mod debug_config;
 mod diff_render;
 mod exec_cell;
 mod exec_command;

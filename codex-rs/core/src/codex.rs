@@ -118,6 +118,8 @@ use crate::error::Result as CodexResult;
 use crate::exec::StreamOutput;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::feedback_tags;
+use crate::file_watcher::FileWatcher;
+use crate::file_watcher::FileWatcherEvent;
 use crate::git_info::get_git_repo_root;
 use crate::instructions::UserInstructions;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -252,6 +254,7 @@ impl Codex {
         auth_manager: Arc<AuthManager>,
         models_manager: Arc<ModelsManager>,
         skills_manager: Arc<SkillsManager>,
+        file_watcher: Arc<FileWatcher>,
         conversation_history: InitialHistory,
         session_source: SessionSource,
         agent_control: AgentControl,
@@ -388,6 +391,7 @@ impl Codex {
             conversation_history,
             session_source_clone,
             skills_manager,
+            file_watcher,
             agent_control,
         )
         .instrument(session_init_span)
@@ -725,6 +729,29 @@ impl Session {
         state.session_configuration.codex_home().clone()
     }
 
+    fn start_file_watcher_listener(self: &Arc<Self>) {
+        let mut rx = self.services.file_watcher.subscribe();
+        let weak_sess = Arc::downgrade(self);
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(FileWatcherEvent::SkillsChanged { .. }) => {
+                        let Some(sess) = weak_sess.upgrade() else {
+                            break;
+                        };
+                        let event = Event {
+                            id: sess.next_internal_sub_id(),
+                            msg: EventMsg::SkillsUpdateAvailable,
+                        };
+                        sess.send_event_raw(event).await;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                }
+            }
+        });
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn make_turn_context(
         auth_manager: Option<Arc<AuthManager>>,
@@ -798,6 +825,7 @@ impl Session {
         initial_history: InitialHistory,
         session_source: SessionSource,
         skills_manager: Arc<SkillsManager>,
+        file_watcher: Arc<FileWatcher>,
         agent_control: AgentControl,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
@@ -997,6 +1025,7 @@ impl Session {
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
+            file_watcher,
             agent_control,
             state_db: state_db_ctx.clone(),
             model_client: ModelClient::new(
@@ -1049,6 +1078,9 @@ impl Session {
         for event in events {
             sess.send_event_raw(event).await;
         }
+
+        // Start the watcher after SessionConfigured so it cannot emit earlier events.
+        sess.start_file_watcher_listener();
 
         // Construct sandbox_state before initialize() so it can be sent to each
         // MCP server immediately after it becomes ready (avoiding blocking).
@@ -4699,6 +4731,7 @@ mod tests {
     use crate::tools::format_exec_output_str;
 
     use codex_protocol::ThreadId;
+    use codex_protocol::models::FunctionCallOutputBody;
     use codex_protocol::models::FunctionCallOutputPayload;
 
     use crate::protocol::CompactedItem;
@@ -5332,13 +5365,14 @@ mod tests {
 
         let got = FunctionCallOutputPayload::from(&ctr);
         let expected = FunctionCallOutputPayload {
-            content: serde_json::to_string(&json!({
-                "ok": true,
-                "value": 42
-            }))
-            .unwrap(),
+            body: FunctionCallOutputBody::Text(
+                serde_json::to_string(&json!({
+                    "ok": true,
+                    "value": 42
+                }))
+                .unwrap(),
+            ),
             success: Some(true),
-            ..Default::default()
         };
 
         assert_eq!(expected, got);
@@ -5375,10 +5409,10 @@ mod tests {
 
         let got = FunctionCallOutputPayload::from(&ctr);
         let expected = FunctionCallOutputPayload {
-            content: serde_json::to_string(&vec![text_block("hello"), text_block("world")])
-                .unwrap(),
+            body: FunctionCallOutputBody::Text(
+                serde_json::to_string(&vec![text_block("hello"), text_block("world")]).unwrap(),
+            ),
             success: Some(true),
-            ..Default::default()
         };
 
         assert_eq!(expected, got);
@@ -5395,9 +5429,10 @@ mod tests {
 
         let got = FunctionCallOutputPayload::from(&ctr);
         let expected = FunctionCallOutputPayload {
-            content: serde_json::to_string(&json!({ "message": "bad" })).unwrap(),
+            body: FunctionCallOutputBody::Text(
+                serde_json::to_string(&json!({ "message": "bad" })).unwrap(),
+            ),
             success: Some(false),
-            ..Default::default()
         };
 
         assert_eq!(expected, got);
@@ -5414,9 +5449,10 @@ mod tests {
 
         let got = FunctionCallOutputPayload::from(&ctr);
         let expected = FunctionCallOutputPayload {
-            content: serde_json::to_string(&vec![text_block("alpha")]).unwrap(),
+            body: FunctionCallOutputBody::Text(
+                serde_json::to_string(&vec![text_block("alpha")]).unwrap(),
+            ),
             success: Some(true),
-            ..Default::default()
         };
 
         assert_eq!(expected, got);
@@ -5558,6 +5594,7 @@ mod tests {
         mark_state_initial_context_seeded(&mut state);
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
 
+        let file_watcher = Arc::new(FileWatcher::noop());
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
@@ -5576,6 +5613,7 @@ mod tests {
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
+            file_watcher,
             agent_control,
             state_db: None,
             model_client: ModelClient::new(
@@ -5686,6 +5724,7 @@ mod tests {
         mark_state_initial_context_seeded(&mut state);
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
 
+        let file_watcher = Arc::new(FileWatcher::noop());
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
@@ -5704,6 +5743,7 @@ mod tests {
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
+            file_watcher,
             agent_control,
             state_db: None,
             model_client: ModelClient::new(
@@ -5882,7 +5922,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn abort_gracefuly_emits_turn_aborted_only() {
+    async fn abort_gracefully_emits_turn_aborted_only() {
         let (sess, tc, rx) = make_session_and_context_with_rx().await;
         let input = vec![UserInput::Text {
             text: "hello".to_string(),
@@ -6273,7 +6313,10 @@ mod tests {
             .await;
 
         let output = match resp2.expect("expected Ok result") {
-            ToolOutput::Function { content, .. } => content,
+            ToolOutput::Function {
+                body: FunctionCallOutputBody::Text(content),
+                ..
+            } => content,
             _ => panic!("unexpected tool output"),
         };
 

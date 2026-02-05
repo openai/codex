@@ -12,7 +12,10 @@ use std::env;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::LazyLock;
+use std::sync::Mutex as StdMutex;
 use std::time::Duration;
+use std::time::Instant;
 
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::auth::McpAuthStatusEntry;
@@ -82,6 +85,8 @@ pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Default timeout for individual tool calls.
 const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
+
+const CODEX_APPS_TOOLS_CACHE_TTL: Duration = Duration::from_secs(3600);
 
 /// The Responses API requires tool names to match `^[a-zA-Z0-9_-]+$`.
 /// MCP server/tool names are user-controlled, so sanitize the fully-qualified
@@ -160,6 +165,15 @@ pub(crate) struct ToolInfo {
     pub(crate) connector_id: Option<String>,
     pub(crate) connector_name: Option<String>,
 }
+
+#[derive(Clone)]
+struct CachedCodexAppsTools {
+    expires_at: Instant,
+    tools: Vec<ToolInfo>,
+}
+
+static CODEX_APPS_TOOLS_CACHE: LazyLock<StdMutex<Option<CachedCodexAppsTools>>> =
+    LazyLock::new(|| StdMutex::new(None));
 
 type ResponderMap = HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>;
 
@@ -465,13 +479,28 @@ impl McpConnectionManager {
     #[instrument(level = "trace", skip_all)]
     pub async fn list_all_tools(&self) -> HashMap<String, ToolInfo> {
         let mut tools = HashMap::new();
-        for managed_client in self.clients.values() {
+        for (server_name, managed_client) in &self.clients {
             let client = managed_client.client().await.ok();
             if let Some(client) = client {
-                tools.extend(qualify_tools(filter_tools(
-                    client.tools,
-                    client.tool_filter,
-                )));
+                let rmcp_client = client.client;
+                let tool_timeout = client.tool_timeout;
+                let tool_filter = client.tool_filter;
+                let mut server_tools = client.tools;
+
+                if server_name == CODEX_APPS_MCP_SERVER_NAME {
+                    match list_tools_for_client(server_name, &rmcp_client, tool_timeout).await {
+                        Ok(fresh_or_cached_tools) => {
+                            server_tools = fresh_or_cached_tools;
+                        }
+                        Err(err) => {
+                            warn!(
+                                "Failed to refresh tools for MCP server '{server_name}', using startup snapshot: {err:#}"
+                            );
+                        }
+                    }
+                }
+
+                tools.extend(qualify_tools(filter_tools(server_tools, tool_filter)));
             }
         }
         tools
@@ -962,6 +991,50 @@ async fn make_rmcp_client(
 }
 
 async fn list_tools_for_client(
+    server_name: &str,
+    client: &Arc<RmcpClient>,
+    timeout: Option<Duration>,
+) -> Result<Vec<ToolInfo>> {
+    if server_name == CODEX_APPS_MCP_SERVER_NAME
+        && let Some(cached_tools) = read_cached_codex_apps_tools()
+    {
+        return Ok(cached_tools);
+    }
+
+    let tools = list_tools_for_client_uncached(server_name, client, timeout).await?;
+    if server_name == CODEX_APPS_MCP_SERVER_NAME {
+        write_cached_codex_apps_tools(&tools);
+    }
+    Ok(tools)
+}
+
+fn read_cached_codex_apps_tools() -> Option<Vec<ToolInfo>> {
+    let mut cache_guard = CODEX_APPS_TOOLS_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let now = Instant::now();
+
+    if let Some(cached) = cache_guard.as_ref()
+        && now < cached.expires_at
+    {
+        return Some(cached.tools.clone());
+    }
+
+    *cache_guard = None;
+    None
+}
+
+fn write_cached_codex_apps_tools(tools: &[ToolInfo]) {
+    let mut cache_guard = CODEX_APPS_TOOLS_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *cache_guard = Some(CachedCodexAppsTools {
+        expires_at: Instant::now() + CODEX_APPS_TOOLS_CACHE_TTL,
+        tools: tools.to_vec(),
+    });
+}
+
+async fn list_tools_for_client_uncached(
     server_name: &str,
     client: &Arc<RmcpClient>,
     timeout: Option<Duration>,

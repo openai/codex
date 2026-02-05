@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use codex_protocol::models::FunctionCallOutputBody;
 
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
@@ -120,8 +121,7 @@ impl ToolHandler for RequestUserInputHandler {
         })?;
 
         Ok(ToolOutput::Function {
-            content,
-            content_items: None,
+            body: FunctionCallOutputBody::Text(content),
             success: Some(true),
         })
     }
