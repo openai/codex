@@ -53,6 +53,7 @@ struct SpawnAgentsOnCsvArgs {
     output_csv_path: Option<String>,
     output_schema: Option<Value>,
     max_concurrency: Option<usize>,
+    auto_export: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -64,6 +65,7 @@ struct JobIdArgs {
 struct RunAgentJobArgs {
     job_id: String,
     max_concurrency: Option<usize>,
+    auto_export: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -129,6 +131,7 @@ struct JobRunnerOptions {
     max_concurrency: usize,
     spawn_config: Config,
     child_depth: i32,
+    auto_export: bool,
 }
 
 #[async_trait]
@@ -265,12 +268,14 @@ mod spawn_agents_on_csv {
         let job_name = args
             .job_name
             .unwrap_or_else(|| format!("agent-job-{job_suffix}"));
+        let auto_export = args.auto_export.unwrap_or(true);
         let job = db
             .create_agent_job(
                 &codex_state::AgentJobCreateParams {
                     id: job_id.clone(),
                     name: job_name,
                     instruction: args.instruction,
+                    auto_export,
                     output_schema_json: args.output_schema,
                     input_headers: headers,
                     input_csv_path: input_path.display().to_string(),
@@ -283,7 +288,8 @@ mod spawn_agents_on_csv {
                 FunctionCallError::RespondToModel(format!("failed to create agent job: {err}"))
             })?;
 
-        let options = build_runner_options(&session, &turn, args.max_concurrency).await?;
+        let options =
+            build_runner_options(&session, &turn, args.max_concurrency, Some(auto_export)).await?;
         let started = start_job_runner(session, job_id.clone(), options).await?;
 
         let content = serde_json::to_string(&SpawnAgentsOnCsvResult {
@@ -315,21 +321,24 @@ mod run_agent_job {
         let args: RunAgentJobArgs = parse_arguments(arguments.as_str())?;
         let job_id = args.job_id;
         let db = required_state_db(&session)?;
-        if db
+        let job = db
             .get_agent_job(job_id.as_str())
             .await
             .map_err(|err| {
                 FunctionCallError::RespondToModel(format!(
-                    "failed to look up agent job {job_id}: {err}"
+                    "failed to load agent job {job_id}: {err}"
                 ))
             })?
-            .is_none()
-        {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "agent job {job_id} not found"
-            )));
-        }
-        let options = build_runner_options(&session, &turn, args.max_concurrency).await?;
+            .ok_or_else(|| {
+                FunctionCallError::RespondToModel(format!("agent job {job_id} not found"))
+            })?;
+        let options = build_runner_options(
+            &session,
+            &turn,
+            args.max_concurrency,
+            args.auto_export.or(Some(job.auto_export)),
+        )
+        .await?;
         let started = start_job_runner(session, job_id.clone(), options).await?;
         let status = render_job_status(db, job_id.as_str()).await?;
         let content = serde_json::to_string(&json!({
@@ -552,6 +561,7 @@ async fn build_runner_options(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
     requested_concurrency: Option<usize>,
+    requested_auto_export: Option<bool>,
 ) -> Result<JobRunnerOptions, FunctionCallError> {
     let session_source = turn.session_source.clone();
     let child_depth = next_thread_spawn_depth(&session_source);
@@ -568,6 +578,7 @@ async fn build_runner_options(
         max_concurrency,
         spawn_config,
         child_depth,
+        auto_export: requested_auto_export.unwrap_or(true),
     })
 }
 
@@ -770,8 +781,31 @@ async fn run_agent_job_loop(
         db.mark_agent_job_failed(job_id.as_str(), message.as_str())
             .await?;
     } else {
+        if options.auto_export {
+            if let Err(err) = export_job_csv_snapshot(db.clone(), &job).await {
+                let message = format!("auto-export failed: {err}");
+                db.mark_agent_job_failed(job_id.as_str(), message.as_str())
+                    .await?;
+                return Ok(());
+            }
+        }
         db.mark_agent_job_completed(job_id.as_str()).await?;
     }
+    Ok(())
+}
+
+async fn export_job_csv_snapshot(
+    db: Arc<codex_state::StateRuntime>,
+    job: &codex_state::AgentJob,
+) -> anyhow::Result<()> {
+    let items = db.list_agent_job_items(job.id.as_str(), None, None).await?;
+    let csv_content = render_job_csv(job.input_headers.as_slice(), items.as_slice())
+        .map_err(|err| anyhow::anyhow!("failed to render job csv for auto-export: {err}"))?;
+    let output_path = PathBuf::from(job.output_csv_path.clone());
+    if let Some(parent) = output_path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::write(&output_path, csv_content).await?;
     Ok(())
 }
 

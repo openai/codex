@@ -531,6 +531,15 @@ fn create_spawn_agents_on_csv_tool() -> ToolSpec {
             ),
         },
     );
+    properties.insert(
+        "auto_export".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "Whether to auto-export CSV output on successful completion (default true)."
+                    .to_string(),
+            ),
+        },
+    );
     ToolSpec::Function(ResponsesApiTool {
         name: "spawn_agents_on_csv".to_string(),
         description: "Create and run a batch agent job over a CSV file.".to_string(),
@@ -556,6 +565,15 @@ fn create_run_agent_job_tool() -> ToolSpec {
         JsonSchema::Number {
             description: Some(
                 "Maximum concurrent workers for this job. Defaults to a safe value capped by config."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "auto_export".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "Whether to auto-export CSV output on successful completion (default true)."
                     .to_string(),
             ),
         },
