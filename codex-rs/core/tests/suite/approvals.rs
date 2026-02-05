@@ -1849,3 +1849,285 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
 
     Ok(())
 }
+
+#[tokio::test(flavor = "current_thread")]
+#[cfg(unix)]
+async fn heredoc_execpolicy_amendment_skips_future_approvals() -> Result<()> {
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::UnlessTrusted;
+    let sandbox_policy = SandboxPolicy::ReadOnly;
+    let sandbox_policy_for_config = sandbox_policy.clone();
+    let mut builder = test_codex().with_config(move |config| {
+        config.approval_policy = Constrained::allow_any(approval_policy);
+        config.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+    });
+    let test = builder.build(&server).await?;
+
+    let command = r#"python3 <<'PY'
+print("hello")
+PY"#;
+
+    let call_id_first = "heredoc-allow-first";
+    let args_first = json!({
+        "command": command,
+        "timeout_ms": 1_000,
+        "prefix_rule": ["python3"],
+    });
+    let first_event = ev_function_call(
+        call_id_first,
+        "shell_command",
+        &serde_json::to_string(&args_first)?,
+    );
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-heredoc-1"),
+            first_event,
+            ev_completed("resp-heredoc-1"),
+        ]),
+    )
+    .await;
+    let _first_results = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-heredoc-1", "done"),
+            ev_completed("resp-heredoc-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "heredoc allow first",
+        approval_policy,
+        sandbox_policy.clone(),
+    )
+    .await?;
+
+    let approval = expect_exec_approval(&test, command).await;
+    let expected_amendment = ExecPolicyAmendment::new(vec!["python3".to_string()]);
+    assert_eq!(
+        approval.proposed_execpolicy_amendment,
+        Some(expected_amendment.clone())
+    );
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: "0".into(),
+            decision: ReviewDecision::ApprovedExecpolicyAmendment {
+                proposed_execpolicy_amendment: expected_amendment,
+            },
+        })
+        .await?;
+    wait_for_completion(&test).await;
+
+    let policy_path = test.home.path().join("rules").join("default.rules");
+    let policy_contents = fs::read_to_string(&policy_path)?;
+    assert!(
+        policy_contents.contains(r#"prefix_rule(pattern=["python3"], decision="allow")"#),
+        "unexpected policy contents: {policy_contents}"
+    );
+
+    let call_id_second = "heredoc-allow-second";
+    let args_second = json!({
+        "command": command,
+        "timeout_ms": 1_000,
+    });
+    let second_event = ev_function_call(
+        call_id_second,
+        "shell_command",
+        &serde_json::to_string(&args_second)?,
+    );
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-heredoc-3"),
+            second_event,
+            ev_completed("resp-heredoc-3"),
+        ]),
+    )
+    .await;
+    let second_results = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-heredoc-2", "done"),
+            ev_completed("resp-heredoc-4"),
+        ]),
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "heredoc allow second",
+        approval_policy,
+        sandbox_policy.clone(),
+    )
+    .await?;
+
+    wait_for_completion_without_approval(&test).await;
+
+    let second_output = parse_result(
+        &second_results
+            .single_request()
+            .function_call_output(call_id_second),
+    );
+    assert_eq!(second_output.exit_code.unwrap_or(0), 0);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[cfg(unix)]
+async fn heredoc_execpolicy_preconfigured_skips_approval_and_succeeds() -> Result<()> {
+    // Expected to fail currently: heredoc (`<<`) is not parsed as a plain shell command,
+    // so execpolicy falls back to matching the wrapper (`$SHELL -lc ...`), not `["python3"]`.
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::UnlessTrusted;
+    let sandbox_policy = SandboxPolicy::ReadOnly;
+    let sandbox_policy_for_config = sandbox_policy.clone();
+    let mut builder = test_codex().with_config(move |config| {
+        config.approval_policy = Constrained::allow_any(approval_policy);
+        config.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+
+        let policy_path = config.codex_home.join("rules").join("default.rules");
+        fs::create_dir_all(
+            policy_path
+                .parent()
+                .expect("policy directory must have a parent"),
+        )
+        .expect("create policy directory");
+        fs::write(
+            policy_path,
+            r#"prefix_rule(pattern=["python3"], decision="allow")"#,
+        )
+        .expect("write policy file");
+    });
+    let test = builder.build(&server).await?;
+
+    let command = r#"python3 <<'PY'
+print("hello")
+PY"#;
+
+    let call_id = "heredoc-preconfigured";
+    let args = json!({
+        "command": command,
+        "timeout_ms": 1_000,
+    });
+    let event = ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?);
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-heredoc-preconfigured-1"),
+            event,
+            ev_completed("resp-heredoc-preconfigured-1"),
+        ]),
+    )
+    .await;
+    let results = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-heredoc-preconfigured-1", "done"),
+            ev_completed("resp-heredoc-preconfigured-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "heredoc preconfigured allow",
+        approval_policy,
+        sandbox_policy.clone(),
+    )
+    .await?;
+
+    wait_for_completion_without_approval(&test).await;
+
+    let output = parse_result(&results.single_request().function_call_output(call_id));
+    assert_eq!(output.exit_code.unwrap_or(0), 0);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[cfg(unix)]
+async fn touch_execpolicy_preconfigured_allows_outside_workspace_write() -> Result<()> {
+    // Expected to succeed: `touch ...` is parsed as a plain shell command, so the
+    // preconfigured allow rule `["touch"]` matches and skips approval.
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::UnlessTrusted;
+    let sandbox_policy = SandboxPolicy::DangerFullAccess;
+    let sandbox_policy_for_config = sandbox_policy.clone();
+    let mut builder = test_codex().with_config(move |config| {
+        config.approval_policy = Constrained::allow_any(approval_policy);
+        config.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+
+        let policy_path = config.codex_home.join("rules").join("default.rules");
+        fs::create_dir_all(
+            policy_path
+                .parent()
+                .expect("policy directory must have a parent"),
+        )
+        .expect("create policy directory");
+        fs::write(
+            policy_path,
+            r#"prefix_rule(pattern=["touch"], decision="allow")"#,
+        )
+        .expect("write policy file");
+    });
+    let test = builder.build(&server).await?;
+
+    let outside_path = env::current_dir()
+        .expect("current dir should be available")
+        .join("touch-outside-execpolicy.txt");
+    let _ = fs::remove_file(&outside_path);
+    let command = format!("touch {outside_path:?}");
+
+    let call_id = "touch-outside-preconfigured";
+    let args = json!({
+        "command": command,
+        "timeout_ms": 1_000,
+    });
+    let event = ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?);
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-touch-outside-1"),
+            event,
+            ev_completed("resp-touch-outside-1"),
+        ]),
+    )
+    .await;
+    let results = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-touch-outside-1", "done"),
+            ev_completed("resp-touch-outside-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "touch outside workspace with preconfigured execpolicy",
+        approval_policy,
+        sandbox_policy.clone(),
+    )
+    .await?;
+
+    wait_for_completion_without_approval(&test).await;
+
+    let output = parse_result(&results.single_request().function_call_output(call_id));
+    assert_eq!(output.exit_code.unwrap_or(0), 0);
+    assert!(
+        outside_path.exists(),
+        "expected outside path to exist: {}",
+        outside_path.display()
+    );
+    let _ = fs::remove_file(outside_path);
+
+    Ok(())
+}
