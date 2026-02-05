@@ -637,11 +637,7 @@ impl OtelManager {
         tags.push(("tool", tool_name));
         tags.push(("success", success_str));
         tags.extend_from_slice(extra_tags);
-        self.counter(
-            TOOL_CALL_COUNT_METRIC,
-            1,
-            &tags,
-        );
+        self.counter(TOOL_CALL_COUNT_METRIC, 1, &tags);
         self.record_duration(TOOL_CALL_DURATION_METRIC, duration, &tags);
         tracing::event!(
             tracing::Level::INFO,
