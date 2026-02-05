@@ -1585,6 +1585,7 @@ impl Config {
             mcp_servers,
             exec_policy: _,
             enforce_residency,
+            feedback_enabled: mut constrained_feedback_enabled,
         } = requirements;
 
         constrained_approval_policy
@@ -1592,6 +1593,28 @@ impl Config {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
         constrained_sandbox_policy
             .set(sandbox_policy)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
+        let feedback_enabled_was_explicit = cfg
+            .feedback
+            .as_ref()
+            .and_then(|feedback| feedback.enabled)
+            .is_some();
+        let mut feedback_enabled = cfg
+            .feedback
+            .as_ref()
+            .and_then(|feedback| feedback.enabled)
+            .unwrap_or(true);
+        if !feedback_enabled_was_explicit
+            && let Err(err) = constrained_feedback_enabled.can_set(&feedback_enabled)
+        {
+            tracing::warn!(
+                error = %err,
+                "default feedback.enabled is disallowed by requirements; falling back to required default"
+            );
+            feedback_enabled = constrained_feedback_enabled.value();
+        }
+        constrained_feedback_enabled
+            .set(feedback_enabled)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
 
         let mcp_servers = constrain_mcp_servers(cfg.mcp_servers.clone(), mcp_servers.as_ref())
@@ -1689,11 +1712,7 @@ impl Config {
                 .as_ref()
                 .and_then(|a| a.enabled)
                 .or(cfg.analytics.as_ref().and_then(|a| a.enabled)),
-            feedback_enabled: cfg
-                .feedback
-                .as_ref()
-                .and_then(|feedback| feedback.enabled)
-                .unwrap_or(true),
+            feedback_enabled: constrained_feedback_enabled.value(),
             tui_notifications: cfg
                 .tui
                 .as_ref()
@@ -4701,6 +4720,7 @@ mcp_oauth_callback_port = 5678
             mcp_servers: None,
             rules: None,
             enforce_residency: None,
+            feedback_enabled: None,
         };
 
         let err = ConfigBuilder::default()
@@ -4776,6 +4796,56 @@ trust_level = "untrusted"
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
         let message = err.to_string();
         assert!(message.contains("invalid value for `approval_policy`"));
+        assert!(message.contains("set by cloud requirements"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn requirements_disallowing_default_feedback_falls_back_to_required_default()
+    -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .cloud_requirements(CloudRequirementsLoader::new(async {
+                Some(crate::config_loader::ConfigRequirementsToml {
+                    feedback_enabled: Some(false),
+                    ..Default::default()
+                })
+            }))
+            .build()
+            .await?;
+
+        assert!(!config.feedback_enabled);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn explicit_feedback_enabled_still_errors_when_disallowed_by_requirements()
+    -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            r#"[feedback]
+enabled = true
+"#,
+        )?;
+
+        let err = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cloud_requirements(CloudRequirementsLoader::new(async {
+                Some(crate::config_loader::ConfigRequirementsToml {
+                    feedback_enabled: Some(false),
+                    ..Default::default()
+                })
+            }))
+            .build()
+            .await
+            .expect_err("explicit feedback.enabled=true should fail");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        let message = err.to_string();
+        assert!(message.contains("invalid value for `feedback.enabled`"));
         assert!(message.contains("set by cloud requirements"));
         Ok(())
     }

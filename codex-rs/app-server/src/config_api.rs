@@ -157,6 +157,7 @@ mod tests {
             mcp_servers: None,
             rules: None,
             enforce_residency: Some(CoreResidencyRequirement::Us),
+            feedback_enabled: None,
         };
 
         let mapped = map_requirements_toml_to_api(requirements);
