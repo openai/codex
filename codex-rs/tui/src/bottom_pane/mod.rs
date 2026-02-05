@@ -25,6 +25,7 @@ use crate::key_hint::KeyBinding;
 use crate::render::renderable::FlexRenderable;
 use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableItem;
+use crate::status_line::StatusLineValue;
 use crate::tui::FrameRequester;
 use bottom_pane_view::BottomPaneView;
 use codex_core::features::Features;
@@ -861,6 +862,16 @@ impl BottomPane {
             flex2.push(0, RenderableItem::Borrowed(&self.composer));
             RenderableItem::Owned(Box::new(flex2))
         }
+    }
+
+    pub(crate) fn set_status_line(&mut self, status_line: Option<StatusLineValue>) {
+        self.composer.set_status_line(status_line);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_status_line_enabled(&mut self, enabled: bool) {
+        self.composer.set_status_line_enabled(enabled);
+        self.request_redraw();
     }
 }
 

@@ -29,6 +29,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::diff_render::calculate_add_remove_from_diff;
+use crate::status_line::StatusLineValue;
 use crate::version::CODEX_CLI_VERSION;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
@@ -581,7 +583,11 @@ pub(crate) struct ChatWidget {
     feedback_audience: FeedbackAudience,
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
+    // Current working directory (if known)
+    current_cwd: Option<PathBuf>,
     external_editor_state: ExternalEditorState,
+    total_lines_added: usize,
+    total_lines_removed: usize,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -792,6 +798,11 @@ impl ChatWidget {
         self.set_status(header, None);
     }
 
+    pub(crate) fn set_status_line(&mut self, status_line: Option<StatusLineValue>) {
+        self.bottom_pane.set_status_line(status_line);
+        self.request_redraw();
+    }
+
     fn restore_retry_status_header_if_present(&mut self) {
         if let Some(header) = self.retry_status_header.take() {
             self.set_status_header(header);
@@ -808,6 +819,7 @@ impl ChatWidget {
         self.thread_name = event.thread_name.clone();
         self.forked_from = event.forked_from_id;
         self.current_rollout_path = event.rollout_path.clone();
+        self.current_cwd = Some(event.cwd.clone());
         let initial_messages = event.initial_messages.clone();
         let forked_from_id = event.forked_from_id;
         let model_for_header = event.model.clone();
@@ -1851,6 +1863,9 @@ impl ChatWidget {
 
     fn on_turn_diff(&mut self, unified_diff: String) {
         debug!("TurnDiffEvent: {unified_diff}");
+        let diff = calculate_add_remove_from_diff(&unified_diff);
+        self.total_lines_added = diff.0;
+        self.total_lines_removed = diff.1;
     }
 
     fn on_deprecation_notice(&mut self, event: DeprecationNoticeEvent) {
@@ -2316,6 +2331,7 @@ impl ChatWidget {
 
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
 
+        let current_cwd = Some(config.cwd.clone());
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -2387,13 +2403,19 @@ impl ChatWidget {
             feedback,
             feedback_audience,
             current_rollout_path: None,
+            current_cwd,
             external_editor_state: ExternalEditorState::Closed,
+            total_lines_added: 0,
+            total_lines_removed: 0,
         };
 
         widget.prefetch_rate_limits();
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+        widget
+            .bottom_pane
+            .set_status_line_enabled(widget.config.tui_status_line.is_some());
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
@@ -2461,6 +2483,7 @@ impl ChatWidget {
         };
 
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
+        let current_cwd = Some(config.cwd.clone());
 
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
@@ -2533,13 +2556,19 @@ impl ChatWidget {
             feedback,
             feedback_audience,
             current_rollout_path: None,
+            current_cwd,
             external_editor_state: ExternalEditorState::Closed,
+            total_lines_added: 0,
+            total_lines_removed: 0,
         };
 
         widget.prefetch_rate_limits();
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+        widget
+            .bottom_pane
+            .set_status_line_enabled(widget.config.tui_status_line.is_some());
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
@@ -2583,6 +2612,7 @@ impl ChatWidget {
             .and_then(|mask| mask.model.clone())
             .unwrap_or(header_model);
 
+        let current_cwd = Some(session_configured.cwd.clone());
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
 
@@ -2668,13 +2698,19 @@ impl ChatWidget {
             feedback,
             feedback_audience,
             current_rollout_path: None,
+            current_cwd,
             external_editor_state: ExternalEditorState::Closed,
+            total_lines_added: 0,
+            total_lines_removed: 0,
         };
 
         widget.prefetch_rate_limits();
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+        widget
+            .bottom_pane
+            .set_status_line_enabled(widget.config.tui_status_line.is_some());
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
@@ -6418,6 +6454,182 @@ async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Option<RateLimi
             None
         }
     }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StatusLineInfo {
+    pub session_id: Option<ThreadId>,
+    pub transcript_path: Option<PathBuf>,
+    pub cwd: PathBuf,
+    pub workspace: StatusLineWorkspace,
+    pub model: StatusLineModel,
+    pub version: String,
+    pub cost: StatusLineCost,
+    pub context_window: StatusLineContextWindow,
+    pub usage: Option<StatusLineUsage>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StatusLineWorkspace {
+    pub project_dir: PathBuf,
+    pub current_dir: PathBuf,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StatusLineModel {
+    pub id: String,
+    pub display_name: String,
+    pub reasoning_level: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StatusLineCost {
+    pub total_lines_added: usize,
+    pub total_lines_removed: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StatusLineContextWindow {
+    pub total_input_tokens: i64,
+    pub total_output_tokens: i64,
+    pub context_window_size: Option<i64>,
+    pub used_percentage: Option<f64>,
+    pub remaining_percentage: Option<f64>,
+    pub current_usage: StatusLineCurrentUsage,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StatusLineCurrentUsage {
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_input_tokens: i64,
+    pub reasoning_output_tokens: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StatusLineUsageLimit {
+    pub percent_left: f64,
+    pub resets_at: Option<String>,
+    pub resets_at_raw: Option<String>,
+    pub window_minutes: Option<i64>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StatusLineUsage {
+    pub limit_5h: Option<StatusLineUsageLimit>,
+    pub limit_7d: Option<StatusLineUsageLimit>,
+}
+
+fn status_line_usage_limit(
+    used_percent: f64,
+    resets_at: Option<String>,
+    resets_at_raw: Option<String>,
+    window_minutes: Option<i64>,
+) -> StatusLineUsageLimit {
+    StatusLineUsageLimit {
+        percent_left: (100.0f64 - used_percent).clamp(0.0f64, 100.0f64),
+        resets_at,
+        resets_at_raw,
+        window_minutes,
+    }
+}
+
+fn status_line_usage_payload(chat: &ChatWidget) -> Option<StatusLineUsage> {
+    let auth = chat.auth_manager.auth_cached()?;
+    if !auth.is_chatgpt_auth() {
+        return None;
+    }
+
+    let snapshot = chat.rate_limit_snapshot.as_ref()?;
+    let payload = StatusLineUsage {
+        limit_5h: snapshot.primary.as_ref().map(|window| {
+            status_line_usage_limit(
+                window.used_percent,
+                window.resets_at.clone(),
+                window.resets_at_raw.clone(),
+                window.window_minutes,
+            )
+        }),
+        limit_7d: snapshot.secondary.as_ref().map(|window| {
+            status_line_usage_limit(
+                window.used_percent,
+                window.resets_at.clone(),
+                window.resets_at_raw.clone(),
+                window.window_minutes,
+            )
+        }),
+    };
+
+    if payload.limit_5h.is_none() && payload.limit_7d.is_none() {
+        return None;
+    }
+
+    Some(payload)
+}
+
+pub fn build_status_line_payload(chat: &ChatWidget, config: &Config) -> StatusLineInfo {
+    let session_id = chat.thread_id;
+    let transcript_path = chat.current_rollout_path.clone();
+    let cwd = chat.current_cwd.as_ref().unwrap_or(&config.cwd);
+    let project_dir = codex_core::git_info::resolve_root_git_project_for_trust(cwd)
+        .unwrap_or_else(|| cwd.clone());
+    let reasoning_level = chat
+        .effective_reasoning_effort()
+        .map(|effort| effort.to_string())
+        .unwrap_or_else(|| "none".to_string());
+    let version = CODEX_CLI_VERSION.to_string();
+    let default_usage = TokenUsage::default();
+    let (context_usage, context_window_size) = match chat.token_info.as_ref() {
+        Some(info) => (&info.last_token_usage, info.model_context_window),
+        None => (&default_usage, config.model_context_window),
+    };
+    let remaining_percentage = context_window_size
+        .map(|cws| context_usage.percent_of_context_window_remaining(cws) as f64);
+    let used_percentage = remaining_percentage.map(|rp| 100f64 - rp);
+    let model_display_name = chat
+        .models_manager
+        .try_list_models(&chat.config)
+        .ok()
+        .and_then(|models| models.into_iter().find(|m| m.model == chat.current_model()))
+        .map(|m| m.display_name)
+        .unwrap_or_else(|| chat.current_model().to_string());
+
+    let payload = StatusLineInfo {
+        session_id,
+        transcript_path,
+        cwd: cwd.clone(),
+        workspace: StatusLineWorkspace {
+            project_dir,
+            current_dir: cwd.clone(),
+        },
+        model: StatusLineModel {
+            id: chat.current_model().to_string(),
+            display_name: model_display_name,
+            reasoning_level,
+        },
+        version,
+        cost: StatusLineCost {
+            total_lines_added: chat.total_lines_added,
+            total_lines_removed: chat.total_lines_removed,
+        },
+        context_window: StatusLineContextWindow {
+            total_input_tokens: context_usage.input_tokens,
+            total_output_tokens: context_usage.output_tokens,
+            context_window_size,
+            used_percentage,
+            remaining_percentage,
+            current_usage: StatusLineCurrentUsage {
+                input_tokens: context_usage.input_tokens,
+                output_tokens: context_usage.output_tokens,
+                cache_read_input_tokens: context_usage.cached_input_tokens,
+                reasoning_output_tokens: context_usage.reasoning_output_tokens,
+            },
+        },
+        usage: status_line_usage_payload(chat),
+    };
+
+    tracing::debug!("status line payload: {:#?}", payload);
+    payload
 }
 
 #[cfg(test)]

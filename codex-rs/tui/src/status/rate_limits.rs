@@ -42,20 +42,25 @@ pub(crate) const RATE_LIMIT_STALE_THRESHOLD_MINUTES: i64 = 15;
 pub(crate) struct RateLimitWindowDisplay {
     pub used_percent: f64,
     pub resets_at: Option<String>,
+    pub resets_at_raw: Option<String>,
     pub window_minutes: Option<i64>,
 }
 
 impl RateLimitWindowDisplay {
     fn from_window(window: &RateLimitWindow, captured_at: DateTime<Local>) -> Self {
-        let resets_at = window
+        let resets_at_utc = window
             .resets_at
             .and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds, 0))
-            .map(|dt| dt.with_timezone(&Local))
-            .map(|dt| format_reset_timestamp(dt, captured_at));
+            .map(|dt| dt.with_timezone(&Local));
+        let resets_at = resets_at_utc.map(|dt| format_reset_timestamp(dt, captured_at));
 
         Self {
             used_percent: window.used_percent,
             resets_at,
+            resets_at_raw: window
+                .resets_at
+                .and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds, 0))
+                .map(|dt| dt.to_rfc3339()),
             window_minutes: window.window_minutes,
         }
     }
