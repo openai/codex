@@ -10,6 +10,8 @@ use crate::tools::registry::ToolKind;
 use async_trait::async_trait;
 use codex_protocol::dynamic_tools::DynamicToolCallRequest;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
+use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::protocol::EventMsg;
 use serde_json::Value;
 use tokio::sync::oneshot;
@@ -55,10 +57,19 @@ impl ToolHandler for DynamicToolHandler {
                 )
             })?;
 
+        let DynamicToolResponse {
+            content_items,
+            success,
+        } = response;
+        let body = content_items
+            .into_iter()
+            .map(FunctionCallOutputContentItem::from)
+            .collect::<Vec<_>>();
+        let body = FunctionCallOutputBody::ContentItems(body);
+
         Ok(ToolOutput::Function {
-            content: response.output,
-            content_items: None,
-            success: Some(response.success),
+            body,
+            success: Some(success),
         })
     }
 }

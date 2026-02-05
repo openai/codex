@@ -1,5 +1,7 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
+use app_test_support::create_fake_rollout;
+use app_test_support::rollout_path;
 use app_test_support::to_response;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
@@ -9,18 +11,25 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::NewConversationParams;
 use codex_app_server_protocol::NewConversationResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ResumeConversationParams;
+use codex_app_server_protocol::ResumeConversationResponse;
 use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserMessageResponse;
 use codex_execpolicy::Policy;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::RawResponseItemEvent;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::TurnContextItem;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -263,6 +272,114 @@ async fn test_send_message_session_not_found() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn resume_with_model_mismatch_appends_model_switch_once() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_assistant_message("msg-1", "Done"),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("resp-2"),
+                responses::ev_assistant_message("msg-2", "Done again"),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let filename_ts = "2025-01-02T12-00-00";
+    let meta_rfc3339 = "2025-01-02T12:00:00Z";
+    let preview = "Resume me";
+    let conversation_id = create_fake_rollout(
+        codex_home.path(),
+        filename_ts,
+        meta_rfc3339,
+        preview,
+        Some("mock_provider"),
+        None,
+    )?;
+    let rollout_path = rollout_path(codex_home.path(), filename_ts, &conversation_id);
+    append_rollout_turn_context(&rollout_path, meta_rfc3339, "previous-model")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let resume_id = mcp
+        .send_resume_conversation_request(ResumeConversationParams {
+            path: Some(rollout_path.clone()),
+            conversation_id: None,
+            history: None,
+            overrides: Some(NewConversationParams {
+                model: Some("gpt-5.2-codex".to_string()),
+                ..Default::default()
+            }),
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("sessionConfigured"),
+    )
+    .await??;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ResumeConversationResponse {
+        conversation_id, ..
+    } = to_response::<ResumeConversationResponse>(resume_resp)?;
+
+    let add_listener_id = mcp
+        .send_add_conversation_listener_request(AddConversationListenerParams {
+            conversation_id,
+            experimental_raw_events: false,
+        })
+        .await?;
+    let add_listener_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(add_listener_id)),
+    )
+    .await??;
+    let AddConversationSubscriptionResponse { subscription_id: _ } =
+        to_response::<_>(add_listener_resp)?;
+
+    send_message("hello after resume", conversation_id, &mut mcp).await?;
+    send_message("second turn", conversation_id, &mut mcp).await?;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2, "expected two model requests");
+
+    let first_developer_texts = requests[0].message_input_texts("developer");
+    let first_model_switch_count = first_developer_texts
+        .iter()
+        .filter(|text| text.contains("<model_switch>"))
+        .count();
+    assert!(
+        first_model_switch_count >= 1,
+        "expected model switch message on first post-resume turn, got {first_developer_texts:?}"
+    );
+
+    let second_developer_texts = requests[1].message_input_texts("developer");
+    let second_model_switch_count = second_developer_texts
+        .iter()
+        .filter(|text| text.contains("<model_switch>"))
+        .count();
+    assert_eq!(
+        second_model_switch_count, 1,
+        "did not expect duplicate model switch message on second post-resume turn, got {second_developer_texts:?}"
+    );
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -437,4 +554,29 @@ fn content_texts(content: &[ContentItem]) -> Vec<&str> {
             _ => None,
         })
         .collect()
+}
+
+fn append_rollout_turn_context(path: &Path, timestamp: &str, model: &str) -> std::io::Result<()> {
+    let line = RolloutLine {
+        timestamp: timestamp.to_string(),
+        item: RolloutItem::TurnContext(TurnContextItem {
+            cwd: PathBuf::from("/"),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: model.to_string(),
+            personality: None,
+            collaboration_mode: None,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            user_instructions: None,
+            developer_instructions: None,
+            final_output_json_schema: None,
+            truncation_policy: None,
+        }),
+    };
+    let serialized = serde_json::to_string(&line).map_err(std::io::Error::other)?;
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(path)?
+        .write_all(format!("{serialized}\n").as_bytes())
 }

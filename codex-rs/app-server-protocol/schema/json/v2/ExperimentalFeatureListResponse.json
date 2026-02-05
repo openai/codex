@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ExperimentalFeature": {
+      "properties": {
+        "announcement": {
+          "description": "Announcement copy shown to users when the feature is introduced.",
+          "type": "string"
+        },
+        "defaultEnabled": {
+          "description": "Whether this feature is enabled by default.",
+          "type": "boolean"
+        },
+        "description": {
+          "description": "Short summary describing what the feature does.",
+          "type": "string"
+        },
+        "displayName": {
+          "description": "User-facing display name shown in the experimental features UI.",
+          "type": "string"
+        },
+        "enabled": {
+          "description": "Whether this feature is currently enabled in the loaded config.",
+          "type": "boolean"
+        },
+        "flagName": {
+          "description": "Stable key used in config.toml and CLI flag toggles.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "announcement",
+        "defaultEnabled",
+        "description",
+        "displayName",
+        "enabled",
+        "flagName"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "data": {
+      "items": {
+        "$ref": "#/definitions/ExperimentalFeature"
+      },
+      "type": "array"
+    },
+    "nextCursor": {
+      "description": "Opaque cursor to pass to the next call to continue after the last item. If None, there are no more items to return.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "data"
+  ],
+  "title": "ExperimentalFeatureListResponse",
+  "type": "object"
+}

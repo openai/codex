@@ -1,5 +1,3 @@
-use codex_protocol::models::ContentItem;
-
 /// Helpers for identifying model-visible "session prefix" messages.
 ///
 /// A session prefix is a user-role message that carries configuration or state needed by
@@ -14,13 +12,4 @@ pub(crate) fn is_session_prefix(text: &str) -> bool {
     let trimmed = text.trim_start();
     let lowered = trimmed.to_ascii_lowercase();
     lowered.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG) || lowered.starts_with(TURN_ABORTED_OPEN_TAG)
-}
-
-/// Returns true if `text` starts with a session prefix marker (case-insensitive).
-pub(crate) fn is_session_prefix_content(content: &[ContentItem]) -> bool {
-    if let [ContentItem::InputText { text }] = content {
-        is_session_prefix(text)
-    } else {
-        false
-    }
 }

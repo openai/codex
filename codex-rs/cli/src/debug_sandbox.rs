@@ -227,16 +227,19 @@ async fn run_command_under_sandbox(
             .await?
         }
         SandboxType::Landlock => {
+            use codex_core::features::Feature;
             #[expect(clippy::expect_used)]
             let codex_linux_sandbox_exe = config
                 .codex_linux_sandbox_exe
                 .expect("codex-linux-sandbox executable not found");
+            let use_bwrap_sandbox = config.features.enabled(Feature::UseLinuxSandboxBwrap);
             spawn_command_under_linux_sandbox(
                 codex_linux_sandbox_exe,
                 command,
                 cwd,
                 config.sandbox_policy.get(),
                 sandbox_policy_cwd.as_path(),
+                use_bwrap_sandbox,
                 stdio_policy,
                 env,
             )

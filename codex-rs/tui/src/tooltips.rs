@@ -39,6 +39,10 @@ fn experimental_tooltips() -> Vec<&'static str> {
 pub(crate) fn get_tooltip(plan: Option<PlanType>) -> Option<String> {
     let mut rng = rand::rng();
 
+    if let Some(announcement) = announcement::fetch_announcement_tip() {
+        return Some(announcement);
+    }
+
     // Leave small chance for a random tooltip to be shown.
     if rng.random_ratio(8, 10) {
         match plan {
@@ -54,10 +58,6 @@ pub(crate) fn get_tooltip(plan: Option<PlanType>) -> Option<String> {
             }
             _ => return Some(OTHER_TOOLTIP.to_string()),
         }
-    }
-
-    if let Some(announcement) = announcement::fetch_announcement_tip() {
-        return Some(announcement);
     }
 
     pick_tooltip(&mut rng).map(str::to_string)

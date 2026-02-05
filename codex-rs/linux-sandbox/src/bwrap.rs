@@ -44,45 +44,6 @@ pub(crate) fn create_bwrap_command_args(
     sandbox_policy: &SandboxPolicy,
     cwd: &Path,
     options: BwrapOptions,
-    bwrap_path: Option<&Path>,
-) -> Result<Vec<String>> {
-    if sandbox_policy.has_full_disk_write_access() {
-        return Ok(command);
-    }
-
-    let bwrap_path = match bwrap_path {
-        Some(path) => {
-            if path.exists() {
-                path.to_path_buf()
-            } else {
-                return Err(CodexErr::UnsupportedOperation(format!(
-                    "bubblewrap (bwrap) not found at configured path: {}",
-                    path.display()
-                )));
-            }
-        }
-        None => which::which("bwrap").map_err(|err| {
-            CodexErr::UnsupportedOperation(format!("bubblewrap (bwrap) not found on PATH: {err}"))
-        })?,
-    };
-
-    let mut args = Vec::new();
-    args.push(path_to_string(&bwrap_path));
-    args.extend(create_bwrap_flags(command, sandbox_policy, cwd, options)?);
-    Ok(args)
-}
-
-/// Doc-hidden helper that builds bubblewrap arguments without a program path.
-///
-/// This is intended for experiments where we call a build-time bubblewrap
-/// `main` symbol via FFI rather than exec'ing the `bwrap` binary. The caller
-/// is responsible for providing a suitable `argv[0]`.
-#[doc(hidden)]
-pub(crate) fn create_bwrap_command_args_vendored(
-    command: Vec<String>,
-    sandbox_policy: &SandboxPolicy,
-    cwd: &Path,
-    options: BwrapOptions,
 ) -> Result<Vec<String>> {
     if sandbox_policy.has_full_disk_write_access() {
         return Ok(command);

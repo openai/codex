@@ -128,6 +128,17 @@ pub enum SandboxType {
     WindowsRestrictedToken,
 }
 
+impl SandboxType {
+    pub(crate) fn as_metric_tag(self) -> &'static str {
+        match self {
+            SandboxType::None => "none",
+            SandboxType::MacosSeatbelt => "seatbelt",
+            SandboxType::LinuxSeccomp => "seccomp",
+            SandboxType::WindowsRestrictedToken => "windows_sandbox",
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct StdoutStream {
     pub sub_id: String,
@@ -140,6 +151,7 @@ pub async fn process_exec_tool_call(
     sandbox_policy: &SandboxPolicy,
     sandbox_cwd: &Path,
     codex_linux_sandbox_exe: &Option<PathBuf>,
+    use_linux_sandbox_bwrap: bool,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<ExecToolCallOutput> {
     let windows_sandbox_level = params.windows_sandbox_level;
@@ -184,14 +196,15 @@ pub async fn process_exec_tool_call(
 
     let manager = SandboxManager::new();
     let exec_env = manager
-        .transform(
+        .transform(crate::sandboxing::SandboxTransformRequest {
             spec,
-            sandbox_policy,
-            sandbox_type,
-            sandbox_cwd,
-            codex_linux_sandbox_exe.as_ref(),
+            policy: sandbox_policy,
+            sandbox: sandbox_type,
+            sandbox_policy_cwd: sandbox_cwd,
+            codex_linux_sandbox_exe: codex_linux_sandbox_exe.as_ref(),
+            use_linux_sandbox_bwrap,
             windows_sandbox_level,
-        )
+        })
         .map_err(CodexErr::from)?;
 
     // Route through the sandboxing module for a single, unified execution path.
@@ -1108,6 +1121,7 @@ mod tests {
             &SandboxPolicy::DangerFullAccess,
             cwd.as_path(),
             &None,
+            false,
             None,
         )
         .await;

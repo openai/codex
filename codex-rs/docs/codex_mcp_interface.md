@@ -73,6 +73,8 @@ Send input to the active turn:
 - `sendUserMessage` → enqueue items to the conversation
 - `sendUserTurn` → structured turn with explicit `cwd`, `approvalPolicy`, `sandboxPolicy`, `model`, optional `effort`, `summary`, optional `personality`, and optional `outputSchema` (JSON Schema for the final assistant message)
 
+Valid `personality` values are `friendly`, `pragmatic`, and `none`. When `none` is selected, the personality placeholder is replaced with an empty string.
+
 For v2 threads, `turn/start` also accepts `outputSchema` to constrain the final assistant message for that turn.
 
 Interrupt a running turn: `interruptConversation`.

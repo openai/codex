@@ -72,6 +72,9 @@ For complete documentation of the `Op` and `EventMsg` variants, refer to [protoc
   - `Op::UserInputAnswer` – Provide answers for a `request_user_input` tool call
   - `Op::ListSkills` – Request skills for one or more cwd values (optionally `force_reload`)
   - `Op::UserTurn` and `Op::OverrideTurnContext` accept an optional `personality` override that updates the model’s communication style
+
+Valid `personality` values are `friendly`, `pragmatic`, and `none`. When `none` is selected, the personality placeholder is replaced with an empty string.
+
 - `EventMsg`
   - `EventMsg::AgentMessage` – Messages from the `Model`
   - `EventMsg::AgentMessageContentDelta` – Streaming assistant text

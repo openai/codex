@@ -8,6 +8,7 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use codex_protocol::models::ResponseInputItem;
 
 pub struct McpHandler;
 
@@ -53,20 +54,11 @@ impl ToolHandler for McpHandler {
         .await;
 
         match response {
-            codex_protocol::models::ResponseInputItem::McpToolCallOutput { result, .. } => {
-                Ok(ToolOutput::Mcp { result })
-            }
-            codex_protocol::models::ResponseInputItem::FunctionCallOutput { output, .. } => {
-                let codex_protocol::models::FunctionCallOutputPayload {
-                    content,
-                    content_items,
-                    success,
-                } = output;
-                Ok(ToolOutput::Function {
-                    content,
-                    content_items,
-                    success,
-                })
+            ResponseInputItem::McpToolCallOutput { result, .. } => Ok(ToolOutput::Mcp { result }),
+            ResponseInputItem::FunctionCallOutput { output, .. } => {
+                let success = output.success;
+                let body = output.body;
+                Ok(ToolOutput::Function { body, success })
             }
             _ => Err(FunctionCallError::RespondToModel(
                 "mcp handler received unexpected response variant".to_string(),

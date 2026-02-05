@@ -51,6 +51,19 @@ pub struct ExecEnv {
     pub arg0: Option<String>,
 }
 
+/// Bundled arguments for sandbox transformation.
+///
+/// This keeps call sites self-documenting when several fields are optional.
+pub(crate) struct SandboxTransformRequest<'a> {
+    pub spec: CommandSpec,
+    pub policy: &'a SandboxPolicy,
+    pub sandbox: SandboxType,
+    pub sandbox_policy_cwd: &'a Path,
+    pub codex_linux_sandbox_exe: Option<&'a PathBuf>,
+    pub use_linux_sandbox_bwrap: bool,
+    pub windows_sandbox_level: WindowsSandboxLevel,
+}
+
 pub enum SandboxPreference {
     Auto,
     Require,
@@ -104,13 +117,17 @@ impl SandboxManager {
 
     pub(crate) fn transform(
         &self,
-        mut spec: CommandSpec,
-        policy: &SandboxPolicy,
-        sandbox: SandboxType,
-        sandbox_policy_cwd: &Path,
-        codex_linux_sandbox_exe: Option<&PathBuf>,
-        windows_sandbox_level: WindowsSandboxLevel,
+        request: SandboxTransformRequest<'_>,
     ) -> Result<ExecEnv, SandboxTransformError> {
+        let SandboxTransformRequest {
+            mut spec,
+            policy,
+            sandbox,
+            sandbox_policy_cwd,
+            codex_linux_sandbox_exe,
+            use_linux_sandbox_bwrap,
+            windows_sandbox_level,
+        } = request;
         let mut env = spec.env;
         if !policy.has_full_network_access() {
             env.insert(
@@ -141,8 +158,12 @@ impl SandboxManager {
             SandboxType::LinuxSeccomp => {
                 let exe = codex_linux_sandbox_exe
                     .ok_or(SandboxTransformError::MissingLinuxSandboxExecutable)?;
-                let mut args =
-                    create_linux_sandbox_command_args(command.clone(), policy, sandbox_policy_cwd);
+                let mut args = create_linux_sandbox_command_args(
+                    command.clone(),
+                    policy,
+                    sandbox_policy_cwd,
+                    use_linux_sandbox_bwrap,
+                );
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(exe.to_string_lossy().to_string());
                 full_command.append(&mut args);

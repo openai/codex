@@ -149,6 +149,8 @@ async fn shell_tools_run_in_parallel() -> anyhow::Result<()> {
 
     let shell_args = json!({
         "command": "sleep 0.3",
+        // Avoid user-specific shell startup cost (e.g. zsh profile scripts) in timing assertions.
+        "login": false,
         "timeout_ms": 1_000,
     });
     let args_one = serde_json::to_string(&shell_args)?;

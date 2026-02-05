@@ -403,7 +403,7 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: thread.id.clone(),
             model: Some("gpt-5.2-codex".to_string()),
-            personality: Some(Personality::Pragmatic),
+            personality: Some(Personality::Friendly),
             ..Default::default()
         })
         .await?;

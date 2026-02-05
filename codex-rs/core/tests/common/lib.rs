@@ -1,7 +1,6 @@
 #![expect(clippy::expect_used)]
 
 use codex_utils_cargo_bin::CargoBinError;
-use codex_utils_cargo_bin::find_resource;
 use tempfile::TempDir;
 
 use codex_core::CodexThread;
@@ -128,40 +127,6 @@ pub fn load_sse_fixture(path: impl AsRef<std::path::Path>) -> String {
 }
 
 pub fn load_sse_fixture_with_id_from_str(raw: &str, id: &str) -> String {
-    let replaced = raw.replace("__ID__", id);
-    let events: Vec<serde_json::Value> =
-        serde_json::from_str(&replaced).expect("parse JSON fixture");
-    events
-        .into_iter()
-        .map(|e| {
-            let kind = e
-                .get("type")
-                .and_then(|v| v.as_str())
-                .expect("fixture event missing type");
-            if e.as_object().map(|o| o.len() == 1).unwrap_or(false) {
-                format!("event: {kind}\n\n")
-            } else {
-                format!("event: {kind}\ndata: {e}\n\n")
-            }
-        })
-        .collect()
-}
-
-/// Same as [`load_sse_fixture`], but replaces the placeholder `__ID__` in the
-/// fixture template with the supplied identifier before parsing. This lets a
-/// single JSON template be reused by multiple tests that each need a unique
-/// `response_id`.
-pub fn load_sse_fixture_with_id(path: impl AsRef<std::path::Path>, id: &str) -> String {
-    let p = path.as_ref();
-    let full_path = match find_resource!(p) {
-        Ok(p) => p,
-        Err(err) => panic!(
-            "failed to find fixture template at {:?}: {err}",
-            path.as_ref()
-        ),
-    };
-
-    let raw = std::fs::read_to_string(full_path).expect("read fixture template");
     let replaced = raw.replace("__ID__", id);
     let events: Vec<serde_json::Value> =
         serde_json::from_str(&replaced).expect("parse JSON fixture");

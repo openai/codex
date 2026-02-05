@@ -2,15 +2,11 @@ use codex_core::models_manager::manager::ModelsManager;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
 
-fn is_tui_mode(kind: ModeKind) -> bool {
-    matches!(kind, ModeKind::Plan | ModeKind::Default)
-}
-
 fn filtered_presets(models_manager: &ModelsManager) -> Vec<CollaborationModeMask> {
     models_manager
         .list_collaboration_modes()
         .into_iter()
-        .filter(|mask| mask.mode.is_some_and(is_tui_mode))
+        .filter(|mask| mask.mode.is_some_and(ModeKind::is_tui_visible))
         .collect()
 }
 
@@ -31,7 +27,7 @@ pub(crate) fn mask_for_kind(
     models_manager: &ModelsManager,
     kind: ModeKind,
 ) -> Option<CollaborationModeMask> {
-    if !is_tui_mode(kind) {
+    if !kind.is_tui_visible() {
         return None;
     }
     filtered_presets(models_manager)

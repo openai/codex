@@ -115,14 +115,14 @@ export class CodexExec {
       commandArgs.push("--config", `approval_policy="${args.approvalPolicy}"`);
     }
 
+    if (args.threadId) {
+      commandArgs.push("resume", args.threadId);
+    }
+
     if (args.images?.length) {
       for (const image of args.images) {
         commandArgs.push("--image", image);
       }
-    }
-
-    if (args.threadId) {
-      commandArgs.push("resume", args.threadId);
     }
 
     const env: Record<string, string> = {};

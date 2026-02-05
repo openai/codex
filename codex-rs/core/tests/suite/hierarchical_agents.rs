@@ -1,20 +1,22 @@
 use codex_core::features::Feature;
-use core_test_support::load_sse_fixture_with_id;
+use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
 
 const HIERARCHICAL_AGENTS_SNIPPET: &str =
     "Files called AGENTS.md commonly appear in many places inside a container";
 
-fn sse_completed(id: &str) -> String {
-    load_sse_fixture_with_id("../fixtures/completed_template.json", id)
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hierarchical_agents_appends_to_project_doc_in_user_instructions() {
     let server = start_mock_server().await;
-    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
 
     let mut builder = test_codex().with_config(|config| {
         config.features.enable(Feature::ChildAgentsMd);
@@ -49,7 +51,11 @@ async fn hierarchical_agents_appends_to_project_doc_in_user_instructions() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hierarchical_agents_emits_when_no_project_doc() {
     let server = start_mock_server().await;
-    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
 
     let mut builder = test_codex().with_config(|config| {
         config.features.enable(Feature::ChildAgentsMd);

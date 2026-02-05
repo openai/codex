@@ -1,3 +1,4 @@
+use codex_protocol::models::FunctionCallOutputBody;
 use std::path::Path;
 use std::time::Duration;
 
@@ -86,14 +87,12 @@ impl ToolHandler for GrepFilesHandler {
 
         if search_results.is_empty() {
             Ok(ToolOutput::Function {
-                content: "No matches found.".to_string(),
-                content_items: None,
+                body: FunctionCallOutputBody::Text("No matches found.".to_string()),
                 success: Some(false),
             })
         } else {
             Ok(ToolOutput::Function {
-                content: search_results.join("\n"),
-                content_items: None,
+                body: FunctionCallOutputBody::Text(search_results.join("\n")),
                 success: Some(true),
             })
         }

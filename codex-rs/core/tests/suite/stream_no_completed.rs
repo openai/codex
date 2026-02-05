@@ -7,7 +7,9 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_sse_fixture;
-use core_test_support::load_sse_fixture_with_id;
+use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_response_created;
+use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
@@ -22,10 +24,6 @@ use wiremock::matchers::path;
 
 fn sse_incomplete() -> String {
     load_sse_fixture("tests/fixtures/incomplete_sse.json")
-}
-
-fn sse_completed(id: &str) -> String {
-    load_sse_fixture_with_id("../fixtures/completed_template.json", id)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -48,7 +46,13 @@ async fn retries_on_early_close() {
             } else {
                 ResponseTemplate::new(200)
                     .insert_header("content-type", "text/event-stream")
-                    .set_body_raw(sse_completed("resp_ok"), "text/event-stream")
+                    .set_body_raw(
+                        sse(vec![
+                            ev_response_created("resp_ok"),
+                            ev_completed("resp_ok"),
+                        ]),
+                        "text/event-stream",
+                    )
             }
         }
     }
@@ -67,7 +71,7 @@ async fn retries_on_early_close() {
         name: "openai".into(),
         base_url: Some(format!("{}/v1", server.uri())),
         // Environment variable that should exist in the test environment.
-        // ModelClientSession will return an error if the environment variable for the
+        // ModelClient will return an error if the environment variable for the
         // provider is not set.
         env_key: Some("PATH".into()),
         env_key_instructions: None,

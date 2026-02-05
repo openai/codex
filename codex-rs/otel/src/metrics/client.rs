@@ -9,6 +9,7 @@ use crate::metrics::validation::validate_metric_name;
 use crate::metrics::validation::validate_tag_key;
 use crate::metrics::validation::validate_tag_value;
 use crate::metrics::validation::validate_tags;
+use codex_utils_string::sanitize_metric_tag_value;
 use opentelemetry::KeyValue;
 use opentelemetry::metrics::Counter;
 use opentelemetry::metrics::Histogram;
@@ -197,12 +198,17 @@ impl MetricsClient {
 
         validate_tags(&default_tags)?;
 
+        let mut resource_attributes = Vec::with_capacity(4);
+        resource_attributes.push(KeyValue::new(
+            semconv::attribute::SERVICE_VERSION,
+            service_version,
+        ));
+        resource_attributes.push(KeyValue::new(ENV_ATTRIBUTE, environment));
+        resource_attributes.extend(os_resource_attributes());
+
         let resource = Resource::builder()
             .with_service_name(service_name)
-            .with_attributes(vec![
-                KeyValue::new(semconv::attribute::SERVICE_VERSION, service_version),
-                KeyValue::new(ENV_ATTRIBUTE, environment),
-            ])
+            .with_attributes(resource_attributes)
             .build();
 
         let runtime_reader = runtime_reader.then(|| {
@@ -282,6 +288,22 @@ impl MetricsClient {
     pub fn shutdown(&self) -> Result<()> {
         self.0.shutdown()
     }
+}
+
+fn os_resource_attributes() -> Vec<KeyValue> {
+    let os_info = os_info::get();
+    let os_type_raw = os_info.os_type().to_string();
+    let os_type = sanitize_metric_tag_value(os_type_raw.as_str());
+    let os_version_raw = os_info.version().to_string();
+    let os_version = sanitize_metric_tag_value(os_version_raw.as_str());
+    let mut attributes = Vec::new();
+    if os_type != "unspecified" {
+        attributes.push(KeyValue::new("os", os_type));
+    }
+    if os_version != "unspecified" {
+        attributes.push(KeyValue::new("os_version", os_version));
+    }
+    attributes
 }
 
 fn build_provider<E>(

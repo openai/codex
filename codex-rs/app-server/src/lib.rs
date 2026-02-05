@@ -8,14 +8,24 @@ use codex_core::config::ConfigBuilder;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::config_loader::LoaderOverrides;
+use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::message_processor::MessageProcessor;
 use crate::message_processor::MessageProcessorArgs;
-use crate::outgoing_message::OutgoingMessage;
+use crate::outgoing_message::ConnectionId;
+use crate::outgoing_message::OutgoingEnvelope;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::transport::CHANNEL_CAPACITY;
+use crate::transport::ConnectionState;
+use crate::transport::TransportEvent;
+use crate::transport::has_initialized_connections;
+use crate::transport::route_outgoing_envelope;
+use crate::transport::start_stdio_connection;
+use crate::transport::start_websocket_acceptor;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
@@ -26,13 +36,9 @@ use codex_core::check_execpolicy_for_warnings;
 use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::TextRange as CoreTextRange;
 use codex_feedback::CodexFeedback;
-use tokio::io::AsyncBufReadExt;
-use tokio::io::AsyncWriteExt;
-use tokio::io::BufReader;
-use tokio::io::{self};
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 use toml::Value as TomlValue;
-use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -51,11 +57,9 @@ mod fuzzy_file_search;
 mod message_processor;
 mod models;
 mod outgoing_message;
+mod transport;
 
-/// Size of the bounded channels used to communicate between tasks. The value
-/// is a balance between throughput and memory usage – 128 messages should be
-/// plenty for an interactive CLI.
-const CHANNEL_CAPACITY: usize = 128;
+pub use crate::transport::AppServerTransport;
 
 fn config_warning_from_error(
     summary: impl Into<String>,
@@ -173,32 +177,39 @@ pub async fn run_main(
     loader_overrides: LoaderOverrides,
     default_analytics_enabled: bool,
 ) -> IoResult<()> {
-    // Set up channels.
-    let (incoming_tx, mut incoming_rx) = mpsc::channel::<JSONRPCMessage>(CHANNEL_CAPACITY);
-    let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingMessage>(CHANNEL_CAPACITY);
+    run_main_with_transport(
+        codex_linux_sandbox_exe,
+        cli_config_overrides,
+        loader_overrides,
+        default_analytics_enabled,
+        AppServerTransport::Stdio,
+    )
+    .await
+}
 
-    // Task: read from stdin, push to `incoming_tx`.
-    let stdin_reader_handle = tokio::spawn({
-        async move {
-            let stdin = io::stdin();
-            let reader = BufReader::new(stdin);
-            let mut lines = reader.lines();
+pub async fn run_main_with_transport(
+    codex_linux_sandbox_exe: Option<PathBuf>,
+    cli_config_overrides: CliConfigOverrides,
+    loader_overrides: LoaderOverrides,
+    default_analytics_enabled: bool,
+    transport: AppServerTransport,
+) -> IoResult<()> {
+    let (transport_event_tx, mut transport_event_rx) =
+        mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
+    let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingEnvelope>(CHANNEL_CAPACITY);
 
-            while let Some(line) = lines.next_line().await.unwrap_or_default() {
-                match serde_json::from_str::<JSONRPCMessage>(&line) {
-                    Ok(msg) => {
-                        if incoming_tx.send(msg).await.is_err() {
-                            // Receiver gone – nothing left to do.
-                            break;
-                        }
-                    }
-                    Err(e) => error!("Failed to deserialize JSONRPCMessage: {e}"),
-                }
-            }
-
-            debug!("stdin reader finished (EOF)");
+    let mut stdio_handles = Vec::<JoinHandle<()>>::new();
+    let mut websocket_accept_handle = None;
+    match transport {
+        AppServerTransport::Stdio => {
+            start_stdio_connection(transport_event_tx.clone(), &mut stdio_handles).await?;
         }
-    });
+        AppServerTransport::WebSocket { bind_address } => {
+            websocket_accept_handle =
+                Some(start_websocket_acceptor(bind_address, transport_event_tx.clone()).await?);
+        }
+    }
+    let shutdown_when_no_connections = matches!(transport, AppServerTransport::Stdio);
 
     // Parse CLI overrides once and derive the base Config eagerly so later
     // components do not need to work with raw TOML values.
@@ -327,15 +338,14 @@ pub async fn run_main(
         }
     }
 
-    // Task: process incoming messages.
     let processor_handle = tokio::spawn({
-        let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
+        let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(outgoing_tx));
         let cli_overrides: Vec<(String, TomlValue)> = cli_kv_overrides.clone();
         let loader_overrides = loader_overrides_for_config_api;
         let mut processor = MessageProcessor::new(MessageProcessorArgs {
             outgoing: outgoing_message_sender,
             codex_linux_sandbox_exe,
-            config: std::sync::Arc::new(config),
+            config: Arc::new(config),
             cli_overrides,
             loader_overrides,
             cloud_requirements: cloud_requirements.clone(),
@@ -343,25 +353,65 @@ pub async fn run_main(
             config_warnings,
         });
         let mut thread_created_rx = processor.thread_created_receiver();
+        let mut connections = HashMap::<ConnectionId, ConnectionState>::new();
         async move {
             let mut listen_for_threads = true;
             loop {
                 tokio::select! {
-                    msg = incoming_rx.recv() => {
-                        let Some(msg) = msg else {
+                    event = transport_event_rx.recv() => {
+                        let Some(event) = event else {
                             break;
                         };
-                        match msg {
-                            JSONRPCMessage::Request(r) => processor.process_request(r).await,
-                            JSONRPCMessage::Response(r) => processor.process_response(r).await,
-                            JSONRPCMessage::Notification(n) => processor.process_notification(n).await,
-                            JSONRPCMessage::Error(e) => processor.process_error(e).await,
+                        match event {
+                            TransportEvent::ConnectionOpened { connection_id, writer } => {
+                                connections.insert(connection_id, ConnectionState::new(writer));
+                            }
+                            TransportEvent::ConnectionClosed { connection_id } => {
+                                connections.remove(&connection_id);
+                                if shutdown_when_no_connections && connections.is_empty() {
+                                    break;
+                                }
+                            }
+                            TransportEvent::IncomingMessage { connection_id, message } => {
+                                match message {
+                                    JSONRPCMessage::Request(request) => {
+                                        let Some(connection_state) = connections.get_mut(&connection_id) else {
+                                            warn!("dropping request from unknown connection: {:?}", connection_id);
+                                            continue;
+                                        };
+                                        processor
+                                            .process_request(
+                                                connection_id,
+                                                request,
+                                                &mut connection_state.session,
+                                            )
+                                            .await;
+                                    }
+                                    JSONRPCMessage::Response(response) => {
+                                        processor.process_response(response).await;
+                                    }
+                                    JSONRPCMessage::Notification(notification) => {
+                                        processor.process_notification(notification).await;
+                                    }
+                                    JSONRPCMessage::Error(err) => {
+                                        processor.process_error(err).await;
+                                    }
+                                }
+                            }
                         }
+                    }
+                    envelope = outgoing_rx.recv() => {
+                        let Some(envelope) = envelope else {
+                            break;
+                        };
+                        route_outgoing_envelope(&mut connections, envelope).await;
                     }
                     created = thread_created_rx.recv(), if listen_for_threads => {
                         match created {
                             Ok(thread_id) => {
-                                processor.try_attach_thread_listener(thread_id).await;
+                                if has_initialized_connections(&connections) {
+                                    processor.try_attach_thread_listener(thread_id).await;
+                                }
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                                 // TODO(jif) handle lag.
@@ -382,33 +432,17 @@ pub async fn run_main(
         }
     });
 
-    // Task: write outgoing messages to stdout.
-    let stdout_writer_handle = tokio::spawn(async move {
-        let mut stdout = io::stdout();
-        while let Some(outgoing_message) = outgoing_rx.recv().await {
-            let Ok(value) = serde_json::to_value(outgoing_message) else {
-                error!("Failed to convert OutgoingMessage to JSON value");
-                continue;
-            };
-            match serde_json::to_string(&value) {
-                Ok(mut json) => {
-                    json.push('\n');
-                    if let Err(e) = stdout.write_all(json.as_bytes()).await {
-                        error!("Failed to write to stdout: {e}");
-                        break;
-                    }
-                }
-                Err(e) => error!("Failed to serialize JSONRPCMessage: {e}"),
-            }
-        }
+    drop(transport_event_tx);
 
-        info!("stdout writer exited (channel closed)");
-    });
+    let _ = processor_handle.await;
 
-    // Wait for all tasks to finish.  The typical exit path is the stdin reader
-    // hitting EOF which, once it drops `incoming_tx`, propagates shutdown to
-    // the processor and then to the stdout task.
-    let _ = tokio::join!(stdin_reader_handle, processor_handle, stdout_writer_handle);
+    if let Some(handle) = websocket_accept_handle {
+        handle.abort();
+    }
+
+    for handle in stdio_handles {
+        let _ = handle.await;
+    }
 
     Ok(())
 }

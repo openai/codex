@@ -18,6 +18,7 @@ use crate::unified_exec::UnifiedExecProcessManager;
 use crate::unified_exec::UnifiedExecResponse;
 use crate::unified_exec::WriteStdinRequest;
 use async_trait::async_trait;
+use codex_protocol::models::FunctionCallOutputBody;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -238,8 +239,7 @@ impl ToolHandler for UnifiedExecHandler {
         let content = format_response(&response);
 
         Ok(ToolOutput::Function {
-            content,
-            content_items: None,
+            body: FunctionCallOutputBody::Text(content),
             success: Some(true),
         })
     }

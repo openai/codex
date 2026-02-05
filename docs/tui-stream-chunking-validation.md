@@ -32,6 +32,8 @@ RUST_LOG='codex_tui::streaming::commit_tick=trace,codex_tui=info,codex_core=info
 
 ## Log capture process
 
+Tip: for one-off measurements, run with `-c log_dir=...` to direct logs to a fresh directory and avoid mixing sessions.
+
 1. Record the current size of `~/.codex/log/codex-tui.log` as a start offset.
 2. Run an interactive prompt that produces sustained streamed output.
 3. Stop the run.

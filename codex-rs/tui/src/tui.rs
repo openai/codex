@@ -214,6 +214,8 @@ pub fn init() -> Result<Terminal> {
     }
     set_modes()?;
 
+    flush_terminal_input_buffer();
+
     set_panic_hook();
 
     let backend = CrosstermBackend::new(stdout());

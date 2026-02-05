@@ -67,4 +67,30 @@ describe("CodexExec", () => {
       expect(result.error.message).toMatch(/Codex Exec exited/);
     }
   });
+
+  it("places resume args before image args", async () => {
+    const { CodexExec } = await import("../src/exec");
+    spawnMock.mockClear();
+    const child = new FakeChildProcess();
+    spawnMock.mockReturnValue(child as unknown as child_process.ChildProcess);
+
+    setImmediate(() => {
+      child.stdout.end();
+      child.stderr.end();
+      child.emit("exit", 0, null);
+    });
+
+    const exec = new CodexExec("codex");
+    for await (const _ of exec.run({ input: "hi", images: ["img.png"], threadId: "thread-id" })) {
+      // no-op
+    }
+
+    const commandArgs = spawnMock.mock.calls[0]?.[1] as string[] | undefined;
+    expect(commandArgs).toBeDefined();
+    const resumeIndex = commandArgs!.indexOf("resume");
+    const imageIndex = commandArgs!.indexOf("--image");
+    expect(resumeIndex).toBeGreaterThan(-1);
+    expect(imageIndex).toBeGreaterThan(-1);
+    expect(resumeIndex).toBeLessThan(imageIndex);
+  });
 });

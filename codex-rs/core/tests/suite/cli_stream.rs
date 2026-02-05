@@ -85,13 +85,8 @@ async fn responses_mode_stream_cli() {
         !page.items.is_empty(),
         "expected at least one session to be listed"
     );
-    // First line of head must be the SessionMeta payload (id/timestamp)
-    let head0 = page.items[0].head.first().expect("missing head record");
-    assert!(head0.get("id").is_some(), "head[0] missing id");
-    assert!(
-        head0.get("timestamp").is_some(),
-        "head[0] missing timestamp"
-    );
+    assert!(page.items[0].thread_id.is_some(), "missing thread_id");
+    assert!(page.items[0].created_at.is_some(), "missing created_at");
 }
 
 /// Verify that passing `-c model_instructions_file=...` to the CLI

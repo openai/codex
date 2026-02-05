@@ -5,8 +5,11 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
+use codex_protocol::protocol::UserMessageEvent;
 use serde::Serialize;
 use serde_json::Value;
+
+const IMAGE_ONLY_USER_MESSAGE_PLACEHOLDER: &str = "[Image]";
 
 /// Apply a rollout item to the metadata structure.
 pub fn apply_rollout_item(
@@ -37,6 +40,9 @@ fn apply_session_meta_from_item(metadata: &mut ThreadMetadata, meta_line: &Sessi
     if let Some(provider) = meta_line.meta.model_provider.as_deref() {
         metadata.model_provider = provider.to_string();
     }
+    if !meta_line.meta.cli_version.is_empty() {
+        metadata.cli_version = meta_line.meta.cli_version.clone();
+    }
     if !meta_line.meta.cwd.as_os_str().is_empty() {
         metadata.cwd = meta_line.meta.cwd.clone();
     }
@@ -61,9 +67,14 @@ fn apply_event_msg(metadata: &mut ThreadMetadata, event: &EventMsg) {
             }
         }
         EventMsg::UserMessage(user) => {
-            metadata.has_user_event = true;
+            if metadata.first_user_message.is_none() {
+                metadata.first_user_message = user_message_preview(user);
+            }
             if metadata.title.is_empty() {
-                metadata.title = strip_user_message_prefix(user.message.as_str()).to_string();
+                let title = strip_user_message_prefix(user.message.as_str());
+                if !title.is_empty() {
+                    metadata.title = title.to_string();
+                }
             }
         }
         _ => {}
@@ -71,7 +82,7 @@ fn apply_event_msg(metadata: &mut ThreadMetadata, event: &EventMsg) {
 }
 
 fn apply_response_item(_metadata: &mut ThreadMetadata, _item: &ResponseItem) {
-    // Title and has_user_event are derived from EventMsg::UserMessage only.
+    // Title and first_user_message are derived from EventMsg::UserMessage only.
 }
 
 fn strip_user_message_prefix(text: &str) -> &str {
@@ -79,6 +90,22 @@ fn strip_user_message_prefix(text: &str) -> &str {
         Some(idx) => text[idx + USER_MESSAGE_BEGIN.len()..].trim(),
         None => text.trim(),
     }
+}
+
+fn user_message_preview(user: &UserMessageEvent) -> Option<String> {
+    let message = strip_user_message_prefix(user.message.as_str());
+    if !message.is_empty() {
+        return Some(message.to_string());
+    }
+    if user
+        .images
+        .as_ref()
+        .is_some_and(|images| !images.is_empty())
+        || !user.local_images.is_empty()
+    {
+        return Some(IMAGE_ONLY_USER_MESSAGE_PLACEHOLDER.to_string());
+    }
+    None
 }
 
 pub(crate) fn enum_to_string<T: Serialize>(value: &T) -> String {
@@ -108,7 +135,7 @@ mod tests {
     use uuid::Uuid;
 
     #[test]
-    fn response_item_user_messages_do_not_set_title_or_has_user_event() {
+    fn response_item_user_messages_do_not_set_title_or_first_user_message() {
         let mut metadata = metadata_for_test();
         let item = RolloutItem::ResponseItem(ResponseItem::Message {
             id: None,
@@ -122,12 +149,12 @@ mod tests {
 
         apply_rollout_item(&mut metadata, &item, "test-provider");
 
-        assert_eq!(metadata.has_user_event, false);
+        assert_eq!(metadata.first_user_message, None);
         assert_eq!(metadata.title, "");
     }
 
     #[test]
-    fn event_msg_user_messages_set_title_and_has_user_event() {
+    fn event_msg_user_messages_set_title_and_first_user_message() {
         let mut metadata = metadata_for_test();
         let item = RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
             message: format!("{USER_MESSAGE_BEGIN} actual user request"),
@@ -138,8 +165,46 @@ mod tests {
 
         apply_rollout_item(&mut metadata, &item, "test-provider");
 
-        assert_eq!(metadata.has_user_event, true);
+        assert_eq!(
+            metadata.first_user_message.as_deref(),
+            Some("actual user request")
+        );
         assert_eq!(metadata.title, "actual user request");
+    }
+
+    #[test]
+    fn event_msg_image_only_user_message_sets_image_placeholder_preview() {
+        let mut metadata = metadata_for_test();
+        let item = RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: String::new(),
+            images: Some(vec!["https://example.com/image.png".to_string()]),
+            local_images: vec![],
+            text_elements: vec![],
+        }));
+
+        apply_rollout_item(&mut metadata, &item, "test-provider");
+
+        assert_eq!(
+            metadata.first_user_message.as_deref(),
+            Some(super::IMAGE_ONLY_USER_MESSAGE_PLACEHOLDER)
+        );
+        assert_eq!(metadata.title, "");
+    }
+
+    #[test]
+    fn event_msg_blank_user_message_without_images_keeps_first_user_message_empty() {
+        let mut metadata = metadata_for_test();
+        let item = RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: "   ".to_string(),
+            images: Some(vec![]),
+            local_images: vec![],
+            text_elements: vec![],
+        }));
+
+        apply_rollout_item(&mut metadata, &item, "test-provider");
+
+        assert_eq!(metadata.first_user_message, None);
+        assert_eq!(metadata.title, "");
     }
 
     fn metadata_for_test() -> ThreadMetadata {
@@ -153,11 +218,12 @@ mod tests {
             source: "cli".to_string(),
             model_provider: "openai".to_string(),
             cwd: PathBuf::from("/tmp"),
+            cli_version: "0.0.0".to_string(),
             title: String::new(),
             sandbox_policy: "read-only".to_string(),
             approval_mode: "on-request".to_string(),
             tokens_used: 1,
-            has_user_event: false,
+            first_user_message: None,
             archived_at: None,
             git_sha: None,
             git_branch: None,

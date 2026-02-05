@@ -57,6 +57,30 @@ async fn make_config_for_test(
 }
 
 #[tokio::test]
+async fn cli_overrides_resolve_relative_paths_against_cwd() -> std::io::Result<()> {
+    let codex_home = tempdir().expect("tempdir");
+    let cwd_dir = tempdir().expect("tempdir");
+    let cwd_path = cwd_dir.path().to_path_buf();
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .cli_overrides(vec![(
+            "log_dir".to_string(),
+            TomlValue::String("run-logs".to_string()),
+        )])
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(cwd_path.clone()),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+
+    let expected = AbsolutePathBuf::resolve_path_against_base("run-logs", cwd_path)?;
+    assert_eq!(config.log_dir, expected.to_path_buf());
+    Ok(())
+}
+
+#[tokio::test]
 async fn returns_config_error_for_invalid_user_config_toml() {
     let tmp = tempdir().expect("tempdir");
     let contents = "model = \"gpt-4\"\ninvalid = [";
@@ -484,6 +508,59 @@ enforce_residency = "us"
         config_requirements.enforce_residency.value(),
         Some(crate::config_loader::ResidencyRequirement::Us)
     );
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn cloud_requirements_take_precedence_over_mdm_requirements() -> anyhow::Result<()> {
+    use base64::Engine;
+
+    let tmp = tempdir()?;
+    let state = load_config_layers_state(
+        tmp.path(),
+        Some(AbsolutePathBuf::try_from(tmp.path())?),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides {
+            macos_managed_config_requirements_base64: Some(
+                base64::prelude::BASE64_STANDARD.encode(
+                    r#"
+allowed_approval_policies = ["on-request"]
+"#
+                    .as_bytes(),
+                ),
+            ),
+            ..LoaderOverrides::default()
+        },
+        CloudRequirementsLoader::new(async {
+            Some(ConfigRequirementsToml {
+                allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_sandbox_modes: None,
+                mcp_servers: None,
+                rules: None,
+                enforce_residency: None,
+            })
+        }),
+    )
+    .await?;
+
+    assert_eq!(
+        state.requirements().approval_policy.value(),
+        AskForApproval::Never
+    );
+    assert_eq!(
+        state
+            .requirements()
+            .approval_policy
+            .can_set(&AskForApproval::OnRequest),
+        Err(ConstraintError::InvalidValue {
+            field_name: "approval_policy",
+            candidate: "OnRequest".into(),
+            allowed: "[Never]".into(),
+            requirement_source: RequirementSource::CloudRequirements,
+        })
+    );
+
     Ok(())
 }
 

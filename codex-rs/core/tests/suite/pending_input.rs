@@ -125,6 +125,11 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
 
     let _ = gate_completed_tx.send(());
 
+    let _ = wait_for_event(&codex, |event| {
+        matches!(event, EventMsg::UserMessage(message) if message.message == "second prompt")
+    })
+    .await;
+
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let requests = server.requests().await;

@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use codex_protocol::models::FunctionCallOutputBody;
 use serde::Deserialize;
 use tokio::fs;
 
@@ -92,8 +93,7 @@ impl ToolHandler for ViewImageHandler {
             .await;
 
         Ok(ToolOutput::Function {
-            content: "attached local image path".to_string(),
-            content_items: None,
+            body: FunctionCallOutputBody::Text("attached local image path".to_string()),
             success: Some(true),
         })
     }
