@@ -35,13 +35,14 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
 
     manager.reset_runtime_metrics();
 
-    manager.tool_result(
+    manager.tool_result_with_tags(
         "shell",
         "call-1",
         "{\"cmd\":\"echo\"}",
         Duration::from_millis(250),
         true,
         "ok",
+        &[],
     );
     manager.record_api_request(1, Some(200), None, Duration::from_millis(300));
     manager.record_websocket_request(Duration::from_millis(400), None);

@@ -566,11 +566,12 @@ impl OtelManager {
         );
     }
 
-    pub async fn log_tool_result<F, Fut, E>(
+    pub async fn log_tool_result_with_tags<F, Fut, E>(
         &self,
         tool_name: &str,
         call_id: &str,
         arguments: &str,
+        extra_tags: &[(&str, &str)],
         f: F,
     ) -> Result<(String, bool), E>
     where
@@ -587,13 +588,14 @@ impl OtelManager {
             Err(error) => (Cow::Owned(error.to_string()), false),
         };
 
-        self.tool_result(
+        self.tool_result_with_tags(
             tool_name,
             call_id,
             arguments,
             duration,
             success,
             output.as_ref(),
+            extra_tags,
         );
 
         result
@@ -619,7 +621,7 @@ impl OtelManager {
         );
     }
 
-    pub fn tool_result(
+    pub fn tool_result_with_tags(
         &self,
         tool_name: &str,
         call_id: &str,
@@ -627,18 +629,19 @@ impl OtelManager {
         duration: Duration,
         success: bool,
         output: &str,
+        extra_tags: &[(&str, &str)],
     ) {
         let success_str = if success { "true" } else { "false" };
+        let mut tags = Vec::with_capacity(2 + extra_tags.len());
+        tags.push(("tool", tool_name));
+        tags.push(("success", success_str));
+        tags.extend_from_slice(extra_tags);
         self.counter(
             TOOL_CALL_COUNT_METRIC,
             1,
-            &[("tool", tool_name), ("success", success_str)],
+            &tags,
         );
-        self.record_duration(
-            TOOL_CALL_DURATION_METRIC,
-            duration,
-            &[("tool", tool_name), ("success", success_str)],
-        );
+        self.record_duration(TOOL_CALL_DURATION_METRIC, duration, &tags);
         tracing::event!(
             tracing::Level::INFO,
             event.name = "codex.tool_result",
