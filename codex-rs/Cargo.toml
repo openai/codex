@@ -255,6 +255,10 @@ zip = "2.4.2"
 wiremock = "0.6"
 zeroize = "1.8.2"
 
+# Azure authentication
+azure_core = "0.21"
+azure_identity = "0.21"
+
 [workspace.lints]
 rust = {}
 

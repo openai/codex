@@ -157,6 +157,9 @@ pub enum CodexErr {
     #[error("Fatal error: {0}")]
     Fatal(String),
 
+    #[error("Azure authentication failed: {0}")]
+    AzureAuth(String),
+
     // -----------------------------------------------------------------
     // Automatic conversions for common external error types
     // -----------------------------------------------------------------
@@ -209,7 +212,8 @@ impl CodexErr {
             | CodexErr::Spawn
             | CodexErr::SessionConfiguredNotFirstEvent
             | CodexErr::UsageLimitReached(_)
-            | CodexErr::ModelCap(_) => false,
+            | CodexErr::ModelCap(_)
+            | CodexErr::AzureAuth(_) => false,
             CodexErr::Stream(..)
             | CodexErr::Timeout
             | CodexErr::UnexpectedStatus(_)

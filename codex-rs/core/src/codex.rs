@@ -1038,7 +1038,7 @@ impl Session {
                 config.features.enabled(Feature::EnableRequestCompression),
                 config.features.enabled(Feature::RuntimeMetrics),
                 Self::build_model_client_beta_features_header(config.as_ref()),
-            ),
+            )?,
         };
 
         let sess = Arc::new(Session {
@@ -5626,7 +5626,8 @@ mod tests {
                 config.features.enabled(Feature::EnableRequestCompression),
                 config.features.enabled(Feature::RuntimeMetrics),
                 Session::build_model_client_beta_features_header(config.as_ref()),
-            ),
+            )
+            .expect("failed to create ModelClient"),
         };
 
         let turn_context = Session::make_turn_context(
@@ -5756,7 +5757,8 @@ mod tests {
                 config.features.enabled(Feature::EnableRequestCompression),
                 config.features.enabled(Feature::RuntimeMetrics),
                 Session::build_model_client_beta_features_header(config.as_ref()),
-            ),
+            )
+            .expect("failed to create ModelClient"),
         };
 
         let turn_context = Arc::new(Session::make_turn_context(

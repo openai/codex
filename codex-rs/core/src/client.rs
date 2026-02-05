@@ -21,6 +21,7 @@ use crate::api_bridge::CoreAuthProvider;
 use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::map_api_error;
 use crate::auth::UnauthorizedRecovery;
+use crate::azure_auth::AzureCredentialProvider;
 use codex_api::CompactClient as ApiCompactClient;
 use codex_api::CompactionInput as ApiCompactionInput;
 use codex_api::MemoriesClient as ApiMemoriesClient;
@@ -104,6 +105,7 @@ struct ModelClientState {
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
     disable_websockets: AtomicBool,
+    azure_auth: Option<Arc<AzureCredentialProvider>>,
 }
 
 /// A session-scoped client for model-provider API calls.
@@ -161,6 +163,13 @@ impl ModelClient {
     ///
     /// All arguments are expected to be stable for the lifetime of a Codex session. Per-turn values
     /// are passed to [`ModelClientSession::stream`] (and other turn-scoped methods) explicitly.
+    ///
+    /// If `provider.azure_auth` is set and the `azure-identity` feature is enabled, this will
+    /// initialize an Azure credential provider for token-based authentication.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if Azure auth is configured but initialization fails.
     pub fn new(
         auth_manager: Option<Arc<AuthManager>>,
         conversation_id: ThreadId,
@@ -171,8 +180,14 @@ impl ModelClient {
         enable_request_compression: bool,
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        let azure_auth = if let Some(mode) = provider.azure_auth {
+            Some(Arc::new(AzureCredentialProvider::new(mode)?))
+        } else {
+            None
+        };
+
+        Ok(Self {
             state: Arc::new(ModelClientState {
                 auth_manager,
                 conversation_id,
@@ -184,8 +199,9 @@ impl ModelClient {
                 include_timing_metrics,
                 beta_features_header,
                 disable_websockets: AtomicBool::new(false),
+                azure_auth,
             }),
-        }
+        })
     }
 
     /// Creates a fresh turn-scoped streaming session.
@@ -217,6 +233,10 @@ impl ModelClient {
         if prompt.input.is_empty() {
             return Ok(Vec::new());
         }
+        // Ensure Azure token is fresh before the request
+        if let Some(azure) = &self.state.azure_auth {
+            azure.ensure_token().await?;
+        }
         let auth_manager = self.state.auth_manager.clone();
         let auth = match auth_manager.as_ref() {
             Some(manager) => manager.auth().await,
@@ -226,7 +246,11 @@ impl ModelClient {
             .state
             .provider
             .to_api_provider(auth.as_ref().map(CodexAuth::internal_auth_mode))?;
-        let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
+        let api_auth = auth_provider_from_auth(
+            auth.clone(),
+            &self.state.provider,
+            self.state.azure_auth.as_deref(),
+        )?;
         let transport = ReqwestTransport::new(build_reqwest_client());
         let request_telemetry = Self::build_request_telemetry(otel_manager);
         let client = ApiCompactClient::new(transport, api_provider, api_auth)
@@ -263,6 +287,10 @@ impl ModelClient {
             return Ok(Vec::new());
         }
 
+        // Ensure Azure token is fresh before the request
+        if let Some(azure) = &self.state.azure_auth {
+            azure.ensure_token().await?;
+        }
         let auth_manager = self.state.auth_manager.clone();
         let auth = match auth_manager.as_ref() {
             Some(manager) => manager.auth().await,
@@ -272,7 +300,11 @@ impl ModelClient {
             .state
             .provider
             .to_api_provider(auth.as_ref().map(CodexAuth::internal_auth_mode))?;
-        let api_auth = auth_provider_from_auth(auth, &self.state.provider)?;
+        let api_auth = auth_provider_from_auth(
+            auth,
+            &self.state.provider,
+            self.state.azure_auth.as_deref(),
+        )?;
         let transport = ReqwestTransport::new(build_reqwest_client());
         let request_telemetry = Self::build_request_telemetry(otel_manager);
         let client = ApiMemoriesClient::new(transport, api_provider, api_auth)
@@ -542,6 +574,11 @@ impl ModelClientSession {
             return Ok(map_response_stream(stream, otel_manager.clone()));
         }
 
+        // Ensure Azure token is fresh before the request
+        if let Some(azure) = &self.client.state.azure_auth {
+            azure.ensure_token().await?;
+        }
+
         let auth_manager = self.client.state.auth_manager.clone();
         let api_prompt = Self::build_responses_request(prompt)?;
 
@@ -558,7 +595,11 @@ impl ModelClientSession {
                 .state
                 .provider
                 .to_api_provider(auth.as_ref().map(CodexAuth::internal_auth_mode))?;
-            let api_auth = auth_provider_from_auth(auth.clone(), &self.client.state.provider)?;
+            let api_auth = auth_provider_from_auth(
+                auth.clone(),
+                &self.client.state.provider,
+                self.client.state.azure_auth.as_deref(),
+            )?;
             let transport = ReqwestTransport::new(build_reqwest_client());
             let (request_telemetry, sse_telemetry) = Self::build_streaming_telemetry(otel_manager);
             let compression = self.responses_request_compression(auth.as_ref());
@@ -607,6 +648,11 @@ impl ModelClientSession {
         web_search_eligible: bool,
         turn_metadata_header: Option<&str>,
     ) -> Result<ResponseStream> {
+        // Ensure Azure token is fresh before the request
+        if let Some(azure) = &self.client.state.azure_auth {
+            azure.ensure_token().await?;
+        }
+
         let auth_manager = self.client.state.auth_manager.clone();
         let api_prompt = Self::build_responses_request(prompt)?;
 
@@ -623,7 +669,11 @@ impl ModelClientSession {
                 .state
                 .provider
                 .to_api_provider(auth.as_ref().map(CodexAuth::internal_auth_mode))?;
-            let api_auth = auth_provider_from_auth(auth.clone(), &self.client.state.provider)?;
+            let api_auth = auth_provider_from_auth(
+                auth.clone(),
+                &self.client.state.provider,
+                self.client.state.azure_auth.as_deref(),
+            )?;
             let compression = self.responses_request_compression(auth.as_ref());
 
             let options = self.build_responses_options(

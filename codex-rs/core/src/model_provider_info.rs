@@ -42,6 +42,20 @@ pub enum WireApi {
     Responses,
 }
 
+/// Azure authentication mode for Azure OpenAI endpoints.
+///
+/// When set, the provider will use the Azure Identity SDK to obtain tokens
+/// instead of requiring an API key from an environment variable.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AzureAuthMode {
+    /// Use Azure's DefaultAzureCredential chain, which tries multiple
+    /// authentication methods in order: environment variables, managed
+    /// identity, Azure CLI, etc.
+    #[default]
+    DefaultCredential,
+}
+
 impl<'de> Deserialize<'de> for WireApi {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -113,6 +127,11 @@ pub struct ModelProviderInfo {
     /// Whether this provider supports the Responses API WebSocket transport.
     #[serde(default)]
     pub supports_websockets: bool,
+
+    /// Azure authentication mode. When set, uses Azure Identity SDK
+    /// instead of API key authentication. Only applicable for Azure OpenAI endpoints.
+    #[serde(default)]
+    pub azure_auth: Option<AzureAuthMode>,
 }
 
 impl ModelProviderInfo {
@@ -262,6 +281,7 @@ impl ModelProviderInfo {
             stream_idle_timeout_ms: None,
             requires_openai_auth: true,
             supports_websockets: true,
+            azure_auth: None,
         }
     }
 
@@ -336,6 +356,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         stream_idle_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        azure_auth: None,
     }
 }
 
@@ -365,6 +386,7 @@ base_url = "http://localhost:11434/v1"
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: false,
+            azure_auth: None,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -396,6 +418,7 @@ query_params = { api-version = "2025-04-01-preview" }
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: false,
+            azure_auth: None,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -430,6 +453,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: false,
+            azure_auth: None,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();

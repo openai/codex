@@ -110,7 +110,12 @@ which = { workspace = true }
 wildmatch = { workspace = true }
 zip = { workspace = true }
 
+# Azure authentication (optional)
+azure_core = { workspace = true, optional = true }
+azure_identity = { workspace = true, optional = true }
+
 [features]
+azure-identity = ["azure_core", "azure_identity"]
 deterministic_process_ids = []
 test-support = []
 

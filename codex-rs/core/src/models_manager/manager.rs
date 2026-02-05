@@ -206,7 +206,7 @@ impl ModelsManager {
         let auth = self.auth_manager.auth().await;
         let auth_mode = self.auth_manager.get_internal_auth_mode();
         let api_provider = self.provider.to_api_provider(auth_mode)?;
-        let api_auth = auth_provider_from_auth(auth.clone(), &self.provider)?;
+        let api_auth = auth_provider_from_auth(auth.clone(), &self.provider, None)?;
         let transport = ReqwestTransport::new(build_reqwest_client());
         let client = ModelsClient::new(transport, api_provider, api_auth);
 
@@ -430,6 +430,7 @@ mod tests {
             stream_idle_timeout_ms: Some(5_000),
             requires_openai_auth: false,
             supports_websockets: false,
+            azure_auth: None,
         }
     }
 

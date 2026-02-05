@@ -411,6 +411,7 @@ fn websocket_provider(server: &WebSocketTestServer) -> ModelProviderInfo {
         stream_idle_timeout_ms: Some(5_000),
         requires_openai_auth: false,
         supports_websockets: true,
+        azure_auth: None,
     }
 }
 
@@ -465,7 +466,8 @@ async fn websocket_harness_with_runtime_metrics(
         false,
         runtime_metrics_enabled,
         None,
-    );
+    )
+    .expect("failed to create ModelClient");
 
     WebsocketTestHarness {
         _codex_home: codex_home,

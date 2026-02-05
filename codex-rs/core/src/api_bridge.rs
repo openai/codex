@@ -9,6 +9,7 @@ use http::HeaderMap;
 use serde::Deserialize;
 
 use crate::auth::CodexAuth;
+use crate::azure_auth::AzureCredentialProvider;
 use crate::error::CodexErr;
 use crate::error::ModelCapError;
 use crate::error::RetryLimitReachedError;
@@ -174,7 +175,19 @@ fn extract_header(headers: Option<&HeaderMap>, name: &str) -> Option<String> {
 pub(crate) fn auth_provider_from_auth(
     auth: Option<CodexAuth>,
     provider: &ModelProviderInfo,
+    azure_auth: Option<&AzureCredentialProvider>,
 ) -> crate::error::Result<CoreAuthProvider> {
+    // Priority 1: Azure credential (if configured and has a cached token)
+    if let Some(azure) = azure_auth {
+        if let Some(token) = azure.cached_bearer_token() {
+            return Ok(CoreAuthProvider {
+                token: Some(token),
+                account_id: None,
+            });
+        }
+    }
+
+    // Priority 2: API key from environment
     if let Some(api_key) = provider.api_key()? {
         return Ok(CoreAuthProvider {
             token: Some(api_key),
@@ -182,6 +195,7 @@ pub(crate) fn auth_provider_from_auth(
         });
     }
 
+    // Priority 3: Explicit bearer token
     if let Some(token) = provider.experimental_bearer_token.clone() {
         return Ok(CoreAuthProvider {
             token: Some(token),
@@ -189,6 +203,7 @@ pub(crate) fn auth_provider_from_auth(
         });
     }
 
+    // Priority 4: CodexAuth (ChatGPT login, API key, etc.)
     if let Some(auth) = auth {
         let token = auth.get_token()?;
         Ok(CoreAuthProvider {
