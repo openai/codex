@@ -84,15 +84,28 @@ enum ClientState {
     },
 }
 
+#[cfg(unix)]
 const PROCESS_GROUP_TERM_GRACE_PERIOD: Duration = Duration::from_secs(2);
 
+#[cfg(unix)]
 struct ProcessGroupGuard {
     process_group_id: u32,
 }
 
+#[cfg(not(unix))]
+struct ProcessGroupGuard;
+
 impl ProcessGroupGuard {
     fn new(process_group_id: u32) -> Self {
-        Self { process_group_id }
+        #[cfg(unix)]
+        {
+            Self { process_group_id }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = process_group_id;
+            Self
+        }
     }
 }
 
