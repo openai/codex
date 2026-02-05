@@ -212,7 +212,9 @@ async fn load_config_layers_state_with_env(
 ) -> io::Result<ConfigLayerStack> {
     let mut config_requirements_toml = ConfigRequirementsWithSources::default();
 
-    if let Some(requirements) = cloud_requirements.get().await {
+    if let Some(loader) = cloud_requirements
+        && let Some(requirements) = loader.get().await
+    {
         config_requirements_toml
             .merge_unset_fields(RequirementSource::CloudRequirements, requirements);
     }
@@ -225,13 +227,6 @@ async fn load_config_layers_state_with_env(
             .as_deref(),
     )
     .await?;
-
-    if let Some(loader) = cloud_requirements
-        && let Some(requirements) = loader.get().await
-    {
-        config_requirements_toml
-            .merge_unset_fields(RequirementSource::CloudRequirements, requirements);
-    }
 
     // Honor /etc/codex/requirements.toml.
     if cfg!(unix) {
