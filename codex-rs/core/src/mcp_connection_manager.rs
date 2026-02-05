@@ -45,12 +45,12 @@ use futures::future::Shared;
 use rmcp::model::ClientCapabilities;
 use rmcp::model::ElicitationCapability;
 use rmcp::model::Implementation;
-use rmcp::model::InitializeRequestParam;
+use rmcp::model::InitializeRequestParams;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
-use rmcp::model::PaginatedRequestParam;
+use rmcp::model::PaginatedRequestParams;
 use rmcp::model::ProtocolVersion;
-use rmcp::model::ReadResourceRequestParam;
+use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
 use rmcp::model::Resource;
@@ -526,7 +526,8 @@ impl McpConnectionManager {
                 let mut cursor: Option<String> = None;
 
                 loop {
-                    let params = cursor.as_ref().map(|next| PaginatedRequestParam {
+                    let params = cursor.as_ref().map(|next| PaginatedRequestParams {
+                        meta: None,
                         cursor: Some(next.clone()),
                     });
                     let response = match client.list_resources(params, timeout).await {
@@ -591,7 +592,8 @@ impl McpConnectionManager {
                 let mut cursor: Option<String> = None;
 
                 loop {
-                    let params = cursor.as_ref().map(|next| PaginatedRequestParam {
+                    let params = cursor.as_ref().map(|next| PaginatedRequestParams {
+                        meta: None,
                         cursor: Some(next.clone()),
                     });
                     let response = match client.list_resource_templates(params, timeout).await {
@@ -681,7 +683,7 @@ impl McpConnectionManager {
     pub async fn list_resources(
         &self,
         server: &str,
-        params: Option<PaginatedRequestParam>,
+        params: Option<PaginatedRequestParams>,
     ) -> Result<ListResourcesResult> {
         let managed = self.client_by_name(server).await?;
         let timeout = managed.tool_timeout;
@@ -697,7 +699,7 @@ impl McpConnectionManager {
     pub async fn list_resource_templates(
         &self,
         server: &str,
-        params: Option<PaginatedRequestParam>,
+        params: Option<PaginatedRequestParams>,
     ) -> Result<ListResourceTemplatesResult> {
         let managed = self.client_by_name(server).await?;
         let client = managed.client.clone();
@@ -713,7 +715,7 @@ impl McpConnectionManager {
     pub async fn read_resource(
         &self,
         server: &str,
-        params: ReadResourceRequestParam,
+        params: ReadResourceRequestParams,
     ) -> Result<ReadResourceResult> {
         let managed = self.client_by_name(server).await?;
         let client = managed.client.clone();
@@ -896,7 +898,8 @@ async fn start_server_task(
     tx_event: Sender<Event>,
     elicitation_requests: ElicitationRequestManager,
 ) -> Result<ManagedClient, StartupOutcomeError> {
-    let params = InitializeRequestParam {
+    let params = InitializeRequestParams {
+        meta: None,
         capabilities: ClientCapabilities {
             experimental: None,
             roots: None,
@@ -906,6 +909,7 @@ async fn start_server_task(
             elicitation: Some(ElicitationCapability {
                 schema_validation: None,
             }),
+            tasks: None,
         },
         client_info: Implementation {
             name: "codex-mcp-client".to_owned(),
