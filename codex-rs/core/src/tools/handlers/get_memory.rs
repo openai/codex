@@ -1,8 +1,3 @@
-use async_trait::async_trait;
-use codex_protocol::ThreadId;
-use serde::Deserialize;
-use serde_json::json;
-use codex_protocol::models::FunctionCallOutputBody;
 use crate::function_tool::FunctionCallError;
 use crate::state_db;
 use crate::tools::context::ToolInvocation;
@@ -11,6 +6,11 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use async_trait::async_trait;
+use codex_protocol::ThreadId;
+use codex_protocol::models::FunctionCallOutputBody;
+use serde::Deserialize;
+use serde_json::json;
 
 pub struct GetMemoryHandler;
 
