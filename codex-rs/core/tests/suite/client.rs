@@ -11,7 +11,6 @@ use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::ThreadManager;
-use codex_core::TransportManager;
 use codex_core::WireApi;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::built_in_model_providers;
@@ -22,6 +21,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_otel::OtelManager;
+use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
@@ -1258,25 +1258,24 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         model_info.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
-        auth_manager.get_auth_mode(),
+        auth_manager.auth_mode().map(TelemetryAuthMode::from),
         false,
         "test".to_string(),
         SessionSource::Exec,
     );
 
-    let mut client = ModelClient::new(
-        Arc::clone(&config),
+    let client = ModelClient::new(
         None,
-        model_info,
-        otel_manager,
-        provider,
-        effort,
-        summary,
         conversation_id,
+        provider.clone(),
         SessionSource::Exec,
-        TransportManager::new(),
-    )
-    .new_session(None);
+        config.model_verbosity,
+        false,
+        false,
+        false,
+        None,
+    );
+    let mut client_session = client.new_session();
 
     let mut prompt = Prompt::default();
     prompt.input.push(ResponseItem::Reasoning {
@@ -1314,10 +1313,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     });
     prompt.input.push(ResponseItem::FunctionCallOutput {
         call_id: "function-call-id".into(),
-        output: FunctionCallOutputPayload {
-            content: "ok".into(),
-            ..Default::default()
-        },
+        output: FunctionCallOutputPayload::from_text("ok".into()),
     });
     prompt.input.push(ResponseItem::LocalShellCall {
         id: Some("local-shell-id".into()),
@@ -1343,8 +1339,8 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         output: "ok".into(),
     });
 
-    let mut stream = client
-        .stream(&prompt)
+    let mut stream = client_session
+        .stream(&prompt, &model_info, &otel_manager, effort, summary, None)
         .await
         .expect("responses stream to start");
 

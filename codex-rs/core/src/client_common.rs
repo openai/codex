@@ -3,6 +3,7 @@ use crate::config::types::Personality;
 use crate::error::Result;
 pub use codex_api::common::ResponseEvent;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseItem;
 use futures::Stream;
 use serde::Deserialize;
@@ -97,9 +98,11 @@ fn reserialize_shell_outputs(items: &mut [ResponseItem]) {
         }
         ResponseItem::FunctionCallOutput { call_id, output } => {
             if shell_call_ids.remove(call_id)
-                && let Some(structured) = parse_structured_shell_output(&output.content)
+                && let Some(structured) = output
+                    .text_content()
+                    .and_then(parse_structured_shell_output)
             {
-                output.content = structured
+                output.body = FunctionCallOutputBody::Text(structured);
             }
         }
         _ => {}

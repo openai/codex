@@ -16,6 +16,7 @@ use std::sync::Mutex;
 use std::sync::RwLock;
 
 use codex_app_server_protocol::AuthMode as ApiAuthMode;
+use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 
 pub use crate::auth::storage::AuthCredentialsStoreMode;
@@ -45,6 +46,15 @@ use thiserror::Error;
 pub enum AuthMode {
     ApiKey,
     Chatgpt,
+}
+
+impl From<AuthMode> for TelemetryAuthMode {
+    fn from(mode: AuthMode) -> Self {
+        match mode {
+            AuthMode::ApiKey => TelemetryAuthMode::ApiKey,
+            AuthMode::Chatgpt => TelemetryAuthMode::Chatgpt,
+        }
+    }
 }
 
 /// Authentication mechanism used by the current user.
@@ -186,7 +196,7 @@ impl CodexAuth {
         load_auth(codex_home, false, auth_credentials_store_mode)
     }
 
-    pub fn internal_auth_mode(&self) -> AuthMode {
+    pub fn auth_mode(&self) -> AuthMode {
         match self {
             Self::ApiKey(_) => AuthMode::ApiKey,
             Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) => AuthMode::Chatgpt,
@@ -202,14 +212,14 @@ impl CodexAuth {
     }
 
     pub fn is_chatgpt_auth(&self) -> bool {
-        self.internal_auth_mode() == AuthMode::Chatgpt
+        self.auth_mode() == AuthMode::Chatgpt
     }
 
     pub fn is_external_chatgpt_tokens(&self) -> bool {
         matches!(self, Self::ChatgptAuthTokens(_))
     }
 
-    /// Returns `None` is `is_internal_auth_mode() != AuthMode::ApiKey`.
+    /// Returns `None` if `auth_mode() != AuthMode::ApiKey`.
     pub fn api_key(&self) -> Option<&str> {
         match self {
             Self::ApiKey(auth) => Some(auth.api_key.as_str()),
@@ -434,7 +444,7 @@ pub fn enforce_login_restrictions(config: &Config) -> std::io::Result<()> {
     };
 
     if let Some(required_method) = config.forced_login_method {
-        let method_violation = match (required_method, auth.internal_auth_mode()) {
+        let method_violation = match (required_method, auth.auth_mode()) {
             (ForcedLoginMethod::Api, AuthMode::ApiKey) => None,
             (ForcedLoginMethod::Chatgpt, AuthMode::Chatgpt) => None,
             (ForcedLoginMethod::Api, AuthMode::Chatgpt) => Some(
@@ -1158,14 +1168,12 @@ impl AuthManager {
         Ok(removed)
     }
 
-    pub fn get_auth_mode(&self) -> Option<ApiAuthMode> {
+    pub fn get_api_auth_mode(&self) -> Option<ApiAuthMode> {
         self.auth_cached().as_ref().map(CodexAuth::api_auth_mode)
     }
 
-    pub fn get_internal_auth_mode(&self) -> Option<AuthMode> {
-        self.auth_cached()
-            .as_ref()
-            .map(CodexAuth::internal_auth_mode)
+    pub fn auth_mode(&self) -> Option<AuthMode> {
+        self.auth_cached().as_ref().map(CodexAuth::auth_mode)
     }
 
     async fn refresh_if_stale(&self, auth: &CodexAuth) -> Result<bool, RefreshTokenError> {
@@ -1373,7 +1381,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(None, auth.api_key());
-        assert_eq!(AuthMode::Chatgpt, auth.internal_auth_mode());
+        assert_eq!(AuthMode::Chatgpt, auth.auth_mode());
 
         let auth_dot_json = auth
             .get_current_auth_json()
@@ -1418,7 +1426,7 @@ mod tests {
         let auth = super::load_auth(dir.path(), false, AuthCredentialsStoreMode::File)
             .unwrap()
             .unwrap();
-        assert_eq!(auth.internal_auth_mode(), AuthMode::ApiKey);
+        assert_eq!(auth.auth_mode(), AuthMode::ApiKey);
         assert_eq!(auth.api_key(), Some("sk-test-key"));
 
         assert!(auth.get_token_data().is_err());
