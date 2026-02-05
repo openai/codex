@@ -42,6 +42,7 @@ use tracing_test::traced_test;
 const MODEL: &str = "gpt-5.2-codex";
 const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
 const OPENAI_BETA_RESPONSES_WEBSOCKETS: &str = "responses_websockets=2026-02-04";
+const WS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
 
 struct WebsocketTestHarness {
     _codex_home: TempDir,
@@ -456,6 +457,76 @@ async fn responses_websocket_creates_on_non_prefix() {
     server.shutdown().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_v2_creates_with_previous_response_id_on_prefix() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![
+        vec![ev_response_created("resp-1"), ev_completed("resp-1")],
+        vec![ev_response_created("resp-2"), ev_completed("resp-2")],
+    ]])
+    .await;
+
+    let harness = websocket_harness_with_v2(&server, true).await;
+    let mut session = harness.client.new_session();
+    let prompt_one = prompt_with_input(vec![message_item("hello")]);
+    let prompt_two = prompt_with_input(vec![message_item("hello"), message_item("second")]);
+
+    stream_until_complete(&mut session, &harness, &prompt_one).await;
+    stream_until_complete(&mut session, &harness, &prompt_two).await;
+
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 2);
+    let first = connection.first().expect("missing request").body_json();
+    let second = connection.get(1).expect("missing request").body_json();
+
+    assert_eq!(first["type"].as_str(), Some("response.create"));
+    assert_eq!(second["type"].as_str(), Some("response.create"));
+    assert_eq!(second["previous_response_id"].as_str(), Some("resp-1"));
+    assert_eq!(
+        second["input"],
+        serde_json::to_value(&prompt_two.input[1..]).unwrap()
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_v2_sets_openai_beta_header() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![vec![
+        ev_response_created("resp-1"),
+        ev_completed("resp-1"),
+    ]]])
+    .await;
+
+    let harness = websocket_harness_with_v2(&server, true).await;
+    let mut session = harness.client.new_session();
+    let prompt = prompt_with_input(vec![message_item("hello")]);
+
+    stream_until_complete(&mut session, &harness, &prompt).await;
+
+    let handshake = server.single_handshake();
+    let openai_beta_header = handshake
+        .header(OPENAI_BETA_HEADER)
+        .expect("missing OpenAI-Beta header");
+    assert!(
+        openai_beta_header
+            .split(',')
+            .map(str::trim)
+            .any(|value| value == WS_V2_BETA_HEADER_VALUE)
+    );
+    assert!(
+        !openai_beta_header
+            .split(',')
+            .map(str::trim)
+            .any(|value| value == OPENAI_BETA_RESPONSES_WEBSOCKETS)
+    );
+
+    server.shutdown().await;
+}
+
 fn message_item(text: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,
@@ -499,6 +570,21 @@ async fn websocket_harness_with_runtime_metrics(
     server: &WebSocketTestServer,
     runtime_metrics_enabled: bool,
 ) -> WebsocketTestHarness {
+    websocket_harness_with_options(server, runtime_metrics_enabled, false).await
+}
+
+async fn websocket_harness_with_v2(
+    server: &WebSocketTestServer,
+    websocket_v2_enabled: bool,
+) -> WebsocketTestHarness {
+    websocket_harness_with_options(server, false, websocket_v2_enabled).await
+}
+
+async fn websocket_harness_with_options(
+    server: &WebSocketTestServer,
+    runtime_metrics_enabled: bool,
+    websocket_v2_enabled: bool,
+) -> WebsocketTestHarness {
     let provider = websocket_provider(server);
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home).await;
@@ -506,6 +592,9 @@ async fn websocket_harness_with_runtime_metrics(
     config.features.enable(Feature::ResponsesWebsockets);
     if runtime_metrics_enabled {
         config.features.enable(Feature::RuntimeMetrics);
+    }
+    if websocket_v2_enabled {
+        config.features.enable(Feature::ResponsesWebsocketsV2);
     }
     let config = Arc::new(config);
     let model_info = ModelsManager::construct_model_info_offline(MODEL, &config);
@@ -538,6 +627,7 @@ async fn websocket_harness_with_runtime_metrics(
         SessionSource::Exec,
         config.model_verbosity,
         true,
+        websocket_v2_enabled,
         false,
         runtime_metrics_enabled,
         None,
