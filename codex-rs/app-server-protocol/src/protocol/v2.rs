@@ -998,6 +998,7 @@ pub struct ModelListParams {
 pub struct Model {
     pub id: String,
     pub model: String,
+    pub upgrade: Option<String>,
     pub display_name: String,
     pub description: String,
     pub supported_reasoning_efforts: Vec<ReasoningEffortOption>,
@@ -1410,6 +1411,18 @@ pub struct ThreadUnarchiveResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ThreadCompactStartParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadCompactStartResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ThreadRollbackParams {
     pub thread_id: String,
     /// The number of turns to drop from the end of the thread. Must be >= 1.
@@ -1552,6 +1565,44 @@ pub struct SkillsListParams {
 #[ts(export_to = "v2/")]
 pub struct SkillsListResponse {
     pub data: Vec<SkillsListEntry>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillsRemoteReadParams {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RemoteSkillSummary {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillsRemoteReadResponse {
+    pub data: Vec<RemoteSkillSummary>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillsRemoteWriteParams {
+    pub hazelnut_id: String,
+    pub is_preload: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillsRemoteWriteResponse {
+    pub id: String,
+    pub name: String,
+    pub path: PathBuf,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
@@ -2775,8 +2826,32 @@ pub struct DynamicToolCallParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct DynamicToolCallResponse {
-    pub output: String,
+    pub content_items: Vec<DynamicToolCallOutputContentItem>,
     pub success: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+#[ts(export_to = "v2/")]
+pub enum DynamicToolCallOutputContentItem {
+    #[serde(rename_all = "camelCase")]
+    InputText { text: String },
+    #[serde(rename_all = "camelCase")]
+    InputImage { image_url: String },
+}
+
+impl From<DynamicToolCallOutputContentItem>
+    for codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem
+{
+    fn from(item: DynamicToolCallOutputContentItem) -> Self {
+        match item {
+            DynamicToolCallOutputContentItem::InputText { text } => Self::InputText { text },
+            DynamicToolCallOutputContentItem::InputImage { image_url } => {
+                Self::InputImage { image_url }
+            }
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -3135,6 +3210,63 @@ mod tests {
                 "responseTooManyFailedAttempts": {
                     "httpStatusCode": 401
                 }
+            })
+        );
+    }
+
+    #[test]
+    fn dynamic_tool_response_serializes_content_items() {
+        let value = serde_json::to_value(DynamicToolCallResponse {
+            content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                text: "dynamic-ok".to_string(),
+            }],
+            success: true,
+        })
+        .unwrap();
+
+        assert_eq!(
+            value,
+            json!({
+                "contentItems": [
+                    {
+                        "type": "inputText",
+                        "text": "dynamic-ok"
+                    }
+                ],
+                "success": true,
+            })
+        );
+    }
+
+    #[test]
+    fn dynamic_tool_response_serializes_text_and_image_content_items() {
+        let value = serde_json::to_value(DynamicToolCallResponse {
+            content_items: vec![
+                DynamicToolCallOutputContentItem::InputText {
+                    text: "dynamic-ok".to_string(),
+                },
+                DynamicToolCallOutputContentItem::InputImage {
+                    image_url: "data:image/png;base64,AAA".to_string(),
+                },
+            ],
+            success: true,
+        })
+        .unwrap();
+
+        assert_eq!(
+            value,
+            json!({
+                "contentItems": [
+                    {
+                        "type": "inputText",
+                        "text": "dynamic-ok"
+                    },
+                    {
+                        "type": "inputImage",
+                        "imageUrl": "data:image/png;base64,AAA"
+                    }
+                ],
+                "success": true,
             })
         );
     }

@@ -144,6 +144,7 @@ use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::CollaborationModeIndicator;
+use crate::bottom_pane::ColumnWidthMode;
 use crate::bottom_pane::DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED;
 use crate::bottom_pane::ExperimentalFeatureItem;
 use crate::bottom_pane::ExperimentalFeaturesView;
@@ -196,6 +197,9 @@ mod skills;
 use self::skills::collect_tool_mentions;
 use self::skills::find_app_mentions;
 use self::skills::find_skill_mentions_with_tool_mentions;
+use crate::streaming::chunking::AdaptiveChunkingPolicy;
+use crate::streaming::commit_tick::CommitTickScope;
+use crate::streaming::commit_tick::run_commit_tick;
 use crate::streaming::controller::PlanStreamController;
 use crate::streaming::controller::StreamController;
 
@@ -485,6 +489,7 @@ pub(crate) struct ChatWidget {
     rate_limit_warnings: RateLimitWarningState,
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
     rate_limit_poller: Option<JoinHandle<()>>,
+    adaptive_chunking: AdaptiveChunkingPolicy,
     // Stream lifecycle controller
     stream_controller: Option<StreamController>,
     // Stream lifecycle controller for proposed plan output.
@@ -769,6 +774,7 @@ impl ChatWidget {
         {
             self.add_boxed_history(cell);
         }
+        self.adaptive_chunking.reset();
     }
 
     /// Update the status indicator header and details.
@@ -943,6 +949,7 @@ impl ChatWidget {
             && controller.push(&delta)
         {
             self.app_event_tx.send(AppEvent::StartCommitAnimation);
+            self.run_catch_up_commit_tick();
         }
         self.request_redraw();
     }
@@ -1020,6 +1027,7 @@ impl ChatWidget {
         self.saw_plan_item_this_turn = false;
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
+        self.adaptive_chunking.reset();
         self.plan_stream_controller = None;
         self.otel_manager.reset_runtime_metrics();
         self.bottom_pane.clear_quit_shortcut_hint();
@@ -1286,7 +1294,9 @@ impl ChatWidget {
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
         self.clear_unified_exec_processes();
+        self.adaptive_chunking.reset();
         self.stream_controller = None;
+        self.plan_stream_controller = None;
         self.maybe_show_pending_rate_limit_prompt();
     }
 
@@ -1838,30 +1848,41 @@ impl ChatWidget {
         self.set_status(message, additional_details);
     }
 
-    /// Periodic tick to commit at most one queued line to history with a small delay,
-    /// animating the output.
+    /// Periodic tick for stream commits. In smooth mode this preserves one-line pacing, while
+    /// catch-up mode drains larger batches to reduce queue lag.
     pub(crate) fn on_commit_tick(&mut self) {
-        let mut has_controller = false;
-        let mut all_idle = true;
-        if let Some(controller) = self.stream_controller.as_mut() {
-            has_controller = true;
-            let (cell, is_idle) = controller.on_commit_tick();
-            if let Some(cell) = cell {
-                self.bottom_pane.hide_status_indicator();
-                self.add_boxed_history(cell);
-            }
-            all_idle &= is_idle;
+        self.run_commit_tick();
+    }
+
+    /// Runs a regular periodic commit tick.
+    fn run_commit_tick(&mut self) {
+        self.run_commit_tick_with_scope(CommitTickScope::AnyMode);
+    }
+
+    /// Runs an opportunistic commit tick only if catch-up mode is active.
+    fn run_catch_up_commit_tick(&mut self) {
+        self.run_commit_tick_with_scope(CommitTickScope::CatchUpOnly);
+    }
+
+    /// Runs a commit tick for the current stream queue snapshot.
+    ///
+    /// `scope` controls whether this call may commit in smooth mode or only when catch-up
+    /// is currently active.
+    fn run_commit_tick_with_scope(&mut self, scope: CommitTickScope) {
+        let now = Instant::now();
+        let outcome = run_commit_tick(
+            &mut self.adaptive_chunking,
+            self.stream_controller.as_mut(),
+            self.plan_stream_controller.as_mut(),
+            scope,
+            now,
+        );
+        for cell in outcome.cells {
+            self.bottom_pane.hide_status_indicator();
+            self.add_boxed_history(cell);
         }
-        if let Some(controller) = self.plan_stream_controller.as_mut() {
-            has_controller = true;
-            let (cell, is_idle) = controller.on_commit_tick();
-            if let Some(cell) = cell {
-                self.bottom_pane.hide_status_indicator();
-                self.add_boxed_history(cell);
-            }
-            all_idle &= is_idle;
-        }
-        if has_controller && all_idle {
+
+        if outcome.has_controller && outcome.all_idle {
             self.app_event_tx.send(AppEvent::StopCommitAnimation);
         }
     }
@@ -1930,6 +1951,7 @@ impl ChatWidget {
             && controller.push(&delta)
         {
             self.app_event_tx.send(AppEvent::StartCommitAnimation);
+            self.run_catch_up_commit_tick();
         }
         self.request_redraw();
     }
@@ -2268,6 +2290,7 @@ impl ChatWidget {
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             rate_limit_poller: None,
+            adaptive_chunking: AdaptiveChunkingPolicy::default(),
             stream_controller: None,
             plan_stream_controller: None,
             running_commands: HashMap::new(),
@@ -2413,6 +2436,7 @@ impl ChatWidget {
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             rate_limit_poller: None,
+            adaptive_chunking: AdaptiveChunkingPolicy::default(),
             stream_controller: None,
             plan_stream_controller: None,
             running_commands: HashMap::new(),
@@ -2547,6 +2571,7 @@ impl ChatWidget {
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             rate_limit_poller: None,
+            adaptive_chunking: AdaptiveChunkingPolicy::default(),
             stream_controller: None,
             plan_stream_controller: None,
             running_commands: HashMap::new(),
@@ -2980,6 +3005,9 @@ impl ChatWidget {
             }
             SlashCommand::Status => {
                 self.add_status_output();
+            }
+            SlashCommand::DebugConfig => {
+                self.add_debug_config_output();
             }
             SlashCommand::Ps => {
                 self.add_ps_output();
@@ -3526,6 +3554,7 @@ impl ChatWidget {
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
             EventMsg::ListCustomPromptsResponse(ev) => self.on_list_custom_prompts(ev),
             EventMsg::ListSkillsResponse(ev) => self.on_list_skills(ev),
+            EventMsg::ListRemoteSkillsResponse(_) | EventMsg::RemoteSkillDownloaded(_) => {}
             EventMsg::SkillsUpdateAvailable => {
                 self.submit_op(Op::ListSkills {
                     cwds: Vec::new(),
@@ -3753,6 +3782,10 @@ impl ChatWidget {
             collaboration_mode,
             reasoning_effort_override,
         ));
+    }
+
+    pub(crate) fn add_debug_config_output(&mut self) {
+        self.add_to_history(crate::debug_config::new_debug_config_output(&self.config));
     }
 
     pub(crate) fn add_ps_output(&mut self) {
@@ -5472,6 +5505,7 @@ impl ChatWidget {
 
     fn personality_label(personality: Personality) -> &'static str {
         match personality {
+            Personality::None => "None",
             Personality::Friendly => "Friendly",
             Personality::Pragmatic => "Pragmatic",
         }
@@ -5479,6 +5513,7 @@ impl ChatWidget {
 
     fn personality_description(personality: Personality) -> &'static str {
         match personality {
+            Personality::None => "No personality instructions.",
             Personality::Friendly => "Warm, collaborative, and helpful.",
             Personality::Pragmatic => "Concise, task-focused, and direct.",
         }
@@ -5717,6 +5752,7 @@ impl ChatWidget {
             items,
             is_searchable: true,
             search_placeholder: Some("Type to search apps".to_string()),
+            col_width_mode: ColumnWidthMode::AutoAllRows,
             ..Default::default()
         });
     }

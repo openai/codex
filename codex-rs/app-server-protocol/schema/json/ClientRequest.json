@@ -480,6 +480,19 @@
       },
       "type": "object"
     },
+    "FunctionCallOutputBody": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "$ref": "#/definitions/FunctionCallOutputContentItem"
+          },
+          "type": "array"
+        }
+      ]
+    },
     "FunctionCallOutputContentItem": {
       "description": "Responses API compatible content items that can be returned by a tool call. This is a subset of ContentItem with the types we support as function call outputs.",
       "oneOf": [
@@ -526,19 +539,10 @@
       ]
     },
     "FunctionCallOutputPayload": {
-      "description": "The payload we send back to OpenAI when reporting a tool call result.\n\n`content` preserves the historical plain-string payload so downstream integrations (tests, logging, etc.) can keep treating tool output as `String`. When an MCP server returns richer data we additionally populate `content_items` with the structured form that the Responses API understands.",
+      "description": "The payload we send back to OpenAI when reporting a tool call result.\n\n`body` serializes directly as the wire value for `function_call_output.output`. `success` remains internal metadata for downstream handling.",
       "properties": {
-        "content": {
-          "type": "string"
-        },
-        "content_items": {
-          "items": {
-            "$ref": "#/definitions/FunctionCallOutputContentItem"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
+        "body": {
+          "$ref": "#/definitions/FunctionCallOutputBody"
         },
         "success": {
           "type": [
@@ -548,7 +552,7 @@
         }
       },
       "required": [
-        "content"
+        "body"
       ],
       "type": "object"
     },
@@ -1171,6 +1175,7 @@
     },
     "Personality": {
       "enum": [
+        "none",
         "friendly",
         "pragmatic"
       ],
@@ -2183,6 +2188,24 @@
       },
       "type": "object"
     },
+    "SkillsRemoteReadParams": {
+      "type": "object"
+    },
+    "SkillsRemoteWriteParams": {
+      "properties": {
+        "hazelnutId": {
+          "type": "string"
+        },
+        "isPreload": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "hazelnutId",
+        "isPreload"
+      ],
+      "type": "object"
+    },
     "TextElement": {
       "properties": {
         "byteRange": {
@@ -2207,6 +2230,17 @@
       "type": "object"
     },
     "ThreadArchiveParams": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadCompactStartParams": {
       "properties": {
         "threadId": {
           "type": "string"
@@ -3199,6 +3233,30 @@
         },
         "method": {
           "enum": [
+            "thread/compact/start"
+          ],
+          "title": "Thread/compact/startRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadCompactStartParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/compact/startRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
             "thread/rollback"
           ],
           "title": "Thread/rollbackRequestMethod",
@@ -3310,6 +3368,54 @@
         "params"
       ],
       "title": "Skills/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "skills/remote/read"
+          ],
+          "title": "Skills/remote/readRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/SkillsRemoteReadParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Skills/remote/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "skills/remote/write"
+          ],
+          "title": "Skills/remote/writeRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/SkillsRemoteWriteParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Skills/remote/writeRequest",
       "type": "object"
     },
     {

@@ -70,6 +70,7 @@ codex-ansi-escape = { path = "ansi-escape" }
 codex-api = { path = "codex-api" }
 codex-app-server = { path = "app-server" }
 codex-app-server-protocol = { path = "app-server-protocol" }
+codex-app-server-test-client = { path = "app-server-test-client" }
 codex-apply-patch = { path = "apply-patch" }
 codex-arg0 = { path = "arg0" }
 codex-async-utils = { path = "async-utils" }
@@ -249,6 +250,7 @@ walkdir = "2.5.0"
 webbrowser = "1.0"
 which = "8"
 wildmatch = "2.6.1"
+zip = "2.4.2"
 
 wiremock = "0.6"
 zeroize = "1.8.2"

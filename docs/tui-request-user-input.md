@@ -30,7 +30,9 @@ friction for freeform input.
 - Enter advances to the next question.
 - Enter on the last question submits all answers.
 - PageUp/PageDown navigate across questions (when multiple are present).
-- Esc interrupts the run.
+- Esc interrupts the run in option selection mode.
+- When notes are open for an option question, Tab or Esc clears notes and returns
+  to option selection.
 
 ## Layout priorities
 

@@ -208,6 +208,10 @@ client_request_definitions! {
         params: v2::ThreadUnarchiveParams,
         response: v2::ThreadUnarchiveResponse,
     },
+    ThreadCompactStart => "thread/compact/start" {
+        params: v2::ThreadCompactStartParams,
+        response: v2::ThreadCompactStartResponse,
+    },
     ThreadRollback => "thread/rollback" {
         params: v2::ThreadRollbackParams,
         response: v2::ThreadRollbackResponse,
@@ -227,6 +231,14 @@ client_request_definitions! {
     SkillsList => "skills/list" {
         params: v2::SkillsListParams,
         response: v2::SkillsListResponse,
+    },
+    SkillsRemoteRead => "skills/remote/read" {
+        params: v2::SkillsRemoteReadParams,
+        response: v2::SkillsRemoteReadResponse,
+    },
+    SkillsRemoteWrite => "skills/remote/write" {
+        params: v2::SkillsRemoteWriteParams,
+        response: v2::SkillsRemoteWriteResponse,
     },
     AppsList => "app/list" {
         params: v2::AppsListParams,

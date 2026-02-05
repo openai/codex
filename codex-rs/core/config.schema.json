@@ -235,6 +235,9 @@
             "unified_exec": {
               "type": "boolean"
             },
+            "use_linux_sandbox_bwrap": {
+              "type": "boolean"
+            },
             "web_search": {
               "type": "boolean"
             },
@@ -705,6 +708,7 @@
     },
     "Personality": {
       "enum": [
+        "none",
         "friendly",
         "pragmatic"
       ],
@@ -1251,6 +1255,9 @@
           "type": "boolean"
         },
         "unified_exec": {
+          "type": "boolean"
+        },
+        "use_linux_sandbox_bwrap": {
           "type": "boolean"
         },
         "web_search": {

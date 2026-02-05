@@ -66,7 +66,7 @@ impl SessionTask for UserShellCommandTask {
             .counter("codex.task.user_shell", 1, &[]);
 
         let event = EventMsg::TurnStarted(TurnStartedEvent {
-            model_context_window: turn_context.client.get_model_context_window(),
+            model_context_window: turn_context.model_context_window(),
             collaboration_mode_kind: turn_context.collaboration_mode.mode,
         });
         let session = session.clone_session();
