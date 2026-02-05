@@ -26,12 +26,8 @@ fn format_allowed_modes() -> String {
     }
 }
 
-fn request_user_input_is_available_in_mode(mode: ModeKind) -> bool {
-    mode.allows_request_user_input()
-}
-
 pub(crate) fn request_user_input_unavailable_message(mode: ModeKind) -> Option<String> {
-    if request_user_input_is_available_in_mode(mode) {
+    if mode.allows_request_user_input() {
         None
     } else {
         let mode_name = mode.display_name();
@@ -122,22 +118,10 @@ mod tests {
 
     #[test]
     fn request_user_input_mode_availability_is_plan_only() {
-        assert_eq!(
-            request_user_input_is_available_in_mode(ModeKind::Plan),
-            true
-        );
-        assert_eq!(
-            request_user_input_is_available_in_mode(ModeKind::Default),
-            false
-        );
-        assert_eq!(
-            request_user_input_is_available_in_mode(ModeKind::Execute),
-            false
-        );
-        assert_eq!(
-            request_user_input_is_available_in_mode(ModeKind::PairProgramming),
-            false
-        );
+        assert!(ModeKind::Plan.allows_request_user_input());
+        assert!(!ModeKind::Default.allows_request_user_input());
+        assert!(!ModeKind::Execute.allows_request_user_input());
+        assert!(!ModeKind::PairProgramming.allows_request_user_input());
     }
 
     #[test]
