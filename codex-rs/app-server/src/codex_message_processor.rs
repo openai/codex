@@ -874,17 +874,6 @@ impl CodexMessageProcessor {
                             }
                         };
 
-                        let payload = LoginChatGptCompleteNotification {
-                            login_id,
-                            success,
-                            error: error_msg.clone(),
-                        };
-                        outgoing_clone
-                            .send_server_notification(ServerNotification::LoginChatGptComplete(
-                                payload,
-                            ))
-                            .await;
-
                         if success {
                             auth_manager.reload();
                             replace_cloud_requirements_loader(
@@ -892,6 +881,18 @@ impl CodexMessageProcessor {
                                 auth_manager.clone(),
                                 chatgpt_base_url,
                             );
+
+                            let payload = LoginChatGptCompleteNotification {
+                                login_id,
+                                success: true,
+                                error: None,
+                            };
+                            outgoing_clone
+                                .send_server_notification(ServerNotification::LoginChatGptComplete(
+                                    payload,
+                                ))
+                                .await;
+
                             sync_default_client_residency_requirement(
                                 &cli_overrides,
                                 cloud_requirements.as_ref(),
@@ -908,6 +909,17 @@ impl CodexMessageProcessor {
                             };
                             outgoing_clone
                                 .send_server_notification(ServerNotification::AuthStatusChange(
+                                    payload,
+                                ))
+                                .await;
+                        } else {
+                            let payload = LoginChatGptCompleteNotification {
+                                login_id,
+                                success: false,
+                                error: error_msg,
+                            };
+                            outgoing_clone
+                                .send_server_notification(ServerNotification::LoginChatGptComplete(
                                     payload,
                                 ))
                                 .await;
@@ -980,17 +992,6 @@ impl CodexMessageProcessor {
                             }
                         };
 
-                        let payload_v2 = AccountLoginCompletedNotification {
-                            login_id: Some(login_id.to_string()),
-                            success,
-                            error: error_msg,
-                        };
-                        outgoing_clone
-                            .send_server_notification(ServerNotification::AccountLoginCompleted(
-                                payload_v2,
-                            ))
-                            .await;
-
                         if success {
                             auth_manager.reload();
                             replace_cloud_requirements_loader(
@@ -998,6 +999,18 @@ impl CodexMessageProcessor {
                                 auth_manager.clone(),
                                 chatgpt_base_url,
                             );
+
+                            let payload_v2 = AccountLoginCompletedNotification {
+                                login_id: Some(login_id.to_string()),
+                                success: true,
+                                error: None,
+                            };
+                            outgoing_clone
+                                .send_server_notification(
+                                    ServerNotification::AccountLoginCompleted(payload_v2),
+                                )
+                                .await;
+
                             sync_default_client_residency_requirement(
                                 &cli_overrides,
                                 cloud_requirements.as_ref(),
@@ -1016,6 +1029,17 @@ impl CodexMessageProcessor {
                                 .send_server_notification(ServerNotification::AccountUpdated(
                                     payload_v2,
                                 ))
+                                .await;
+                        } else {
+                            let payload_v2 = AccountLoginCompletedNotification {
+                                login_id: Some(login_id.to_string()),
+                                success: false,
+                                error: error_msg,
+                            };
+                            outgoing_clone
+                                .send_server_notification(
+                                    ServerNotification::AccountLoginCompleted(payload_v2),
+                                )
                                 .await;
                         }
 
