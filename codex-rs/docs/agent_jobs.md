@@ -70,3 +70,33 @@ Exports include original input columns plus:
 - `result_json`
 - `reported_at`
 - `completed_at`
+
+## CLI Example (Auto-Export)
+
+The example below creates a small CSV, runs a batch job, waits for completion,
+and prints the auto-exported CSV.
+
+```bash
+./codex-rs/target/debug/codex exec \
+  --enable collab \
+  --enable sqlite \
+  --full-auto \
+  -C /path/to/repo \
+  - <<'PROMPT'
+Create /tmp/security_rank_input_demo.csv with 5 rows using paths:
+- codex-rs/core/src/tools/handlers/agent_jobs.rs
+- codex-rs/core/src/tools/handlers/shell.rs
+- codex-rs/core/src/agent/control.rs
+- codex-rs/core/src/exec_policy.rs
+- codex-rs/core/src/tools/handlers/mcp.rs
+Columns: path, area (use "core" for area).
+
+Then call spawn_agents_on_csv with:
+csv_path: /tmp/security_rank_input_demo.csv
+instruction: read the file (relative to repo root), skim first 200 lines, score security relevance 1-10, output JSON with keys path, score, rationale, signals array.
+output_csv_path: /tmp/security_rank_output_demo.csv
+
+Do NOT call export_agent_job_csv manually.
+Wait for completion and then print the output path and `head -n 6` of the CSV.
+PROMPT
+```
