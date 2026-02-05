@@ -4039,7 +4039,8 @@ async fn run_sampling_request(
 
         // Use the configured provider-specific stream retry budget.
         let max_retries = turn_context.provider.stream_max_retries();
-        if retries >= max_retries
+        if retries > 0
+            && retries >= max_retries
             && client_session.try_switch_fallback_transport(&turn_context.otel_manager)
         {
             sess.send_event(
