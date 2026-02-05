@@ -100,9 +100,21 @@ enum BackgroundEvent {
 }
 
 /// Interactive session picker that lists recorded rollout files with simple
-/// search and pagination. Shows the session name when available, otherwise the
-/// first user input as the preview, relative time (e.g., "5 seconds ago"), and
-/// the absolute path.
+/// search and pagination.
+///
+/// The picker displays sessions in a table with timestamp columns (created/updated),
+/// git branch, working directory, and conversation preview. Users can toggle
+/// between sorting by creation time and last-updated time using the Tab key.
+///
+/// Sessions are loaded on-demand via cursor-based pagination. The backend
+/// `RolloutRecorder::list_threads` returns pages ordered by the selected sort key,
+/// and the picker deduplicates across pages to handle overlapping windows when
+/// new sessions appear during pagination.
+///
+/// Filtering happens in two layers:
+/// 1. Provider and source filtering at the backend (only interactive CLI sessions
+///    for the current model provider).
+/// 2. Working-directory filtering at the picker (unless `--all` is passed).
 pub async fn run_resume_picker(
     tui: &mut Tui,
     codex_home: &Path,
@@ -224,6 +236,7 @@ async fn run_session_picker(
     Ok(SessionSelection::StartFresh)
 }
 
+/// Returns the human-readable column header for the given sort key.
 fn sort_key_label(sort_key: ThreadSortKey) -> &'static str {
     match sort_key {
         ThreadSortKey::CreatedAt => "Creation",
@@ -784,6 +797,11 @@ impl PickerState {
         token
     }
 
+    /// Cycles the sort order between creation time and last-updated time.
+    ///
+    /// Triggers a full reload because the backend must re-sort all sessions.
+    /// The existing `all_rows` are cleared and pagination restarts from the
+    /// beginning with the new sort key.
     fn toggle_sort_key(&mut self) {
         self.sort_key = match self.sort_key {
             ThreadSortKey::CreatedAt => ThreadSortKey::UpdatedAt,
@@ -1166,10 +1184,15 @@ fn render_column_headers(
     frame.render_widget_ref(Line::from(spans), area);
 }
 
+/// Pre-computed column widths and formatted labels for all visible rows.
+///
+/// Widths are measured in Unicode display width (not byte length) so columns
+/// align correctly when labels contain non-ASCII characters.
 struct ColumnMetrics {
     max_updated_width: usize,
     max_branch_width: usize,
     max_cwd_width: usize,
+    /// (updated_label, branch_label, cwd_label) per row.
     labels: Vec<(String, String, String)>,
 }
 
