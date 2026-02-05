@@ -1161,10 +1161,9 @@ fn format_updated_label(row: &Row) -> String {
 }
 
 fn format_created_label(row: &Row) -> String {
-    match (row.created_at, row.updated_at) {
-        (Some(created), _) => human_time_ago(created),
-        (None, Some(updated)) => human_time_ago(updated),
-        (None, None) => "-".to_string(),
+    match row.created_at {
+        Some(created) => human_time_ago(created),
+        None => "-".to_string(),
     }
 }
 
