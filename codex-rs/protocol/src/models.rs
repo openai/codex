@@ -72,6 +72,12 @@ pub enum ContentItem {
     OutputText { text: String },
 }
 
+impl ContentItem {
+    pub fn is_input_image(&self) -> bool {
+        matches!(self, ContentItem::InputImage { .. })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 /// Classifies an assistant message as interim commentary or final answer text.
@@ -193,6 +199,24 @@ pub enum ResponseItem {
     },
     #[serde(other)]
     Other,
+}
+
+impl ResponseItem {
+    pub fn has_input_image(&self) -> bool {
+        match self {
+            ResponseItem::Message { content, .. } => {
+                content.iter().any(ContentItem::is_input_image)
+            }
+            ResponseItem::FunctionCallOutput { output, .. } => {
+                output.content_items().is_some_and(|items| {
+                    items
+                        .iter()
+                        .any(FunctionCallOutputContentItem::is_input_image)
+                })
+            }
+            _ => false,
+        }
+    }
 }
 
 pub const BASE_INSTRUCTIONS_DEFAULT: &str = include_str!("prompts/base_instructions/default.md");
@@ -793,6 +817,12 @@ pub enum FunctionCallOutputContentItem {
     InputText { text: String },
     // Do not rename, these are serialized and used directly in the responses API.
     InputImage { image_url: String },
+}
+
+impl FunctionCallOutputContentItem {
+    pub fn is_input_image(&self) -> bool {
+        matches!(self, FunctionCallOutputContentItem::InputImage { .. })
+    }
 }
 
 /// Converts structured function-call output content into plain text for

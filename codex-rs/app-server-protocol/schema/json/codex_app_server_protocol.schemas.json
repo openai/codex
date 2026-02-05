@@ -14316,6 +14316,17 @@
             "description": "Version of the CLI that created the thread.",
             "type": "string"
           },
+          "conversationModalities": {
+            "default": null,
+            "description": "Tri-state conversation modalities signal: - `None`: unknown / not yet determined - `Some([Text])`: known to be text-only - `Some([Text, Image])`: images are known to exist in context",
+            "items": {
+              "$ref": "#/definitions/v2/InputModality"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "createdAt": {
             "description": "Unix timestamp (in seconds) when the thread was created.",
             "format": "int64",

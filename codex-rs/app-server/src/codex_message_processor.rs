@@ -201,7 +201,7 @@ use codex_core::rollout_date_parts;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_core::skills::remote::download_remote_skill;
 use codex_core::skills::remote::list_remote_skills;
-use codex_core::state_db::StateDbHandle;
+use codex_core::state_db::{StateDbHandle, get_state_db};
 use codex_core::state_db::open_if_present;
 use codex_core::token_data::parse_id_token;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
@@ -217,6 +217,9 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::dynamic_tools::DynamicToolSpec as CoreDynamicToolSpec;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::InputModality;
+use codex_protocol::openai_models::input_modalities_from_mask;
+use codex_protocol::openai_models::input_modalities_to_mask;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::GitInfo as CoreGitInfo;
 use codex_protocol::protocol::McpAuthStatus as CoreMcpAuthStatus;
@@ -1896,11 +1899,41 @@ impl CodexMessageProcessor {
                     ..
                 } = new_conv;
                 let config_snapshot = thread.config_snapshot().await;
-                let thread = build_thread_from_snapshot(
-                    thread_id,
-                    &config_snapshot,
-                    session_configured.rollout_path.clone(),
-                );
+                let fallback_provider = self.config.model_provider_id.as_str();
+                let state_db_ctx = get_state_db(&self.config, None).await;
+
+                // A bit hacky, but the summary contains a lot of useful information for the thread
+                // that unfortunately does not get returned from thread_manager.start_thread().
+                let thread = match session_configured.rollout_path.as_ref() {
+                    Some(rollout_path) => {
+                        match read_summary_from_rollout(rollout_path.as_path(), fallback_provider)
+                            .await
+                        {
+                            Ok(summary) => {
+                                let conversation_modalities = resolve_conversation_modalities(
+                                    state_db_ctx.as_deref(),
+                                    thread_id,
+                                    None,
+                                    Some(rollout_path.as_path()),
+                                )
+                                .await;
+                                summary_to_thread(summary, conversation_modalities)
+                            }
+                            Err(err) => {
+                                self.send_internal_error(
+                                    request_id,
+                                    format!(
+                                        "failed to load rollout `{}` for thread {thread_id}: {err}",
+                                        rollout_path.display()
+                                    ),
+                                )
+                                .await;
+                                return;
+                            }
+                        }
+                    }
+                    None => build_ephemeral_thread(thread_id, &config_snapshot),
+                };
 
                 let response = ThreadStartResponse {
                     thread: thread.clone(),
@@ -2224,7 +2257,14 @@ impl CodexMessageProcessor {
                         message: format!("failed to read unarchived thread: {err}"),
                         data: None,
                     })?;
-            Ok(summary_to_thread(summary))
+            let conversation_modalities = resolve_conversation_modalities(
+                state_db_ctx.as_deref(),
+                summary.conversation_id,
+                None,
+                Some(summary.path.as_path()),
+            )
+            .await;
+            Ok(summary_to_thread(summary, conversation_modalities))
         }
         .await;
 
@@ -2385,7 +2425,18 @@ impl CodexMessageProcessor {
             }
         };
 
-        let data = summaries.into_iter().map(summary_to_thread).collect();
+        let state_db_ctx = get_state_db(&self.config, None).await;
+        let mut data = Vec::with_capacity(summaries.len());
+        for summary in summaries {
+            let conversation_modalities = resolve_conversation_modalities(
+                state_db_ctx.as_deref(),
+                summary.conversation_id,
+                None,
+                Some(summary.path.as_path()),
+            )
+            .await;
+            data.push(summary_to_thread(summary, conversation_modalities));
+        }
         let response = ThreadListResponse { data, next_cursor };
         self.outgoing.send_response(request_id, response).await;
     }
@@ -2499,12 +2550,30 @@ impl CodexMessageProcessor {
             return;
         }
 
+        let state_db_ctx = get_state_db(&self.config, None).await;
+
         let mut thread = if let Some(summary) = db_summary {
-            summary_to_thread(summary)
+            let conversation_modalities = resolve_conversation_modalities(
+                state_db_ctx.as_deref(),
+                thread_uuid,
+                None,
+                rollout_path.as_deref(),
+            )
+            .await;
+            summary_to_thread(summary, conversation_modalities)
         } else if let Some(rollout_path) = rollout_path.as_ref() {
             let fallback_provider = self.config.model_provider_id.as_str();
             match read_summary_from_rollout(rollout_path, fallback_provider).await {
-                Ok(summary) => summary_to_thread(summary),
+                Ok(summary) => {
+                    let conversation_modalities = resolve_conversation_modalities(
+                        state_db_ctx.as_deref(),
+                        thread_uuid,
+                        None,
+                        Some(rollout_path.as_path()),
+                    )
+                    .await;
+                    summary_to_thread(summary, conversation_modalities)
+                }
                 Err(err) => {
                     self.send_internal_error(
                         request_id,
@@ -2539,7 +2608,17 @@ impl CodexMessageProcessor {
             if include_turns {
                 rollout_path = loaded_rollout_path.clone();
             }
-            build_thread_from_snapshot(thread_uuid, &config_snapshot, loaded_rollout_path)
+            let mut thread = if loaded_rollout_path.is_some() {
+                build_thread_from_snapshot(thread_uuid, &config_snapshot, loaded_rollout_path)
+            } else {
+                build_ephemeral_thread(thread_uuid, &config_snapshot)
+            };
+            if let Some(modalities) =
+                fetch_state_db_conversation_modalities(state_db_ctx.as_ref(), thread_uuid).await
+            {
+                thread.conversation_modalities = Some(modalities);
+            }
+            thread
         };
 
         if include_turns && let Some(rollout_path) = rollout_path.as_ref() {
@@ -2726,6 +2805,7 @@ impl CodexMessageProcessor {
         };
 
         let fallback_model_provider = config.model_provider_id.clone();
+        let state_db_ctx = get_state_db(&config, None).await;
 
         match self
             .thread_manager
@@ -2762,13 +2842,13 @@ impl CodexMessageProcessor {
                     );
                 }
 
-                let mut thread = match read_summary_from_rollout(
+                let summary = match read_summary_from_rollout(
                     rollout_path.as_path(),
                     fallback_model_provider.as_str(),
                 )
                 .await
                 {
-                    Ok(summary) => summary_to_thread(summary),
+                    Ok(summary) => summary,
                     Err(err) => {
                         self.send_internal_error(
                             request_id,
@@ -2781,6 +2861,14 @@ impl CodexMessageProcessor {
                         return;
                     }
                 };
+                let conversation_modalities = resolve_conversation_modalities(
+                    state_db_ctx.as_deref(),
+                    thread_id,
+                    None,
+                    Some(rollout_path.as_path()),
+                )
+                .await;
+                let mut thread = summary_to_thread(summary, conversation_modalities);
                 thread.turns = initial_messages
                     .as_deref()
                     .map_or_else(Vec::new, build_turns_from_event_msgs);
@@ -2970,13 +3058,13 @@ impl CodexMessageProcessor {
             );
         }
 
-        let mut thread = match read_summary_from_rollout(
+        let summary = match read_summary_from_rollout(
             rollout_path.as_path(),
             fallback_model_provider.as_str(),
         )
         .await
         {
-            Ok(summary) => summary_to_thread(summary),
+            Ok(summary) => summary,
             Err(err) => {
                 self.send_internal_error(
                     request_id,
@@ -2989,6 +3077,14 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        let conversation_modalities = resolve_conversation_modalities(
+            state_db_ctx.as_deref(),
+            thread_id,
+            None,
+            Some(rollout_path.as_path()),
+        )
+        .await;
+        let mut thread = summary_to_thread(summary, conversation_modalities);
         thread.turns = initial_messages
             .as_deref()
             .map_or_else(Vec::new, build_turns_from_event_msgs);
@@ -4285,6 +4381,10 @@ impl CodexMessageProcessor {
             return;
         };
 
+        let has_image_input = items.iter().any(|item| {
+            matches!(item, WireInputItem::Image { .. } | WireInputItem::LocalImage { .. })
+        });
+
         let mapped_items: Vec<CoreInputItem> = items
             .into_iter()
             .map(|item| match item {
@@ -4299,6 +4399,16 @@ impl CodexMessageProcessor {
                 WireInputItem::LocalImage { path } => CoreInputItem::LocalImage { path },
             })
             .collect();
+
+        if has_image_input {
+            let modalities = conversation_modalities_for_has_image(true);
+            persist_conversation_modalities(
+                conversation.state_db(),
+                conversation_id,
+                &modalities,
+            )
+            .await;
+        }
 
         // Submit user input to the conversation.
         let _ = conversation
@@ -4337,6 +4447,10 @@ impl CodexMessageProcessor {
             return;
         };
 
+        let has_image_input = items.iter().any(|item| {
+            matches!(item, WireInputItem::Image { .. } | WireInputItem::LocalImage { .. })
+        });
+
         let mapped_items: Vec<CoreInputItem> = items
             .into_iter()
             .map(|item| match item {
@@ -4351,6 +4465,16 @@ impl CodexMessageProcessor {
                 WireInputItem::LocalImage { path } => CoreInputItem::LocalImage { path },
             })
             .collect();
+
+        if has_image_input {
+            let modalities = conversation_modalities_for_has_image(true);
+            persist_conversation_modalities(
+                conversation.state_db(),
+                conversation_id,
+                &modalities,
+            )
+            .await;
+        }
 
         let _ = conversation
             .submit(Op::UserTurn {
@@ -5001,7 +5125,15 @@ impl CodexMessageProcessor {
         if let Some(rollout_path) = review_thread.rollout_path() {
             match read_summary_from_rollout(rollout_path.as_path(), fallback_provider).await {
                 Ok(summary) => {
-                    let thread = summary_to_thread(summary);
+                    let state_db_ctx = get_state_db(&self.config, None).await;
+                    let conversation_modalities = resolve_conversation_modalities(
+                        state_db_ctx.as_deref(),
+                        summary.conversation_id,
+                        None,
+                        Some(rollout_path.as_path()),
+                    )
+                    .await;
+                    let thread = summary_to_thread(summary, conversation_modalities);
                     let notif = ThreadStartedNotification { thread };
                     self.outgoing
                         .send_server_notification(ServerNotification::ThreadStarted(notif))
@@ -5795,7 +5927,6 @@ pub(crate) async fn read_summary_from_rollout(
     fallback_provider: &str,
 ) -> std::io::Result<ConversationSummary> {
     let head = read_head_for_summary(path).await?;
-
     let Some(first) = head.first() else {
         return Err(IoError::other(format!(
             "rollout at {} is empty",
@@ -5876,6 +6007,109 @@ pub(crate) async fn read_event_msgs_from_rollout(
         .collect())
 }
 
+async fn fetch_state_db_conversation_modalities(
+    state_db_ctx: Option<&StateDbHandle>,
+    thread_id: ThreadId,
+) -> Option<Vec<InputModality>> {
+    let ctx = state_db_ctx?;
+    match ctx.get_thread(thread_id).await {
+        Ok(Some(metadata)) => metadata
+            .conversation_modalities
+            .map(input_modalities_from_mask),
+        Ok(None) => None,
+        Err(err) => {
+            warn!("failed to read conversation modalities for thread {thread_id}: {err}");
+            None
+        }
+    }
+}
+
+async fn persist_conversation_modalities(
+    state_db_ctx: Option<&StateDbHandle>,
+    thread_id: ThreadId,
+    conversation_modalities: &[InputModality],
+) {
+    let Some(ctx) = state_db_ctx else {
+        return;
+    };
+    if let Err(err) = ctx
+        .set_thread_conversation_modalities(
+            thread_id,
+            input_modalities_to_mask(conversation_modalities),
+        )
+        .await
+    {
+        warn!(
+            "failed to persist conversation modalities for thread {thread_id}: {err}"
+        );
+    }
+}
+
+pub(crate) async fn resolve_conversation_modalities(
+    state_db_ctx: Option<&StateDbHandle>,
+    thread_id: ThreadId,
+    current_modalities: Option<Vec<InputModality>>,
+    rollout_path: Option<&Path>,
+) -> Option<Vec<InputModality>> {
+    if let Some(modalities) = current_modalities {
+        if modalities.contains(&InputModality::Image) {
+            persist_conversation_modalities(state_db_ctx, thread_id, &modalities).await;
+        }
+        return Some(modalities);
+    }
+
+    if let Some(value) = fetch_state_db_conversation_modalities(state_db_ctx, thread_id).await {
+        return Some(value);
+    }
+
+    let Some(rollout_path) = rollout_path else {
+        return None;
+    };
+
+    match read_rollout_has_image_context(rollout_path).await {
+        Ok(has_image_context) => {
+            let modalities = conversation_modalities_for_has_image(has_image_context);
+            persist_conversation_modalities(state_db_ctx, thread_id, &modalities).await;
+            Some(modalities)
+        }
+        Err(err) => {
+            warn!(
+                "failed to determine conversation modalities for rollout {}: {err}",
+                rollout_path.display()
+            );
+            None
+        }
+    }
+}
+
+pub(crate) async fn read_rollout_has_image_context(path: &Path) -> std::io::Result<bool> {
+    let items = match RolloutRecorder::get_rollout_history(path).await? {
+        InitialHistory::New => Vec::new(),
+        InitialHistory::Forked(items) => items,
+        InitialHistory::Resumed(resumed) => resumed.history,
+    };
+
+    Ok(items.into_iter().rev().any(|item| match item {
+        RolloutItem::ResponseItem(response_item) => response_item.has_input_image(),
+        RolloutItem::EventMsg(EventMsg::UserMessage(user_message)) => {
+            user_message
+                .images
+                .as_ref()
+                .is_some_and(|images| !images.is_empty())
+                || !user_message.local_images.is_empty()
+        }
+        _ => false,
+    }))
+}
+
+fn conversation_modalities_for_has_image(has_image_context: bool) -> Vec<InputModality> {
+    if has_image_context {
+        vec![InputModality::Text, InputModality::Image]
+    } else {
+        vec![InputModality::Text]
+    }
+}
+
 fn extract_conversation_summary(
     path: PathBuf,
     head: &[serde_json::Value],
@@ -5909,7 +6143,6 @@ fn extract_conversation_summary(
         .unwrap_or_else(|| fallback_provider.to_string());
     let git_info = git.map(map_git_info);
     let updated_at = updated_at.or_else(|| timestamp.clone());
-
     Some(ConversationSummary {
         conversation_id,
         timestamp,
@@ -5961,6 +6194,7 @@ fn build_thread_from_snapshot(
     Thread {
         id: thread_id.to_string(),
         preview: String::new(),
+        conversation_modalities: Some(vec![InputModality::Text]),
         model_provider: config_snapshot.model_provider_id.clone(),
         created_at: now,
         updated_at: now,
@@ -5973,7 +6207,10 @@ fn build_thread_from_snapshot(
     }
 }
 
-pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
+pub(crate) fn summary_to_thread(
+    summary: ConversationSummary,
+    resolved_conversation_modalities: Option<Vec<InputModality>>,
+) -> Thread {
     let ConversationSummary {
         conversation_id,
         path,
@@ -5994,10 +6231,12 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
         branch: info.branch,
         origin_url: info.origin_url,
     });
+    let conversation_modalities = resolved_conversation_modalities;
 
     Thread {
         id: conversation_id.to_string(),
         preview,
+        conversation_modalities,
         model_provider,
         created_at: created_at.map(|dt| dt.timestamp()).unwrap_or(0),
         updated_at: updated_at.map(|dt| dt.timestamp()).unwrap_or(0),
@@ -6156,6 +6395,58 @@ mod tests {
         };
 
         assert_eq!(summary, expected);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_rollout_has_image_context_detects_images() -> Result<()> {
+        use codex_protocol::protocol::EventMsg;
+        use codex_protocol::protocol::RolloutItem;
+        use codex_protocol::protocol::RolloutLine;
+        use codex_protocol::protocol::SessionMetaLine;
+        use codex_protocol::protocol::UserMessageEvent;
+        use std::fs;
+
+        let temp_dir = TempDir::new()?;
+        let path = temp_dir.path().join("rollout.jsonl");
+
+        let conversation_id = ThreadId::from_string("f3225d70-c282-4eaf-bb39-c474f8194bcb")?;
+        let timestamp = "2025-09-06T10:10:10.000Z".to_string();
+
+        let session_meta = SessionMeta {
+            id: conversation_id,
+            timestamp: timestamp.clone(),
+            model_provider: None,
+            ..SessionMeta::default()
+        };
+
+        let lines = vec![
+            RolloutLine {
+                timestamp: timestamp.clone(),
+                item: RolloutItem::SessionMeta(SessionMetaLine {
+                    meta: session_meta,
+                    git: None,
+                }),
+            },
+            RolloutLine {
+                timestamp: timestamp.clone(),
+                item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                    message: "legacy image event".to_string(),
+                    images: Some(vec!["data:image/png;base64,abc123".to_string()]),
+                    local_images: Vec::new(),
+                    text_elements: Vec::new(),
+                })),
+            },
+        ];
+
+        let mut contents = String::new();
+        for line in lines {
+            contents.push_str(&serde_json::to_string(&line)?);
+            contents.push('\n');
+        }
+        fs::write(&path, contents)?;
+
+        assert_eq!(read_rollout_has_image_context(path.as_path()).await?, true);
         Ok(())
     }
 }
