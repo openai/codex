@@ -4,6 +4,7 @@ use crate::AuthManager;
 use crate::RolloutRecorder;
 use crate::agent::AgentControl;
 use crate::analytics_client::AnalyticsEventsClient;
+use crate::client::ModelClient;
 use crate::exec_policy::ExecPolicyManager;
 use crate::file_watcher::FileWatcher;
 use crate::mcp_connection_manager::McpConnectionManager;
@@ -11,7 +12,6 @@ use crate::models_manager::manager::ModelsManager;
 use crate::skills::SkillsManager;
 use crate::state_db::StateDbHandle;
 use crate::tools::sandboxing::ApprovalStore;
-use crate::transport_manager::TransportManager;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::user_notification::UserNotifier;
 use codex_otel::OtelManager;
@@ -37,5 +37,6 @@ pub(crate) struct SessionServices {
     pub(crate) file_watcher: Arc<FileWatcher>,
     pub(crate) agent_control: AgentControl,
     pub(crate) state_db: Option<StateDbHandle>,
-    pub(crate) transport_manager: TransportManager,
+    /// Session-scoped model client shared across turns.
+    pub(crate) model_client: ModelClient,
 }

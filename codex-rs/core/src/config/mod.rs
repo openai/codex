@@ -271,6 +271,9 @@ pub struct Config {
     /// overridden by the `CODEX_HOME` environment variable).
     pub codex_home: PathBuf,
 
+    /// Directory where Codex writes log files (defaults to `$CODEX_HOME/log`).
+    pub log_dir: PathBuf,
+
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     pub history: History,
 
@@ -895,6 +898,10 @@ pub struct ConfigToml {
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     #[serde(default)]
     pub history: Option<History>,
+
+    /// Directory where Codex writes log files, for example `codex-tui.log`.
+    /// Defaults to `$CODEX_HOME/log`.
+    pub log_dir: Option<AbsolutePathBuf>,
 
     /// Optional URI-based file opener. If set, citations to files in the model
     /// output will be hyperlinked using the specified URI scheme.
@@ -1560,6 +1567,16 @@ impl Config {
 
         let check_for_update_on_startup = cfg.check_for_update_on_startup.unwrap_or(true);
 
+        let log_dir = cfg
+            .log_dir
+            .as_ref()
+            .map(AbsolutePathBuf::to_path_buf)
+            .unwrap_or_else(|| {
+                let mut p = codex_home.clone();
+                p.push("log");
+                p
+            });
+
         // Ensure that every field of ConfigRequirements is applied to the final
         // Config.
         let ConfigRequirements {
@@ -1626,6 +1643,7 @@ impl Config {
             tool_output_token_limit: cfg.tool_output_token_limit,
             agent_max_threads,
             codex_home,
+            log_dir,
             config_layer_stack,
             history,
             ephemeral: ephemeral.unwrap_or_default(),
@@ -1816,9 +1834,7 @@ pub fn find_codex_home() -> std::io::Result<PathBuf> {
 /// Returns the path to the folder where Codex logs are stored. Does not verify
 /// that the directory exists.
 pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {
-    let mut p = cfg.codex_home.clone();
-    p.push("log");
-    Ok(p)
+    Ok(cfg.log_dir.clone())
 }
 
 #[cfg(test)]
@@ -3842,6 +3858,7 @@ model_verbosity = "high"
                 tool_output_token_limit: None,
                 agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
                 codex_home: fixture.codex_home(),
+                log_dir: fixture.codex_home().join("log"),
                 config_layer_stack: Default::default(),
                 history: History::default(),
                 ephemeral: false,
@@ -3927,6 +3944,7 @@ model_verbosity = "high"
             tool_output_token_limit: None,
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
             codex_home: fixture.codex_home(),
+            log_dir: fixture.codex_home().join("log"),
             config_layer_stack: Default::default(),
             history: History::default(),
             ephemeral: false,
@@ -4027,6 +4045,7 @@ model_verbosity = "high"
             tool_output_token_limit: None,
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
             codex_home: fixture.codex_home(),
+            log_dir: fixture.codex_home().join("log"),
             config_layer_stack: Default::default(),
             history: History::default(),
             ephemeral: false,
@@ -4113,6 +4132,7 @@ model_verbosity = "high"
             tool_output_token_limit: None,
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
             codex_home: fixture.codex_home(),
+            log_dir: fixture.codex_home().join("log"),
             config_layer_stack: Default::default(),
             history: History::default(),
             ephemeral: false,

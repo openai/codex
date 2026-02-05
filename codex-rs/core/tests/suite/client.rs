@@ -11,7 +11,6 @@ use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::ThreadManager;
-use codex_core::TransportManager;
 use codex_core::WireApi;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::built_in_model_providers;
@@ -1264,19 +1263,18 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         SessionSource::Exec,
     );
 
-    let mut client = ModelClient::new(
-        Arc::clone(&config),
+    let client = ModelClient::new(
         None,
-        model_info,
-        otel_manager,
-        provider,
-        effort,
-        summary,
         conversation_id,
+        provider.clone(),
         SessionSource::Exec,
-        TransportManager::new(),
-    )
-    .new_session(None);
+        config.model_verbosity,
+        false,
+        false,
+        false,
+        None,
+    );
+    let mut client_session = client.new_session();
 
     let mut prompt = Prompt::default();
     prompt.input.push(ResponseItem::Reasoning {
@@ -1340,8 +1338,16 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         output: "ok".into(),
     });
 
-    let mut stream = client
-        .stream(&prompt)
+    let mut stream = client_session
+        .stream(
+            &prompt,
+            &model_info,
+            &otel_manager,
+            effort,
+            summary,
+            true,
+            None,
+        )
         .await
         .expect("responses stream to start");
 

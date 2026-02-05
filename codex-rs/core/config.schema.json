@@ -1328,6 +1328,14 @@
       "description": "System instructions.",
       "type": "string"
     },
+    "log_dir": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      ],
+      "description": "Directory where Codex writes log files, for example `codex-tui.log`. Defaults to `$CODEX_HOME/log`."
+    },
     "mcp_oauth_callback_port": {
       "description": "Optional fixed port for the local HTTP callback server used during MCP OAuth login. When unset, Codex will bind to an ephemeral port chosen by the OS.",
       "format": "uint16",

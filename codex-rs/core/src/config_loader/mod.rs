@@ -144,7 +144,15 @@ pub async fn load_config_layers_state(
     let cli_overrides_layer = if cli_overrides.is_empty() {
         None
     } else {
-        Some(overrides::build_cli_overrides_layer(cli_overrides))
+        let cli_overrides_layer = overrides::build_cli_overrides_layer(cli_overrides);
+        let base_dir = cwd
+            .as_ref()
+            .map(AbsolutePathBuf::as_path)
+            .unwrap_or(codex_home);
+        Some(resolve_relative_paths_in_config_toml(
+            cli_overrides_layer,
+            base_dir,
+        )?)
     };
 
     // Include an entry for the "system" config folder, loading its config.toml,
