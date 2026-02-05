@@ -35,6 +35,7 @@ use codex_app_server_protocol::ExecOneOffCommandResponse;
 use codex_app_server_protocol::ExperimentalFeature as ApiExperimentalFeature;
 use codex_app_server_protocol::ExperimentalFeatureListParams;
 use codex_app_server_protocol::ExperimentalFeatureListResponse;
+use codex_app_server_protocol::ExperimentalFeatureStage as ApiExperimentalFeatureStage;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::FeedbackUploadResponse;
 use codex_app_server_protocol::ForkConversationParams;
@@ -3074,23 +3075,40 @@ impl CodexMessageProcessor {
 
         let data = FEATURES
             .iter()
-            .filter_map(|spec| {
-                let Stage::Experimental {
-                    name,
-                    menu_description,
-                    announcement,
-                } = spec.stage
-                else {
-                    return None;
+            .map(|spec| {
+                let (stage, display_name, description, announcement) = match spec.stage {
+                    Stage::Experimental {
+                        name,
+                        menu_description,
+                        announcement,
+                    } => (
+                        ApiExperimentalFeatureStage::Beta,
+                        Some(name.to_string()),
+                        Some(menu_description.to_string()),
+                        Some(announcement.to_string()),
+                    ),
+                    Stage::UnderDevelopment => (
+                        ApiExperimentalFeatureStage::UnderDevelopment,
+                        None,
+                        None,
+                        None,
+                    ),
+                    Stage::Stable => (ApiExperimentalFeatureStage::Stable, None, None, None),
+                    Stage::Deprecated => {
+                        (ApiExperimentalFeatureStage::Deprecated, None, None, None)
+                    }
+                    Stage::Removed => (ApiExperimentalFeatureStage::Removed, None, None, None),
                 };
-                Some(ApiExperimentalFeature {
-                    flag_name: spec.key.to_string(),
-                    display_name: name.to_string(),
-                    description: menu_description.to_string(),
-                    announcement: announcement.to_string(),
+
+                ApiExperimentalFeature {
+                    name: spec.key.to_string(),
+                    stage,
+                    display_name,
+                    description,
+                    announcement,
                     enabled: config.features.enabled(spec.id),
                     default_enabled: spec.default_enabled,
-                })
+                }
             })
             .collect::<Vec<_>>();
 
@@ -3129,7 +3147,7 @@ impl CodexMessageProcessor {
         if start > total {
             self.send_invalid_request_error(
                 request_id,
-                format!("cursor {start} exceeds total experimental features {total}"),
+                format!("cursor {start} exceeds total feature flags {total}"),
             )
             .await;
             return;
