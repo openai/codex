@@ -10,6 +10,7 @@ use codex_common::CliConfigOverrides;
 use codex_core::config::Config;
 use codex_core::secrets::SecretName;
 use codex_core::secrets::SecretScope;
+use codex_core::secrets::SecretsBackendKind;
 use codex_core::secrets::SecretsManager;
 use crossterm::event::Event;
 use crossterm::event::KeyCode;
@@ -93,7 +94,7 @@ pub struct SecretsDeleteArgs {
 impl SecretsCli {
     pub async fn run(self) -> Result<()> {
         let config = load_config(self.config_overrides).await?;
-        let manager = SecretsManager::new(config.codex_home.clone(), config.secrets_backend);
+        let manager = SecretsManager::new(config.codex_home, SecretsBackendKind::Local);
         match self.subcommand {
             SecretsSubcommand::Set(args) => run_set(&manager, args),
             SecretsSubcommand::Edit(args) => run_edit(&manager, args),
