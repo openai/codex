@@ -437,6 +437,10 @@ client_request_definitions! {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         response: v1::UserInfoResponse,
     },
+    FindFilesStream {
+        params: FindFilesStreamParams,
+        response: FindFilesStreamResponse,
+    },
     FuzzyFileSearch {
         params: FuzzyFileSearchParams,
         response: FuzzyFileSearchResponse,
@@ -670,6 +674,18 @@ pub struct FuzzyFileSearchParams {
     pub cancellation_token: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct FindFilesStreamParams {
+    pub query: String,
+    pub roots: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<String>,
+    // if provided, will cancel any previous request that used the same value
+    pub cancellation_token: Option<String>,
+}
+
 /// Superset of [`codex_file_search::FileMatch`]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 pub struct FuzzyFileSearchResult {
@@ -683,6 +699,24 @@ pub struct FuzzyFileSearchResult {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 pub struct FuzzyFileSearchResponse {
     pub files: Vec<FuzzyFileSearchResult>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct FindFilesStreamResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct FindFilesStreamChunkNotification {
+    pub request_id: RequestId,
+    pub query: String,
+    pub files: Vec<FuzzyFileSearchResult>,
+    pub total_match_count: usize,
+    pub chunk_index: usize,
+    pub chunk_count: usize,
+    pub running: bool,
 }
 
 server_notification_definitions! {
@@ -716,6 +750,7 @@ server_notification_definitions! {
     ContextCompacted => "thread/compacted" (v2::ContextCompactedNotification),
     DeprecationNotice => "deprecationNotice" (v2::DeprecationNoticeNotification),
     ConfigWarning => "configWarning" (v2::ConfigWarningNotification),
+    FindFilesStreamChunk => "findFilesStream/chunk" (FindFilesStreamChunkNotification),
 
     /// Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.
     WindowsWorldWritableWarning => "windows/worldWritableWarning" (v2::WindowsWorldWritableWarningNotification),
