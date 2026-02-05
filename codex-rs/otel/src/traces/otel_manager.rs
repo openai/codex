@@ -621,6 +621,7 @@ impl OtelManager {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn tool_result_with_tags(
         &self,
         tool_name: &str,
