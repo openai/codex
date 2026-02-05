@@ -324,7 +324,7 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
             effort: None,
             summary: None,
             collaboration_mode: None,
-            personality: Some(Personality::Pragmatic),
+            personality: Some(Personality::Friendly),
         })
         .await?;
 
@@ -365,7 +365,7 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
         "expected personality update preamble, got {personality_text:?}"
     );
     assert!(
-        personality_text.contains(LOCAL_PRAGMATIC_TEMPLATE),
+        personality_text.contains(LOCAL_FRIENDLY_TEMPLATE),
         "expected personality update to include the local pragmatic template, got: {personality_text:?}"
     );
 
@@ -902,7 +902,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
             effort: None,
             summary: None,
             collaboration_mode: None,
-            personality: Some(Personality::Pragmatic),
+            personality: Some(Personality::Friendly),
         })
         .await?;
 
@@ -942,7 +942,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
         "expected personality update preamble, got {personality_text:?}"
     );
     assert!(
-        personality_text.contains(remote_pragmatic_message),
+        personality_text.contains(remote_friendly_message),
         "expected personality update to include remote template, got: {personality_text:?}"
     );
 
