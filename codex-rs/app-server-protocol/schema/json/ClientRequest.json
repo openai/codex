@@ -2810,6 +2810,31 @@
       ],
       "type": "object"
     },
+    "TurnSteerParams": {
+      "properties": {
+        "expectedTurnId": {
+          "description": "Optional active turn id precondition. If specified and the current active turn does not match, the request fails.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "input": {
+          "items": {
+            "$ref": "#/definitions/UserInput"
+          },
+          "type": "array"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "input",
+        "threadId"
+      ],
+      "type": "object"
+    },
     "UserInput": {
       "oneOf": [
         {
@@ -3509,6 +3534,30 @@
         "params"
       ],
       "title": "Turn/startRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "turn/steer"
+          ],
+          "title": "Turn/steerRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/TurnSteerParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Turn/steerRequest",
       "type": "object"
     },
     {

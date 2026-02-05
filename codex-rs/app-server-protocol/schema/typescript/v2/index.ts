@@ -179,6 +179,8 @@ export type { TurnStartParams } from "./TurnStartParams";
 export type { TurnStartResponse } from "./TurnStartResponse";
 export type { TurnStartedNotification } from "./TurnStartedNotification";
 export type { TurnStatus } from "./TurnStatus";
+export type { TurnSteerParams } from "./TurnSteerParams";
+export type { TurnSteerResponse } from "./TurnSteerResponse";
 export type { UserInput } from "./UserInput";
 export type { WebSearchAction } from "./WebSearchAction";
 export type { WindowsWorldWritableWarningNotification } from "./WindowsWorldWritableWarningNotification";

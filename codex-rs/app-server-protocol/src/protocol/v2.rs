@@ -2071,6 +2071,25 @@ pub struct TurnStartResponse {
     pub turn: Turn,
 }
 
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnSteerParams {
+    pub thread_id: String,
+    pub input: Vec<UserInput>,
+    /// Optional active turn id precondition. If specified and the current active
+    /// turn does not match, the request fails.
+    #[ts(optional = nullable)]
+    pub expected_turn_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnSteerResponse {
+    pub turn_id: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
