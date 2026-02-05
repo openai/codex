@@ -2075,10 +2075,10 @@ impl Session {
     }
 
     pub(crate) async fn recompute_token_usage(&self, turn_context: &TurnContext) {
-        let Some(estimated_total_tokens) = self
-            .clone_history()
-            .await
-            .estimate_token_count(turn_context)
+        let history = self.clone_history().await;
+        let base_instructions = self.get_base_instructions().await;
+        let Some(estimated_total_tokens) =
+            history.estimate_token_count_with_base_instructions(&base_instructions)
         else {
             return;
         };
@@ -4734,6 +4734,7 @@ mod tests {
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_app_server_protocol::AppInfo;
     use codex_app_server_protocol::AuthMode;
+    use codex_protocol::models::BaseInstructions;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
     use std::path::Path;
@@ -5011,6 +5012,46 @@ mod tests {
 
         let actual = session.state.lock().await.token_info();
         assert_eq!(actual, Some(info2));
+    }
+
+    #[tokio::test]
+    async fn recompute_token_usage_uses_session_base_instructions() {
+        let (session, turn_context) = make_session_and_context().await;
+
+        let override_instructions = "SESSION_OVERRIDE_INSTRUCTIONS_ONLY".repeat(120);
+        {
+            let mut state = session.state.lock().await;
+            state.session_configuration.base_instructions = override_instructions.clone();
+        }
+
+        let item = user_message("hello");
+        session
+            .record_into_history(std::slice::from_ref(&item), &turn_context)
+            .await;
+
+        let history = session.clone_history().await;
+        let session_base_instructions = BaseInstructions {
+            text: override_instructions,
+        };
+        let expected_tokens = history
+            .estimate_token_count_with_base_instructions(&session_base_instructions)
+            .expect("estimate with session base instructions");
+        let model_estimated_tokens = history
+            .estimate_token_count(&turn_context)
+            .expect("estimate with model instructions");
+        assert_ne!(expected_tokens, model_estimated_tokens);
+
+        session.recompute_token_usage(&turn_context).await;
+
+        let actual_tokens = session
+            .state
+            .lock()
+            .await
+            .token_info()
+            .expect("token info")
+            .last_token_usage
+            .total_tokens;
+        assert_eq!(actual_tokens, expected_tokens.max(0));
     }
 
     #[tokio::test]
