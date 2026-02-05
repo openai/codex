@@ -226,7 +226,11 @@ tiny_http = "0.12"
 tokio = "1"
 tokio-stream = "0.1.18"
 tokio-test = "0.4"
-tokio-tungstenite = { version = "0.28.0", features = ["proxy", "rustls-tls-native-roots"] }
+tokio-tungstenite = { version = "0.27.0", features = ["rustls-tls-native-roots"] }
+#
+# Enable permessage-deflate support by unifying tungstenite features across the
+# graph. codex-api references deflate config via tokio-tungstenite's re-export.
+tungstenite = { version = "0.27.0", features = ["deflate"] }
 tokio-util = "0.7.18"
 toml = "0.9.5"
 toml_edit = "0.24.0"
@@ -317,10 +321,7 @@ opt-level = 0
 # ratatui = { path = "../../ratatui" }
 crossterm = { git = "https://github.com/nornagon/crossterm", branch = "nornagon/color-query" }
 ratatui = { git = "https://github.com/nornagon/ratatui", branch = "nornagon-v0.29.0-patch" }
-tokio-tungstenite = { git = "https://github.com/JakkuSakura/tokio-tungstenite", rev = "2ae536b0de793f3ddf31fc2f22d445bf1ef2023d" }
+tungstenite = { git = "https://github.com/signalapp/tungstenite-rs", rev = "ebdbe86da4c2e5502044658b872189b0c8f63468" }
 
 # Uncomment to debug local changes.
 # rmcp = { path = "../../rust-sdk/crates/rmcp" }
-
-[patch."ssh://git@github.com/JakkuSakura/tungstenite-rs.git"]
-tungstenite = { git = "https://github.com/JakkuSakura/tungstenite-rs", rev = "f514de8644821113e5d18a027d6d28a5c8cc0a6e" }

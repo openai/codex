@@ -16,6 +16,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }
 tokio-tungstenite = { workspace = true }
+tungstenite = { workspace = true }
 tracing = { workspace = true }
 eventsource-stream = { workspace = true }
 regex-lite = { workspace = true }
