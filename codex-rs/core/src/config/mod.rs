@@ -21,6 +21,7 @@ use crate::config::types::UriBasedFileOpener;
 use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigRequirements;
+use crate::config_loader::ConstrainedWithSource;
 use crate::config_loader::LoaderOverrides;
 use crate::config_loader::McpServerIdentity;
 use crate::config_loader::McpServerRequirement;
@@ -115,6 +116,9 @@ pub struct Config {
     /// Provenance for how this [`Config`] was derived (merged layers + enforced
     /// requirements).
     pub config_layer_stack: ConfigLayerStack,
+
+    /// Warnings collected during config load that should be shown on startup.
+    pub startup_warnings: Vec<String>,
 
     /// Optional override of model selection.
     pub model: Option<String>,
@@ -599,6 +603,41 @@ fn constrain_mcp_servers(
         filter_mcp_servers_by_requirements(&mut servers, mcp_requirements.as_ref());
         servers
     })
+}
+
+fn apply_requirement_constrained_value<T>(
+    field_name: &'static str,
+    configured_value: T,
+    constrained_value: &mut ConstrainedWithSource<T>,
+    startup_warnings: &mut Vec<String>,
+) -> std::io::Result<()>
+where
+    T: Clone + std::fmt::Debug + Send + Sync,
+{
+    if let Err(err) = constrained_value.set(configured_value) {
+        let fallback_value = constrained_value.get().clone();
+        tracing::warn!(
+            error = %err,
+            ?fallback_value,
+            requirement_source = ?constrained_value.source,
+            "configured value is disallowed by requirements; falling back to required value for {field_name}"
+        );
+        let message = format!(
+            "Configured value for `{field_name}` is disallowed by requirements; falling back to required value {fallback_value:?}. Details: {err}"
+        );
+        startup_warnings.push(message);
+
+        constrained_value.set(fallback_value).map_err(|fallback_err| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "configured value for `{field_name}` is disallowed by requirements ({err}); fallback to a requirement-compliant value also failed ({fallback_err})"
+                ),
+            )
+        })?;
+    }
+
+    Ok(())
 }
 
 fn mcp_server_matches_requirement(
@@ -1320,6 +1359,7 @@ impl Config {
     ) -> std::io::Result<Self> {
         let requirements = config_layer_stack.requirements().clone();
         let user_instructions = Self::load_instructions(Some(&codex_home));
+        let mut startup_warnings = Vec::new();
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
         let ConfigOverrides {
@@ -1586,12 +1626,18 @@ impl Config {
             enforce_residency,
         } = requirements;
 
-        constrained_approval_policy
-            .set(approval_policy)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
-        constrained_sandbox_policy
-            .set(sandbox_policy)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
+        apply_requirement_constrained_value(
+            "approval_policy",
+            approval_policy,
+            &mut constrained_approval_policy,
+            &mut startup_warnings,
+        )?;
+        apply_requirement_constrained_value(
+            "sandbox_mode",
+            sandbox_policy,
+            &mut constrained_sandbox_policy,
+            &mut startup_warnings,
+        )?;
 
         let mcp_servers = constrain_mcp_servers(cfg.mcp_servers.clone(), mcp_servers.as_ref())
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
@@ -1604,6 +1650,7 @@ impl Config {
             model_provider_id,
             model_provider,
             cwd: resolved_cwd,
+            startup_warnings,
             approval_policy: constrained_approval_policy.value,
             sandbox_policy: constrained_sandbox_policy.value,
             enforce_residency: enforce_residency.value,
@@ -3853,6 +3900,7 @@ model_verbosity = "high"
                 codex_home: fixture.codex_home(),
                 log_dir: fixture.codex_home().join("log"),
                 config_layer_stack: Default::default(),
+                startup_warnings: Vec::new(),
                 history: History::default(),
                 ephemeral: false,
                 file_opener: UriBasedFileOpener::VsCode,
@@ -3940,6 +3988,7 @@ model_verbosity = "high"
             codex_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),
             config_layer_stack: Default::default(),
+            startup_warnings: Vec::new(),
             history: History::default(),
             ephemeral: false,
             file_opener: UriBasedFileOpener::VsCode,
@@ -4042,6 +4091,7 @@ model_verbosity = "high"
             codex_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),
             config_layer_stack: Default::default(),
+            startup_warnings: Vec::new(),
             history: History::default(),
             ephemeral: false,
             file_opener: UriBasedFileOpener::VsCode,
@@ -4130,6 +4180,7 @@ model_verbosity = "high"
             codex_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),
             config_layer_stack: Default::default(),
+            startup_warnings: Vec::new(),
             history: History::default(),
             ephemeral: false,
             file_opener: UriBasedFileOpener::VsCode,
@@ -4681,7 +4732,7 @@ mcp_oauth_callback_port = 5678
     }
 
     #[tokio::test]
-    async fn explicit_sandbox_mode_still_errors_when_disallowed_by_requirements()
+    async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements()
     -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         std::fs::write(
@@ -4700,19 +4751,15 @@ mcp_oauth_callback_port = 5678
             enforce_residency: None,
         };
 
-        let err = ConfigBuilder::default()
+        let config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
             .fallback_cwd(Some(codex_home.path().to_path_buf()))
             .cloud_requirements(CloudRequirementsLoader::new(
                 async move { Some(requirements) },
             ))
             .build()
-            .await
-            .expect_err("explicit disallowed mode should still fail");
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
-        let message = err.to_string();
-        assert!(message.contains("invalid value for `sandbox_mode`"));
-        assert!(message.contains("set by cloud requirements"));
+            .await?;
+        assert_eq!(*config.sandbox_policy.get(), SandboxPolicy::ReadOnly);
         Ok(())
     }
 
@@ -4749,7 +4796,7 @@ trust_level = "untrusted"
     }
 
     #[tokio::test]
-    async fn explicit_approval_policy_still_errors_when_disallowed_by_requirements()
+    async fn explicit_approval_policy_falls_back_when_disallowed_by_requirements()
     -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         std::fs::write(
@@ -4758,7 +4805,7 @@ trust_level = "untrusted"
 "#,
         )?;
 
-        let err = ConfigBuilder::default()
+        let config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
             .fallback_cwd(Some(codex_home.path().to_path_buf()))
             .cloud_requirements(CloudRequirementsLoader::new(async {
@@ -4768,12 +4815,8 @@ trust_level = "untrusted"
                 })
             }))
             .build()
-            .await
-            .expect_err("explicit disallowed approval policy should fail");
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
-        let message = err.to_string();
-        assert!(message.contains("invalid value for `approval_policy`"));
-        assert!(message.contains("set by cloud requirements"));
+            .await?;
+        assert_eq!(config.approval_policy.value(), AskForApproval::OnRequest);
         Ok(())
     }
 }
