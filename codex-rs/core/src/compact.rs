@@ -32,8 +32,18 @@ use tracing::error;
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt.md");
 pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_prefix.md");
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
-// Keep reinjected turn context bounded so large instruction blocks do not
-// dominate post-compaction history.
+// Turn context messages are re-injected after compaction so the next turn sees
+// canonical session state (permissions, environment context, instructions).
+//
+// Some of those entries can be very large (for example AGENTS.md or custom
+// developer instructions), and their size is otherwise unbounded here. Without
+// a cap, re-injection can dominate post-compaction history and quickly push
+// token usage back toward auto-compaction thresholds.
+//
+// We therefore budget the reinjected context separately and drop only
+// droppable context items (largest first) when needed. Using half of the
+// existing compact user-message budget keeps this heuristic simple and local to
+// compaction behavior.
 const REINJECTED_INITIAL_CONTEXT_MAX_TOKENS: usize = COMPACT_USER_MESSAGE_MAX_TOKENS / 2;
 const PERMISSIONS_INSTRUCTIONS_OPEN_TAG: &str = "<permissions instructions>";
 
