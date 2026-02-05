@@ -17,6 +17,6 @@ version_regex = "^0\\.0\\.0$"
 to_date = "2026-05-10"
 
 [[announcements]]
-content = "Upgrade to v0.98.0 to get access to `gpt-5.3-codex`!"
+content = "**BREAKING NEWS**: `gpt-5.3-codex` is out! Upgrade to `0.98.0` to try it."
 from_date = "2025-02-01"
 to_date = "2025-02-15"
