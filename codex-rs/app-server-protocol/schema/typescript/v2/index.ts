@@ -120,6 +120,7 @@ export type { SkillToolDependency } from "./SkillToolDependency";
 export type { SkillsConfigWriteParams } from "./SkillsConfigWriteParams";
 export type { SkillsConfigWriteResponse } from "./SkillsConfigWriteResponse";
 export type { SkillsListEntry } from "./SkillsListEntry";
+export type { SkillsListExtraRootsForCwd } from "./SkillsListExtraRootsForCwd";
 export type { SkillsListParams } from "./SkillsListParams";
 export type { SkillsListResponse } from "./SkillsListResponse";
 export type { SkillsRemoteReadParams } from "./SkillsRemoteReadParams";

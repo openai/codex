@@ -2193,6 +2193,23 @@
       ],
       "type": "object"
     },
+    "SkillsListExtraRootsForCwd": {
+      "properties": {
+        "cwd": {
+          "type": "string"
+        },
+        "extraUserRoots": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "cwd"
+      ],
+      "type": "object"
+    },
     "SkillsListParams": {
       "properties": {
         "cwds": {
@@ -2205,6 +2222,13 @@
         "forceReload": {
           "description": "When true, bypass the skills cache and re-scan skills from disk.",
           "type": "boolean"
+        },
+        "perCwdExtraUserRoots": {
+          "description": "Optional per-cwd extra roots to scan as user-scoped skills.",
+          "items": {
+            "$ref": "#/definitions/SkillsListExtraRootsForCwd"
+          },
+          "type": "array"
         }
       },
       "type": "object"

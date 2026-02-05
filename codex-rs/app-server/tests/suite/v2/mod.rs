@@ -15,6 +15,7 @@ mod plan_item;
 mod rate_limits;
 mod request_user_input;
 mod review;
+mod skills_list;
 mod thread_archive;
 mod thread_fork;
 mod thread_list;
