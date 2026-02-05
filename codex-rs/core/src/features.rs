@@ -107,6 +107,8 @@ pub enum Feature {
     RuntimeMetrics,
     /// Persist rollout metadata to a local SQLite database.
     Sqlite,
+    /// Enable the get_memory tool backed by SQLite thread memories.
+    MemoryTool,
     /// Append additional AGENTS.md guidance to user instructions.
     ChildAgentsMd,
     /// Enforce UTF8 output in Powershell.
@@ -450,6 +452,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::MemoryTool,
+        key: "memory_tool",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::ChildAgentsMd,
         key: "child_agents_md",
         stage: Stage::UnderDevelopment,
@@ -556,12 +564,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Steer,
         key: "steer",
-        stage: Stage::Experimental {
-            name: "Steer conversation",
-            menu_description: "Enter submits immediately; Tab queues messages when a task is running.",
-            announcement: "NEW! Try Steer mode: Enter submits immediately, Tab queues. Enable in /experimental!",
-        },
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::CollaborationModes,

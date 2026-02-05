@@ -36,11 +36,14 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::text::Line;
 use std::time::Duration;
 
 mod app_link_view;
 mod approval_overlay;
+mod multi_select_picker;
 mod request_user_input;
+mod status_line_setup;
 pub(crate) use app_link_view::AppLinkView;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
@@ -74,6 +77,8 @@ pub(crate) use feedback_view::feedback_selection_params;
 pub(crate) use feedback_view::feedback_upload_consent_params;
 pub(crate) use skills_toggle_view::SkillsToggleItem;
 pub(crate) use skills_toggle_view::SkillsToggleView;
+pub(crate) use status_line_setup::StatusLineItem;
+pub(crate) use status_line_setup::StatusLineSetupView;
 mod paste_burst;
 pub mod popup_consts;
 mod queued_user_messages;
@@ -861,6 +866,16 @@ impl BottomPane {
             flex2.push(0, RenderableItem::Borrowed(&self.composer));
             RenderableItem::Owned(Box::new(flex2))
         }
+    }
+
+    pub(crate) fn set_status_line(&mut self, status_line: Option<Line<'static>>) {
+        self.composer.set_status_line(status_line);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_status_line_enabled(&mut self, enabled: bool) {
+        self.composer.set_status_line_enabled(enabled);
+        self.request_redraw();
     }
 }
 

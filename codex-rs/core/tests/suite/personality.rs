@@ -233,7 +233,7 @@ async fn config_personality_none_sends_no_personality() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn default_personality_is_friendly_without_config_toml() -> anyhow::Result<()> {
+async fn default_personality_is_pragmatic_without_config_toml() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -269,7 +269,7 @@ async fn default_personality_is_friendly_without_config_toml() -> anyhow::Result
     let request = resp_mock.single_request();
     let instructions_text = request.instructions_text();
     assert!(
-        instructions_text.contains(LOCAL_FRIENDLY_TEMPLATE),
+        instructions_text.contains(LOCAL_PRAGMATIC_TEMPLATE),
         "expected default friendly template, got: {instructions_text:?}"
     );
 
@@ -324,7 +324,7 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
             effort: None,
             summary: None,
             collaboration_mode: None,
-            personality: Some(Personality::Pragmatic),
+            personality: Some(Personality::Friendly),
         })
         .await?;
 
@@ -365,7 +365,7 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
         "expected personality update preamble, got {personality_text:?}"
     );
     assert!(
-        personality_text.contains(LOCAL_PRAGMATIC_TEMPLATE),
+        personality_text.contains(LOCAL_FRIENDLY_TEMPLATE),
         "expected personality update to include the local pragmatic template, got: {personality_text:?}"
     );
 
@@ -882,7 +882,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::ReadOnly,
-            model: test.session_configured.model.clone(),
+            model: remote_slug.to_string(),
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
@@ -898,11 +898,11 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
             approval_policy: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
-            model: Some(remote_slug.to_string()),
+            model: None,
             effort: None,
             summary: None,
             collaboration_mode: None,
-            personality: Some(Personality::Pragmatic),
+            personality: Some(Personality::Friendly),
         })
         .await?;
 
@@ -942,7 +942,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
         "expected personality update preamble, got {personality_text:?}"
     );
     assert!(
-        personality_text.contains(remote_pragmatic_message),
+        personality_text.contains(remote_friendly_message),
         "expected personality update to include remote template, got: {personality_text:?}"
     );
 

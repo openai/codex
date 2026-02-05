@@ -9,27 +9,15 @@ use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::TUI_VISIBLE_COLLABORATION_MODES;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 
-const REQUEST_USER_INPUT_ALLOWED_MODES: [ModeKind; 1] = [ModeKind::Plan];
-
-fn request_user_input_mode_name(mode: ModeKind) -> &'static str {
-    match mode {
-        ModeKind::Plan => "Plan",
-        ModeKind::Default => "Default",
-        ModeKind::Execute => "Execute",
-        ModeKind::PairProgramming => "Pair Programming",
-    }
-}
-
 fn format_allowed_modes() -> String {
-    let mut mode_names = Vec::with_capacity(REQUEST_USER_INPUT_ALLOWED_MODES.len());
-    for mode in REQUEST_USER_INPUT_ALLOWED_MODES {
-        let name = request_user_input_mode_name(mode);
-        if !mode_names.contains(&name) {
-            mode_names.push(name);
-        }
-    }
+    let mode_names: Vec<&str> = TUI_VISIBLE_COLLABORATION_MODES
+        .into_iter()
+        .filter(|mode| mode.allows_request_user_input())
+        .map(ModeKind::display_name)
+        .collect();
 
     match mode_names.as_slice() {
         [] => "no modes".to_string(),
@@ -39,15 +27,11 @@ fn format_allowed_modes() -> String {
     }
 }
 
-fn request_user_input_is_available_in_mode(mode: ModeKind) -> bool {
-    REQUEST_USER_INPUT_ALLOWED_MODES.contains(&mode)
-}
-
 pub(crate) fn request_user_input_unavailable_message(mode: ModeKind) -> Option<String> {
-    if request_user_input_is_available_in_mode(mode) {
+    if mode.allows_request_user_input() {
         None
     } else {
-        let mode_name = request_user_input_mode_name(mode);
+        let mode_name = mode.display_name();
         Some(format!(
             "request_user_input is unavailable in {mode_name} mode"
         ))
@@ -134,22 +118,10 @@ mod tests {
 
     #[test]
     fn request_user_input_mode_availability_is_plan_only() {
-        assert_eq!(
-            request_user_input_is_available_in_mode(ModeKind::Plan),
-            true
-        );
-        assert_eq!(
-            request_user_input_is_available_in_mode(ModeKind::Default),
-            false
-        );
-        assert_eq!(
-            request_user_input_is_available_in_mode(ModeKind::Execute),
-            false
-        );
-        assert_eq!(
-            request_user_input_is_available_in_mode(ModeKind::PairProgramming),
-            false
-        );
+        assert!(ModeKind::Plan.allows_request_user_input());
+        assert!(!ModeKind::Default.allows_request_user_input());
+        assert!(!ModeKind::Execute.allows_request_user_input());
+        assert!(!ModeKind::PairProgramming.allows_request_user_input());
     }
 
     #[test]

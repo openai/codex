@@ -190,6 +190,9 @@
             "include_apply_patch_tool": {
               "type": "boolean"
             },
+            "memory_tool": {
+              "type": "boolean"
+            },
             "personality": {
               "type": "boolean"
             },
@@ -1046,6 +1049,14 @@
           "default": true,
           "description": "Show startup tooltips in the TUI welcome screen. Defaults to `true`.",
           "type": "boolean"
+        },
+        "status_line": {
+          "default": null,
+          "description": "Ordered list of status line item identifiers.\n\nWhen set, the TUI renders the selected items as the status line.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "type": "object"
@@ -1212,6 +1223,9 @@
         "include_apply_patch_tool": {
           "type": "boolean"
         },
+        "memory_tool": {
+          "type": "boolean"
+        },
         "personality": {
           "type": "boolean"
         },
@@ -1327,6 +1341,14 @@
     "instructions": {
       "description": "System instructions.",
       "type": "string"
+    },
+    "log_dir": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      ],
+      "description": "Directory where Codex writes log files, for example `codex-tui.log`. Defaults to `$CODEX_HOME/log`."
     },
     "mcp_oauth_callback_port": {
       "description": "Optional fixed port for the local HTTP callback server used during MCP OAuth login. When unset, Codex will bind to an ephemeral port chosen by the OS.",
