@@ -932,18 +932,18 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
         .last()
         .expect("expected personality update request");
     let developer_texts = request.message_input_texts("developer");
-    let personality_text = developer_texts
+    let model_switch_text = developer_texts
         .iter()
-        .find(|text| text.contains("<personality_spec>"))
-        .expect("expected personality update message in developer input");
+        .find(|text| text.contains("<model_switch>"))
+        .expect("expected model switch message in developer input");
 
     assert!(
-        personality_text.contains("The user has requested a new communication style."),
-        "expected personality update preamble, got {personality_text:?}"
+        model_switch_text.contains("The user was previously using a different model."),
+        "expected model switch preamble, got {model_switch_text:?}"
     );
     assert!(
-        personality_text.contains(remote_pragmatic_message),
-        "expected personality update to include remote template, got: {personality_text:?}"
+        model_switch_text.contains(remote_pragmatic_message),
+        "expected model switch message to include remote template, got: {model_switch_text:?}"
     );
 
     Ok(())

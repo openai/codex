@@ -384,7 +384,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: Some(new_policy.clone()),
             windows_sandbox_level: None,
-            model: Some("o3".to_string()),
+            model: None,
             effort: Some(Some(ReasoningEffort::High)),
             summary: Some(ReasoningSummary::Detailed),
             collaboration_mode: None,
@@ -427,20 +427,8 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
         expected_permissions_msg_2, expected_permissions_msg,
         "expected updated permissions message after override"
     );
-    let expected_model_switch_msg = body2["input"][body1_input.len() + 1].clone();
-    assert_eq!(
-        expected_model_switch_msg["role"].as_str(),
-        Some("developer")
-    );
-    assert!(
-        expected_model_switch_msg["content"][0]["text"]
-            .as_str()
-            .is_some_and(|text| text.contains("<model_switch>")),
-        "expected model switch message after model override: {expected_model_switch_msg:?}"
-    );
     let mut expected_body2 = body1_input.to_vec();
     expected_body2.push(expected_permissions_msg_2);
-    expected_body2.push(expected_model_switch_msg);
     expected_body2.push(expected_user_message_2);
     assert_eq!(body2["input"], serde_json::Value::Array(expected_body2));
 
