@@ -341,6 +341,7 @@ pub async fn reconcile_rollout(
     default_provider: &str,
     builder: Option<&ThreadMetadataBuilder>,
     items: &[RolloutItem],
+    archived_only: Option<bool>,
 ) {
     let Some(ctx) = context else {
         return;
@@ -368,7 +369,17 @@ pub async fn reconcile_rollout(
                 return;
             }
         };
-    if let Err(err) = ctx.upsert_thread(&outcome.metadata).await {
+    let mut metadata = outcome.metadata;
+    match archived_only {
+        Some(true) if metadata.archived_at.is_none() => {
+            metadata.archived_at = Some(metadata.updated_at);
+        }
+        Some(false) => {
+            metadata.archived_at = None;
+        }
+        Some(true) | None => {}
+    }
+    if let Err(err) = ctx.upsert_thread(&metadata).await {
         warn!(
             "state db reconcile_rollout upsert failed {}: {err}",
             rollout_path.display()
@@ -406,12 +417,14 @@ pub async fn read_repair_rollout_path(
         && let Ok(Some(mut metadata)) = ctx.get_thread(thread_id).await
     {
         metadata.rollout_path = rollout_path.to_path_buf();
-        if let Some(archived_only) = archived_only {
-            if archived_only && metadata.archived_at.is_none() {
+        match archived_only {
+            Some(true) if metadata.archived_at.is_none() => {
                 metadata.archived_at = Some(metadata.updated_at);
-            } else if !archived_only {
+            }
+            Some(false) => {
                 metadata.archived_at = None;
             }
+            Some(true) | None => {}
         }
         if let Err(err) = ctx.upsert_thread(&metadata).await {
             warn!(
@@ -434,6 +447,7 @@ pub async fn read_repair_rollout_path(
         default_provider.as_str(),
         None,
         &[],
+        archived_only,
     )
     .await;
 }

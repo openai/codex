@@ -567,6 +567,7 @@ async fn rollout_writer(
             default_provider.as_str(),
             state_builder.as_ref(),
             std::slice::from_ref(&rollout_item),
+            None,
         )
         .await;
     }
