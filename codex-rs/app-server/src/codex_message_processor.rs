@@ -3108,6 +3108,7 @@ impl CodexMessageProcessor {
             return;
         }
 
+        // Clamp to 1 so limit=0 cannot return a non-advancing page.
         let effective_limit = limit.unwrap_or(total as u32).max(1) as usize;
         let effective_limit = effective_limit.min(total);
         let start = match cursor {
