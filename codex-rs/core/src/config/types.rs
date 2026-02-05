@@ -4,7 +4,6 @@
 // definitions that do not contain business logic.
 
 use crate::config_loader::RequirementSource;
-use crate::secrets::SecretsBackendKind;
 pub use codex_protocol::config_types::AltScreenMode;
 pub use codex_protocol::config_types::ModeKind;
 pub use codex_protocol::config_types::Personality;
@@ -24,13 +23,6 @@ use serde::Serialize;
 use serde::de::Error as SerdeError;
 
 pub const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-pub struct SecretsConfigToml {
-    #[serde(default)]
-    pub backend: Option<SecretsBackendKind>,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum McpServerDisabledReason {
