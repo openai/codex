@@ -494,8 +494,11 @@ impl CodexMessageProcessor {
                     .await;
             }
             ClientRequest::ThreadBackgroundTerminalsClean { request_id, params } => {
-                self.thread_background_terminals_clean(request_id, params)
-                    .await;
+                self.thread_background_terminals_clean(
+                    to_connection_request_id(request_id),
+                    params,
+                )
+                .await;
             }
             ClientRequest::ThreadRollback { request_id, params } => {
                 self.thread_rollback(to_connection_request_id(request_id), params)
@@ -2298,7 +2301,7 @@ impl CodexMessageProcessor {
 
     async fn thread_background_terminals_clean(
         &self,
-        request_id: RequestId,
+        request_id: ConnectionRequestId,
         params: ThreadBackgroundTerminalsCleanParams,
     ) {
         let ThreadBackgroundTerminalsCleanParams { thread_id } = params;
