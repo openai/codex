@@ -3,6 +3,8 @@ use std::path::PathBuf;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::bottom_pane::MentionBinding;
+use crate::mention_codec::decode_history_mentions;
 use codex_core::protocol::Op;
 use codex_protocol::user_input::TextElement;
 
@@ -11,6 +13,7 @@ pub(crate) struct HistoryEntry {
     pub(crate) text: String,
     pub(crate) text_elements: Vec<TextElement>,
     pub(crate) local_image_paths: Vec<PathBuf>,
+    pub(crate) mention_bindings: Vec<MentionBinding>,
 }
 
 impl HistoryEntry {
@@ -19,14 +22,24 @@ impl HistoryEntry {
             text: String::new(),
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
+            mention_bindings: Vec::new(),
         }
     }
 
     pub(crate) fn from_text(text: String) -> Self {
+        let decoded = decode_history_mentions(&text);
         Self {
-            text,
+            text: decoded.text,
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
+            mention_bindings: decoded
+                .mentions
+                .into_iter()
+                .map(|mention| MentionBinding {
+                    mention: mention.mention,
+                    path: mention.path,
+                })
+                .collect(),
         }
     }
 }

@@ -10,6 +10,7 @@ use crate::app_event::ExitMode;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::LocalImageAttachment;
+use crate::bottom_pane::MentionBinding;
 use crate::history_cell::UserHistoryCell;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
@@ -61,6 +62,7 @@ use codex_core::protocol::UndoCompletedEvent;
 use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
+use codex_core::skills::model::SkillMetadata;
 use codex_otel::OtelManager;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::ThreadId;
@@ -77,6 +79,7 @@ use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::SkillScope;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -391,7 +394,82 @@ async fn submission_preserves_text_elements_and_local_images() {
 }
 
 #[tokio::test]
-async fn blocked_image_restore_preserves_mention_paths() {
+async fn submission_prefers_selected_duplicate_skill_path() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = codex_core::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::ReadOnly,
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+    drain_insert_history(&mut rx);
+
+    let repo_skill_path = PathBuf::from("/tmp/repo/figma/SKILL.md");
+    let user_skill_path = PathBuf::from("/tmp/user/figma/SKILL.md");
+    chat.set_skills(Some(vec![
+        SkillMetadata {
+            name: "figma".to_string(),
+            description: "Repo skill".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            path: repo_skill_path.clone(),
+            scope: SkillScope::Repo,
+        },
+        SkillMetadata {
+            name: "figma".to_string(),
+            description: "User skill".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            path: user_skill_path.clone(),
+            scope: SkillScope::User,
+        },
+    ]));
+
+    chat.bottom_pane.set_composer_text_with_mention_bindings(
+        "please use $figma now".to_string(),
+        Vec::new(),
+        Vec::new(),
+        vec![MentionBinding {
+            mention: "figma".to_string(),
+            path: user_skill_path.to_string_lossy().into_owned(),
+        }],
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let items = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => items,
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    };
+    let selected_skill_paths = items
+        .iter()
+        .filter_map(|item| match item {
+            UserInput::Skill { path, .. } => Some(path.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(selected_skill_paths, vec![user_skill_path]);
+}
+
+#[tokio::test]
+async fn blocked_image_restore_preserves_mention_bindings() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     let placeholder = "[Image #1]";
@@ -404,23 +482,33 @@ async fn blocked_image_restore_preserves_mention_paths() {
         placeholder: placeholder.to_string(),
         path: PathBuf::from("/tmp/blocked.png"),
     }];
-    let mention_paths =
-        HashMap::from([("file".to_string(), "/tmp/skills/file/SKILL.md".to_string())]);
+    let mention_bindings = vec![MentionBinding {
+        mention: "file".to_string(),
+        path: "/tmp/skills/file/SKILL.md".to_string(),
+    }];
 
     chat.restore_blocked_image_submission(
         text.clone(),
-        text_elements.clone(),
+        text_elements,
         local_images.clone(),
-        mention_paths.clone(),
+        mention_bindings.clone(),
     );
 
+    let mention_start = text.find("$file").expect("mention token exists");
+    let expected_elements = vec![
+        TextElement::new((0..placeholder.len()).into(), Some(placeholder.to_string())),
+        TextElement::new(
+            (mention_start..mention_start + "$file".len()).into(),
+            Some("$file".to_string()),
+        ),
+    ];
     assert_eq!(chat.bottom_pane.composer_text(), text);
-    assert_eq!(chat.bottom_pane.composer_text_elements(), text_elements);
+    assert_eq!(chat.bottom_pane.composer_text_elements(), expected_elements);
     assert_eq!(
         chat.bottom_pane.composer_local_image_paths(),
         vec![local_images[0].path.clone()],
     );
-    assert_eq!(chat.bottom_pane.take_mention_paths(), mention_paths);
+    assert_eq!(chat.bottom_pane.take_mention_bindings(), mention_bindings);
 
     let cells = drain_insert_history(&mut rx);
     let warning = cells
@@ -468,7 +556,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
             path: first_images[0].clone(),
         }],
         text_elements: first_elements,
-        mention_paths: HashMap::new(),
+        mention_bindings: Vec::new(),
     });
     chat.queued_user_messages.push_back(UserMessage {
         text: second_text,
@@ -477,7 +565,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
             path: second_images[0].clone(),
         }],
         text_elements: second_elements,
-        mention_paths: HashMap::new(),
+        mention_bindings: Vec::new(),
     });
     chat.refresh_queued_user_messages();
 
@@ -605,7 +693,7 @@ async fn remap_placeholders_uses_attachment_labels() {
         text,
         text_elements: elements,
         local_images: attachments,
-        mention_paths: HashMap::new(),
+        mention_bindings: Vec::new(),
     };
     let mut next_label = 3usize;
     let remapped = remap_placeholders_for_message(message, &mut next_label);
@@ -666,7 +754,7 @@ async fn remap_placeholders_uses_byte_ranges_when_placeholder_missing() {
         text,
         text_elements: elements,
         local_images: attachments,
-        mention_paths: HashMap::new(),
+        mention_bindings: Vec::new(),
     };
     let mut next_label = 3usize;
     let remapped = remap_placeholders_for_message(message, &mut next_label);
