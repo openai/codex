@@ -14,6 +14,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_state::DB_METRIC_COMPARE_ERROR;
 pub use codex_state::LogEntry;
+use codex_state::STATE_DB_VERSION;
 use codex_state::ThreadMetadataBuilder;
 use serde_json::Value;
 use std::path::Path;
@@ -435,7 +436,11 @@ pub fn record_discrepancy(stage: &str, reason: &str) {
         let _ = metric.counter(
             DB_METRIC_COMPARE_ERROR,
             1,
-            &[("stage", stage), ("reason", reason)],
+            &[
+                ("stage", stage),
+                ("reason", reason),
+                ("version", &STATE_DB_VERSION.to_string()),
+            ],
         );
     }
 }
