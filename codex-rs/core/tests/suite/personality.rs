@@ -882,7 +882,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::ReadOnly,
-            model: test.session_configured.model.clone(),
+            model: remote_slug.to_string(),
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
@@ -898,7 +898,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
             approval_policy: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
-            model: Some(remote_slug.to_string()),
+            model: None,
             effort: None,
             summary: None,
             collaboration_mode: None,
@@ -932,18 +932,18 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
         .last()
         .expect("expected personality update request");
     let developer_texts = request.message_input_texts("developer");
-    let model_switch_text = developer_texts
+    let personality_text = developer_texts
         .iter()
-        .find(|text| text.contains("<model_switch>"))
-        .expect("expected model switch message in developer input");
+        .find(|text| text.contains("<personality_spec>"))
+        .expect("expected personality update message in developer input");
 
     assert!(
-        model_switch_text.contains("The user was previously using a different model."),
-        "expected model switch preamble, got {model_switch_text:?}"
+        personality_text.contains("The user has requested a new communication style."),
+        "expected personality update preamble, got {personality_text:?}"
     );
     assert!(
-        model_switch_text.contains(remote_pragmatic_message),
-        "expected model switch message to include remote template, got: {model_switch_text:?}"
+        personality_text.contains(remote_pragmatic_message),
+        "expected personality update to include remote template, got: {personality_text:?}"
     );
 
     Ok(())
