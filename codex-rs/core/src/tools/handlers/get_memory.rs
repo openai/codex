@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use codex_protocol::ThreadId;
 use serde::Deserialize;
 use serde_json::json;
-
+use codex_protocol::models::FunctionCallOutputBody;
 use crate::function_tool::FunctionCallError;
 use crate::state_db;
 use crate::tools::context::ToolInvocation;
@@ -65,8 +65,7 @@ impl ToolHandler for GetMemoryHandler {
         })?;
 
         Ok(ToolOutput::Function {
-            content,
-            content_items: None,
+            body: FunctionCallOutputBody::Text(content),
             success: Some(true),
         })
     }
