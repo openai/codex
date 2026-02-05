@@ -92,6 +92,10 @@ pub enum CodexErrorInfo {
         model: String,
         reset_after_seconds: Option<u64>,
     },
+    UnsupportedInputModality {
+        model: String,
+        modality: InputModality,
+    },
     HttpConnectionFailed {
         #[serde(rename = "httpStatusCode")]
         #[ts(rename = "httpStatusCode")]
@@ -135,6 +139,9 @@ impl From<CoreCodexErrorInfo> for CodexErrorInfo {
                 model,
                 reset_after_seconds,
             },
+            CoreCodexErrorInfo::UnsupportedInputModality { model, modality } => {
+                CodexErrorInfo::UnsupportedInputModality { model, modality }
+            }
             CoreCodexErrorInfo::HttpConnectionFailed { http_status_code } => {
                 CodexErrorInfo::HttpConnectionFailed { http_status_code }
             }
@@ -3209,6 +3216,24 @@ mod tests {
             json!({
                 "responseTooManyFailedAttempts": {
                     "httpStatusCode": 401
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn codex_error_info_serializes_unsupported_input_modality_in_camel_case() {
+        let value = CodexErrorInfo::UnsupportedInputModality {
+            model: "gpt-5.2-codex".to_string(),
+            modality: InputModality::Image,
+        };
+
+        assert_eq!(
+            serde_json::to_value(value).unwrap(),
+            json!({
+                "unsupportedInputModality": {
+                    "model": "gpt-5.2-codex",
+                    "modality": "image"
                 }
             })
         );

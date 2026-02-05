@@ -349,6 +349,31 @@
         {
           "additionalProperties": false,
           "properties": {
+            "unsupportedInputModality": {
+              "properties": {
+                "modality": {
+                  "$ref": "#/definitions/InputModality"
+                },
+                "model": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "modality",
+                "model"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "unsupportedInputModality"
+          ],
+          "title": "UnsupportedInputModalityCodexErrorInfo",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "httpConnectionFailed": {
               "properties": {
                 "httpStatusCode": {
@@ -486,6 +511,31 @@
             "model_cap"
           ],
           "title": "ModelCapCodexErrorInfo2",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "unsupported_input_modality": {
+              "properties": {
+                "modality": {
+                  "$ref": "#/definitions/InputModality"
+                },
+                "model": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "modality",
+                "model"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "unsupported_input_modality"
+          ],
+          "title": "UnsupportedInputModalityCodexErrorInfo2",
           "type": "object"
         },
         {
@@ -3635,6 +3685,25 @@
         "ts"
       ],
       "type": "object"
+    },
+    "InputModality": {
+      "description": "Canonical user-input modality tags advertised by a model.",
+      "oneOf": [
+        {
+          "description": "Plain text turns and tool payloads.",
+          "enum": [
+            "text"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Image attachments included in user turns.",
+          "enum": [
+            "image"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "ItemCompletedNotification": {
       "properties": {

@@ -72,6 +72,12 @@ pub enum ContentItem {
     OutputText { text: String },
 }
 
+impl ContentItem {
+    pub fn is_input_image(&self) -> bool {
+        matches!(self, Self::InputImage { .. })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum MessagePhase {
@@ -183,6 +189,23 @@ pub enum ResponseItem {
     },
     #[serde(other)]
     Other,
+}
+
+impl ResponseItem {
+    /// Returns true when this response item contains at least one input image.
+    pub fn has_input_image(&self) -> bool {
+        match self {
+            Self::Message { content, .. } => content.iter().any(ContentItem::is_input_image),
+            Self::FunctionCallOutput { output, .. } => {
+                output.content_items().is_some_and(|items| {
+                    items
+                        .iter()
+                        .any(FunctionCallOutputContentItem::is_input_image)
+                })
+            }
+            _ => false,
+        }
+    }
 }
 
 pub const BASE_INSTRUCTIONS_DEFAULT: &str = include_str!("prompts/base_instructions/default.md");
@@ -777,6 +800,12 @@ pub enum FunctionCallOutputContentItem {
     InputText { text: String },
     // Do not rename, these are serialized and used directly in the responses API.
     InputImage { image_url: String },
+}
+
+impl FunctionCallOutputContentItem {
+    pub fn is_input_image(&self) -> bool {
+        matches!(self, Self::InputImage { .. })
+    }
 }
 
 /// Converts structured function-call output content into plain text for
@@ -1688,5 +1717,40 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn response_item_has_input_image_detects_message_images() {
+        let item = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![
+                ContentItem::InputText {
+                    text: "hello".to_string(),
+                },
+                ContentItem::InputImage {
+                    image_url: "data:image/png;base64,AAA".to_string(),
+                },
+            ],
+            end_turn: None,
+            phase: None,
+        };
+        assert!(item.has_input_image());
+    }
+
+    #[test]
+    fn response_item_has_input_image_detects_function_output_images() {
+        let item = ResponseItem::FunctionCallOutput {
+            call_id: "call_1".to_string(),
+            output: FunctionCallOutputPayload::from_content_items(vec![
+                FunctionCallOutputContentItem::InputText {
+                    text: "caption".to_string(),
+                },
+                FunctionCallOutputContentItem::InputImage {
+                    image_url: "data:image/png;base64,BBB".to_string(),
+                },
+            ]),
+        };
+        assert!(item.has_input_image());
     }
 }

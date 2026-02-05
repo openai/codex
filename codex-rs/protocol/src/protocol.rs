@@ -34,6 +34,7 @@ use crate::models::ContentItem;
 use crate::models::ResponseItem;
 use crate::models::WebSearchAction;
 use crate::num_format::format_with_separators;
+use crate::openai_models::InputModality;
 use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
@@ -959,6 +960,10 @@ pub enum CodexErrorInfo {
     ModelCap {
         model: String,
         reset_after_seconds: Option<u64>,
+    },
+    UnsupportedInputModality {
+        model: String,
+        modality: InputModality,
     },
     HttpConnectionFailed {
         http_status_code: Option<u16>,

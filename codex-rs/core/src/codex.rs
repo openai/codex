@@ -214,6 +214,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
@@ -3839,6 +3840,26 @@ fn codex_apps_connector_id(tool: &crate::mcp_connection_manager::ToolInfo) -> Op
     tool.connector_id.as_deref()
 }
 
+fn preflight_validate_sampling_input_modalities(
+    turn_context: &TurnContext,
+    input: &[ResponseItem],
+) -> CodexResult<()> {
+    let model_supports_images = turn_context
+        .model_info
+        .input_modalities
+        .contains(&InputModality::Image);
+    let input_contains_images = input.iter().any(ResponseItem::has_input_image);
+
+    if !model_supports_images && input_contains_images {
+        return Err(CodexErr::UnsupportedInputModality {
+            model: turn_context.model_info.slug.clone(),
+            modality: InputModality::Image,
+        });
+    }
+
+    Ok(())
+}
+
 struct SamplingRequestToolSelection<'a> {
     explicit_app_paths: &'a [String],
     skill_name_counts_lower: &'a HashMap<String, usize>,
@@ -3861,6 +3882,8 @@ async fn run_sampling_request(
     tool_selection: SamplingRequestToolSelection<'_>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
+    preflight_validate_sampling_input_modalities(turn_context.as_ref(), &input)?;
+
     let mut mcp_tools = sess
         .services
         .mcp_connection_manager
