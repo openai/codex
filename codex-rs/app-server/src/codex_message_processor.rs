@@ -32,6 +32,9 @@ use codex_app_server_protocol::ConversationGitInfo;
 use codex_app_server_protocol::ConversationSummary;
 use codex_app_server_protocol::DynamicToolSpec as ApiDynamicToolSpec;
 use codex_app_server_protocol::ExecOneOffCommandResponse;
+use codex_app_server_protocol::ExperimentalFeature as ApiExperimentalFeature;
+use codex_app_server_protocol::ExperimentalFeatureListParams;
+use codex_app_server_protocol::ExperimentalFeatureListResponse;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::FeedbackUploadResponse;
 use codex_app_server_protocol::ForkConversationParams;
@@ -165,7 +168,9 @@ use codex_core::default_client::get_codex_user_agent;
 use codex_core::error::CodexErr;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
+use codex_core::features::FEATURES;
 use codex_core::features::Feature;
+use codex_core::features::Stage;
 use codex_core::find_archived_thread_path_by_id_str;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::git_info::git_diff_to_remote;
@@ -516,6 +521,9 @@ impl CodexMessageProcessor {
                 tokio::spawn(async move {
                     Self::list_models(outgoing, thread_manager, config, request_id, params).await;
                 });
+            }
+            ClientRequest::ExperimentalFeatureList { request_id, params } => {
+                self.experimental_feature_list(request_id, params).await;
             }
             ClientRequest::CollaborationModeList { request_id, params } => {
                 let outgoing = self.outgoing.clone();
@@ -3048,6 +3056,98 @@ impl CodexMessageProcessor {
         let items = thread_manager.list_collaboration_modes();
         let response = CollaborationModeListResponse { data: items };
         outgoing.send_response(request_id, response).await;
+    }
+
+    async fn experimental_feature_list(
+        &self,
+        request_id: RequestId,
+        params: ExperimentalFeatureListParams,
+    ) {
+        let ExperimentalFeatureListParams { cursor, limit } = params;
+        let config = match self.load_latest_config().await {
+            Ok(config) => config,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let data = FEATURES
+            .iter()
+            .filter_map(|spec| {
+                let Stage::Experimental {
+                    name,
+                    menu_description,
+                    announcement,
+                } = spec.stage
+                else {
+                    return None;
+                };
+                Some(ApiExperimentalFeature {
+                    flag_name: spec.key.to_string(),
+                    display_name: name.to_string(),
+                    description: menu_description.to_string(),
+                    announcement: announcement.to_string(),
+                    enabled: config.features.enabled(spec.id),
+                    default_enabled: spec.default_enabled,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let total = data.len();
+        if total == 0 {
+            self.outgoing
+                .send_response(
+                    request_id,
+                    ExperimentalFeatureListResponse {
+                        data: Vec::new(),
+                        next_cursor: None,
+                    },
+                )
+                .await;
+            return;
+        }
+
+        let effective_limit = limit.unwrap_or(total as u32).max(1) as usize;
+        let effective_limit = effective_limit.min(total);
+        let start = match cursor {
+            Some(cursor) => match cursor.parse::<usize>() {
+                Ok(idx) => idx,
+                Err(_) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("invalid cursor: {cursor}"),
+                    )
+                    .await;
+                    return;
+                }
+            },
+            None => 0,
+        };
+
+        if start > total {
+            self.send_invalid_request_error(
+                request_id,
+                format!("cursor {start} exceeds total experimental features {total}"),
+            )
+            .await;
+            return;
+        }
+
+        let end = start.saturating_add(effective_limit).min(total);
+        let data = data[start..end].to_vec();
+        let next_cursor = if end < total {
+            Some(end.to_string())
+        } else {
+            None
+        };
+
+        self.outgoing
+            .send_response(
+                request_id,
+                ExperimentalFeatureListResponse { data, next_cursor },
+            )
+            .await;
     }
 
     async fn mock_experimental_method(

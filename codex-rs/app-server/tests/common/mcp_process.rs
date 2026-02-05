@@ -22,6 +22,7 @@ use codex_app_server_protocol::CollaborationModeListParams;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigValueWriteParams;
+use codex_app_server_protocol::ExperimentalFeatureListParams;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::ForkConversationParams;
 use codex_app_server_protocol::GetAccountParams;
@@ -471,6 +472,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("model/list", params).await
+    }
+
+    /// Send an `experimentalFeature/list` JSON-RPC request.
+    pub async fn send_experimental_feature_list_request(
+        &mut self,
+        params: ExperimentalFeatureListParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("experimentalFeature/list", params).await
     }
 
     /// Send an `app/list` JSON-RPC request.

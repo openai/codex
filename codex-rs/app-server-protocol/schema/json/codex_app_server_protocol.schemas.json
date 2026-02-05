@@ -941,6 +941,30 @@
             },
             "method": {
               "enum": [
+                "experimentalFeature/list"
+              ],
+              "title": "ExperimentalFeature/listRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ExperimentalFeatureListParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "ExperimentalFeature/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "mcpServer/oauth/login"
               ],
               "title": "McpServer/oauth/loginRequestMethod",
@@ -11202,6 +11226,89 @@
           "willRetry"
         ],
         "title": "ErrorNotification",
+        "type": "object"
+      },
+      "ExperimentalFeature": {
+        "properties": {
+          "announcement": {
+            "description": "Announcement copy shown to users when the feature is introduced.",
+            "type": "string"
+          },
+          "defaultEnabled": {
+            "description": "Whether this feature is enabled by default.",
+            "type": "boolean"
+          },
+          "description": {
+            "description": "Short summary describing what the feature does.",
+            "type": "string"
+          },
+          "displayName": {
+            "description": "User-facing display name shown in the experimental features UI.",
+            "type": "string"
+          },
+          "enabled": {
+            "description": "Whether this feature is currently enabled in the loaded config.",
+            "type": "boolean"
+          },
+          "flagName": {
+            "description": "Stable key used in config.toml and CLI flag toggles.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "announcement",
+          "defaultEnabled",
+          "description",
+          "displayName",
+          "enabled",
+          "flagName"
+        ],
+        "type": "object"
+      },
+      "ExperimentalFeatureListParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "cursor": {
+            "description": "Opaque pagination cursor returned by a previous call.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "description": "Optional page size; defaults to a reasonable server-side value.",
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "title": "ExperimentalFeatureListParams",
+        "type": "object"
+      },
+      "ExperimentalFeatureListResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/definitions/v2/ExperimentalFeature"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "description": "Opaque cursor to pass to the next call to continue after the last item. If None, there are no more items to return.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "ExperimentalFeatureListResponse",
         "type": "object"
       },
       "FeedbackUploadParams": {

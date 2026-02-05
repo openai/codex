@@ -6,6 +6,7 @@ mod compaction;
 mod config_rpc;
 mod dynamic_tools;
 mod experimental_api;
+mod experimental_feature_list;
 mod initialize;
 mod model_list;
 mod output_schema;
