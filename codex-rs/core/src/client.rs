@@ -153,6 +153,11 @@ pub struct ModelClientSession {
     turn_state: Arc<OnceLock<String>>,
 }
 
+enum WebsocketStreamOutcome {
+    Stream(ResponseStream),
+    FallbackToHttp,
+}
+
 impl ModelClient {
     #[allow(clippy::too_many_arguments)]
     /// Creates a new session-scoped `ModelClient`.
@@ -327,6 +332,20 @@ impl ModelClientSession {
                 .state
                 .disable_websockets
                 .swap(true, Ordering::Relaxed)
+    }
+
+    fn switch_to_http_fallback_silent(&mut self, otel_manager: &OtelManager) {
+        let websocket_enabled = self.responses_websocket_enabled();
+        if self.activate_http_fallback(websocket_enabled) {
+            otel_manager.counter(
+                "codex.transport.fallback_to_http",
+                1,
+                &[("from_wire_api", "responses_websocket")],
+            );
+        }
+
+        self.connection = None;
+        self.websocket_last_items.clear();
     }
 
     fn responses_websocket_enabled(&self) -> bool {
@@ -599,7 +618,7 @@ impl ModelClientSession {
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
         turn_metadata_header: Option<&str>,
-    ) -> Result<ResponseStream> {
+    ) -> Result<WebsocketStreamOutcome> {
         let auth_manager = self.client.state.auth_manager.clone();
         let api_prompt = Self::build_responses_request(prompt)?;
 
@@ -639,6 +658,11 @@ impl ModelClientSession {
                 .await
             {
                 Ok(connection) => connection,
+                Err(ApiError::Transport(TransportError::Http { status, .. }))
+                    if status == StatusCode::UPGRADE_REQUIRED =>
+                {
+                    return Ok(WebsocketStreamOutcome::FallbackToHttp);
+                }
                 Err(ApiError::Transport(
                     unauthorized_transport @ TransportError::Http { status, .. },
                 )) if status == StatusCode::UNAUTHORIZED => {
@@ -654,7 +678,10 @@ impl ModelClientSession {
                 .map_err(map_api_error)?;
             self.websocket_last_items = api_prompt.input.clone();
 
-            return Ok(map_response_stream(stream_result, otel_manager.clone()));
+            return Ok(WebsocketStreamOutcome::Stream(map_response_stream(
+                stream_result,
+                otel_manager.clone(),
+            )));
         }
     }
 
@@ -694,30 +721,34 @@ impl ModelClientSession {
         let wire_api = self.client.state.provider.wire_api;
         match wire_api {
             WireApi::Responses => {
-                let websocket_enabled =
-                    self.responses_websocket_enabled() && !self.disable_websockets();
-
-                if websocket_enabled {
-                    self.stream_responses_websocket(
-                        prompt,
-                        model_info,
-                        otel_manager,
-                        effort,
-                        summary,
-                        turn_metadata_header,
-                    )
-                    .await
-                } else {
-                    self.stream_responses_api(
-                        prompt,
-                        model_info,
-                        otel_manager,
-                        effort,
-                        summary,
-                        turn_metadata_header,
-                    )
-                    .await
+                if self.responses_websocket_enabled() && !self.disable_websockets() {
+                    match self
+                        .stream_responses_websocket(
+                            prompt,
+                            model_info,
+                            otel_manager,
+                            effort,
+                            summary,
+                            turn_metadata_header,
+                        )
+                        .await?
+                    {
+                        WebsocketStreamOutcome::Stream(stream) => return Ok(stream),
+                        WebsocketStreamOutcome::FallbackToHttp => {
+                            self.switch_to_http_fallback_silent(otel_manager);
+                        }
+                    }
                 }
+
+                self.stream_responses_api(
+                    prompt,
+                    model_info,
+                    otel_manager,
+                    effort,
+                    summary,
+                    turn_metadata_header,
+                )
+                .await
             }
         }
     }
