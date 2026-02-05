@@ -235,6 +235,9 @@
             "unified_exec": {
               "type": "boolean"
             },
+            "use_linux_sandbox_bwrap": {
+              "type": "boolean"
+            },
             "web_search": {
               "type": "boolean"
             },
@@ -378,10 +381,7 @@
       "description": "Initial collaboration mode to use when the TUI starts.",
       "enum": [
         "plan",
-        "code",
-        "pair_programming",
-        "execute",
-        "custom"
+        "default"
       ],
       "type": "string"
     },
@@ -708,6 +708,7 @@
     },
     "Personality": {
       "enum": [
+        "none",
         "friendly",
         "pragmatic"
       ],
@@ -1021,7 +1022,7 @@
             }
           ],
           "default": null,
-          "description": "Start the TUI in the specified collaboration mode (plan/execute/etc.). Defaults to unset."
+          "description": "Start the TUI in the specified collaboration mode (plan/default). Defaults to unset."
         },
         "notification_method": {
           "allOf": [
@@ -1256,6 +1257,9 @@
         "unified_exec": {
           "type": "boolean"
         },
+        "use_linux_sandbox_bwrap": {
+          "type": "boolean"
+        },
         "web_search": {
           "type": "boolean"
         },
@@ -1323,6 +1327,14 @@
     "instructions": {
       "description": "System instructions.",
       "type": "string"
+    },
+    "log_dir": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      ],
+      "description": "Directory where Codex writes log files, for example `codex-tui.log`. Defaults to `$CODEX_HOME/log`."
     },
     "mcp_oauth_callback_port": {
       "description": "Optional fixed port for the local HTTP callback server used during MCP OAuth login. When unset, Codex will bind to an ephemeral port chosen by the OS.",

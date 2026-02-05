@@ -1,4 +1,6 @@
 use async_trait::async_trait;
+use codex_protocol::ThreadId;
+use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ShellCommandToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
 use std::sync::Arc;
@@ -41,12 +43,16 @@ struct RunExecLikeArgs {
 }
 
 impl ShellHandler {
-    fn to_exec_params(params: &ShellToolCallParams, turn_context: &TurnContext) -> ExecParams {
+    fn to_exec_params(
+        params: &ShellToolCallParams,
+        turn_context: &TurnContext,
+        thread_id: ThreadId,
+    ) -> ExecParams {
         ExecParams {
             command: params.command.clone(),
             cwd: turn_context.resolve_path(params.workdir.clone()),
             expiration: params.timeout_ms.into(),
-            env: create_env(&turn_context.shell_environment_policy),
+            env: create_env(&turn_context.shell_environment_policy, Some(thread_id)),
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             windows_sandbox_level: turn_context.windows_sandbox_level,
             justification: params.justification.clone(),
@@ -65,6 +71,7 @@ impl ShellCommandHandler {
         params: &ShellCommandToolCallParams,
         session: &crate::codex::Session,
         turn_context: &TurnContext,
+        thread_id: ThreadId,
     ) -> ExecParams {
         let shell = session.user_shell();
         let command = Self::base_command(shell.as_ref(), &params.command, params.login);
@@ -73,7 +80,7 @@ impl ShellCommandHandler {
             command,
             cwd: turn_context.resolve_path(params.workdir.clone()),
             expiration: params.timeout_ms.into(),
-            env: create_env(&turn_context.shell_environment_policy),
+            env: create_env(&turn_context.shell_environment_policy, Some(thread_id)),
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             windows_sandbox_level: turn_context.windows_sandbox_level,
             justification: params.justification.clone(),
@@ -121,7 +128,8 @@ impl ToolHandler for ShellHandler {
             ToolPayload::Function { arguments } => {
                 let params: ShellToolCallParams = parse_arguments(&arguments)?;
                 let prefix_rule = params.prefix_rule.clone();
-                let exec_params = Self::to_exec_params(&params, turn.as_ref());
+                let exec_params =
+                    Self::to_exec_params(&params, turn.as_ref(), session.conversation_id);
                 Self::run_exec_like(RunExecLikeArgs {
                     tool_name: tool_name.clone(),
                     exec_params,
@@ -135,7 +143,8 @@ impl ToolHandler for ShellHandler {
                 .await
             }
             ToolPayload::LocalShell { params } => {
-                let exec_params = Self::to_exec_params(&params, turn.as_ref());
+                let exec_params =
+                    Self::to_exec_params(&params, turn.as_ref(), session.conversation_id);
                 Self::run_exec_like(RunExecLikeArgs {
                     tool_name: tool_name.clone(),
                     exec_params,
@@ -197,7 +206,12 @@ impl ToolHandler for ShellCommandHandler {
 
         let params: ShellCommandToolCallParams = parse_arguments(&arguments)?;
         let prefix_rule = params.prefix_rule.clone();
-        let exec_params = Self::to_exec_params(&params, session.as_ref(), turn.as_ref());
+        let exec_params = Self::to_exec_params(
+            &params,
+            session.as_ref(),
+            turn.as_ref(),
+            session.conversation_id,
+        );
         ShellHandler::run_exec_like(RunExecLikeArgs {
             tool_name,
             exec_params,
@@ -316,8 +330,7 @@ impl ShellHandler {
         let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
         let content = emitter.finish(event_ctx, out).await?;
         Ok(ToolOutput::Function {
-            content,
-            content_items: None,
+            body: FunctionCallOutputBody::Text(content),
             success: Some(true),
         })
     }
@@ -403,7 +416,10 @@ mod tests {
 
         let expected_command = session.user_shell().derive_exec_args(&command, true);
         let expected_cwd = turn_context.resolve_path(workdir.clone());
-        let expected_env = create_env(&turn_context.shell_environment_policy);
+        let expected_env = create_env(
+            &turn_context.shell_environment_policy,
+            Some(session.conversation_id),
+        );
 
         let params = ShellCommandToolCallParams {
             command,
@@ -415,7 +431,12 @@ mod tests {
             justification: justification.clone(),
         };
 
-        let exec_params = ShellCommandHandler::to_exec_params(&params, &session, &turn_context);
+        let exec_params = ShellCommandHandler::to_exec_params(
+            &params,
+            &session,
+            &turn_context,
+            session.conversation_id,
+        );
 
         // ExecParams cannot derive Eq due to the CancellationToken field, so we manually compare the fields.
         assert_eq!(exec_params.command, expected_command);

@@ -1,9 +1,8 @@
 use crate::auth::AuthProvider;
-use crate::auth::add_auth_headers;
 use crate::common::CompactionInput;
+use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
 use crate::provider::Provider;
-use crate::telemetry::run_with_request_telemetry;
 use codex_client::HttpTransport;
 use codex_client::RequestTelemetry;
 use codex_protocol::models::ResponseItem;
@@ -14,28 +13,23 @@ use serde_json::to_value;
 use std::sync::Arc;
 
 pub struct CompactClient<T: HttpTransport, A: AuthProvider> {
-    transport: T,
-    provider: Provider,
-    auth: A,
-    request_telemetry: Option<Arc<dyn RequestTelemetry>>,
+    session: EndpointSession<T, A>,
 }
 
 impl<T: HttpTransport, A: AuthProvider> CompactClient<T, A> {
     pub fn new(transport: T, provider: Provider, auth: A) -> Self {
         Self {
-            transport,
-            provider,
-            auth,
-            request_telemetry: None,
+            session: EndpointSession::new(transport, provider, auth),
         }
     }
 
-    pub fn with_telemetry(mut self, request: Option<Arc<dyn RequestTelemetry>>) -> Self {
-        self.request_telemetry = request;
-        self
+    pub fn with_telemetry(self, request: Option<Arc<dyn RequestTelemetry>>) -> Self {
+        Self {
+            session: self.session.with_request_telemetry(request),
+        }
     }
 
-    fn path(&self) -> &'static str {
+    fn path() -> &'static str {
         "responses/compact"
     }
 
@@ -44,21 +38,10 @@ impl<T: HttpTransport, A: AuthProvider> CompactClient<T, A> {
         body: serde_json::Value,
         extra_headers: HeaderMap,
     ) -> Result<Vec<ResponseItem>, ApiError> {
-        let path = self.path();
-        let builder = || {
-            let mut req = self.provider.build_request(Method::POST, path);
-            req.headers.extend(extra_headers.clone());
-            req.body = Some(body.clone());
-            add_auth_headers(&self.auth, req)
-        };
-
-        let resp = run_with_request_telemetry(
-            self.provider.retry.to_policy(),
-            self.request_telemetry.clone(),
-            builder,
-            |req| self.transport.execute(req),
-        )
-        .await?;
+        let resp = self
+            .session
+            .execute(Method::POST, Self::path(), extra_headers, Some(body))
+            .await?;
         let parsed: CompactHistoryResponse =
             serde_json::from_slice(&resp.body).map_err(|e| ApiError::Stream(e.to_string()))?;
         Ok(parsed.output)
@@ -83,14 +66,11 @@ struct CompactHistoryResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider::RetryConfig;
     use async_trait::async_trait;
     use codex_client::Request;
     use codex_client::Response;
     use codex_client::StreamResponse;
     use codex_client::TransportError;
-    use http::HeaderMap;
-    use std::time::Duration;
 
     #[derive(Clone, Default)]
     struct DummyTransport;
@@ -115,26 +95,11 @@ mod tests {
         }
     }
 
-    fn provider() -> Provider {
-        Provider {
-            name: "test".to_string(),
-            base_url: "https://example.com/v1".to_string(),
-            query_params: None,
-            headers: HeaderMap::new(),
-            retry: RetryConfig {
-                max_attempts: 1,
-                base_delay: Duration::from_millis(1),
-                retry_429: false,
-                retry_5xx: true,
-                retry_transport: true,
-            },
-            stream_idle_timeout: Duration::from_secs(1),
-        }
-    }
-
     #[test]
     fn path_is_responses_compact() {
-        let client = CompactClient::new(DummyTransport, provider(), DummyAuth);
-        assert_eq!(client.path(), "responses/compact");
+        assert_eq!(
+            CompactClient::<DummyTransport, DummyAuth>::path(),
+            "responses/compact"
+        );
     }
 }
