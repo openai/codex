@@ -1643,6 +1643,7 @@ dependencies = [
  "walkdir",
  "which",
  "wildmatch",
+ "windows-sys 0.52.0",
  "wiremock",
  "zip",
  "zstd",
