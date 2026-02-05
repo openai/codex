@@ -5,6 +5,7 @@ use crate::codex_message_processor::TurnSummary;
 use crate::codex_message_processor::TurnSummaryStore;
 use crate::codex_message_processor::read_event_msgs_from_rollout;
 use crate::codex_message_processor::read_summary_from_rollout;
+use crate::codex_message_processor::fetch_state_db_conversation_modalities;
 use crate::codex_message_processor::summary_to_thread;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
@@ -46,6 +47,8 @@ use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind as V2PatchChangeKind;
 use codex_app_server_protocol::PlanDeltaNotification;
 use codex_app_server_protocol::RawResponseItemCompletedNotification;
+use codex_protocol::openai_models::InputModality;
+use codex_protocol::openai_models::input_modalities_to_mask;
 use codex_app_server_protocol::ReasoningSummaryPartAddedNotification;
 use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
 use codex_app_server_protocol::ReasoningTextDeltaNotification;
@@ -100,6 +103,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 use tracing::error;
+use tracing::warn;
 
 type JsonValue = serde_json::Value;
 
@@ -852,6 +856,21 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::RawResponseItem(raw_response_item_event) => {
+            if raw_response_item_event.item.has_input_image() {
+                let modalities = [InputModality::Text, InputModality::Image];
+                if let Some(ctx) = conversation.state_db()
+                    && let Err(err) = ctx
+                        .set_thread_conversation_modalities(
+                            conversation_id,
+                            input_modalities_to_mask(&modalities),
+                        )
+                        .await
+                {
+                    warn!(
+                        "failed to persist conversation modalities for thread {conversation_id}: {err}"
+                    );
+                }
+            }
             maybe_emit_raw_response_item_completed(
                 api_version,
                 conversation_id,
@@ -1100,7 +1119,12 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await
                 {
                     Ok(summary) => {
-                        let mut thread = summary_to_thread(summary);
+                        let conversation_modalities = fetch_state_db_conversation_modalities(
+                            conversation.state_db().as_ref(),
+                            conversation_id,
+                        )
+                        .await;
+                        let mut thread = summary_to_thread(summary, conversation_modalities);
                         match read_event_msgs_from_rollout(rollout_path.as_path()).await {
                             Ok(events) => {
                                 thread.turns = build_turns_from_event_msgs(&events);

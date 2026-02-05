@@ -76,12 +76,29 @@ fn apply_event_msg(metadata: &mut ThreadMetadata, event: &EventMsg) {
                     metadata.title = title.to_string();
                 }
             }
+            if user
+                .images
+                .as_ref()
+                .is_some_and(|images| !images.is_empty())
+                || !user.local_images.is_empty()
+            {
+                metadata.conversation_modalities = Some(
+                    codex_protocol::openai_models::INPUT_MODALITY_TEXT_MASK
+                        | codex_protocol::openai_models::INPUT_MODALITY_IMAGE_MASK,
+                );
+            }
         }
         _ => {}
     }
 }
 
-fn apply_response_item(_metadata: &mut ThreadMetadata, _item: &ResponseItem) {
+fn apply_response_item(metadata: &mut ThreadMetadata, item: &ResponseItem) {
+    if item.has_input_image() {
+        metadata.conversation_modalities = Some(
+            codex_protocol::openai_models::INPUT_MODALITY_TEXT_MASK
+                | codex_protocol::openai_models::INPUT_MODALITY_IMAGE_MASK,
+        );
+    }
     // Title and first_user_message are derived from EventMsg::UserMessage only.
 }
 
@@ -224,6 +241,7 @@ mod tests {
             approval_mode: "on-request".to_string(),
             tokens_used: 1,
             first_user_message: None,
+            conversation_modalities: None,
             archived_at: None,
             git_sha: None,
             git_branch: None,

@@ -72,6 +72,35 @@ pub enum InputModality {
     Image,
 }
 
+pub const INPUT_MODALITY_TEXT_MASK: i64 = 1;
+pub const INPUT_MODALITY_IMAGE_MASK: i64 = 1 << 1;
+
+pub fn input_modality_to_mask(modality: InputModality) -> i64 {
+    match modality {
+        InputModality::Text => INPUT_MODALITY_TEXT_MASK,
+        InputModality::Image => INPUT_MODALITY_IMAGE_MASK,
+    }
+}
+
+pub fn input_modalities_to_mask(modalities: &[InputModality]) -> i64 {
+    modalities
+        .iter()
+        .copied()
+        .map(input_modality_to_mask)
+        .fold(0, |mask, bit| mask | bit)
+}
+
+pub fn input_modalities_from_mask(mask: i64) -> Vec<InputModality> {
+    let mut modalities = Vec::new();
+    if mask & INPUT_MODALITY_TEXT_MASK != 0 {
+        modalities.push(InputModality::Text);
+    }
+    if mask & INPUT_MODALITY_IMAGE_MASK != 0 {
+        modalities.push(InputModality::Image);
+    }
+    modalities
+}
+
 /// Backward-compatible default when `input_modalities` is omitted on the wire.
 ///
 /// Legacy payloads predate modality metadata, so we conservatively assume both text and images are

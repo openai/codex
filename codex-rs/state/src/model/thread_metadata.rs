@@ -78,6 +78,8 @@ pub struct ThreadMetadata {
     pub tokens_used: i64,
     /// First user message observed for this thread, if any.
     pub first_user_message: Option<String>,
+    /// Tri-state conversation modalities bitmask (NULL means unknown).
+    pub conversation_modalities: Option<i64>,
     /// The archive timestamp, if the thread is archived.
     pub archived_at: Option<DateTime<Utc>>,
     /// The git commit SHA, if known.
@@ -119,6 +121,8 @@ pub struct ThreadMetadataBuilder {
     pub git_branch: Option<String>,
     /// The git origin URL, if known.
     pub git_origin_url: Option<String>,
+    /// Tri-state conversation modalities bitmask, if known.
+    pub conversation_modalities: Option<i64>,
 }
 
 impl ThreadMetadataBuilder {
@@ -144,6 +148,9 @@ impl ThreadMetadataBuilder {
             git_sha: None,
             git_branch: None,
             git_origin_url: None,
+            conversation_modalities: Some(
+                codex_protocol::openai_models::INPUT_MODALITY_TEXT_MASK,
+            ),
         }
     }
 
@@ -174,6 +181,9 @@ impl ThreadMetadataBuilder {
             approval_mode,
             tokens_used: 0,
             first_user_message: None,
+            conversation_modalities: self.conversation_modalities.or(Some(
+                codex_protocol::openai_models::INPUT_MODALITY_TEXT_MASK,
+            )),
             archived_at: self.archived_at.map(canonicalize_datetime),
             git_sha: self.git_sha.clone(),
             git_branch: self.git_branch.clone(),
@@ -225,6 +235,9 @@ impl ThreadMetadata {
         if self.first_user_message != other.first_user_message {
             diffs.push("first_user_message");
         }
+        if self.conversation_modalities != other.conversation_modalities {
+            diffs.push("conversation_modalities");
+        }
         if self.archived_at != other.archived_at {
             diffs.push("archived_at");
         }
@@ -260,6 +273,7 @@ pub(crate) struct ThreadRow {
     approval_mode: String,
     tokens_used: i64,
     first_user_message: String,
+    conversation_modalities: Option<i64>,
     archived_at: Option<i64>,
     git_sha: Option<String>,
     git_branch: Option<String>,
@@ -282,6 +296,7 @@ impl ThreadRow {
             approval_mode: row.try_get("approval_mode")?,
             tokens_used: row.try_get("tokens_used")?,
             first_user_message: row.try_get("first_user_message")?,
+            conversation_modalities: row.try_get("conversation_modalities")?,
             archived_at: row.try_get("archived_at")?,
             git_sha: row.try_get("git_sha")?,
             git_branch: row.try_get("git_branch")?,
@@ -308,6 +323,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             approval_mode,
             tokens_used,
             first_user_message,
+            conversation_modalities,
             archived_at,
             git_sha,
             git_branch,
@@ -327,6 +343,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             approval_mode,
             tokens_used,
             first_user_message: (!first_user_message.is_empty()).then_some(first_user_message),
+            conversation_modalities,
             archived_at: archived_at.map(epoch_seconds_to_datetime).transpose()?,
             git_sha,
             git_branch,

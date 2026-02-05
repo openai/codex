@@ -1958,6 +1958,12 @@ pub struct Thread {
     pub id: String,
     /// Usually the first user message in the thread, if available.
     pub preview: String,
+    /// Tri-state conversation modalities signal:
+    /// - `None`: unknown / not yet determined
+    /// - `Some([Text])`: known to be text-only
+    /// - `Some([Text, Image])`: images are known to exist in context
+    #[serde(default)]
+    pub conversation_modalities: Option<Vec<InputModality>>,
     /// Model provider used for this thread (for example, 'openai').
     pub model_provider: String,
     /// Unix timestamp (in seconds) when the thread was created.
