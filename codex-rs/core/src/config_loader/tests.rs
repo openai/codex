@@ -178,7 +178,7 @@ extra = true
     let overrides = LoaderOverrides {
         managed_config_path: Some(managed_path),
         #[cfg(target_os = "macos")]
-        managed_preferences_base64: None,
+        managed_preferences_base64: Some(String::new()),
         macos_managed_config_requirements_base64: None,
     };
 
@@ -215,7 +215,7 @@ async fn returns_empty_when_all_layers_missing() {
     let overrides = LoaderOverrides {
         managed_config_path: Some(managed_path),
         #[cfg(target_os = "macos")]
-        managed_preferences_base64: None,
+        managed_preferences_base64: Some(String::new()),
         macos_managed_config_requirements_base64: None,
     };
 

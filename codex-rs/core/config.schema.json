@@ -881,26 +881,6 @@
       },
       "type": "object"
     },
-    "SecretsBackendKind": {
-      "enum": [
-        "local"
-      ],
-      "type": "string"
-    },
-    "SecretsConfigToml": {
-      "additionalProperties": false,
-      "properties": {
-        "backend": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/SecretsBackendKind"
-            }
-          ],
-          "default": null
-        }
-      },
-      "type": "object"
-    },
     "ShellEnvironmentPolicyInherit": {
       "oneOf": [
         {
@@ -1510,15 +1490,6 @@
         }
       ],
       "description": "Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`."
-    },
-    "secrets": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/SecretsConfigToml"
-        }
-      ],
-      "default": null,
-      "description": "Secrets configuration. Defaults to a local encrypted file backend."
     },
     "shell_environment_policy": {
       "allOf": [
