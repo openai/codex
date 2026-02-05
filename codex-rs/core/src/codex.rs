@@ -1488,14 +1488,11 @@ impl Session {
         next: &TurnContext,
     ) -> Option<ResponseItem> {
         let prev = previous?;
-        if prev.client.get_model() == next.client.get_model() {
+        if prev.model_info.slug == next.model_info.slug {
             return None;
         }
 
-        let model_instructions = next
-            .client
-            .get_model_info()
-            .get_model_instructions(next.personality);
+        let model_instructions = next.model_info.get_model_instructions(next.personality);
         if model_instructions.is_empty() {
             return None;
         }
