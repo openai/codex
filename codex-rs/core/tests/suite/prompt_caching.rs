@@ -427,8 +427,20 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
         expected_permissions_msg_2, expected_permissions_msg,
         "expected updated permissions message after override"
     );
+    let expected_model_switch_msg = body2["input"][body1_input.len() + 1].clone();
+    assert_eq!(
+        expected_model_switch_msg["role"].as_str(),
+        Some("developer")
+    );
+    assert!(
+        expected_model_switch_msg["content"][0]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("<model_switch>")),
+        "expected model switch message after model override: {expected_model_switch_msg:?}"
+    );
     let mut expected_body2 = body1_input.to_vec();
     expected_body2.push(expected_permissions_msg_2);
+    expected_body2.push(expected_model_switch_msg);
     expected_body2.push(expected_user_message_2);
     assert_eq!(body2["input"], serde_json::Value::Array(expected_body2));
 
@@ -676,9 +688,21 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
         expected_permissions_msg_2, expected_permissions_msg,
         "expected updated permissions message after per-turn override"
     );
+    let expected_model_switch_msg = body2["input"][body1_input.len() + 2].clone();
+    assert_eq!(
+        expected_model_switch_msg["role"].as_str(),
+        Some("developer")
+    );
+    assert!(
+        expected_model_switch_msg["content"][0]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("<model_switch>")),
+        "expected model switch message after model override: {expected_model_switch_msg:?}"
+    );
     let mut expected_body2 = body1_input.to_vec();
     expected_body2.push(expected_env_msg_2);
     expected_body2.push(expected_permissions_msg_2);
+    expected_body2.push(expected_model_switch_msg);
     expected_body2.push(expected_user_message_2);
     assert_eq!(body2["input"], serde_json::Value::Array(expected_body2));
 
@@ -892,6 +916,17 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
         expected_permissions_msg_2, expected_permissions_msg,
         "expected updated permissions message after policy change"
     );
+    let expected_model_switch_msg = body2["input"][body1_input.len() + 1].clone();
+    assert_eq!(
+        expected_model_switch_msg["role"].as_str(),
+        Some("developer")
+    );
+    assert!(
+        expected_model_switch_msg["content"][0]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("<model_switch>")),
+        "expected model switch message after model override: {expected_model_switch_msg:?}"
+    );
     let expected_user_message_2 = text_user_input("hello 2".to_string());
     let expected_input_2 = serde_json::Value::Array(vec![
         expected_permissions_msg,
@@ -899,6 +934,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
         expected_env_msg_1,
         expected_user_message_1,
         expected_permissions_msg_2,
+        expected_model_switch_msg,
         expected_user_message_2,
     ]);
     assert_eq!(body2["input"], expected_input_2);
