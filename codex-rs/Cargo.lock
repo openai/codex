@@ -9381,7 +9381,7 @@ dependencies = [
 [[package]]
 name = "tungstenite"
 version = "0.27.0"
-source = "git+https://github.com/signalapp/tungstenite-rs?rev=ebdbe86da4c2e5502044658b872189b0c8f63468#ebdbe86da4c2e5502044658b872189b0c8f63468"
+source = "git+https://github.com/openai/tungstenite-rs?branch=signal-plus-proxy#9200079d3b54a1ff51072e24d81fd354f085156f"
 dependencies = [
  "bytes",
  "data-encoding",

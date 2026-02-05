@@ -321,7 +321,7 @@ opt-level = 0
 # ratatui = { path = "../../ratatui" }
 crossterm = { git = "https://github.com/nornagon/crossterm", branch = "nornagon/color-query" }
 ratatui = { git = "https://github.com/nornagon/ratatui", branch = "nornagon-v0.29.0-patch" }
-tungstenite = { git = "https://github.com/signalapp/tungstenite-rs", rev = "ebdbe86da4c2e5502044658b872189b0c8f63468" }
+tungstenite = { git = "https://github.com/openai/tungstenite-rs", branch = "signal-plus-proxy" }
 
 # Uncomment to debug local changes.
 # rmcp = { path = "../../rust-sdk/crates/rmcp" }
