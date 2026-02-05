@@ -19,6 +19,7 @@ use codex_otel::metrics::MetricsConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use core_test_support::load_default_config_for_test;
@@ -465,6 +466,7 @@ async fn websocket_harness_with_runtime_metrics(
         false,
         runtime_metrics_enabled,
         None,
+        WindowsSandboxLevel::Disabled,
     );
 
     WebsocketTestHarness {

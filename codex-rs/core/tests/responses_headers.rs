@@ -12,11 +12,15 @@ use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::WEB_SEARCH_ELIGIBLE_HEADER;
 use codex_core::WireApi;
+use codex_core::X_OPENAI_INTERNAL_CODEX_ELEVATED_WINDOWS_SANDBOX_HEADER;
+use codex_core::X_OPENAI_INTERNAL_CODEX_EXPERIMENTAL_WINDOWS_SANDBOX_HEADER;
+use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use core_test_support::load_default_config_for_test;
@@ -98,6 +102,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         false,
         false,
         None,
+        WindowsSandboxLevel::Disabled,
     );
     let mut client_session = client.new_session();
 
@@ -209,6 +214,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
         false,
         false,
         None,
+        WindowsSandboxLevel::Disabled,
     );
     let mut client_session = client.new_session();
 
@@ -309,6 +315,72 @@ async fn responses_stream_includes_web_search_eligible_header_false_when_disable
 }
 
 #[tokio::test]
+async fn responses_stream_includes_windows_sandbox_headers_false_by_default() {
+    core_test_support::skip_if_no_network!();
+
+    let server = responses::start_mock_server().await;
+    let response_body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_completed("resp-1"),
+    ]);
+
+    let request_recorder = responses::mount_sse_once(&server, response_body).await;
+
+    let test = test_codex().build(&server).await.expect("build test codex");
+    test.submit_turn("hello").await.expect("submit test prompt");
+
+    let request = request_recorder.single_request();
+    assert_eq!(
+        request
+            .header(X_OPENAI_INTERNAL_CODEX_EXPERIMENTAL_WINDOWS_SANDBOX_HEADER)
+            .as_deref(),
+        Some("false")
+    );
+    assert_eq!(
+        request
+            .header(X_OPENAI_INTERNAL_CODEX_ELEVATED_WINDOWS_SANDBOX_HEADER)
+            .as_deref(),
+        Some("false")
+    );
+}
+
+#[tokio::test]
+async fn responses_stream_includes_windows_sandbox_headers_when_enabled() {
+    core_test_support::skip_if_no_network!();
+
+    let server = responses::start_mock_server().await;
+    let response_body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_completed("resp-1"),
+    ]);
+
+    let request_recorder = responses::mount_sse_once(&server, response_body).await;
+
+    let test = test_codex()
+        .with_config(|config| {
+            config.features.enable(Feature::WindowsSandboxElevated);
+        })
+        .build(&server)
+        .await
+        .expect("build test codex");
+    test.submit_turn("hello").await.expect("submit test prompt");
+
+    let request = request_recorder.single_request();
+    assert_eq!(
+        request
+            .header(X_OPENAI_INTERNAL_CODEX_EXPERIMENTAL_WINDOWS_SANDBOX_HEADER)
+            .as_deref(),
+        Some("true")
+    );
+    assert_eq!(
+        request
+            .header(X_OPENAI_INTERNAL_CODEX_ELEVATED_WINDOWS_SANDBOX_HEADER)
+            .as_deref(),
+        Some("true")
+    );
+}
+
+#[tokio::test]
 async fn responses_respects_model_info_overrides_from_config() {
     core_test_support::skip_if_no_network!();
 
@@ -378,6 +450,7 @@ async fn responses_respects_model_info_overrides_from_config() {
         false,
         false,
         None,
+        WindowsSandboxLevel::Disabled,
     );
     let mut client_session = client.new_session();
 

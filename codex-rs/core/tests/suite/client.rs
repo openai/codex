@@ -27,6 +27,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::Verbosity;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ReasoningItemContent;
@@ -1273,6 +1274,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         false,
         false,
         None,
+        WindowsSandboxLevel::Disabled,
     );
     let mut client_session = client.new_session();
 

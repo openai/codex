@@ -1039,6 +1039,7 @@ impl Session {
                 config.features.enabled(Feature::EnableRequestCompression),
                 config.features.enabled(Feature::RuntimeMetrics),
                 Self::build_model_client_beta_features_header(config.as_ref()),
+                session_configuration.windows_sandbox_level,
             ),
         };
 
@@ -5755,6 +5756,7 @@ mod tests {
                 config.features.enabled(Feature::EnableRequestCompression),
                 config.features.enabled(Feature::RuntimeMetrics),
                 Session::build_model_client_beta_features_header(config.as_ref()),
+                session_configuration.windows_sandbox_level,
             ),
         };
 
@@ -5885,6 +5887,7 @@ mod tests {
                 config.features.enabled(Feature::EnableRequestCompression),
                 config.features.enabled(Feature::RuntimeMetrics),
                 Session::build_model_client_beta_features_header(config.as_ref()),
+                session_configuration.windows_sandbox_level,
             ),
         };
 

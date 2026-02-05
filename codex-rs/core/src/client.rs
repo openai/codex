@@ -50,6 +50,7 @@ use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::Verbosity as VerbosityConfig;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -87,6 +88,10 @@ pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 pub const X_CODEX_TURN_METADATA_HEADER: &str = "x-codex-turn-metadata";
 pub const X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER: &str =
     "x-responsesapi-include-timing-metrics";
+pub const X_OPENAI_INTERNAL_CODEX_EXPERIMENTAL_WINDOWS_SANDBOX_HEADER: &str =
+    "x-openai-internal-codex-experimental-windows-sandbox";
+pub const X_OPENAI_INTERNAL_CODEX_ELEVATED_WINDOWS_SANDBOX_HEADER: &str =
+    "x-openai-internal-codex-elevated-windows-sandbox";
 
 /// Session-scoped state shared by all [`ModelClient`] clones.
 ///
@@ -103,6 +108,7 @@ struct ModelClientState {
     enable_request_compression: bool,
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
+    windows_sandbox_level: WindowsSandboxLevel,
     disable_websockets: AtomicBool,
 }
 
@@ -171,6 +177,7 @@ impl ModelClient {
         enable_request_compression: bool,
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
+        windows_sandbox_level: WindowsSandboxLevel,
     ) -> Self {
         Self {
             state: Arc::new(ModelClientState {
@@ -183,6 +190,7 @@ impl ModelClient {
                 enable_request_compression,
                 include_timing_metrics,
                 beta_features_header,
+                windows_sandbox_level,
                 disable_websockets: AtomicBool::new(false),
             }),
         }
@@ -406,6 +414,7 @@ impl ModelClientSession {
                 self.client.state.beta_features_header.as_deref(),
                 web_search_eligible,
                 Some(&self.turn_state),
+                self.client.state.windows_sandbox_level,
                 turn_metadata_header.as_ref(),
             ),
             compression,
@@ -775,10 +784,12 @@ fn build_api_prompt(prompt: &Prompt, instructions: String, tools_json: Vec<Value
 /// - `x-oai-web-search-eligible`: whether this turn is allowed to use web search.
 /// - `x-codex-turn-state`: sticky routing token captured earlier in the turn.
 /// - `x-codex-turn-metadata`: optional per-turn metadata for observability.
+/// - `x-openai-internal-codex-*-windows-sandbox`: windows sandbox settings for analytics.
 fn build_responses_headers(
     beta_features_header: Option<&str>,
     web_search_eligible: bool,
     turn_state: Option<&Arc<OnceLock<String>>>,
+    windows_sandbox_level: WindowsSandboxLevel,
     turn_metadata_header: Option<&HeaderValue>,
 ) -> ApiHeaderMap {
     let mut headers = ApiHeaderMap::new();
@@ -788,6 +799,22 @@ fn build_responses_headers(
     {
         headers.insert("x-codex-beta-features", header_value);
     }
+    headers.insert(
+        X_OPENAI_INTERNAL_CODEX_EXPERIMENTAL_WINDOWS_SANDBOX_HEADER,
+        HeaderValue::from_static(if windows_sandbox_level == WindowsSandboxLevel::Disabled {
+            "false"
+        } else {
+            "true"
+        }),
+    );
+    headers.insert(
+        X_OPENAI_INTERNAL_CODEX_ELEVATED_WINDOWS_SANDBOX_HEADER,
+        HeaderValue::from_static(if windows_sandbox_level == WindowsSandboxLevel::Elevated {
+            "true"
+        } else {
+            "false"
+        }),
+    );
     headers.insert(
         WEB_SEARCH_ELIGIBLE_HEADER,
         HeaderValue::from_static(if web_search_eligible { "true" } else { "false" }),
