@@ -314,7 +314,7 @@ pub(crate) struct CodexMessageProcessorArgs {
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) config: Arc<Config>,
     pub(crate) cli_overrides: Vec<(String, TomlValue)>,
-    pub(crate) cloud_requirements: CloudRequirementsLoader,
+    pub(crate) cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
     pub(crate) feedback: CodexFeedback,
 }
 
@@ -360,7 +360,7 @@ impl CodexMessageProcessor {
             codex_linux_sandbox_exe,
             config,
             cli_overrides,
-            cloud_requirements: Arc::new(RwLock::new(cloud_requirements)),
+            cloud_requirements,
             conversation_listeners: HashMap::new(),
             listener_thread_ids_by_subscription: HashMap::new(),
             active_login: Arc::new(Mutex::new(None)),
