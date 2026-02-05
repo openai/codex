@@ -17,6 +17,18 @@
       },
       "type": "object"
     },
+    "AppsConfig": {
+      "properties": {
+        "disabled_app_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "AskForApproval": {
       "enum": [
         "untrusted",
@@ -48,6 +60,17 @@
               "type": "null"
             }
           ]
+        },
+        "apps": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AppsConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "compact_prompt": {
           "type": [

@@ -332,6 +332,14 @@ pub struct FeedbackConfigToml {
     pub enabled: Option<bool>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AppsConfigToml {
+    /// App IDs that should be hidden/disabled in Codex surfaces.
+    #[serde(default)]
+    pub disabled_app_ids: Vec<String>,
+}
+
 // ===== OTEL configuration =====
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]

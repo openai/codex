@@ -55,6 +55,20 @@
       },
       "type": "object"
     },
+    "AppsConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "disabled_app_ids": {
+          "default": [],
+          "description": "App IDs that should be hidden/disabled in Codex surfaces.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "AskForApproval": {
       "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Codex.",
       "oneOf": [
@@ -1136,6 +1150,15 @@
         }
       ],
       "description": "Default approval policy for executing commands."
+    },
+    "apps": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AppsConfigToml"
+        }
+      ],
+      "default": null,
+      "description": "Settings for app-specific controls."
     },
     "chatgpt_base_url": {
       "description": "Base URL for requests to ChatGPT (as opposed to the OpenAI API).",

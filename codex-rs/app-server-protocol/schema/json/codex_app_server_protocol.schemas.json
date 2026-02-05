@@ -9850,6 +9850,18 @@
         ],
         "type": "object"
       },
+      "AppsConfig": {
+        "properties": {
+          "disabled_app_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "AppsListParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -10464,6 +10476,17 @@
                 "type": "null"
               }
             ]
+          },
+          "apps": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AppsConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "compact_prompt": {
             "type": [

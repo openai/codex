@@ -700,6 +700,7 @@ fn find_effective_layer(
 mod tests {
     use super::*;
     use anyhow::Result;
+    use codex_app_server_protocol::AppsConfig;
     use codex_app_server_protocol::AskForApproval;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
@@ -797,6 +798,54 @@ unified_exec = true
 remote_compaction = true
 "#;
         assert_eq!(updated, expected);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn write_value_supports_apps_and_disabled_app_ids_paths() -> Result<()> {
+        let tmp = tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "")?;
+
+        let service = ConfigService::new_with_defaults(tmp.path().to_path_buf());
+        service
+            .write_value(ConfigValueWriteParams {
+                file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
+                key_path: "apps".to_string(),
+                value: serde_json::json!({
+                    "disabled_app_ids": ["app1"],
+                }),
+                merge_strategy: MergeStrategy::Replace,
+                expected_version: None,
+            })
+            .await
+            .expect("write apps succeeds");
+
+        service
+            .write_value(ConfigValueWriteParams {
+                file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
+                key_path: "apps.disabled_app_ids".to_string(),
+                value: serde_json::json!(["app1", "app2"]),
+                merge_strategy: MergeStrategy::Replace,
+                expected_version: None,
+            })
+            .await
+            .expect("write apps.disabled_app_ids succeeds");
+
+        let read = service
+            .read(ConfigReadParams {
+                include_layers: false,
+                cwd: None,
+            })
+            .await
+            .expect("config read succeeds");
+
+        assert_eq!(
+            read.config.apps,
+            Some(AppsConfig {
+                disabled_app_ids: vec!["app1".to_string(), "app2".to_string()],
+            })
+        );
+
         Ok(())
     }
 
