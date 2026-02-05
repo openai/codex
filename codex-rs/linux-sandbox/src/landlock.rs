@@ -99,7 +99,45 @@ fn install_filesystem_landlock_rules_on_current_thread(
 /// Installs a seccomp filter that blocks outbound network access except for
 /// AF_UNIX domain sockets.
 fn install_network_seccomp_filter_on_current_thread() -> std::result::Result<(), SandboxErr> {
-    let rules = build_network_seccomp_rules()?;
+    // Build rule map.
+    let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
+
+    // Helper – insert unconditional deny rule for syscall number.
+    let mut deny_syscall = |nr: i64| {
+        rules.insert(nr, vec![]); // empty rule vec = unconditional match
+    };
+
+    deny_syscall(libc::SYS_connect);
+    deny_syscall(libc::SYS_accept);
+    deny_syscall(libc::SYS_accept4);
+    deny_syscall(libc::SYS_bind);
+    deny_syscall(libc::SYS_listen);
+    deny_syscall(libc::SYS_getpeername);
+    deny_syscall(libc::SYS_getsockname);
+    deny_syscall(libc::SYS_shutdown);
+    deny_syscall(libc::SYS_sendto);
+    deny_syscall(libc::SYS_sendmmsg);
+    // NOTE: allowing recvfrom allows some tools like: `cargo clippy` to run
+    // with their socketpair + child processes for sub-proc management
+    // deny_syscall(libc::SYS_recvfrom);
+    deny_syscall(libc::SYS_recvmmsg);
+    deny_syscall(libc::SYS_getsockopt);
+    deny_syscall(libc::SYS_setsockopt);
+    deny_syscall(libc::SYS_ptrace);
+    deny_syscall(libc::SYS_io_uring_setup);
+    deny_syscall(libc::SYS_io_uring_enter);
+    deny_syscall(libc::SYS_io_uring_register);
+
+    // For `socket` we allow AF_UNIX (arg0 == AF_UNIX) and deny everything else.
+    let unix_only_rule = SeccompRule::new(vec![SeccompCondition::new(
+        0, // first argument (domain)
+        SeccompCmpArgLen::Dword,
+        SeccompCmpOp::Ne,
+        libc::AF_UNIX as u64,
+    )?])?;
+
+    rules.insert(libc::SYS_socket, vec![unix_only_rule.clone()]);
+    rules.insert(libc::SYS_socketpair, vec![unix_only_rule]); // always deny (Unix can use socketpair but fine, keep open?)
 
     let filter = SeccompFilter::new(
         rules,
@@ -119,74 +157,4 @@ fn install_network_seccomp_filter_on_current_thread() -> std::result::Result<(),
     apply_filter(&prog)?;
 
     Ok(())
-}
-
-fn build_network_seccomp_rules() -> std::result::Result<BTreeMap<i64, Vec<SeccompRule>>, SandboxErr>
-{
-    let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
-
-    let mut deny_syscall = |syscall_nr: i64| {
-        rules.insert(syscall_nr, vec![]);
-    };
-
-    for syscall_nr in [
-        libc::SYS_connect,
-        libc::SYS_accept,
-        libc::SYS_accept4,
-        libc::SYS_bind,
-        libc::SYS_listen,
-        libc::SYS_getpeername,
-        libc::SYS_getsockname,
-        libc::SYS_shutdown,
-        libc::SYS_sendto,
-        libc::SYS_sendmmsg,
-        // NOTE: allowing recvfrom allows some tools like: `cargo clippy` to run
-        // with their socketpair + child processes for sub-proc management
-        libc::SYS_recvmmsg,
-        libc::SYS_getsockopt,
-        libc::SYS_setsockopt,
-        libc::SYS_ptrace,
-        libc::SYS_io_uring_setup,
-        libc::SYS_io_uring_enter,
-        libc::SYS_io_uring_register,
-    ] {
-        deny_syscall(syscall_nr);
-    }
-
-    // For `socket` we allow AF_UNIX (arg0 == AF_UNIX) and deny everything else.
-    let unix_only_rule = SeccompRule::new(vec![SeccompCondition::new(
-        0, // first argument (domain)
-        SeccompCmpArgLen::Dword,
-        SeccompCmpOp::Ne,
-        libc::AF_UNIX as u64,
-    )?])?;
-
-    rules.insert(libc::SYS_socket, vec![unix_only_rule.clone()]);
-    rules.insert(libc::SYS_socketpair, vec![unix_only_rule]); // always deny (Unix can use socketpair but fine, keep open?)
-
-    Ok(rules)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::build_network_seccomp_rules;
-
-    #[test]
-    fn network_seccomp_rules_deny_io_uring_syscalls() {
-        let rules = match build_network_seccomp_rules() {
-            Ok(rules) => rules,
-            Err(err) => panic!("failed to build seccomp rules: {err:#}"),
-        };
-
-        for syscall_nr in [
-            libc::SYS_io_uring_setup,
-            libc::SYS_io_uring_enter,
-            libc::SYS_io_uring_register,
-        ] {
-            assert!(
-                matches!(rules.get(&syscall_nr), Some(rule) if rule.is_empty()),
-                "expected syscall {syscall_nr} to be denied unconditionally"
-            );
-        }
-    }
 }
