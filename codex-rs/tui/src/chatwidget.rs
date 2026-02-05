@@ -105,6 +105,7 @@ use codex_core::skills::model::SkillMetadata;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_otel::OtelManager;
+use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
@@ -587,7 +588,8 @@ pub(crate) struct ChatWidget {
     // This lets the separator show per-chunk work time (since the previous separator) rather than
     // the total task-running time reported by the status indicator.
     last_separator_elapsed_secs: Option<u64>,
-
+    // Runtime metrics accumulated across delta snapshots for the active turn.
+    turn_runtime_metrics: RuntimeMetricsSummary,
     last_rendered_width: std::cell::Cell<Option<usize>>,
     // Feedback sink for /feedback
     feedback: codex_feedback::CodexFeedback,
@@ -931,6 +933,32 @@ impl ChatWidget {
         self.request_status_line_branch(cwd);
     }
 
+    fn collect_runtime_metrics_delta(&mut self) {
+        if let Some(delta) = self.otel_manager.runtime_metrics_summary() {
+            self.apply_runtime_metrics_delta(delta);
+        }
+    }
+
+    fn apply_runtime_metrics_delta(&mut self, delta: RuntimeMetricsSummary) {
+        let should_log_timing = has_websocket_timing_metrics(delta);
+        self.turn_runtime_metrics.merge(delta);
+        if should_log_timing {
+            self.log_websocket_timing_totals(delta);
+        }
+    }
+
+    fn log_websocket_timing_totals(&mut self, delta: RuntimeMetricsSummary) {
+        if let Some(label) = history_cell::runtime_metrics_label(delta.responses_api_summary()) {
+            self.add_plain_history_lines(vec![
+                vec!["• ".dim(), format!("WebSocket timing: {label}").dark_gray()].into(),
+            ]);
+        }
+    }
+
+    fn refresh_runtime_metrics(&mut self) {
+        self.collect_runtime_metrics_delta();
+    }
+
     fn restore_retry_status_header_if_present(&mut self) {
         if let Some(header) = self.retry_status_header.take() {
             self.set_status_header(header);
@@ -1218,6 +1246,7 @@ impl ChatWidget {
         self.plan_item_active = false;
         self.adaptive_chunking.reset();
         self.plan_stream_controller = None;
+        self.turn_runtime_metrics = RuntimeMetricsSummary::default();
         self.otel_manager.reset_runtime_metrics();
         self.bottom_pane.clear_quit_shortcut_hint();
         self.quit_shortcut_expires_at = None;
@@ -1241,17 +1270,25 @@ impl ChatWidget {
         }
         self.flush_unified_exec_wait_streak();
         if !from_replay {
-            let runtime_metrics = self.otel_manager.runtime_metrics_summary();
-            if runtime_metrics.is_some() {
-                let elapsed_seconds = self
-                    .bottom_pane
-                    .status_widget()
-                    .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds);
+            self.collect_runtime_metrics_delta();
+            let runtime_metrics =
+                (!self.turn_runtime_metrics.is_empty()).then_some(self.turn_runtime_metrics);
+            let show_work_separator = self.needs_final_message_separator && self.had_work_activity;
+            if show_work_separator || runtime_metrics.is_some() {
+                let elapsed_seconds = if show_work_separator {
+                    self.bottom_pane
+                        .status_widget()
+                        .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds)
+                        .map(|current| self.worked_elapsed_from(current))
+                } else {
+                    None
+                };
                 self.add_to_history(history_cell::FinalMessageSeparator::new(
                     elapsed_seconds,
                     runtime_metrics,
                 ));
             }
+            self.turn_runtime_metrics = RuntimeMetricsSummary::default();
             self.needs_final_message_separator = false;
             self.had_work_activity = false;
             self.request_status_line_branch_refresh();
@@ -2087,6 +2124,10 @@ impl ChatWidget {
             }
             self.app_event_tx.send(AppEvent::StopCommitAnimation);
         }
+
+        if self.agent_turn_running {
+            self.refresh_runtime_metrics();
+        }
     }
 
     fn flush_interrupt_queue(&mut self) {
@@ -2529,6 +2570,7 @@ impl ChatWidget {
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             last_separator_elapsed_secs: None,
+            turn_runtime_metrics: RuntimeMetricsSummary::default(),
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             feedback_audience,
@@ -2690,6 +2732,7 @@ impl ChatWidget {
             needs_final_message_separator: false,
             had_work_activity: false,
             last_separator_elapsed_secs: None,
+            turn_runtime_metrics: RuntimeMetricsSummary::default(),
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             feedback_audience,
@@ -2840,6 +2883,7 @@ impl ChatWidget {
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             last_separator_elapsed_secs: None,
+            turn_runtime_metrics: RuntimeMetricsSummary::default(),
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             feedback_audience,
@@ -3858,6 +3902,10 @@ impl ChatWidget {
                     self.on_plan_item_completed(plan_item.text);
                 }
             }
+        }
+
+        if !from_replay && self.agent_turn_running {
+            self.refresh_runtime_metrics();
         }
     }
 
@@ -6688,6 +6736,15 @@ impl ChatWidget {
         );
         RenderableItem::Owned(Box::new(flex))
     }
+}
+
+fn has_websocket_timing_metrics(summary: RuntimeMetricsSummary) -> bool {
+    summary.responses_api_overhead_ms > 0
+        || summary.responses_api_inference_time_ms > 0
+        || summary.responses_api_engine_iapi_ttft_ms > 0
+        || summary.responses_api_engine_service_ttft_ms > 0
+        || summary.responses_api_engine_iapi_tbt_ms > 0
+        || summary.responses_api_engine_service_tbt_ms > 0
 }
 
 impl Drop for ChatWidget {

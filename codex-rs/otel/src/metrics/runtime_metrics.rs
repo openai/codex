@@ -72,24 +72,36 @@ impl RuntimeMetricsSummary {
         self.streaming_events.merge(other.streaming_events);
         self.websocket_calls.merge(other.websocket_calls);
         self.websocket_events.merge(other.websocket_events);
-        self.responses_api_overhead_ms = self
-            .responses_api_overhead_ms
-            .saturating_add(other.responses_api_overhead_ms);
-        self.responses_api_inference_time_ms = self
-            .responses_api_inference_time_ms
-            .saturating_add(other.responses_api_inference_time_ms);
-        self.responses_api_engine_iapi_ttft_ms = self
-            .responses_api_engine_iapi_ttft_ms
-            .saturating_add(other.responses_api_engine_iapi_ttft_ms);
-        self.responses_api_engine_service_ttft_ms = self
-            .responses_api_engine_service_ttft_ms
-            .saturating_add(other.responses_api_engine_service_ttft_ms);
-        self.responses_api_engine_iapi_tbt_ms = self
-            .responses_api_engine_iapi_tbt_ms
-            .saturating_add(other.responses_api_engine_iapi_tbt_ms);
-        self.responses_api_engine_service_tbt_ms = self
-            .responses_api_engine_service_tbt_ms
-            .saturating_add(other.responses_api_engine_service_tbt_ms);
+        if other.responses_api_overhead_ms > 0 {
+            self.responses_api_overhead_ms = other.responses_api_overhead_ms;
+        }
+        if other.responses_api_inference_time_ms > 0 {
+            self.responses_api_inference_time_ms = other.responses_api_inference_time_ms;
+        }
+        if other.responses_api_engine_iapi_ttft_ms > 0 {
+            self.responses_api_engine_iapi_ttft_ms = other.responses_api_engine_iapi_ttft_ms;
+        }
+        if other.responses_api_engine_service_ttft_ms > 0 {
+            self.responses_api_engine_service_ttft_ms = other.responses_api_engine_service_ttft_ms;
+        }
+        if other.responses_api_engine_iapi_tbt_ms > 0 {
+            self.responses_api_engine_iapi_tbt_ms = other.responses_api_engine_iapi_tbt_ms;
+        }
+        if other.responses_api_engine_service_tbt_ms > 0 {
+            self.responses_api_engine_service_tbt_ms = other.responses_api_engine_service_tbt_ms;
+        }
+    }
+
+    pub fn responses_api_summary(&self) -> RuntimeMetricsSummary {
+        Self {
+            responses_api_overhead_ms: self.responses_api_overhead_ms,
+            responses_api_inference_time_ms: self.responses_api_inference_time_ms,
+            responses_api_engine_iapi_ttft_ms: self.responses_api_engine_iapi_ttft_ms,
+            responses_api_engine_service_ttft_ms: self.responses_api_engine_service_ttft_ms,
+            responses_api_engine_iapi_tbt_ms: self.responses_api_engine_iapi_tbt_ms,
+            responses_api_engine_service_tbt_ms: self.responses_api_engine_service_tbt_ms,
+            ..RuntimeMetricsSummary::default()
+        }
     }
 
     pub(crate) fn from_snapshot(snapshot: &ResourceMetrics) -> Self {

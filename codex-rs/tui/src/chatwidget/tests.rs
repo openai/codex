@@ -62,6 +62,7 @@ use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
 use codex_otel::OtelManager;
+use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::CollaborationMode;
@@ -955,6 +956,7 @@ async fn make_chatwidget_manual(
         plan_delta_buffer: String::new(),
         plan_item_active: false,
         last_separator_elapsed_secs: None,
+        turn_runtime_metrics: RuntimeMetricsSummary::default(),
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
         feedback_audience: FeedbackAudience::External,
@@ -5027,6 +5029,50 @@ async fn stream_recovery_restores_previous_status_header() {
     assert_eq!(status.header(), "Working");
     assert_eq!(status.details(), None);
     assert!(chat.retry_status_header.is_none());
+}
+
+#[tokio::test]
+async fn runtime_metrics_websocket_timing_logs_and_final_separator_sums_totals() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::RuntimeMetrics, true);
+
+    chat.on_task_started();
+    chat.apply_runtime_metrics_delta(RuntimeMetricsSummary {
+        responses_api_engine_iapi_ttft_ms: 120,
+        responses_api_engine_service_tbt_ms: 50,
+        ..RuntimeMetricsSummary::default()
+    });
+
+    let first_log = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .find(|line| line.contains("WebSocket timing:"))
+        .expect("expected websocket timing log");
+    assert!(first_log.contains("TTFT: 120ms (iapi)"));
+    assert!(first_log.contains("TBT: 50ms (service)"));
+
+    chat.apply_runtime_metrics_delta(RuntimeMetricsSummary {
+        responses_api_engine_iapi_ttft_ms: 80,
+        ..RuntimeMetricsSummary::default()
+    });
+
+    let second_log = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .find(|line| line.contains("WebSocket timing:"))
+        .expect("expected websocket timing log");
+    assert!(second_log.contains("TTFT: 80ms (iapi)"));
+
+    chat.on_task_complete(None, false);
+    let mut final_separator = None;
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event {
+            final_separator = Some(lines_to_single_string(&cell.display_lines(300)));
+        }
+    }
+    let final_separator = final_separator.expect("expected final separator with runtime metrics");
+    assert!(final_separator.contains("TTFT: 80ms (iapi)"));
+    assert!(final_separator.contains("TBT: 50ms (service)"));
 }
 
 #[tokio::test]

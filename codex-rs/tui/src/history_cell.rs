@@ -2172,7 +2172,7 @@ impl HistoryCell for FinalMessageSeparator {
     }
 }
 
-fn runtime_metrics_label(summary: RuntimeMetricsSummary) -> Option<String> {
+pub(crate) fn runtime_metrics_label(summary: RuntimeMetricsSummary) -> Option<String> {
     let mut parts = Vec::new();
     if summary.tool_calls.count > 0 {
         let duration = format_duration_ms(summary.tool_calls.duration_ms);
