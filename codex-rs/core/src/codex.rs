@@ -2025,6 +2025,15 @@ impl Session {
         history.raw_items().to_vec()
     }
 
+    pub(crate) async fn process_compacted_history(
+        &self,
+        turn_context: &TurnContext,
+        compacted_history: Vec<ResponseItem>,
+    ) -> Vec<ResponseItem> {
+        let initial_context = self.build_initial_context(turn_context).await;
+        compact::process_compacted_history(compacted_history, &initial_context)
+    }
+
     /// Append ResponseItems to the in-memory conversation history only.
     pub(crate) async fn record_into_history(
         &self,
@@ -3663,8 +3672,10 @@ pub(crate) async fn run_turn(
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, event).await;
-    if total_usage_tokens >= auto_compact_limit {
-        run_auto_compact(&sess, &turn_context).await;
+    if total_usage_tokens >= auto_compact_limit
+        && run_auto_compact(&sess, &turn_context).await.is_err()
+    {
+        return None;
     }
 
     let skills_outcome = Some(
@@ -3846,7 +3857,9 @@ pub(crate) async fn run_turn(
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if token_limit_reached && needs_follow_up {
-                    run_auto_compact(&sess, &turn_context).await;
+                    if run_auto_compact(&sess, &turn_context).await.is_err() {
+                        return None;
+                    }
                     continue;
                 }
 
@@ -3904,12 +3917,13 @@ pub(crate) async fn run_turn(
     last_agent_message
 }
 
-async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) {
+async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) -> CodexResult<()> {
     if should_use_remote_compact_task(&turn_context.provider) {
-        run_inline_remote_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await;
+        run_inline_remote_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await?;
     } else {
-        run_inline_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await;
+        run_inline_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await?;
     }
+    Ok(())
 }
 
 fn filter_connectors_for_input(
@@ -5072,6 +5086,42 @@ mod tests {
             .await;
 
         assert_eq!(expected, reconstructed);
+    }
+
+    #[tokio::test]
+    async fn reconstruct_history_uses_replacement_history_verbatim() {
+        let (session, turn_context) = make_session_and_context().await;
+        let summary_item = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "summary".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        };
+        let replacement_history = vec![
+            summary_item.clone(),
+            ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "stale developer instructions".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ];
+        let rollout_items = vec![RolloutItem::Compacted(CompactedItem {
+            message: String::new(),
+            replacement_history: Some(replacement_history.clone()),
+        })];
+
+        let reconstructed = session
+            .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+            .await;
+
+        assert_eq!(reconstructed, replacement_history);
     }
 
     #[tokio::test]
