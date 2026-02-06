@@ -108,6 +108,7 @@ You are doing post-validation refinement for a security finding.
 
 Goals:
 - If possible, produce a standalone Dockerfile that reproduces the finding in a clean environment.
+  - Prefer debugging commands first in an interactive container shell (`docker run ... bash` / `docker exec -it ... bash`), and only then codify the confirmed working steps in the Dockerfile.
   - Prefer an ASan-compiled build for crash PoCs.
   - For crash PoCs, reproduce via a standard, shipped target/entrypoint (existing binary/service) rather than adding a synthetic harness that calls internal functions.
   - For crypto/protocol logic bugs, build/run a minimal harness that demonstrates the failure (no ASan required).

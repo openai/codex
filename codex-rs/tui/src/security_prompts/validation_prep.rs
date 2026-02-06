@@ -39,6 +39,7 @@ Docker target
 - First verify Docker is available (`docker --version`). If not available, record it as a prerequisite and mark the Docker half as unable.
 - If the repo provides a Dockerfile or compose config, prefer using it.
 - Otherwise, create a minimal Dockerfile under the provided output directory (not in the repo) that builds and runs the target.
+- When iterating on Docker steps, prefer opening an interactive shell in the container (`docker run ... bash` / `docker exec -it ... bash`) to debug commands first, then update the Dockerfile after confirming the flow works.
 - Do NOT build test-only or utility binaries in Docker yet (fuzzers, tests, benchmarks). Build only the primary shipped entrypoint(s).
 - Prefer a debug (symbols) and/or ASan build in Docker when feasible, so crash validations capture useful stack traces.
 - Build the image and run it, then verify it starts:
