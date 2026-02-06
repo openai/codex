@@ -82,6 +82,7 @@ pub(crate) struct EventProcessorWithHumanOutput {
     progress_active: bool,
     progress_last_len: usize,
     use_ansi_cursor: bool,
+    progress_wrapped: bool,
 }
 
 impl EventProcessorWithHumanOutput {
@@ -113,6 +114,7 @@ impl EventProcessorWithHumanOutput {
                 progress_active: false,
                 progress_last_len: 0,
                 use_ansi_cursor: cursor_ansi,
+                progress_wrapped: false,
             }
         } else {
             Self {
@@ -134,6 +136,7 @@ impl EventProcessorWithHumanOutput {
                 progress_active: false,
                 progress_last_len: 0,
                 use_ansi_cursor: cursor_ansi,
+                progress_wrapped: false,
             }
         }
     }
@@ -933,7 +936,13 @@ impl EventProcessorWithHumanOutput {
         if self.progress_active {
             self.progress_active = false;
             self.progress_last_len = 0;
-            if !self.use_ansi_cursor {
+            if self.use_ansi_cursor {
+                if self.progress_wrapped {
+                    eprint!("\u{1b}[?25h\u{1b}[?7h");
+                    self.progress_wrapped = false;
+                }
+                eprintln!();
+            } else {
                 eprintln!();
             }
         }
@@ -972,16 +981,26 @@ impl EventProcessorWithHumanOutput {
             }
             return;
         }
-        if self.progress_active {
-            eprint!("\u{1b}[1A\u{1b}[2K");
+        if !self.progress_active {
+            eprint!("\u{1b}[?25l\u{1b}[?7l");
+            self.progress_wrapped = true;
         }
-        eprintln!("{line}");
-        let _ = std::io::stderr().flush();
+        let mut output = String::new();
+        output.push('\r');
+        output.push_str("\u{1b}[2K");
+        output.push_str(&line);
         if done {
+            if self.progress_wrapped {
+                output.push_str("\u{1b}[?25h\u{1b}[?7h");
+                self.progress_wrapped = false;
+            }
+            eprintln!("{output}");
             self.progress_active = false;
             self.progress_last_len = 0;
             return;
         }
+        eprint!("{output}");
+        let _ = std::io::stderr().flush();
         self.progress_active = true;
         self.progress_last_len = line.len();
     }
