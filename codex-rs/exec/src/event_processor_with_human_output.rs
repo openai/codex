@@ -935,7 +935,7 @@ impl EventProcessorWithHumanOutput {
             self.progress_active = false;
             self.progress_last_len = 0;
             if self.use_ansi_cursor {
-                eprint!("\r\u{1b}[2K\n");
+                eprint!("\u{1b}[1G\u{1b}[2K\n");
             } else {
                 eprintln!();
             }
@@ -976,8 +976,7 @@ impl EventProcessorWithHumanOutput {
             return;
         }
         let mut output = String::new();
-        output.push('\r');
-        output.push_str("\u{1b}[2K");
+        output.push_str("\u{1b}[1G\u{1b}[2K");
         output.push_str(&line);
         if done {
             output.push('\n');
