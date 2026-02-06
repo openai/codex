@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ThreadPurgeResult": {
+      "properties": {
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/ThreadPurgeStatus"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadPurgeStatus": {
+      "enum": [
+        "purged",
+        "notFound",
+        "notArchived",
+        "inUse",
+        "failed"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "data": {
+      "items": {
+        "$ref": "#/definitions/ThreadPurgeResult"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "data"
+  ],
+  "title": "ThreadPurgeResponse",
+  "type": "object"
+}

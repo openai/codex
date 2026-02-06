@@ -208,6 +208,10 @@ client_request_definitions! {
         params: v2::ThreadUnarchiveParams,
         response: v2::ThreadUnarchiveResponse,
     },
+    ThreadPurge => "thread/purge" {
+        params: v2::ThreadPurgeParams,
+        response: v2::ThreadPurgeResponse,
+    },
     ThreadCompactStart => "thread/compact/start" {
         params: v2::ThreadCompactStartParams,
         response: v2::ThreadCompactStartResponse,
@@ -1108,6 +1112,27 @@ mod tests {
                 "params": {
                     "cursor": null,
                     "limit": null
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_thread_purge() -> Result<()> {
+        let request = ClientRequest::ThreadPurge {
+            request_id: RequestId::Integer(9),
+            params: v2::ThreadPurgeParams {
+                thread_ids: vec!["thr_1".to_string(), "thr_2".to_string()],
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "thread/purge",
+                "id": 9,
+                "params": {
+                    "threadIds": ["thr_1", "thr_2"]
                 }
             }),
             serde_json::to_value(&request)?,

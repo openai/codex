@@ -605,6 +605,30 @@
             },
             "method": {
               "enum": [
+                "thread/purge"
+              ],
+              "title": "Thread/purgeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadPurgeParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/purgeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/compact/start"
               ],
               "title": "Thread/compact/startRequestMethod",
@@ -14884,6 +14908,69 @@
         ],
         "title": "ThreadNameUpdatedNotification",
         "type": "object"
+      },
+      "ThreadPurgeParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "threadIds"
+        ],
+        "title": "ThreadPurgeParams",
+        "type": "object"
+      },
+      "ThreadPurgeResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/definitions/v2/ThreadPurgeResult"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "ThreadPurgeResponse",
+        "type": "object"
+      },
+      "ThreadPurgeResult": {
+        "properties": {
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/definitions/v2/ThreadPurgeStatus"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "threadId"
+        ],
+        "type": "object"
+      },
+      "ThreadPurgeStatus": {
+        "enum": [
+          "purged",
+          "notFound",
+          "notArchived",
+          "inUse",
+          "failed"
+        ],
+        "type": "string"
       },
       "ThreadReadParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",

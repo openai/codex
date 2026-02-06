@@ -19,6 +19,7 @@ mod thread_archive;
 mod thread_fork;
 mod thread_list;
 mod thread_loaded_list;
+mod thread_purge;
 mod thread_read;
 mod thread_resume;
 mod thread_rollback;

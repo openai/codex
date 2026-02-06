@@ -118,6 +118,10 @@ use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
+use codex_app_server_protocol::ThreadPurgeParams;
+use codex_app_server_protocol::ThreadPurgeResponse;
+use codex_app_server_protocol::ThreadPurgeResult;
+use codex_app_server_protocol::ThreadPurgeStatus;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeParams;
@@ -489,6 +493,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadUnarchive { request_id, params } => {
                 self.thread_unarchive(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadPurge { request_id, params } => {
+                self.thread_purge(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ThreadCompactStart { request_id, params } => {
@@ -2216,6 +2224,231 @@ impl CodexMessageProcessor {
             Err(err) => {
                 self.outgoing.send_error(request_id, err).await;
             }
+        }
+    }
+
+    async fn thread_purge(&mut self, request_id: ConnectionRequestId, params: ThreadPurgeParams) {
+        let state_db_ctx = open_if_present(
+            &self.config.codex_home,
+            self.config.model_provider_id.as_str(),
+        )
+        .await;
+
+        let mut data = Vec::with_capacity(params.thread_ids.len());
+        for thread_id in params.thread_ids {
+            let result = self
+                .purge_thread_by_id(thread_id.as_str(), state_db_ctx.as_ref())
+                .await;
+            data.push(result);
+        }
+
+        self.outgoing
+            .send_response(request_id, ThreadPurgeResponse { data })
+            .await;
+    }
+
+    async fn purge_thread_by_id(
+        &self,
+        thread_id_str: &str,
+        state_db_ctx: Option<&StateDbHandle>,
+    ) -> ThreadPurgeResult {
+        let thread_id = match ThreadId::from_string(thread_id_str) {
+            Ok(id) => id,
+            Err(err) => {
+                return Self::thread_purge_result(
+                    thread_id_str,
+                    ThreadPurgeStatus::Failed,
+                    Some(format!("invalid thread id: {err}")),
+                );
+            }
+        };
+
+        if self.thread_manager.get_thread(thread_id).await.is_ok() {
+            return Self::thread_purge_result(
+                thread_id_str,
+                ThreadPurgeStatus::InUse,
+                Some("thread is currently loaded in memory".to_string()),
+            );
+        }
+
+        let canonical_thread_id = thread_id.to_string();
+        let archived_path = match find_archived_thread_path_by_id_str(
+            &self.config.codex_home,
+            canonical_thread_id.as_str(),
+        )
+        .await
+        {
+            Ok(Some(path)) => path,
+            Ok(None) => {
+                match find_thread_path_by_id_str(
+                    &self.config.codex_home,
+                    canonical_thread_id.as_str(),
+                )
+                .await
+                {
+                    Ok(Some(_)) => {
+                        return Self::thread_purge_result(
+                            thread_id_str,
+                            ThreadPurgeStatus::NotArchived,
+                            None,
+                        );
+                    }
+                    Ok(None) => {
+                        return Self::thread_purge_result(
+                            thread_id_str,
+                            ThreadPurgeStatus::NotFound,
+                            None,
+                        );
+                    }
+                    Err(err) => {
+                        return Self::thread_purge_result(
+                            thread_id_str,
+                            ThreadPurgeStatus::Failed,
+                            Some(format!("failed to locate thread id {thread_id_str}: {err}")),
+                        );
+                    }
+                }
+            }
+            Err(err) => {
+                return Self::thread_purge_result(
+                    thread_id_str,
+                    ThreadPurgeStatus::Failed,
+                    Some(format!(
+                        "failed to locate archived thread id {thread_id_str}: {err}"
+                    )),
+                );
+            }
+        };
+
+        let rollout_path_display = archived_path.display().to_string();
+        let archived_folder = self
+            .config
+            .codex_home
+            .join(codex_core::ARCHIVED_SESSIONS_SUBDIR);
+
+        let canonical_archived_dir = match tokio::fs::canonicalize(&archived_folder).await {
+            Ok(path) => path,
+            Err(err) => {
+                return Self::thread_purge_result(
+                    thread_id_str,
+                    ThreadPurgeStatus::Failed,
+                    Some(format!(
+                        "failed to purge thread: unable to resolve archived directory: {err}"
+                    )),
+                );
+            }
+        };
+
+        let canonical_rollout_path = match tokio::fs::canonicalize(&archived_path).await {
+            Ok(path) if path.starts_with(&canonical_archived_dir) => path,
+            Ok(_) => {
+                return Self::thread_purge_result(
+                    thread_id_str,
+                    ThreadPurgeStatus::Failed,
+                    Some(format!(
+                        "rollout path `{rollout_path_display}` must be in archived directory"
+                    )),
+                );
+            }
+            Err(err) => {
+                return Self::thread_purge_result(
+                    thread_id_str,
+                    ThreadPurgeStatus::Failed,
+                    Some(format!("failed to resolve archived rollout path: {err}")),
+                );
+            }
+        };
+
+        let required_suffix = format!("{thread_id}.jsonl");
+        let Some(file_name) = canonical_rollout_path.file_name().map(OsStr::to_owned) else {
+            return Self::thread_purge_result(
+                thread_id_str,
+                ThreadPurgeStatus::Failed,
+                Some(format!(
+                    "rollout path `{rollout_path_display}` missing file name"
+                )),
+            );
+        };
+        if !file_name
+            .to_string_lossy()
+            .ends_with(required_suffix.as_str())
+        {
+            return Self::thread_purge_result(
+                thread_id_str,
+                ThreadPurgeStatus::Failed,
+                Some(format!(
+                    "rollout path `{rollout_path_display}` does not match thread id {thread_id}"
+                )),
+            );
+        }
+
+        if let Err(err) = tokio::fs::remove_file(&canonical_rollout_path).await {
+            let status = if err.kind() == std::io::ErrorKind::NotFound {
+                ThreadPurgeStatus::NotFound
+            } else {
+                ThreadPurgeStatus::Failed
+            };
+            return Self::thread_purge_result(
+                thread_id_str,
+                status,
+                Some(format!("failed to purge thread: {err}")),
+            );
+        }
+
+        let mut warnings = Vec::new();
+        if let Some(ctx) = state_db_ctx
+            && let Err(err) = ctx.delete_thread(thread_id).await
+        {
+            warnings.push(format!("failed to remove thread metadata: {err}"));
+        }
+        if let Err(err) =
+            Self::remove_shell_snapshots_for_thread(self.config.codex_home.as_path(), thread_id)
+                .await
+        {
+            warnings.push(format!("failed to remove shell snapshots: {err}"));
+        }
+
+        let message = if warnings.is_empty() {
+            None
+        } else {
+            Some(warnings.join("; "))
+        };
+        Self::thread_purge_result(thread_id_str, ThreadPurgeStatus::Purged, message)
+    }
+
+    async fn remove_shell_snapshots_for_thread(
+        codex_home: &Path,
+        thread_id: ThreadId,
+    ) -> std::io::Result<()> {
+        let snapshot_dir = codex_home.join("shell_snapshots");
+        let mut first_error = None;
+
+        for extension in ["sh", "ps1"] {
+            let snapshot_path = snapshot_dir.join(format!("{thread_id}.{extension}"));
+            if let Err(err) = tokio::fs::remove_file(snapshot_path).await
+                && err.kind() != std::io::ErrorKind::NotFound
+                && first_error.is_none()
+            {
+                first_error = Some(err);
+            }
+        }
+
+        if let Some(err) = first_error {
+            Err(err)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn thread_purge_result(
+        thread_id: &str,
+        status: ThreadPurgeStatus,
+        message: Option<String>,
+    ) -> ThreadPurgeResult {
+        ThreadPurgeResult {
+            thread_id: thread_id.to_string(),
+            status,
+            message,
         }
     }
 

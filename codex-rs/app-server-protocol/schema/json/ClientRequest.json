@@ -2432,6 +2432,20 @@
       },
       "type": "object"
     },
+    "ThreadPurgeParams": {
+      "properties": {
+        "threadIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "threadIds"
+      ],
+      "type": "object"
+    },
     "ThreadReadParams": {
       "properties": {
         "includeTurns": {
@@ -3268,6 +3282,30 @@
         "params"
       ],
       "title": "Thread/unarchiveRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/purge"
+          ],
+          "title": "Thread/purgeRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadPurgeParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/purgeRequest",
       "type": "object"
     },
     {

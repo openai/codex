@@ -92,6 +92,7 @@ Example (from OpenAI's official VSCode extension):
 - `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success.
 - `thread/name/set` — set or update a thread’s user-facing name; returns `{}` on success. Thread names are not required to be unique; name lookups resolve to the most recently updated thread.
 - `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success.
+- `thread/purge` — permanently delete one or more archived thread rollouts; returns per-thread statuses.
 - `thread/compact/start` — trigger conversation history compaction for a thread; returns `{}` immediately while progress streams through standard turn/item notifications.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications.
@@ -250,6 +251,23 @@ Use `thread/unarchive` to move an archived rollout back into the sessions direct
 ```json
 { "method": "thread/unarchive", "id": 24, "params": { "threadId": "thr_b" } }
 { "id": 24, "result": { "thread": { "id": "thr_b" } } }
+```
+
+### Example: Purge archived threads (batch)
+
+Use `thread/purge` to permanently delete archived rollouts. This endpoint only
+purges archived threads and returns a result for each requested id.
+
+```json
+{ "method": "thread/purge", "id": 26, "params": {
+    "threadIds": ["thr_b", "thr_c"]
+} }
+{ "id": 26, "result": {
+    "data": [
+        { "threadId": "thr_b", "status": "purged", "message": null },
+        { "threadId": "thr_c", "status": "notFound", "message": null }
+    ]
+} }
 ```
 
 ### Example: Trigger thread compaction

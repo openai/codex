@@ -55,6 +55,7 @@ use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadLoadedListParams;
+use codex_app_server_protocol::ThreadPurgeParams;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadRollbackParams;
@@ -419,6 +420,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/unarchive", params).await
+    }
+
+    /// Send a `thread/purge` JSON-RPC request.
+    pub async fn send_thread_purge_request(
+        &mut self,
+        params: ThreadPurgeParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/purge", params).await
     }
 
     /// Send a `thread/compact/start` JSON-RPC request.
