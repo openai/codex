@@ -3754,25 +3754,18 @@ pub(crate) async fn run_turn(
                     needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
                 } = sampling_request_output;
-                let total_usage_tokens = sess.get_total_token_usage().await;
-                let token_limit_reached = total_usage_tokens >= auto_compact_limit;
-
-                let estimated_token_count =
-                    sess.get_estimated_token_count(turn_context.as_ref()).await;
-
-                info!(
-                    turn_id = %turn_context.sub_id,
-                    total_usage_tokens,
-                    estimated_token_count = ?estimated_token_count,
+                let token_limit_reached = log_post_sampling_token_usage_and_maybe_compact(
+                    &sess,
+                    &turn_context,
                     auto_compact_limit,
-                    token_limit_reached,
                     needs_follow_up,
-                    "post sampling token usage"
-                );
+                    "run_turn",
+                )
+                .await;
 
-                // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
+                // As long as compaction works well in getting us way below the token
+                // limit, we should not worry about being in an infinite loop.
                 if token_limit_reached && needs_follow_up {
-                    run_auto_compact(&sess, &turn_context).await;
                     continue;
                 }
 
@@ -3836,6 +3829,36 @@ async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) 
     } else {
         run_inline_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await;
     }
+}
+
+async fn log_post_sampling_token_usage_and_maybe_compact(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    auto_compact_limit: i64,
+    needs_follow_up: bool,
+    checkpoint: &'static str,
+) -> bool {
+    let total_usage_tokens = sess.get_total_token_usage().await;
+    let estimated_token_count = sess.get_estimated_token_count(turn_context.as_ref()).await;
+    let token_limit_reached = total_usage_tokens >= auto_compact_limit
+        || estimated_token_count.is_some_and(|count| count >= auto_compact_limit);
+
+    info!(
+        turn_id = %turn_context.sub_id,
+        total_usage_tokens,
+        estimated_token_count = ?estimated_token_count,
+        auto_compact_limit,
+        token_limit_reached,
+        needs_follow_up,
+        checkpoint,
+        "post sampling token usage"
+    );
+
+    if token_limit_reached && needs_follow_up {
+        run_auto_compact(sess, turn_context).await;
+    }
+
+    token_limit_reached
 }
 
 fn filter_connectors_for_input(
@@ -4465,12 +4488,21 @@ async fn drain_in_flight(
     in_flight: &mut FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>>,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    auto_compact_limit: i64,
 ) -> CodexResult<()> {
     while let Some(res) = in_flight.next().await {
         match res {
             Ok(response_input) => {
                 sess.record_conversation_items(&turn_context, &[response_input.into()])
                     .await;
+                log_post_sampling_token_usage_and_maybe_compact(
+                    &sess,
+                    &turn_context,
+                    auto_compact_limit,
+                    true,
+                    "drain_in_flight",
+                )
+                .await;
             }
             Err(err) => {
                 error_or_panic(format!("in-flight tool future failed during drain: {err}"));
@@ -4546,6 +4578,10 @@ async fn try_run_sampling_request(
     let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
         FuturesOrdered::new();
     let mut needs_follow_up = false;
+    let auto_compact_limit = turn_context
+        .model_info
+        .auto_compact_token_limit()
+        .unwrap_or(i64::MAX);
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
     let mut should_emit_turn_diff = false;
@@ -4612,6 +4648,14 @@ async fn try_run_sampling_request(
                     )
                     .await
                     {
+                        log_post_sampling_token_usage_and_maybe_compact(
+                            &sess,
+                            &turn_context,
+                            auto_compact_limit,
+                            needs_follow_up,
+                            "stream_item_done_plan",
+                        )
+                        .await;
                         continue;
                     }
                 }
@@ -4633,6 +4677,14 @@ async fn try_run_sampling_request(
                     last_agent_message = Some(agent_message);
                 }
                 needs_follow_up |= output_result.needs_follow_up;
+                log_post_sampling_token_usage_and_maybe_compact(
+                    &sess,
+                    &turn_context,
+                    auto_compact_limit,
+                    needs_follow_up,
+                    "stream_item_done",
+                )
+                .await;
             }
             ResponseEvent::OutputItemAdded(item) => {
                 if let Some(turn_item) = handle_non_tool_response_item(&item, plan_mode).await {
@@ -4761,7 +4813,13 @@ async fn try_run_sampling_request(
         }
     };
 
-    drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
+    drain_in_flight(
+        &mut in_flight,
+        sess.clone(),
+        turn_context.clone(),
+        auto_compact_limit,
+    )
+    .await?;
 
     if should_emit_turn_diff {
         let unified_diff = {

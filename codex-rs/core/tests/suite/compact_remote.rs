@@ -239,6 +239,81 @@ async fn remote_compact_runs_automatically() -> Result<()> {
 
 #[cfg_attr(target_os = "windows", ignore)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_auto_compact_runs_during_multi_tool_output_drain() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let first_call_id = "first-large-call";
+    let second_call_id = "second-small-call";
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.features.enable(Feature::RemoteCompaction);
+                config.base_instructions = Some("test instructions".to_string());
+                config.model_auto_compact_token_limit = Some(500);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            sse(vec![
+                responses::ev_shell_command_call(first_call_id, "yes compact-me | head -c 9000"),
+                responses::ev_shell_command_call(second_call_id, "printf small-output"),
+                responses::ev_completed_with_tokens("resp-1", 10),
+            ]),
+            sse(vec![
+                responses::ev_assistant_message("m2", "after compact"),
+                responses::ev_completed_with_tokens("resp-2", 10),
+            ]),
+        ],
+    )
+    .await;
+
+    let compact_mock =
+        responses::mount_compact_json_once(harness.server(), serde_json::json!({ "output": [] }))
+            .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "trigger remote compact during drain".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let compact_request = compact_mock.single_request();
+    assert!(
+        compact_request
+            .function_call_output_text(first_call_id)
+            .is_some(),
+        "expected compaction request to include the first drained tool output"
+    );
+    assert!(
+        compact_request
+            .function_call_output_text(second_call_id)
+            .is_none(),
+        "expected compaction request before the second drained tool output"
+    );
+
+    assert!(
+        responses_mock
+            .function_call_output_text(second_call_id)
+            .is_some(),
+        "expected second tool output to be sent in follow-up sampling request"
+    );
+
+    Ok(())
+}
+
+#[cfg_attr(target_os = "windows", ignore)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_compact_trims_function_call_history_to_fit_context_window() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

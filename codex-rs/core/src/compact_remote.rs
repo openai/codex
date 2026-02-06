@@ -126,7 +126,7 @@ fn trim_function_call_history_to_fit_context_window(
         let Some(last_item) = history.raw_items().last() else {
             break;
         };
-        if !is_codex_generated_item(last_item) {
+        if !is_remote_compaction_trim_candidate(last_item) {
             break;
         }
         if !history.remove_last_item() {
@@ -136,4 +136,71 @@ fn trim_function_call_history_to_fit_context_window(
     }
 
     deleted_items
+}
+
+fn is_remote_compaction_trim_candidate(item: &ResponseItem) -> bool {
+    is_codex_generated_item(item)
+        || matches!(
+            item,
+            ResponseItem::FunctionCall { .. }
+                | ResponseItem::CustomToolCall { .. }
+                | ResponseItem::LocalShellCall { .. }
+        )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codex::make_session_and_context;
+    use codex_protocol::models::ContentItem;
+    use pretty_assertions::assert_eq;
+
+    #[tokio::test]
+    async fn trim_drops_trailing_function_call_without_output() {
+        let (_session, mut turn_context) = make_session_and_context().await;
+        turn_context.model_info.context_window = Some(200);
+        turn_context.model_info.effective_context_window_percent = 100;
+
+        let mut history = ContextManager::new();
+        history.record_items(
+            &[
+                ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputText {
+                        text: "user question".to_string(),
+                    }],
+                    end_turn: None,
+                    phase: None,
+                },
+                ResponseItem::FunctionCall {
+                    id: None,
+                    name: "shell_command".to_string(),
+                    arguments: serde_json::json!({
+                        "command": format!("echo {}", "x".repeat(2_000)),
+                    })
+                    .to_string(),
+                    call_id: "pending-call".to_string(),
+                },
+            ],
+            turn_context.truncation_policy,
+        );
+
+        let deleted_items = trim_function_call_history_to_fit_context_window(
+            &mut history,
+            &turn_context,
+            &BaseInstructions {
+                text: "base".to_string(),
+            },
+        );
+
+        assert_eq!(deleted_items, 1);
+        assert!(
+            !history
+                .raw_items()
+                .iter()
+                .any(|item| matches!(item, ResponseItem::FunctionCall { call_id, .. } if call_id == "pending-call")),
+            "expected trailing function_call to be removed during remote trim"
+        );
+    }
 }
