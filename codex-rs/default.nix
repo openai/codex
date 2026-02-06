@@ -3,20 +3,37 @@
   rustPlatform,
   pkg-config,
   lib,
+  git,
+  cmake,
+  llvmPackages,
   ...
 }:
 rustPlatform.buildRustPackage (_: {
   env = {
     PKG_CONFIG_PATH = "${openssl.dev}/lib/pkgconfig:$PKG_CONFIG_PATH";
+    LIBCLANG_PATH = "${llvmPackages.libclang.lib}/lib";
   };
   pname = "codex-rs";
   version = "0.1.0";
   cargoLock.lockFile = ./Cargo.lock;
+  postPatch = ''
+    boringssl_cmake="$cargoDepsCopy/rama-boring-sys-0.5.10/deps/boringssl/CMakeLists.txt"
+    if [ ! -f "$boringssl_cmake" ]; then
+      echo "missing boringssl CMakeLists.txt at $boringssl_cmake" >&2
+      exit 1
+    fi
+    substituteInPlace "$boringssl_cmake" \
+      --replace-fail "-Werror -Wformat=2" "-Wformat=2"
+  '';
   doCheck = false;
   src = ./.;
   nativeBuildInputs = [
     pkg-config
     openssl
+    git
+    cmake
+    llvmPackages.clang
+    llvmPackages.libclang.lib
   ];
 
   cargoLock.outputHashes = {
