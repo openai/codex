@@ -35,9 +35,17 @@ use windows_sys::Win32::Security::SECURITY_NT_AUTHORITY;
 pub const SETUP_VERSION: u32 = 5;
 pub const OFFLINE_USERNAME: &str = "CodexSandboxOffline";
 pub const ONLINE_USERNAME: &str = "CodexSandboxOnline";
+pub const OFFLINE_BLOCK_RULE_NAME: &str = "codex_sandbox_offline_block_outbound";
 const ERROR_CANCELLED: u32 = 1223;
 const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x0000_0020;
 const DOMAIN_ALIAS_RID_ADMINS: u32 = 0x0000_0220;
+
+#[derive(Debug, Clone, Default)]
+pub struct SetupIdentityOverrides {
+    pub offline_username: Option<String>,
+    pub online_username: Option<String>,
+    pub offline_block_rule_name: Option<String>,
+}
 
 pub fn sandbox_dir(codex_home: &Path) -> PathBuf {
     codex_home.join(".sandbox")
@@ -82,6 +90,7 @@ pub fn run_setup_refresh(
         version: SETUP_VERSION,
         offline_username: OFFLINE_USERNAME.to_string(),
         online_username: ONLINE_USERNAME.to_string(),
+        offline_block_rule_name: OFFLINE_BLOCK_RULE_NAME.to_string(),
         codex_home: codex_home.to_path_buf(),
         command_cwd: command_cwd.to_path_buf(),
         read_roots,
@@ -260,6 +269,7 @@ struct ElevationPayload {
     version: u32,
     offline_username: String,
     online_username: String,
+    offline_block_rule_name: String,
     codex_home: PathBuf,
     command_cwd: PathBuf,
     read_roots: Vec<PathBuf>,
@@ -456,6 +466,28 @@ pub fn run_elevated_setup(
     read_roots_override: Option<Vec<PathBuf>>,
     write_roots_override: Option<Vec<PathBuf>>,
 ) -> Result<()> {
+    run_elevated_setup_with_identity_overrides(
+        policy,
+        policy_cwd,
+        command_cwd,
+        env_map,
+        codex_home,
+        read_roots_override,
+        write_roots_override,
+        None,
+    )
+}
+
+pub fn run_elevated_setup_with_identity_overrides(
+    policy: &SandboxPolicy,
+    policy_cwd: &Path,
+    command_cwd: &Path,
+    env_map: &HashMap<String, String>,
+    codex_home: &Path,
+    read_roots_override: Option<Vec<PathBuf>>,
+    write_roots_override: Option<Vec<PathBuf>>,
+    identity_overrides: Option<&SetupIdentityOverrides>,
+) -> Result<()> {
     // Ensure the shared sandbox directory exists before we send it to the elevated helper.
     let sbx_dir = sandbox_dir(codex_home);
     std::fs::create_dir_all(&sbx_dir).map_err(|err| {
@@ -475,8 +507,15 @@ pub fn run_elevated_setup(
     );
     let payload = ElevationPayload {
         version: SETUP_VERSION,
-        offline_username: OFFLINE_USERNAME.to_string(),
-        online_username: ONLINE_USERNAME.to_string(),
+        offline_username: identity_overrides
+            .and_then(|o| o.offline_username.clone())
+            .unwrap_or_else(|| OFFLINE_USERNAME.to_string()),
+        online_username: identity_overrides
+            .and_then(|o| o.online_username.clone())
+            .unwrap_or_else(|| ONLINE_USERNAME.to_string()),
+        offline_block_rule_name: identity_overrides
+            .and_then(|o| o.offline_block_rule_name.clone())
+            .unwrap_or_else(|| OFFLINE_BLOCK_RULE_NAME.to_string()),
         codex_home: codex_home.to_path_buf(),
         command_cwd: command_cwd.to_path_buf(),
         read_roots,
