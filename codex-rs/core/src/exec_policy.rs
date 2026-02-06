@@ -25,6 +25,7 @@ use tokio::fs;
 use tokio::task::spawn_blocking;
 
 use crate::bash::parse_shell_lc_plain_commands;
+use crate::bash::parse_shell_lc_single_command_prefix;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::sandboxing::SandboxPermissions;
@@ -132,8 +133,7 @@ impl ExecPolicyManager {
             prefix_rule,
         } = req;
         let exec_policy = self.current();
-        let commands =
-            parse_shell_lc_plain_commands(command).unwrap_or_else(|| vec![command.to_vec()]);
+        let commands = commands_for_exec_policy(command);
         let exec_policy_fallback = |cmd: &[String]| {
             render_decision_for_unmatched_command(
                 approval_policy,
@@ -358,6 +358,18 @@ pub fn render_decision_for_unmatched_command(
 
 fn default_policy_path(codex_home: &Path) -> PathBuf {
     codex_home.join(RULES_DIR_NAME).join(DEFAULT_POLICY_FILE)
+}
+
+fn commands_for_exec_policy(command: &[String]) -> Vec<Vec<String>> {
+    if let Some(commands) = parse_shell_lc_plain_commands(command) {
+        return commands;
+    }
+
+    if let Some(single_command) = parse_shell_lc_single_command_prefix(command) {
+        return vec![single_command];
+    }
+
+    vec![command.to_vec()]
 }
 
 /// Derive a proposed execpolicy amendment when a command requires user approval
@@ -822,6 +834,40 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             requirement,
             ExecApprovalRequirement::Forbidden {
                 reason: "`bash -lc 'rm -rf /some/important/folder'` rejected: policy forbids commands starting with `rm`".to_string()
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn evaluates_heredoc_script_against_prefix_rules() {
+        let policy_src = r#"prefix_rule(pattern=["python3"], decision="allow")"#;
+        let mut parser = PolicyParser::new();
+        parser
+            .parse("test.rules", policy_src)
+            .expect("parse policy");
+        let policy = Arc::new(parser.build());
+        let command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "python3 <<'PY'\nprint('hello')\nPY".to_string(),
+        ];
+
+        let requirement = ExecPolicyManager::new(policy)
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                features: &Features::with_defaults(),
+                command: &command,
+                approval_policy: AskForApproval::OnRequest,
+                sandbox_policy: &SandboxPolicy::ReadOnly,
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                prefix_rule: None,
+            })
+            .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: true,
+                proposed_execpolicy_amendment: None,
             }
         );
     }

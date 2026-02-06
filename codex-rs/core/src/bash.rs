@@ -119,6 +119,25 @@ pub fn parse_shell_lc_plain_commands(command: &[String]) -> Option<Vec<Vec<Strin
     try_parse_word_only_commands_sequence(&tree, script)
 }
 
+/// Returns the parsed argv for a single shell command in a here-doc style
+/// script (`<<`), as long as the script contains exactly one command node.
+pub fn parse_shell_lc_single_command_prefix(command: &[String]) -> Option<Vec<String>> {
+    let (_, script) = extract_bash_command(command)?;
+    // Keep this fallback narrow: only apply to here-doc style scripts that are
+    // otherwise rejected by the strict word-only parser.
+    if !script.contains("<<") {
+        return None;
+    }
+
+    let tree = try_parse_shell(script)?;
+    if tree.root_node().has_error() {
+        return None;
+    }
+
+    let command_node = find_single_command_node(tree.root_node())?;
+    parse_heredoc_command_words(command_node, script)
+}
+
 fn parse_plain_command_from_node(cmd: tree_sitter::Node, src: &str) -> Option<Vec<String>> {
     if cmd.kind() != "command" {
         return None;
@@ -175,6 +194,55 @@ fn parse_plain_command_from_node(cmd: tree_sitter::Node, src: &str) -> Option<Ve
         }
     }
     Some(words)
+}
+
+fn parse_heredoc_command_words(cmd: Node<'_>, src: &str) -> Option<Vec<String>> {
+    if cmd.kind() != "command" {
+        return None;
+    }
+
+    let mut words = Vec::new();
+    let mut cursor = cmd.walk();
+    for child in cmd.named_children(&mut cursor) {
+        match child.kind() {
+            "command_name" => {
+                let word_node = child.named_child(0)?;
+                if !matches!(word_node.kind(), "word" | "number") {
+                    return None;
+                }
+                words.push(word_node.utf8_text(src.as_bytes()).ok()?.to_owned());
+            }
+            "word" | "number" => {
+                words.push(child.utf8_text(src.as_bytes()).ok()?.to_owned());
+            }
+            // Allow shell constructs that attach IO to a single command without
+            // changing argv matching semantics for the executable prefix.
+            "variable_assignment" | "comment" => {}
+            kind if kind.contains("redirect") || kind.contains("heredoc") => {}
+            _ => return None,
+        }
+    }
+
+    if words.is_empty() { None } else { Some(words) }
+}
+
+fn find_single_command_node(root: Node<'_>) -> Option<Node<'_>> {
+    let mut stack = vec![root];
+    let mut single_command = None;
+    while let Some(node) = stack.pop() {
+        if node.kind() == "command" {
+            if single_command.is_some() {
+                return None;
+            }
+            single_command = Some(node);
+        }
+
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    single_command
 }
 
 fn parse_double_quoted_string(node: Node, src: &str) -> Option<String> {
@@ -374,5 +442,44 @@ mod tests {
         // Command substitution in concatenated strings should be rejected
         assert!(parse_seq("rg -g\"$(pwd)\" pattern").is_none());
         assert!(parse_seq("rg -g\"$(echo '*.py')\" pattern").is_none());
+    }
+
+    #[test]
+    fn parse_shell_lc_single_command_prefix_supports_heredoc() {
+        let command = vec![
+            "zsh".to_string(),
+            "-lc".to_string(),
+            "python3 <<'PY'\nprint('hello')\nPY".to_string(),
+        ];
+        let parsed = parse_shell_lc_single_command_prefix(&command);
+        assert_eq!(parsed, Some(vec!["python3".to_string()]));
+
+        let command_unquoted = vec![
+            "zsh".to_string(),
+            "-lc".to_string(),
+            "python3 << PY\nprint('hello')\nPY".to_string(),
+        ];
+        let parsed_unquoted = parse_shell_lc_single_command_prefix(&command_unquoted);
+        assert_eq!(parsed_unquoted, Some(vec!["python3".to_string()]));
+    }
+
+    #[test]
+    fn parse_shell_lc_single_command_prefix_rejects_multi_command_scripts() {
+        let command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "python3 <<'PY'\nprint('hello')\nPY\necho done".to_string(),
+        ];
+        assert_eq!(parse_shell_lc_single_command_prefix(&command), None);
+    }
+
+    #[test]
+    fn parse_shell_lc_single_command_prefix_rejects_non_heredoc_redirects() {
+        let command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "echo hello > /tmp/out.txt".to_string(),
+        ];
+        assert_eq!(parse_shell_lc_single_command_prefix(&command), None);
     }
 }
