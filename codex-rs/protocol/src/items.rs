@@ -1,3 +1,4 @@
+use crate::models::MessagePhase;
 use crate::models::WebSearchAction;
 use crate::protocol::AgentMessageEvent;
 use crate::protocol::AgentReasoningEvent;
@@ -43,6 +44,9 @@ pub enum AgentMessageContent {
 pub struct AgentMessageItem {
     pub id: String,
     pub content: Vec<AgentMessageContent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub phase: Option<MessagePhase>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -172,6 +176,7 @@ impl AgentMessageItem {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             content: content.to_vec(),
+            phase: None,
         }
     }
 

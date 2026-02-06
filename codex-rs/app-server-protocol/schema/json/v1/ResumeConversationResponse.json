@@ -4695,6 +4695,16 @@
             "id": {
               "type": "string"
             },
+            "phase": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MessagePhase"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "type": {
               "enum": [
                 "AgentMessage"

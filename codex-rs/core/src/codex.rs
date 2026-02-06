@@ -4480,6 +4480,7 @@ async fn emit_agent_message_in_plan_mode(
                 TurnItem::AgentMessage(codex_protocol::items::AgentMessageItem {
                     id: agent_message_id.clone(),
                     content: Vec::new(),
+                    phase: None,
                 })
             });
         sess.emit_turn_item_started(turn_context, &start_item).await;

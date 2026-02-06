@@ -3248,6 +3248,7 @@ mod tests {
                     text: "world".to_string(),
                 },
             ],
+            phase: None,
         });
 
         assert_eq!(
