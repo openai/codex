@@ -4492,6 +4492,7 @@ async fn drain_in_flight(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     auto_compact_limit: i64,
+    needs_follow_up: bool,
 ) -> CodexResult<()> {
     while let Some(res) = in_flight.next().await {
         match res {
@@ -4502,7 +4503,7 @@ async fn drain_in_flight(
                     &sess,
                     &turn_context,
                     auto_compact_limit,
-                    true,
+                    needs_follow_up,
                     in_flight.is_empty(),
                     "drain_in_flight",
                 )
@@ -4806,6 +4807,7 @@ async fn try_run_sampling_request(
         sess.clone(),
         turn_context.clone(),
         auto_compact_limit,
+        needs_follow_up,
     )
     .await?;
 
