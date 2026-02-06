@@ -19,7 +19,7 @@ use tracing::info;
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-) -> bool {
+) -> CodexResult<()> {
     run_remote_compact_task_inner(&sess, &turn_context).await
 }
 
@@ -30,21 +30,20 @@ pub(crate) async fn run_remote_compact_task(sess: Arc<Session>, turn_context: Ar
     });
     sess.send_event(&turn_context, start_event).await;
 
-    let _ = run_remote_compact_task_inner(&sess, &turn_context).await;
+    if let Err(err) = run_remote_compact_task_inner(&sess, &turn_context).await {
+        let event = EventMsg::Error(
+            err.to_error_event(Some("Error running remote compact task".to_string())),
+        );
+        sess.send_event(&turn_context, event).await;
+    }
 }
 
 async fn run_remote_compact_task_inner(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-) -> bool {
-    if let Err(err) = run_remote_compact_task_inner_impl(sess, turn_context).await {
-        let event = EventMsg::Error(
-            err.to_error_event(Some("Error running remote compact task".to_string())),
-        );
-        sess.send_event(turn_context, event).await;
-        return false;
-    }
-    true
+) -> CodexResult<()> {
+    run_remote_compact_task_inner_impl(sess, turn_context).await?;
+    Ok(())
 }
 
 async fn run_remote_compact_task_inner_impl(

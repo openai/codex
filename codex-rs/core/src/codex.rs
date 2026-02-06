@@ -3654,7 +3654,11 @@ pub(crate) async fn run_turn(
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, event).await;
-    if total_usage_tokens >= auto_compact_limit && !run_auto_compact(&sess, &turn_context).await {
+    if total_usage_tokens >= auto_compact_limit
+        && let Err(e) = run_auto_compact(&sess, &turn_context).await
+    {
+        let event = EventMsg::Error(e.to_error_event(None));
+        sess.send_event(&turn_context, event).await;
         return None;
     }
 
@@ -3837,7 +3841,9 @@ pub(crate) async fn run_turn(
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if token_limit_reached && needs_follow_up {
-                    if !run_auto_compact(&sess, &turn_context).await {
+                    if let Err(e) = run_auto_compact(&sess, &turn_context).await {
+                        let event = EventMsg::Error(e.to_error_event(None));
+                        sess.send_event(&turn_context, event).await;
                         break;
                     }
                     continue;
@@ -3897,12 +3903,16 @@ pub(crate) async fn run_turn(
     last_agent_message
 }
 
-async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) -> bool {
+async fn run_auto_compact(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+) -> crate::error::Result<()> {
     if should_use_remote_compact_task(&turn_context.provider) {
-        run_inline_remote_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await
+        run_inline_remote_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await?;
     } else {
-        run_inline_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await
+        run_inline_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await?;
     }
+    Ok(())
 }
 
 fn filter_connectors_for_input(

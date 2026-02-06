@@ -2279,8 +2279,12 @@ async fn auto_compact_failure_stops_follow_up_sampling_loop() {
     })
     .await;
     assert!(
-        error_message.contains("Error running remote compact task"),
-        "expected remote auto compact failure message, got: {error_message}"
+        !error_message.contains("Error running remote compact task"),
+        "expected propagated compact error instead of wrapper message, got: {error_message}"
+    );
+    assert!(
+        !error_message.is_empty(),
+        "expected non-empty compact error message"
     );
     wait_for_event(&codex, |msg| matches!(msg, EventMsg::TurnComplete(_))).await;
 
