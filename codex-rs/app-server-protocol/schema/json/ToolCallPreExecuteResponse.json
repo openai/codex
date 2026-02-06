@@ -1,0 +1,234 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "PermissionPromptMetadata": {
+      "description": "Metadata for displaying a permission prompt when decision is AskUser.",
+      "properties": {
+        "command": {
+          "description": "For bash: the command being executed",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "description": "Human-readable description of the operation",
+          "type": "string"
+        },
+        "filePath": {
+          "description": "For file operations: the target file path",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "promptType": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/PermissionPromptType"
+            }
+          ],
+          "description": "Type of permission being requested"
+        },
+        "toolName": {
+          "description": "For MCP/API: the tool or endpoint name",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "description",
+        "promptType"
+      ],
+      "type": "object"
+    },
+    "PermissionPromptType": {
+      "description": "Type of permission prompt to display when decision is AskUser.",
+      "oneOf": [
+        {
+          "description": "Shell command execution",
+          "enum": [
+            "bash"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "File write operation (Write, Edit, MultiEdit, NotebookEdit)",
+          "enum": [
+            "file_write"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "MCP tool that may mutate data",
+          "enum": [
+            "mcp_mutation"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "API endpoint call that may mutate data",
+          "enum": [
+            "api_mutation"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "ToolCallPreExecuteDecision": {
+      "description": "Decision for PreToolUse hook response.",
+      "oneOf": [
+        {
+          "description": "Allow the tool to execute with original input.",
+          "enum": [
+            "allow"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Block the tool execution. The reason will be returned to the model.",
+          "properties": {
+            "block": {
+              "properties": {
+                "reason": {
+                  "description": "Error message to return to the model (guides retry behavior).",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "reason"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "block"
+          ],
+          "title": "BlockToolCallPreExecuteDecision",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Allow execution but with modified input.",
+          "properties": {
+            "modify": {
+              "properties": {
+                "input": {
+                  "description": "Modified input to use instead of the original."
+                }
+              },
+              "required": [
+                "input"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "modify"
+          ],
+          "title": "ModifyToolCallPreExecuteDecision",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Ask user for permission before proceeding. Client should display a permission prompt and then call respondToToolCallPreExecute again with the user's decision in the user_response field.",
+          "properties": {
+            "askUser": {
+              "properties": {
+                "prompt": {
+                  "allOf": [
+                    {
+                      "$ref": "#/definitions/PermissionPromptMetadata"
+                    }
+                  ],
+                  "description": "Metadata for displaying the permission prompt"
+                }
+              },
+              "required": [
+                "prompt"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "askUser"
+          ],
+          "title": "AskUserToolCallPreExecuteDecision",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "User's response to an AskUser request (sent by client after prompting).",
+          "properties": {
+            "userResponse": {
+              "properties": {
+                "accept_for_session": {
+                  "default": false,
+                  "description": "If true, auto-approve similar operations for the rest of the session",
+                  "type": "boolean"
+                },
+                "decision": {
+                  "allOf": [
+                    {
+                      "$ref": "#/definitions/UserPermissionDecision"
+                    }
+                  ],
+                  "description": "The user's decision"
+                }
+              },
+              "required": [
+                "decision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "userResponse"
+          ],
+          "title": "UserResponseToolCallPreExecuteDecision",
+          "type": "object"
+        }
+      ]
+    },
+    "UserPermissionDecision": {
+      "description": "User's decision on a permission prompt.",
+      "oneOf": [
+        {
+          "description": "User approved the operation",
+          "enum": [
+            "approved"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "User denied the operation",
+          "enum": [
+            "denied"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Permission request timed out",
+          "enum": [
+            "timedOut"
+          ],
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "description": "Response for PreToolUse hook.",
+  "properties": {
+    "decision": {
+      "$ref": "#/definitions/ToolCallPreExecuteDecision"
+    }
+  },
+  "required": [
+    "decision"
+  ],
+  "title": "ToolCallPreExecuteResponse",
+  "type": "object"
+}

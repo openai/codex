@@ -461,6 +461,20 @@
               "description": "The command's working directory.",
               "type": "string"
             },
+            "description": {
+              "description": "LLM-provided description of what this command does.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "displayName": {
+              "description": "LLM-provided short semantic name (e.g., \"Git Status\", \"Run Tests\").",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "durationMs": {
               "description": "The duration of the command execution in milliseconds.",
               "format": "int64",

@@ -192,6 +192,8 @@ export type { TokenCountEvent } from "./TokenCountEvent";
 export type { TokenUsage } from "./TokenUsage";
 export type { TokenUsageInfo } from "./TokenUsageInfo";
 export type { Tool } from "./Tool";
+export type { ToolCallPreExecuteRequestEvent } from "./ToolCallPreExecuteRequestEvent";
+export type { ToolCallType } from "./ToolCallType";
 export type { Tools } from "./Tools";
 export type { TurnAbortReason } from "./TurnAbortReason";
 export type { TurnAbortedEvent } from "./TurnAbortedEvent";

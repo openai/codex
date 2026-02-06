@@ -1,0 +1,110 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ToolCallType": {
+      "description": "Type of tool being executed, used for PreToolUse hook.",
+      "oneOf": [
+        {
+          "description": "Bash/shell command execution",
+          "enum": [
+            "bash"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "File write operation",
+          "enum": [
+            "fileWrite"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "File edit/patch operation",
+          "enum": [
+            "fileEdit"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "MCP tool call",
+          "enum": [
+            "mcp"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Custom tool call",
+          "enum": [
+            "custom"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Function tool call",
+          "enum": [
+            "function"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Local shell execution",
+          "enum": [
+            "localShell"
+          ],
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "description": "Request parameters for PreToolUse hook. Sent to client BEFORE any tool execution to allow interception.",
+  "properties": {
+    "input": {
+      "description": "The tool input as JSON. Structure depends on tool_type."
+    },
+    "itemId": {
+      "type": "string"
+    },
+    "mcpServer": {
+      "description": "For MCP tools: the server name.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "mcpTool": {
+      "description": "For MCP tools: the actual tool name within the server.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "threadId": {
+      "type": "string"
+    },
+    "toolName": {
+      "description": "The name of the tool (e.g., \"bash\", \"mcp__github__create_issue\").",
+      "type": "string"
+    },
+    "toolType": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ToolCallType"
+        }
+      ],
+      "description": "The type of tool being executed."
+    },
+    "turnId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "input",
+    "itemId",
+    "threadId",
+    "toolName",
+    "toolType",
+    "turnId"
+  ],
+  "title": "ToolCallPreExecuteParams",
+  "type": "object"
+}

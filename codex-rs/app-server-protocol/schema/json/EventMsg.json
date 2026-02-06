@@ -1170,6 +1170,20 @@
               "description": "The command's working directory if not the default cwd for the agent.",
               "type": "string"
             },
+            "description": {
+              "description": "LLM-provided description of what this command does.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "display_name": {
+              "description": "LLM-provided short semantic name (e.g., \"Git Status\", \"Run Tests\").",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "interaction_input": {
               "description": "Raw input sent to a unified exec session (if this is an interaction event).",
               "type": [
@@ -1311,6 +1325,20 @@
             "cwd": {
               "description": "The command's working directory if not the default cwd for the agent.",
               "type": "string"
+            },
+            "description": {
+              "description": "LLM-provided description of what this command does.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "display_name": {
+              "description": "LLM-provided short semantic name (e.g., \"Git Status\", \"Run Tests\").",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "duration": {
               "allOf": [
@@ -1620,6 +1648,66 @@
             "type"
           ],
           "title": "ApplyPatchApprovalRequestEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "CRAFT AGENTS: PreToolUse hook request for tool interception. Sent BEFORE any tool execution to allow client to block/modify/allow.",
+          "properties": {
+            "callId": {
+              "description": "Identifier for the tool call.",
+              "type": "string"
+            },
+            "input": {
+              "description": "The tool input as JSON string.",
+              "type": "string"
+            },
+            "mcpServer": {
+              "description": "For MCP tools: the server name.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "mcpTool": {
+              "description": "For MCP tools: the actual tool name within the server.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "toolName": {
+              "description": "The name of the tool (e.g., \"bash\", \"mcp__github__create_issue\").",
+              "type": "string"
+            },
+            "toolType": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ToolCallType"
+                }
+              ],
+              "description": "The type of tool being executed."
+            },
+            "turnId": {
+              "default": "",
+              "description": "Turn ID that this tool call belongs to.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "tool_call_pre_execute_request"
+              ],
+              "title": "ToolCallPreExecuteRequestEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "callId",
+            "input",
+            "toolName",
+            "toolType",
+            "type"
+          ],
+          "title": "ToolCallPreExecuteRequestEventMsg",
           "type": "object"
         },
         {
@@ -4574,6 +4662,19 @@
       ],
       "type": "object"
     },
+    "ToolCallType": {
+      "description": "Type of tool being executed, for PreToolUse hook.",
+      "enum": [
+        "bash",
+        "fileWrite",
+        "fileEdit",
+        "mcp",
+        "custom",
+        "function",
+        "localShell"
+      ],
+      "type": "string"
+    },
     "TurnAbortReason": {
       "enum": [
         "interrupted",
@@ -5697,6 +5798,20 @@
           "description": "The command's working directory if not the default cwd for the agent.",
           "type": "string"
         },
+        "description": {
+          "description": "LLM-provided description of what this command does.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "display_name": {
+          "description": "LLM-provided short semantic name (e.g., \"Git Status\", \"Run Tests\").",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "interaction_input": {
           "description": "Raw input sent to a unified exec session (if this is an interaction event).",
           "type": [
@@ -5838,6 +5953,20 @@
         "cwd": {
           "description": "The command's working directory if not the default cwd for the agent.",
           "type": "string"
+        },
+        "description": {
+          "description": "LLM-provided description of what this command does.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "display_name": {
+          "description": "LLM-provided short semantic name (e.g., \"Git Status\", \"Run Tests\").",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "duration": {
           "allOf": [
@@ -6147,6 +6276,66 @@
         "type"
       ],
       "title": "ApplyPatchApprovalRequestEventMsg",
+      "type": "object"
+    },
+    {
+      "description": "CRAFT AGENTS: PreToolUse hook request for tool interception. Sent BEFORE any tool execution to allow client to block/modify/allow.",
+      "properties": {
+        "callId": {
+          "description": "Identifier for the tool call.",
+          "type": "string"
+        },
+        "input": {
+          "description": "The tool input as JSON string.",
+          "type": "string"
+        },
+        "mcpServer": {
+          "description": "For MCP tools: the server name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mcpTool": {
+          "description": "For MCP tools: the actual tool name within the server.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "toolName": {
+          "description": "The name of the tool (e.g., \"bash\", \"mcp__github__create_issue\").",
+          "type": "string"
+        },
+        "toolType": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ToolCallType"
+            }
+          ],
+          "description": "The type of tool being executed."
+        },
+        "turnId": {
+          "default": "",
+          "description": "Turn ID that this tool call belongs to.",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "tool_call_pre_execute_request"
+          ],
+          "title": "ToolCallPreExecuteRequestEventMsgType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "callId",
+        "input",
+        "toolName",
+        "toolType",
+        "type"
+      ],
+      "title": "ToolCallPreExecuteRequestEventMsg",
       "type": "object"
     },
     {

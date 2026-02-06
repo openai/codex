@@ -32,4 +32,12 @@ source: ExecCommandSource,
 /**
  * Raw input sent to a unified exec session (if this is an interaction event).
  */
-interaction_input?: string, };
+interaction_input?: string, 
+/**
+ * LLM-provided description of what this command does.
+ */
+description?: string, 
+/**
+ * LLM-provided short semantic name (e.g., "Git Status", "Run Tests").
+ */
+display_name?: string, };

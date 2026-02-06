@@ -56,4 +56,12 @@ duration: string,
 /**
  * Formatted output from the command, as seen by the model.
  */
-formatted_output: string, };
+formatted_output: string, 
+/**
+ * LLM-provided description of what this command does.
+ */
+description?: string, 
+/**
+ * LLM-provided short semantic name (e.g., "Git Status", "Run Tests").
+ */
+display_name?: string, };

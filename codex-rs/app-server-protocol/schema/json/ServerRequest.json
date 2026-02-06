@@ -530,6 +530,112 @@
     "ThreadId": {
       "type": "string"
     },
+    "ToolCallPreExecuteParams": {
+      "description": "Request parameters for PreToolUse hook. Sent to client BEFORE any tool execution to allow interception.",
+      "properties": {
+        "input": {
+          "description": "The tool input as JSON. Structure depends on tool_type."
+        },
+        "itemId": {
+          "type": "string"
+        },
+        "mcpServer": {
+          "description": "For MCP tools: the server name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mcpTool": {
+          "description": "For MCP tools: the actual tool name within the server.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "toolName": {
+          "description": "The name of the tool (e.g., \"bash\", \"mcp__github__create_issue\").",
+          "type": "string"
+        },
+        "toolType": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ToolCallType"
+            }
+          ],
+          "description": "The type of tool being executed."
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "input",
+        "itemId",
+        "threadId",
+        "toolName",
+        "toolType",
+        "turnId"
+      ],
+      "type": "object"
+    },
+    "ToolCallType": {
+      "description": "Type of tool being executed, used for PreToolUse hook.",
+      "oneOf": [
+        {
+          "description": "Bash/shell command execution",
+          "enum": [
+            "bash"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "File write operation",
+          "enum": [
+            "fileWrite"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "File edit/patch operation",
+          "enum": [
+            "fileEdit"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "MCP tool call",
+          "enum": [
+            "mcp"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Custom tool call",
+          "enum": [
+            "custom"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Function tool call",
+          "enum": [
+            "function"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Local shell execution",
+          "enum": [
+            "localShell"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "ToolRequestUserInputOption": {
       "description": "EXPERIMENTAL. Defines a single selectable option for request_user_input.",
       "properties": {
@@ -661,6 +767,31 @@
         "params"
       ],
       "title": "Item/fileChange/requestApprovalRequest",
+      "type": "object"
+    },
+    {
+      "description": "CRAFT AGENTS: PreToolUse hook - sent BEFORE any tool execution. Allows client to block, modify input, or allow tool execution.",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "item/toolCall/preExecute"
+          ],
+          "title": "Item/toolCall/preExecuteRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ToolCallPreExecuteParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Item/toolCall/preExecuteRequest",
       "type": "object"
     },
     {

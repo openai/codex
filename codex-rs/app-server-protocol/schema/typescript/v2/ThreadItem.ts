@@ -21,6 +21,14 @@ export type ThreadItem = { "type": "userMessage", id: string, content: Array<Use
  */
 command: string, 
 /**
+ * LLM-provided description of what this command does.
+ */
+description: string | null, 
+/**
+ * LLM-provided short semantic name (e.g., "Git Status", "Run Tests").
+ */
+displayName: string | null, 
+/**
  * The command's working directory.
  */
 cwd: string, 
