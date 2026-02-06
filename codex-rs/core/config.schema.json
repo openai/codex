@@ -230,6 +230,9 @@
             "powershell_utf8": {
               "type": "boolean"
             },
+            "remote_compaction": {
+              "type": "boolean"
+            },
             "remote_models": {
               "type": "boolean"
             },
@@ -1268,6 +1271,9 @@
           "type": "boolean"
         },
         "powershell_utf8": {
+          "type": "boolean"
+        },
+        "remote_compaction": {
           "type": "boolean"
         },
         "remote_models": {
