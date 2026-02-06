@@ -38,6 +38,7 @@ use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::terminal;
 use crate::truncate::TruncationPolicy;
 use crate::turn_metadata::build_turn_metadata_header;
+use crate::turn_metadata::resolve_turn_metadata_header_with_timeout;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -563,22 +564,22 @@ impl TurnContext {
             .clone()
     }
 
+    /// Resolves the per-turn metadata header under a shared timeout policy.
+    ///
+    /// This uses the same timeout helper as websocket startup preconnect so both turn execution
+    /// and background preconnect observe identical "timeout means best-effort fallback" behavior.
     pub async fn resolve_turn_metadata_header(&self) -> Option<String> {
-        const TURN_METADATA_HEADER_TIMEOUT_MS: u64 = 250;
-        match tokio::time::timeout(
-            std::time::Duration::from_millis(TURN_METADATA_HEADER_TIMEOUT_MS),
+        resolve_turn_metadata_header_with_timeout(
             self.build_turn_metadata_header(),
+            self.turn_metadata_header.get().cloned().flatten(),
         )
         .await
-        {
-            Ok(header) => header,
-            Err(_) => {
-                warn!("timed out after 250ms while building turn metadata header");
-                self.turn_metadata_header.get().cloned().flatten()
-            }
-        }
     }
 
+    /// Starts best-effort background computation of turn metadata.
+    ///
+    /// This warms the cached value used by [`TurnContext::resolve_turn_metadata_header`] so turns
+    /// and websocket preconnect are less likely to pay metadata construction latency on demand.
     pub fn spawn_turn_metadata_header_task(self: &Arc<Self>) {
         let context = Arc::clone(self);
         tokio::spawn(async move {
@@ -1077,6 +1078,14 @@ impl Session {
             services,
             next_internal_sub_id: AtomicU64::new(0),
         });
+
+        // Warm a websocket in the background so the first turn can reuse it.
+        // This performs only connection setup; user input is still sent later via response.create
+        // when submit_turn() runs.
+        sess.services.model_client.pre_establish_connection(
+            sess.services.otel_manager.clone(),
+            session_configuration.cwd.clone(),
+        );
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
@@ -2014,6 +2023,15 @@ impl Session {
             }
         }
         history.raw_items().to_vec()
+    }
+
+    pub(crate) async fn process_compacted_history(
+        &self,
+        turn_context: &TurnContext,
+        compacted_history: Vec<ResponseItem>,
+    ) -> Vec<ResponseItem> {
+        let initial_context = self.build_initial_context(turn_context).await;
+        compact::process_compacted_history(compacted_history, &initial_context)
     }
 
     /// Append ResponseItems to the in-memory conversation history only.
@@ -5068,6 +5086,42 @@ mod tests {
             .await;
 
         assert_eq!(expected, reconstructed);
+    }
+
+    #[tokio::test]
+    async fn reconstruct_history_uses_replacement_history_verbatim() {
+        let (session, turn_context) = make_session_and_context().await;
+        let summary_item = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "summary".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        };
+        let replacement_history = vec![
+            summary_item.clone(),
+            ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "stale developer instructions".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ];
+        let rollout_items = vec![RolloutItem::Compacted(CompactedItem {
+            message: String::new(),
+            replacement_history: Some(replacement_history.clone()),
+        })];
+
+        let reconstructed = session
+            .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+            .await;
+
+        assert_eq!(reconstructed, replacement_history);
     }
 
     #[tokio::test]

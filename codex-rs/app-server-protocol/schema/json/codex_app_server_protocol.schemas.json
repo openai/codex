@@ -14230,13 +14230,6 @@
               "null"
             ]
           },
-          "path": {
-            "description": "[UNSTABLE] Specify the rollout path to fork from. If specified, the thread_id param will be ignored.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "sandbox": {
             "anyOf": [
               {
@@ -14995,16 +14988,6 @@
               "null"
             ]
           },
-          "history": {
-            "description": "[UNSTABLE] FOR CODEX CLOUD - DO NOT USE. If specified, the thread will be resumed with the provided history instead of loaded from disk.",
-            "items": {
-              "$ref": "#/definitions/v2/ResponseItem"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
           "model": {
             "description": "Configuration overrides for the resumed thread, if any.",
             "type": [
@@ -15013,13 +14996,6 @@
             ]
           },
           "modelProvider": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "path": {
-            "description": "[UNSTABLE] Specify the rollout path to resume from. If specified, the thread_id param will be ignored.",
             "type": [
               "string",
               "null"
@@ -15223,11 +15199,6 @@
               "boolean",
               "null"
             ]
-          },
-          "experimentalRawEvents": {
-            "default": false,
-            "description": "If true, opt into emitting raw response items on the event stream.\n\nThis is for internal use only (e.g. Codex Cloud). (TODO): Figure out a better way to categorize internal / experimental events & protocols.",
-            "type": "boolean"
           },
           "model": {
             "type": [
@@ -15664,17 +15635,6 @@
               }
             ],
             "description": "Override the approval policy for this turn and subsequent turns."
-          },
-          "collaborationMode": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/CollaborationMode"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "EXPERIMENTAL - set a pre-set collaboration mode. Takes precedence over model, reasoning_effort, and developer instructions if set."
           },
           "cwd": {
             "description": "Override the working directory for this turn and subsequent turns.",
