@@ -2767,12 +2767,14 @@ impl Session {
 }
 
 async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiver<Submission>) {
-    // Seed with context only when rollout creation is deferred, so first-turn
-    // overrides can be diffed against the current baseline.
+    // Non-deferred sessions persist an initial baseline at thread start, so we
+    // keep the default turn context for first-turn diffing.
+    // Deferred sessions seed initial context on first turn with the current
+    // settings, so a baseline here would duplicate first-turn updates.
     let mut previous_context: Option<Arc<TurnContext>> = if sess.defer_new_rollout_creation {
-        Some(sess.new_default_turn().await)
-    } else {
         None
+    } else {
+        Some(sess.new_default_turn().await)
     };
 
     // To break out of this loop, send Op::Shutdown.
@@ -2803,12 +2805,6 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                         None,
                     )
                 };
-                if previous_context.is_none() {
-                    // Non-deferred sessions can receive overrides before the first turn.
-                    // Capture the current baseline so the first turn can persist diffed
-                    // settings updates (model/cwd/permissions/collaboration/personality).
-                    previous_context = Some(sess.new_default_turn().await);
-                }
                 handlers::override_turn_context(
                     &sess,
                     sub.id.clone(),
