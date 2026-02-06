@@ -82,7 +82,6 @@ pub(crate) struct EventProcessorWithHumanOutput {
     progress_active: bool,
     progress_last_len: usize,
     use_ansi_cursor: bool,
-    progress_wrap_disabled: bool,
 }
 
 impl EventProcessorWithHumanOutput {
@@ -114,7 +113,6 @@ impl EventProcessorWithHumanOutput {
                 progress_active: false,
                 progress_last_len: 0,
                 use_ansi_cursor: cursor_ansi,
-                progress_wrap_disabled: false,
             }
         } else {
             Self {
@@ -136,7 +134,6 @@ impl EventProcessorWithHumanOutput {
                 progress_active: false,
                 progress_last_len: 0,
                 use_ansi_cursor: cursor_ansi,
-                progress_wrap_disabled: false,
             }
         }
     }
@@ -926,10 +923,6 @@ impl EventProcessorWithHumanOutput {
             self.progress_active = false;
             self.progress_last_len = 0;
             if self.use_ansi_cursor {
-                if self.progress_wrap_disabled {
-                    eprint!("\u{1b}[?7h");
-                    self.progress_wrap_disabled = false;
-                }
                 eprint!("\u{1b}[1G\u{1b}[2K\n");
             } else {
                 eprintln!();
@@ -970,18 +963,10 @@ impl EventProcessorWithHumanOutput {
             }
             return;
         }
-        if !self.progress_active {
-            eprint!("\u{1b}[?7l");
-            self.progress_wrap_disabled = true;
-        }
         let mut output = String::new();
         output.push_str("\u{1b}[1G\u{1b}[2K");
         output.push_str(&line);
         if done {
-            if self.progress_wrap_disabled {
-                output.push_str("\u{1b}[?7h");
-                self.progress_wrap_disabled = false;
-            }
             output.push('\n');
             eprint!("{output}");
             self.progress_active = false;
