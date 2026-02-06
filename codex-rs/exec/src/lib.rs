@@ -125,7 +125,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     let cursor_ansi = match color {
         cli::Color::Never => false,
         cli::Color::Always => true,
-        cli::Color::Auto => std::io::stderr().is_terminal(),
+        cli::Color::Auto => stderr_with_ansi || std::io::stderr().is_terminal(),
     };
 
     // Build fmt layer (existing logging) to compose with OTEL layer.
