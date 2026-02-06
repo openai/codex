@@ -36,10 +36,12 @@ mod app_cmd;
 #[cfg(target_os = "macos")]
 mod desktop_app;
 mod mcp_cmd;
+mod secrets_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
 
 use crate::mcp_cmd::McpCli;
+use crate::secrets_cmd::SecretsCli;
 
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -92,6 +94,9 @@ enum Subcommand {
 
     /// Remove stored authentication credentials.
     Logout(LogoutCommand),
+
+    /// [experimental] Manage secrets.
+    Secrets(SecretsCli),
 
     /// [experimental] Run Codex as an MCP server and manage MCP servers.
     Mcp(McpCli),
@@ -593,6 +598,16 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             // Propagate any root-level config overrides (e.g. `-c key=value`).
             prepend_config_flags(&mut mcp_cli.config_overrides, root_config_overrides.clone());
             mcp_cli.run().await?;
+        }
+        Some(Subcommand::Secrets(mut secrets_cli)) => {
+            eprintln!(
+                "Warning: `codex secrets` is experimental and may change in future releases."
+            );
+            prepend_config_flags(
+                &mut secrets_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
+            secrets_cli.run().await?;
         }
         Some(Subcommand::AppServer(app_server_cli)) => match app_server_cli.subcommand {
             None => {
