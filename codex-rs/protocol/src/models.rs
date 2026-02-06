@@ -1421,6 +1421,8 @@ mod tests {
                 sandbox_permissions: None,
                 prefix_rule: None,
                 justification: None,
+                description: None,
+                display_name: None,
             },
             params
         );
