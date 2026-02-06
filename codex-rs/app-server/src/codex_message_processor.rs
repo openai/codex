@@ -4618,9 +4618,7 @@ impl CodexMessageProcessor {
             }
         };
 
-        if let Some(expected_turn_id) = params.expected_turn_id.as_ref()
-            && expected_turn_id.is_empty()
-        {
+        if params.expected_turn_id.is_empty() {
             self.send_invalid_request_error(
                 request_id,
                 "expectedTurnId must not be empty".to_string(),
@@ -4636,7 +4634,7 @@ impl CodexMessageProcessor {
             .collect();
 
         match thread
-            .steer_input(mapped_items, params.expected_turn_id.as_deref())
+            .steer_input(mapped_items, Some(&params.expected_turn_id))
             .await
         {
             Ok(turn_id) => {

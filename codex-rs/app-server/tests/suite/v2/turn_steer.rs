@@ -54,7 +54,7 @@ async fn turn_steer_requires_active_turn() -> Result<()> {
                 text: "steer".to_string(),
                 text_elements: Vec::new(),
             }],
-            expected_turn_id: None,
+            expected_turn_id: "turn-does-not-exist".to_string(),
         })
         .await?;
     let steer_err: JSONRPCError = timeout(
@@ -141,7 +141,7 @@ async fn turn_steer_returns_active_turn_id() -> Result<()> {
                 text: "steer".to_string(),
                 text_elements: Vec::new(),
             }],
-            expected_turn_id: Some(turn.id.clone()),
+            expected_turn_id: turn.id.clone(),
         })
         .await?;
     let steer_resp: JSONRPCResponse = timeout(

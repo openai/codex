@@ -166,11 +166,8 @@
   },
   "properties": {
     "expectedTurnId": {
-      "description": "Optional active turn id precondition. If specified and the current active turn does not match, the request fails.",
-      "type": [
-        "string",
-        "null"
-      ]
+      "description": "Required active turn id precondition. The request fails when it does not match the currently active turn.",
+      "type": "string"
     },
     "input": {
       "items": {
@@ -183,6 +180,7 @@
     }
   },
   "required": [
+    "expectedTurnId",
     "input",
     "threadId"
   ],

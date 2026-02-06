@@ -2077,10 +2077,9 @@ pub struct TurnStartResponse {
 pub struct TurnSteerParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
-    /// Optional active turn id precondition. If specified and the current active
-    /// turn does not match, the request fails.
-    #[ts(optional = nullable)]
-    pub expected_turn_id: Option<String>,
+    /// Required active turn id precondition. The request fails when it does not
+    /// match the currently active turn.
+    pub expected_turn_id: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

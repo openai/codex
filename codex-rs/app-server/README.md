@@ -378,7 +378,7 @@ Use `turn/steer` to append additional user input to the currently active turn. T
 { "id": 32, "result": { "turnId": "turn_456" } }
 ```
 
-If there is no active turn (or `expectedTurnId` does not match the active turn), the request fails with an `invalid request` error.
+`expectedTurnId` is required. If there is no active turn (or `expectedTurnId` does not match the active turn), the request fails with an `invalid request` error.
 
 ### Example: Request a code review
 
