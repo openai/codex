@@ -479,6 +479,88 @@ async fn auto_remote_compact_trims_function_call_history_to_fit_context_window()
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_remote_compact_failure_stops_agent_loop() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.model_auto_compact_token_limit = Some(120);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    mount_sse_once(
+        harness.server(),
+        sse(vec![
+            responses::ev_assistant_message("initial-assistant", "initial turn complete"),
+            responses::ev_completed_with_tokens("initial-response", 500_000),
+        ]),
+    )
+    .await;
+
+    let compact_mock = responses::mount_compact_json_once(
+        harness.server(),
+        serde_json::json!({ "output": "invalid compact payload shape" }),
+    )
+    .await;
+    let post_compact_turn_mock = mount_sse_once(
+        harness.server(),
+        sse(vec![
+            responses::ev_assistant_message("post-compact-assistant", "should not run"),
+            responses::ev_completed("post-compact-response"),
+        ]),
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "turn that exceeds token threshold".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "turn that triggers auto compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    let error_message = wait_for_event_match(&codex, |event| match event {
+        EventMsg::Error(err) => Some(err.message.clone()),
+        _ => None,
+    })
+    .await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    assert!(
+        error_message.contains("Error running remote compact task"),
+        "expected compact failure error, got {error_message}"
+    );
+    assert_eq!(
+        compact_mock.requests().len(),
+        1,
+        "expected exactly one remote compact attempt"
+    );
+    assert!(
+        post_compact_turn_mock.requests().is_empty(),
+        "expected agent loop to stop after compaction failure"
+    );
+
+    Ok(())
+}
+
 #[cfg_attr(target_os = "windows", ignore)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_compact_trim_estimate_uses_session_base_instructions() -> Result<()> {
