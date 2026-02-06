@@ -126,6 +126,9 @@ fn trim_function_call_history_to_fit_context_window(
         let Some(last_item) = history.raw_items().last() else {
             break;
         };
+        if is_pending_tool_call_without_output(last_item, history.raw_items()) {
+            break;
+        }
         if !is_remote_compaction_trim_candidate(last_item) {
             break;
         }
@@ -148,6 +151,41 @@ fn is_remote_compaction_trim_candidate(item: &ResponseItem) -> bool {
         )
 }
 
+fn is_pending_tool_call_without_output(item: &ResponseItem, items: &[ResponseItem]) -> bool {
+    match item {
+        ResponseItem::FunctionCall { call_id, .. } => !items.iter().any(|candidate| {
+            matches!(
+                candidate,
+                ResponseItem::FunctionCallOutput {
+                    call_id: existing, ..
+                } if existing == call_id
+            )
+        }),
+        ResponseItem::CustomToolCall { call_id, .. } => !items.iter().any(|candidate| {
+            matches!(
+                candidate,
+                ResponseItem::CustomToolCallOutput {
+                    call_id: existing, ..
+                } if existing == call_id
+            )
+        }),
+        ResponseItem::LocalShellCall { call_id, .. } => {
+            let Some(call_id) = call_id.as_ref() else {
+                return true;
+            };
+            !items.iter().any(|candidate| {
+                matches!(
+                    candidate,
+                    ResponseItem::FunctionCallOutput {
+                        call_id: existing, ..
+                    } if existing == call_id
+                )
+            })
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,7 +194,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[tokio::test]
-    async fn trim_drops_trailing_function_call_without_output() {
+    async fn trim_keeps_trailing_function_call_without_output() {
         let (_session, mut turn_context) = make_session_and_context().await;
         turn_context.model_info.context_window = Some(200);
         turn_context.model_info.effective_context_window_percent = 100;
@@ -194,13 +232,13 @@ mod tests {
             },
         );
 
-        assert_eq!(deleted_items, 1);
+        assert_eq!(deleted_items, 0);
         assert!(
-            !history
+            history
                 .raw_items()
                 .iter()
                 .any(|item| matches!(item, ResponseItem::FunctionCall { call_id, .. } if call_id == "pending-call")),
-            "expected trailing function_call to be removed during remote trim"
+            "expected trailing function_call without output to be preserved"
         );
     }
 }
