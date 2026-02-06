@@ -61,7 +61,6 @@ use codex_app_server_protocol::ToolCallPreExecuteDecision as V2ToolCallPreExecut
 use codex_app_server_protocol::ToolCallPreExecuteParams;
 use codex_app_server_protocol::ToolCallPreExecuteResponse;
 use codex_app_server_protocol::ToolCallType as V2ToolCallType;
-use codex_app_server_protocol::UserPermissionDecision as V2UserPermissionDecision;
 use codex_app_server_protocol::ToolRequestUserInputOption;
 use codex_app_server_protocol::ToolRequestUserInputParams;
 use codex_app_server_protocol::ToolRequestUserInputQuestion;
@@ -74,6 +73,7 @@ use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::UserPermissionDecision as V2UserPermissionDecision;
 use codex_app_server_protocol::build_turns_from_event_msgs;
 use codex_core::CodexThread;
 use codex_core::parse_command::shlex_join;
@@ -328,7 +328,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                     prompt_metadata: None,
                     user_response: None,
                 };
-                conversation.notify_tool_preexecute(&call_id, allow_response).await;
+                conversation
+                    .notify_tool_preexecute(&call_id, allow_response)
+                    .await;
             }
         }
         EventMsg::RequestUserInput(request) => {
@@ -1564,10 +1566,7 @@ async fn on_tool_preexecute_response(
     conversation: Arc<CodexThread>,
 ) {
     // Wait for response with 60-second timeout
-    let response = tokio::time::timeout(
-        std::time::Duration::from_secs(60),
-        receiver,
-    ).await;
+    let response = tokio::time::timeout(std::time::Duration::from_secs(60), receiver).await;
 
     let value = match response {
         Ok(Ok(value)) => value,
@@ -1581,7 +1580,9 @@ async fn on_tool_preexecute_response(
                 prompt_metadata: None,
                 user_response: None,
             };
-            conversation.notify_tool_preexecute(&call_id, allow_response).await;
+            conversation
+                .notify_tool_preexecute(&call_id, allow_response)
+                .await;
             return;
         }
         Err(_timeout) => {
@@ -1594,93 +1595,139 @@ async fn on_tool_preexecute_response(
                 prompt_metadata: None,
                 user_response: None,
             };
-            conversation.notify_tool_preexecute(&call_id, block_response).await;
+            conversation
+                .notify_tool_preexecute(&call_id, block_response)
+                .await;
             return;
         }
     };
 
-    let response = serde_json::from_value::<ToolCallPreExecuteResponse>(value).unwrap_or_else(|err| {
-        error!("CRAFT AGENTS: failed to deserialize ToolCallPreExecuteResponse: {err}");
-        // Default to Allow on parse error
-        ToolCallPreExecuteResponse {
-            decision: V2ToolCallPreExecuteDecision::Allow,
-        }
-    });
+    let response =
+        serde_json::from_value::<ToolCallPreExecuteResponse>(value).unwrap_or_else(|err| {
+            error!("CRAFT AGENTS: failed to deserialize ToolCallPreExecuteResponse: {err}");
+            // Default to Allow on parse error
+            ToolCallPreExecuteResponse {
+                decision: V2ToolCallPreExecuteDecision::Allow,
+            }
+        });
 
     // Convert V2 response to Core response
     match response.decision {
         V2ToolCallPreExecuteDecision::Allow => {
-            conversation.notify_tool_preexecute(&call_id, CoreToolCallPreExecuteResponse {
-                decision: CoreToolCallPreExecuteDecision::Allow,
-                reason: None,
-                modified_input: None,
-                prompt_metadata: None,
-                user_response: None,
-            }).await;
+            conversation
+                .notify_tool_preexecute(
+                    &call_id,
+                    CoreToolCallPreExecuteResponse {
+                        decision: CoreToolCallPreExecuteDecision::Allow,
+                        reason: None,
+                        modified_input: None,
+                        prompt_metadata: None,
+                        user_response: None,
+                    },
+                )
+                .await;
         }
         V2ToolCallPreExecuteDecision::Block { reason } => {
-            conversation.notify_tool_preexecute(&call_id, CoreToolCallPreExecuteResponse {
-                decision: CoreToolCallPreExecuteDecision::Block,
-                reason: Some(reason),
-                modified_input: None,
-                prompt_metadata: None,
-                user_response: None,
-            }).await;
+            conversation
+                .notify_tool_preexecute(
+                    &call_id,
+                    CoreToolCallPreExecuteResponse {
+                        decision: CoreToolCallPreExecuteDecision::Block,
+                        reason: Some(reason),
+                        modified_input: None,
+                        prompt_metadata: None,
+                        user_response: None,
+                    },
+                )
+                .await;
         }
         V2ToolCallPreExecuteDecision::Modify { input } => {
-            conversation.notify_tool_preexecute(&call_id, CoreToolCallPreExecuteResponse {
-                decision: CoreToolCallPreExecuteDecision::Modify,
-                reason: None,
-                modified_input: Some(serde_json::to_string(&input).unwrap_or_default()),
-                prompt_metadata: None,
-                user_response: None,
-            }).await;
+            conversation
+                .notify_tool_preexecute(
+                    &call_id,
+                    CoreToolCallPreExecuteResponse {
+                        decision: CoreToolCallPreExecuteDecision::Modify,
+                        reason: None,
+                        modified_input: Some(serde_json::to_string(&input).unwrap_or_default()),
+                        prompt_metadata: None,
+                        user_response: None,
+                    },
+                )
+                .await;
         }
         V2ToolCallPreExecuteDecision::AskUser { prompt: _ } => {
             // AskUser is a client-side state that shouldn't be sent to core.
             // The client should display a prompt, then send a UserResponse.
             // If we receive AskUser directly, treat it as an error and block.
             warn!("CRAFT AGENTS: received AskUser directly, expected UserResponse - blocking");
-            conversation.notify_tool_preexecute(&call_id, CoreToolCallPreExecuteResponse {
-                decision: CoreToolCallPreExecuteDecision::Block,
-                reason: Some("Invalid response: expected UserResponse after AskUser".to_string()),
-                modified_input: None,
-                prompt_metadata: None,
-                user_response: None,
-            }).await;
+            conversation
+                .notify_tool_preexecute(
+                    &call_id,
+                    CoreToolCallPreExecuteResponse {
+                        decision: CoreToolCallPreExecuteDecision::Block,
+                        reason: Some(
+                            "Invalid response: expected UserResponse after AskUser".to_string(),
+                        ),
+                        modified_input: None,
+                        prompt_metadata: None,
+                        user_response: None,
+                    },
+                )
+                .await;
         }
-        V2ToolCallPreExecuteDecision::UserResponse { decision, accept_for_session } => {
+        V2ToolCallPreExecuteDecision::UserResponse {
+            decision,
+            accept_for_session,
+        } => {
             // User has responded to the permission prompt
             match decision {
                 V2UserPermissionDecision::Approved => {
-                    info!("CRAFT AGENTS: user approved permission (accept_for_session={})", accept_for_session);
-                    conversation.notify_tool_preexecute(&call_id, CoreToolCallPreExecuteResponse {
-                        decision: CoreToolCallPreExecuteDecision::Allow,
-                        reason: None,
-                        modified_input: None,
-                        prompt_metadata: None,
-                        user_response: None,
-                    }).await;
+                    info!(
+                        "CRAFT AGENTS: user approved permission (accept_for_session={})",
+                        accept_for_session
+                    );
+                    conversation
+                        .notify_tool_preexecute(
+                            &call_id,
+                            CoreToolCallPreExecuteResponse {
+                                decision: CoreToolCallPreExecuteDecision::Allow,
+                                reason: None,
+                                modified_input: None,
+                                prompt_metadata: None,
+                                user_response: None,
+                            },
+                        )
+                        .await;
                 }
                 V2UserPermissionDecision::Denied => {
                     info!("CRAFT AGENTS: user denied permission");
-                    conversation.notify_tool_preexecute(&call_id, CoreToolCallPreExecuteResponse {
-                        decision: CoreToolCallPreExecuteDecision::Block,
-                        reason: Some("User denied permission".to_string()),
-                        modified_input: None,
-                        prompt_metadata: None,
-                        user_response: None,
-                    }).await;
+                    conversation
+                        .notify_tool_preexecute(
+                            &call_id,
+                            CoreToolCallPreExecuteResponse {
+                                decision: CoreToolCallPreExecuteDecision::Block,
+                                reason: Some("User denied permission".to_string()),
+                                modified_input: None,
+                                prompt_metadata: None,
+                                user_response: None,
+                            },
+                        )
+                        .await;
                 }
                 V2UserPermissionDecision::TimedOut => {
                     warn!("CRAFT AGENTS: user permission request timed out");
-                    conversation.notify_tool_preexecute(&call_id, CoreToolCallPreExecuteResponse {
-                        decision: CoreToolCallPreExecuteDecision::Block,
-                        reason: Some("Permission request timed out".to_string()),
-                        modified_input: None,
-                        prompt_metadata: None,
-                        user_response: None,
-                    }).await;
+                    conversation
+                        .notify_tool_preexecute(
+                            &call_id,
+                            CoreToolCallPreExecuteResponse {
+                                decision: CoreToolCallPreExecuteDecision::Block,
+                                reason: Some("Permission request timed out".to_string()),
+                                modified_input: None,
+                                prompt_metadata: None,
+                                user_response: None,
+                            },
+                        )
+                        .await;
                 }
             }
         }

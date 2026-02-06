@@ -54,12 +54,12 @@ pub use crate::approvals::ElicitationAction;
 pub use crate::approvals::ExecApprovalRequestEvent;
 pub use crate::approvals::ExecPolicyAmendment;
 // CRAFT AGENTS: PreToolUse hook types
+pub use crate::approvals::PermissionPromptMetadata;
+pub use crate::approvals::PermissionPromptType;
 pub use crate::approvals::ToolCallPreExecuteDecision;
 pub use crate::approvals::ToolCallPreExecuteRequestEvent;
 pub use crate::approvals::ToolCallPreExecuteResponse;
 pub use crate::approvals::ToolCallType;
-pub use crate::approvals::PermissionPromptType;
-pub use crate::approvals::PermissionPromptMetadata;
 pub use crate::approvals::UserPermissionDecision;
 pub use crate::approvals::UserPermissionResponse;
 pub use crate::request_user_input::RequestUserInputEvent;

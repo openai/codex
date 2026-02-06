@@ -156,31 +156,40 @@ impl ToolRouter {
             ToolPayload::Function { arguments } => {
                 (ToolCallType::Function, arguments.clone(), None, None)
             }
-            ToolPayload::Custom { input } => {
-                (ToolCallType::Custom, input.clone(), None, None)
-            }
+            ToolPayload::Custom { input } => (ToolCallType::Custom, input.clone(), None, None),
             ToolPayload::LocalShell { params } => {
                 let input = serde_json::to_string(params).unwrap_or_default();
                 (ToolCallType::LocalShell, input, None, None)
             }
-            ToolPayload::Mcp { server, tool, raw_arguments } => {
-                (ToolCallType::Mcp, raw_arguments.clone(), Some(server.clone()), Some(tool.clone()))
-            }
+            ToolPayload::Mcp {
+                server,
+                tool,
+                raw_arguments,
+            } => (
+                ToolCallType::Mcp,
+                raw_arguments.clone(),
+                Some(server.clone()),
+                Some(tool.clone()),
+            ),
         };
 
-        let preexecute_response = session.request_tool_preexecute(
-            &turn,
-            call_id.clone(),
-            tool_type,
-            tool_name.clone(),
-            input_json,
-            mcp_server,
-            mcp_tool,
-        ).await;
+        let preexecute_response = session
+            .request_tool_preexecute(
+                &turn,
+                call_id.clone(),
+                tool_type,
+                tool_name.clone(),
+                input_json,
+                mcp_server,
+                mcp_tool,
+            )
+            .await;
 
         match preexecute_response.decision {
             ToolCallPreExecuteDecision::Block => {
-                let reason = preexecute_response.reason.unwrap_or_else(|| "Blocked by permission system".to_string());
+                let reason = preexecute_response
+                    .reason
+                    .unwrap_or_else(|| "Blocked by permission system".to_string());
                 return Ok(Self::failure_response(
                     failure_call_id,
                     payload_outputs_custom,
@@ -191,24 +200,28 @@ impl ToolRouter {
                 // Update the payload with modified input
                 if let Some(modified_input) = preexecute_response.modified_input {
                     payload = match payload {
-                        ToolPayload::Function { .. } => {
-                            ToolPayload::Function { arguments: modified_input }
-                        }
-                        ToolPayload::Custom { .. } => {
-                            ToolPayload::Custom { input: modified_input }
-                        }
+                        ToolPayload::Function { .. } => ToolPayload::Function {
+                            arguments: modified_input,
+                        },
+                        ToolPayload::Custom { .. } => ToolPayload::Custom {
+                            input: modified_input,
+                        },
                         ToolPayload::LocalShell { .. } => {
                             match serde_json::from_str(&modified_input) {
                                 Ok(params) => ToolPayload::LocalShell { params },
                                 Err(e) => {
-                                    warn!("CRAFT AGENTS: Failed to parse modified LocalShell params: {e}");
+                                    warn!(
+                                        "CRAFT AGENTS: Failed to parse modified LocalShell params: {e}"
+                                    );
                                     payload // Keep original on parse error
                                 }
                             }
                         }
-                        ToolPayload::Mcp { server, tool, .. } => {
-                            ToolPayload::Mcp { server, tool, raw_arguments: modified_input }
-                        }
+                        ToolPayload::Mcp { server, tool, .. } => ToolPayload::Mcp {
+                            server,
+                            tool,
+                            raw_arguments: modified_input,
+                        },
                     };
                 }
             }
@@ -222,7 +235,9 @@ impl ToolRouter {
                 return Ok(Self::failure_response(
                     failure_call_id,
                     payload_outputs_custom,
-                    FunctionCallError::Blocked("Permission pending - AskUser response expected".to_string()),
+                    FunctionCallError::Blocked(
+                        "Permission pending - AskUser response expected".to_string(),
+                    ),
                 ));
             }
         }

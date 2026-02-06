@@ -177,7 +177,16 @@ impl ToolEmitter {
             ) => {
                 emit_exec_stage(
                     ctx,
-                    ExecCommandInput::new(command, cwd.as_path(), parsed_cmd, *source, None, None, description.clone(), display_name.clone()),
+                    ExecCommandInput::new(
+                        command,
+                        cwd.as_path(),
+                        parsed_cmd,
+                        *source,
+                        None,
+                        None,
+                        description.clone(),
+                        display_name.clone(),
+                    ),
                     stage,
                 )
                 .await;
