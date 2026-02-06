@@ -126,6 +126,8 @@ fn trim_function_call_history_to_fit_context_window(
         let Some(last_item) = history.raw_items().last() else {
             break;
         };
+        // Keep a trailing tool call until its output is present; trimming the
+        // call first can orphan a later-arriving output during mid-stream auto-compaction.
         if is_pending_tool_call_without_output(last_item, history.raw_items()) {
             break;
         }
