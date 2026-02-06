@@ -38,7 +38,7 @@ impl SessionTask for CompactTask {
                 1,
                 &[("type", "local")],
             );
-            crate::compact::run_compact_task(session, ctx, input).await
+            crate::compact::run_user_requested_local_compact_task(session, ctx, input).await
         }
 
         None

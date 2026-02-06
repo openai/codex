@@ -30,6 +30,7 @@ use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::mount_compact_json_once;
+use core_test_support::responses::mount_response_once_match;
 use core_test_support::responses::mount_response_sequence;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
@@ -41,6 +42,8 @@ use core_test_support::responses::start_mock_server;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::body_string_contains;
 // --- Test helpers -----------------------------------------------------------
 
 pub(super) const FIRST_REPLY: &str = "FIRST_REPLY";
@@ -1431,6 +1434,80 @@ async fn auto_compact_starts_after_turn_started() {
     .await;
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_failure_aborts_turn_before_sampling_for_local_provider() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let second_turn_text = "this turn should fail before sampling";
+
+    let first_turn = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed_with_tokens("r1", 1_000_000),
+    ]);
+    let first_turn_mock = mount_sse_once(&server, first_turn).await;
+
+    let compact_failure_mock = mount_response_once_match(
+        &server,
+        body_string_contains(SUMMARIZATION_PROMPT),
+        ResponseTemplate::new(500)
+            .insert_header("content-type", "application/json")
+            .set_body_json(json!({
+                "error": {"type": "internal_server_error", "message": "synthetic compaction failure"}
+            })),
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+        config.model_auto_compact_token_limit = Some(200);
+        config.model_provider.stream_max_retries = Some(0);
+    });
+    let codex = builder.build(&server).await.unwrap().codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "seed turn".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: second_turn_text.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+
+    let EventMsg::Error(error) =
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::Error(_))).await
+    else {
+        panic!("expected error event");
+    };
+    assert!(
+        error.message.contains("Error running auto compact task"),
+        "expected auto-compact failure prefix in error message: {}",
+        error.message
+    );
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(first_turn_mock.requests().len(), 1);
+    // The compact mock receives any unmatched `/responses` calls. Keeping this at 1
+    // verifies we only attempted the compact request and never proceeded to sampling.
+    assert_eq!(compact_failure_mock.requests().len(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
