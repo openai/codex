@@ -101,6 +101,7 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Block;
+use ratatui::widgets::Paragraph;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
 
@@ -131,6 +132,7 @@ use super::footer::single_line_footer_layout;
 use super::footer::toggle_shortcut_mode;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
+use super::pending_remote_images::PendingRemoteImages;
 use super::skill_popup::MentionItem;
 use super::skill_popup::SkillPopup;
 use super::slash_commands;
@@ -284,6 +286,7 @@ pub(crate) struct ChatComposer {
     custom_prompts: Vec<CustomPrompt>,
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
+    pending_remote_images: PendingRemoteImages,
     footer_flash: Option<FooterFlash>,
     context_window_percent: Option<i64>,
     context_window_used_tokens: Option<i64>,
@@ -376,6 +379,7 @@ impl ChatComposer {
             custom_prompts: Vec::new(),
             footer_mode: FooterMode::ComposerEmpty,
             footer_hint_override: None,
+            pending_remote_images: PendingRemoteImages::new(),
             footer_flash: None,
             context_window_percent: None,
             context_window_used_tokens: None,
@@ -481,7 +485,13 @@ impl ChatComposer {
         };
         let [composer_rect, popup_rect] =
             Layout::vertical([Constraint::Min(3), popup_constraint]).areas(area);
-        let textarea_rect = composer_rect.inset(Insets::tlbr(1, LIVE_PREFIX_COLS, 1, 1));
+        let mut textarea_rect = composer_rect.inset(Insets::tlbr(1, LIVE_PREFIX_COLS, 1, 1));
+        let reserved_height = self
+            .pending_remote_images
+            .panel_height(textarea_rect.width)
+            .min(textarea_rect.height.saturating_sub(1));
+        textarea_rect.y = textarea_rect.y.saturating_add(reserved_height);
+        textarea_rect.height = textarea_rect.height.saturating_sub(reserved_height);
         [composer_rect, textarea_rect, popup_rect]
     }
 
@@ -711,6 +721,10 @@ impl ChatComposer {
     /// `None` restores the default shortcut footer.
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
         self.footer_hint_override = items;
+    }
+
+    pub(crate) fn set_pending_non_editable_image_urls(&mut self, urls: Vec<String>) {
+        self.pending_remote_images.urls = urls;
     }
 
     #[cfg(test)]
@@ -3068,8 +3082,10 @@ impl Renderable for ChatComposer {
         let footer_spacing = Self::footer_spacing(footer_hint_height);
         let footer_total_height = footer_hint_height + footer_spacing;
         const COLS_WITH_MARGIN: u16 = LIVE_PREFIX_COLS + 1;
-        self.textarea
-            .desired_height(width.saturating_sub(COLS_WITH_MARGIN))
+        let inner_width = width.saturating_sub(COLS_WITH_MARGIN);
+        let pending_remote_images_height = self.pending_remote_images.panel_height(inner_width);
+        self.textarea.desired_height(inner_width)
+            + pending_remote_images_height
             + 2
             + match &self.active_popup {
                 ActivePopup::None => footer_total_height,
@@ -3307,6 +3323,18 @@ impl ChatComposer {
         }
         let style = user_message_style();
         Block::default().style(style).render_ref(composer_rect, buf);
+        let pending_remote_image_lines = self.pending_remote_images.lines(textarea_rect.width);
+        if !pending_remote_image_lines.is_empty() {
+            let pending_rect = Rect {
+                x: textarea_rect.x,
+                y: composer_rect.y.saturating_add(1),
+                width: textarea_rect.width,
+                height: pending_remote_image_lines.len() as u16,
+            };
+            Paragraph::new(pending_remote_image_lines)
+                .style(style)
+                .render_ref(pending_rect, buf);
+        }
         if !textarea_rect.is_empty() {
             let prompt = if self.input_enabled {
                 "›".bold()
