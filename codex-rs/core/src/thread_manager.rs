@@ -91,6 +91,12 @@ pub struct NewThread {
     pub session_configured: SessionConfiguredEvent,
 }
 
+struct SpawnThreadWithSourceOptions {
+    session_source: SessionSource,
+    dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+    defer_new_rollout_creation: bool,
+}
+
 /// [`ThreadManager`] is responsible for creating threads and maintaining
 /// them in memory.
 pub struct ThreadManager {
@@ -419,9 +425,11 @@ impl ThreadManagerState {
             InitialHistory::New,
             Arc::clone(&self.auth_manager),
             agent_control,
-            session_source,
-            Vec::new(),
-            false,
+            SpawnThreadWithSourceOptions {
+                session_source,
+                dynamic_tools: Vec::new(),
+                defer_new_rollout_creation: false,
+            },
         )
         .await
     }
@@ -441,22 +449,22 @@ impl ThreadManagerState {
             initial_history,
             auth_manager,
             agent_control,
-            self.session_source.clone(),
-            dynamic_tools,
-            defer_new_rollout_creation,
+            SpawnThreadWithSourceOptions {
+                session_source: self.session_source.clone(),
+                dynamic_tools,
+                defer_new_rollout_creation,
+            },
         )
         .await
     }
 
-    pub(crate) async fn spawn_thread_with_source(
+    async fn spawn_thread_with_source(
         &self,
         config: Config,
         initial_history: InitialHistory,
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
-        session_source: SessionSource,
-        dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
-        defer_new_rollout_creation: bool,
+        options: SpawnThreadWithSourceOptions,
     ) -> CodexResult<NewThread> {
         self.file_watcher.register_config(&config);
         let CodexSpawnOk {
@@ -468,10 +476,10 @@ impl ThreadManagerState {
             Arc::clone(&self.skills_manager),
             Arc::clone(&self.file_watcher),
             initial_history,
-            defer_new_rollout_creation,
-            session_source,
+            options.defer_new_rollout_creation,
+            options.session_source,
             agent_control,
-            dynamic_tools,
+            options.dynamic_tools,
         )
         .await?;
         self.finalize_thread_spawn(codex, thread_id).await
