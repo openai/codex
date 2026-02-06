@@ -114,7 +114,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         config_overrides,
     } = cli;
 
-    let (stdout_with_ansi, stderr_with_ansi) = match color {
+    let (_stdout_with_ansi, stderr_with_ansi) = match color {
         cli::Color::Always => (true, true),
         cli::Color::Never => (false, false),
         cli::Color::Auto => (
@@ -300,7 +300,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     let mut event_processor: Box<dyn EventProcessor> = match json_mode {
         true => Box::new(EventProcessorWithJsonOutput::new(last_message_file.clone())),
         _ => Box::new(EventProcessorWithHumanOutput::create_with_ansi(
-            stdout_with_ansi,
+            stderr_with_ansi,
             &config,
             last_message_file.clone(),
         )),
