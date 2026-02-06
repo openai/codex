@@ -534,21 +534,12 @@ fn load_auth(
     };
 
     // API key via env var takes precedence over any other auth method.
-    if enable_codex_api_key_env {
-        if let Some(api_key) = read_codex_api_key_from_env() {
-            let client = crate::default_client::create_client();
-            return Ok(Some(CodexAuth::from_api_key_with_client(
-                api_key.as_str(),
-                client,
-            )));
-        }
-        if let Some(api_key) = read_openai_api_key_from_env() {
-            let client = crate::default_client::create_client();
-            return Ok(Some(CodexAuth::from_api_key_with_client(
-                api_key.as_str(),
-                client,
-            )));
-        }
+    if enable_codex_api_key_env && let Some(api_key) = read_codex_api_key_from_env() {
+        let client = crate::default_client::create_client();
+        return Ok(Some(CodexAuth::from_api_key_with_client(
+            api_key.as_str(),
+            client,
+        )));
     }
 
     // External ChatGPT auth tokens live in the in-memory (ephemeral) store. Always check this
@@ -1536,14 +1527,6 @@ mod tests {
             }
             Self { key, original }
         }
-
-        fn unset(key: &'static str) -> Self {
-            let original = env::var_os(key);
-            unsafe {
-                env::remove_var(key);
-            }
-            Self { key, original }
-        }
     }
 
     #[cfg(test)]
@@ -1653,20 +1636,6 @@ mod tests {
             err.to_string()
                 .contains("ChatGPT login is required, but an API key is currently being used.")
         );
-    }
-
-    #[tokio::test]
-    #[serial(codex_api_key)]
-    async fn load_auth_prefers_openai_api_key_env() {
-        let _codex_guard = EnvVarGuard::unset(CODEX_API_KEY_ENV_VAR);
-        let _openai_guard = EnvVarGuard::set(OPENAI_API_KEY_ENV_VAR, "sk-openai");
-        let codex_home = tempdir().unwrap();
-
-        let auth = super::load_auth(codex_home.path(), true, AuthCredentialsStoreMode::File)
-            .expect("load auth")
-            .expect("auth available");
-
-        assert_eq!(auth.api_key(), Some("sk-openai"));
     }
 
     #[test]
