@@ -2,6 +2,7 @@ use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
+use app_test_support::rollout_path;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
@@ -14,7 +15,19 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use codex_protocol::ThreadId;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::CompactedItem;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionMetaLine;
+use codex_protocol::protocol::SessionSource as CoreSessionSource;
+use codex_protocol::protocol::ThreadRolledBackEvent;
 use pretty_assertions::assert_eq;
+use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -155,6 +168,146 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
     }
 
     Ok(())
+}
+
+#[tokio::test]
+async fn thread_resume_replays_compaction_and_rollback_markers() -> Result<()> {
+    let responses = vec![create_final_assistant_message_sse_response("Done")?];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let thread_id = create_rollout_with_compaction_and_rollback(
+        codex_home.path(),
+        "2025-01-07T12-00-00",
+        "2025-01-07T12:00:00Z",
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id,
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse { thread, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
+
+    assert_eq!(thread.turns.len(), 1);
+    assert_eq!(
+        thread.turns[0].items,
+        vec![ThreadItem::UserMessage {
+            id: "item-1".to_string(),
+            content: vec![V2UserInput::Text {
+                text: "compacted summary".to_string(),
+                text_elements: Vec::new(),
+            }],
+        }]
+    );
+
+    Ok(())
+}
+
+fn create_rollout_with_compaction_and_rollback(
+    codex_home: &std::path::Path,
+    filename_ts: &str,
+    meta_rfc3339: &str,
+) -> Result<String> {
+    let uuid = uuid::Uuid::new_v4();
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+    let path = rollout_path(codex_home, filename_ts, &uuid.to_string());
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("rollout path missing parent: {}", path.display()))?;
+    std::fs::create_dir_all(parent)?;
+
+    let session_meta = SessionMeta {
+        id: thread_id,
+        forked_from_id: None,
+        timestamp: meta_rfc3339.to_string(),
+        cwd: PathBuf::from("/"),
+        originator: "codex".to_string(),
+        cli_version: "0.0.0".to_string(),
+        source: CoreSessionSource::Cli,
+        model_provider: Some("mock_provider".to_string()),
+        base_instructions: None,
+        dynamic_tools: None,
+    };
+    let lines = [
+        RolloutLine {
+            timestamp: meta_rfc3339.to_string(),
+            item: RolloutItem::SessionMeta(SessionMetaLine {
+                meta: session_meta,
+                git: None,
+            }),
+        },
+        RolloutLine {
+            timestamp: meta_rfc3339.to_string(),
+            item: RolloutItem::ResponseItem(user_msg("old user")),
+        },
+        RolloutLine {
+            timestamp: meta_rfc3339.to_string(),
+            item: RolloutItem::ResponseItem(assistant_msg("old assistant")),
+        },
+        RolloutLine {
+            timestamp: meta_rfc3339.to_string(),
+            item: RolloutItem::Compacted(CompactedItem {
+                message: "summary".to_string(),
+                replacement_history: Some(vec![user_msg("compacted summary")]),
+            }),
+        },
+        RolloutLine {
+            timestamp: meta_rfc3339.to_string(),
+            item: RolloutItem::ResponseItem(user_msg("latest user")),
+        },
+        RolloutLine {
+            timestamp: meta_rfc3339.to_string(),
+            item: RolloutItem::ResponseItem(assistant_msg("latest assistant")),
+        },
+        RolloutLine {
+            timestamp: meta_rfc3339.to_string(),
+            item: RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+                num_turns: 1,
+            })),
+        },
+    ];
+
+    let content = lines
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<Result<Vec<_>, _>>()?
+        .join("\n");
+    std::fs::write(path, format!("{content}\n"))?;
+    Ok(uuid.to_string())
+}
+
+fn user_msg(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: text.to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    }
+}
+
+fn assistant_msg(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: text.to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    }
 }
 
 fn create_config_toml(codex_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {

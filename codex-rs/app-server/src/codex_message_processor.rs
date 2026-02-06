@@ -135,7 +135,6 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInfoResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_app_server_protocol::UserSavedConfig;
-use codex_app_server_protocol::build_turns_from_event_msgs;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
 use codex_core::AuthManager;
@@ -178,6 +177,7 @@ use codex_core::protocol::ReviewTarget as CoreReviewTarget;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
+use codex_core::replay_rollout_response_items;
 use codex_core::rollout_date_parts;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_core::skills::remote::download_remote_skill;
@@ -204,6 +204,7 @@ use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
+use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_rmcp_client::perform_oauth_login_return_url;
 use codex_utils_json_to_toml::json_to_toml;
@@ -2259,9 +2260,9 @@ impl CodexMessageProcessor {
         };
 
         if include_turns && let Some(rollout_path) = rollout_path.as_ref() {
-            match read_event_msgs_from_rollout(rollout_path).await {
-                Ok(events) => {
-                    thread.turns = build_turns_from_event_msgs(&events);
+            match read_turns_from_rollout(rollout_path).await {
+                Ok(turns) => {
+                    thread.turns = turns;
                 }
                 Err(err) => {
                     self.send_internal_error(
@@ -2442,11 +2443,7 @@ impl CodexMessageProcessor {
                 session_configured,
                 ..
             }) => {
-                let SessionConfiguredEvent {
-                    rollout_path,
-                    initial_messages,
-                    ..
-                } = session_configured;
+                let SessionConfiguredEvent { rollout_path, .. } = session_configured;
                 let Some(rollout_path) = rollout_path else {
                     self.send_internal_error(
                         request_id,
@@ -2486,9 +2483,20 @@ impl CodexMessageProcessor {
                         return;
                     }
                 };
-                thread.turns = initial_messages
-                    .as_deref()
-                    .map_or_else(Vec::new, build_turns_from_event_msgs);
+                thread.turns = match read_turns_from_rollout(rollout_path.as_path()).await {
+                    Ok(turns) => turns,
+                    Err(err) => {
+                        self.send_internal_error(
+                            request_id,
+                            format!(
+                                "failed to load rollout `{}` for thread {thread_id}: {err}",
+                                rollout_path.display()
+                            ),
+                        )
+                        .await;
+                        return;
+                    }
+                };
 
                 let response = ThreadResumeResponse {
                     thread,
@@ -2654,11 +2662,7 @@ impl CodexMessageProcessor {
             }
         };
 
-        let SessionConfiguredEvent {
-            rollout_path,
-            initial_messages,
-            ..
-        } = session_configured;
+        let SessionConfiguredEvent { rollout_path, .. } = session_configured;
         let Some(rollout_path) = rollout_path else {
             self.send_internal_error(
                 request_id,
@@ -2698,9 +2702,20 @@ impl CodexMessageProcessor {
                 return;
             }
         };
-        thread.turns = initial_messages
-            .as_deref()
-            .map_or_else(Vec::new, build_turns_from_event_msgs);
+        thread.turns = match read_turns_from_rollout(rollout_path.as_path()).await {
+            Ok(turns) => turns,
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!(
+                        "failed to load rollout `{}` for thread {thread_id}: {err}",
+                        rollout_path.display()
+                    ),
+                )
+                .await;
+                return;
+            }
+        };
 
         let response = ThreadForkResponse {
             thread: thread.clone(),
@@ -5043,22 +5058,227 @@ pub(crate) async fn read_summary_from_rollout(
     })
 }
 
-pub(crate) async fn read_event_msgs_from_rollout(
-    path: &Path,
-) -> std::io::Result<Vec<codex_protocol::protocol::EventMsg>> {
+fn build_turns_from_rollout_items(rollout_items: &[RolloutItem]) -> Vec<Turn> {
+    let response_items = replay_rollout_response_items(rollout_items);
+    let replayed_user_messages = replay_rollout_user_messages(rollout_items);
+    build_turns_from_response_items(&response_items, &replayed_user_messages)
+}
+
+fn build_turns_from_response_items(
+    response_items: &[ResponseItem],
+    replayed_user_messages: &[Option<UserMessageEvent>],
+) -> Vec<Turn> {
+    let mut turns = Vec::new();
+    let mut current_turn: Option<Turn> = None;
+    let mut next_turn_index: i64 = 1;
+    let mut next_item_index: i64 = 1;
+    let mut next_user_message_index: usize = 0;
+
+    for response_item in response_items {
+        let Some(mut turn_item) = codex_core::parse_turn_item(response_item) else {
+            continue;
+        };
+
+        let is_user_message = matches!(&turn_item, TurnItem::UserMessage(_));
+        if is_user_message {
+            if let Some(user_message_event) = replayed_user_messages
+                .get(next_user_message_index)
+                .and_then(Option::as_ref)
+            {
+                overwrite_user_message_content(&mut turn_item, user_message_event);
+            }
+            next_user_message_index += 1;
+            finish_current_turn(&mut turns, &mut current_turn);
+            current_turn = Some(Turn {
+                id: next_turn_id(&mut next_turn_index),
+                items: Vec::new(),
+                error: None,
+                status: TurnStatus::Completed,
+            });
+        } else if current_turn.is_none() {
+            current_turn = Some(Turn {
+                id: next_turn_id(&mut next_turn_index),
+                items: Vec::new(),
+                error: None,
+                status: TurnStatus::Completed,
+            });
+        }
+
+        overwrite_turn_item_id(&mut turn_item, next_item_id(&mut next_item_index));
+        if let Some(turn) = current_turn.as_mut() {
+            turn.items.push(ThreadItem::from(turn_item));
+        }
+    }
+
+    finish_current_turn(&mut turns, &mut current_turn);
+    turns
+}
+
+fn overwrite_turn_item_id(turn_item: &mut TurnItem, id: String) {
+    let item_id = match turn_item {
+        TurnItem::UserMessage(item) => &mut item.id,
+        TurnItem::AgentMessage(item) => &mut item.id,
+        TurnItem::Plan(item) => &mut item.id,
+        TurnItem::Reasoning(item) => &mut item.id,
+        TurnItem::WebSearch(item) => &mut item.id,
+        TurnItem::ContextCompaction(item) => &mut item.id,
+    };
+    *item_id = id;
+}
+
+fn overwrite_user_message_content(turn_item: &mut TurnItem, user_message_event: &UserMessageEvent) {
+    if let TurnItem::UserMessage(user_message) = turn_item {
+        user_message.content = user_message_content_from_event(user_message_event);
+    }
+}
+
+fn user_message_content_from_event(user_message_event: &UserMessageEvent) -> Vec<CoreInputItem> {
+    let mut content = Vec::new();
+    if !user_message_event.message.trim().is_empty() {
+        content.push(CoreInputItem::Text {
+            text: user_message_event.message.clone(),
+            text_elements: user_message_event.text_elements.clone(),
+        });
+    }
+    if let Some(images) = &user_message_event.images {
+        for image in images {
+            content.push(CoreInputItem::Image {
+                image_url: image.clone(),
+            });
+        }
+    }
+    for path in &user_message_event.local_images {
+        content.push(CoreInputItem::LocalImage { path: path.clone() });
+    }
+    content
+}
+
+fn replay_rollout_user_messages(rollout_items: &[RolloutItem]) -> Vec<Option<UserMessageEvent>> {
+    let mut replayed_entries = Vec::new();
+    let mut replayed_prefix = Vec::new();
+
+    for rollout_item in rollout_items {
+        replayed_prefix.push(rollout_item.clone());
+        match rollout_item {
+            RolloutItem::ResponseItem(response_item) => {
+                replayed_entries.push(ReplayEntry {
+                    response_item: response_item.clone(),
+                    user_message_event: None,
+                });
+            }
+            RolloutItem::EventMsg(EventMsg::UserMessage(user_message_event)) => {
+                if let Some(entry) = replayed_entries.iter_mut().rev().find(|entry| {
+                    is_user_response_item(&entry.response_item)
+                        && entry.user_message_event.is_none()
+                }) {
+                    entry.user_message_event = Some(user_message_event.clone());
+                }
+            }
+            RolloutItem::Compacted(compacted) => {
+                let replayed_response_items = replay_rollout_response_items(&replayed_prefix);
+                replayed_entries = if compacted.replacement_history.is_some() {
+                    replayed_response_items
+                        .into_iter()
+                        .map(|response_item| ReplayEntry {
+                            response_item,
+                            user_message_event: None,
+                        })
+                        .collect()
+                } else {
+                    carry_user_message_events(&replayed_entries, &replayed_response_items)
+                };
+            }
+            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(_)) => {
+                let replayed_response_items = replay_rollout_response_items(&replayed_prefix);
+                replayed_entries =
+                    carry_user_message_events(&replayed_entries, &replayed_response_items);
+            }
+            _ => {}
+        }
+    }
+
+    replayed_entries
+        .into_iter()
+        .filter_map(|entry| {
+            if is_user_response_item(&entry.response_item) {
+                Some(entry.user_message_event)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn carry_user_message_events(
+    replayed_entries: &[ReplayEntry],
+    replayed_response_items: &[ResponseItem],
+) -> Vec<ReplayEntry> {
+    let mut replayed_entry_cursor = 0usize;
+    replayed_response_items
+        .iter()
+        .map(|response_item| {
+            let user_message_event = replayed_entries
+                .iter()
+                .enumerate()
+                .skip(replayed_entry_cursor)
+                .find(|(_, entry)| entry.response_item == *response_item)
+                .and_then(|(idx, entry)| {
+                    replayed_entry_cursor = idx + 1;
+                    entry.user_message_event.clone()
+                });
+            ReplayEntry {
+                response_item: response_item.clone(),
+                user_message_event: if is_user_response_item(response_item) {
+                    user_message_event
+                } else {
+                    None
+                },
+            }
+        })
+        .collect()
+}
+
+fn is_user_response_item(response_item: &ResponseItem) -> bool {
+    matches!(
+        response_item,
+        ResponseItem::Message { role, .. } if role == "user"
+    )
+}
+
+#[derive(Clone)]
+struct ReplayEntry {
+    response_item: ResponseItem,
+    user_message_event: Option<UserMessageEvent>,
+}
+
+fn finish_current_turn(turns: &mut Vec<Turn>, current_turn: &mut Option<Turn>) {
+    if let Some(turn) = current_turn.take()
+        && !turn.items.is_empty()
+    {
+        turns.push(turn);
+    }
+}
+
+fn next_turn_id(next_turn_index: &mut i64) -> String {
+    let id = format!("turn-{next_turn_index}");
+    *next_turn_index += 1;
+    id
+}
+
+fn next_item_id(next_item_index: &mut i64) -> String {
+    let id = format!("item-{next_item_index}");
+    *next_item_index += 1;
+    id
+}
+
+pub(crate) async fn read_turns_from_rollout(path: &Path) -> std::io::Result<Vec<Turn>> {
     let items = match RolloutRecorder::get_rollout_history(path).await? {
         InitialHistory::New => Vec::new(),
         InitialHistory::Forked(items) => items,
         InitialHistory::Resumed(resumed) => resumed.history,
     };
 
-    Ok(items
-        .into_iter()
-        .filter_map(|item| match item {
-            RolloutItem::EventMsg(event) => Some(event),
-            _ => None,
-        })
-        .collect())
+    Ok(build_turns_from_rollout_items(&items))
 }
 
 fn extract_conversation_summary(
@@ -5195,10 +5415,229 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
 mod tests {
     use super::*;
     use anyhow::Result;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::CompactedItem;
+    use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::ThreadRolledBackEvent;
+    use codex_protocol::protocol::UserMessageEvent;
+    use codex_protocol::user_input::ByteRange;
+    use codex_protocol::user_input::TextElement;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tempfile::TempDir;
+
+    fn user_msg(text: &str) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: text.to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }
+    }
+
+    fn assistant_msg(text: &str) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: text.to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }
+    }
+
+    fn user_message_event(message: &str, placeholder: &str) -> UserMessageEvent {
+        UserMessageEvent {
+            message: message.to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: vec![TextElement::new(
+                ByteRange {
+                    start: 0,
+                    end: message.len(),
+                },
+                Some(placeholder.to_string()),
+            )],
+        }
+    }
+
+    #[test]
+    fn build_turns_from_rollout_items_applies_compaction_replacement_history() {
+        let rollout_items = vec![
+            RolloutItem::ResponseItem(user_msg("old user")),
+            RolloutItem::ResponseItem(assistant_msg("old assistant")),
+            RolloutItem::Compacted(CompactedItem {
+                message: "summary".to_string(),
+                replacement_history: Some(vec![user_msg("summary user")]),
+            }),
+            RolloutItem::ResponseItem(user_msg("latest user")),
+            RolloutItem::ResponseItem(assistant_msg("latest assistant")),
+        ];
+
+        let turns = build_turns_from_rollout_items(&rollout_items);
+        let expected = vec![
+            Turn {
+                id: "turn-1".to_string(),
+                items: vec![ThreadItem::UserMessage {
+                    id: "item-1".to_string(),
+                    content: vec![V2UserInput::Text {
+                        text: "summary user".to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                }],
+                error: None,
+                status: TurnStatus::Completed,
+            },
+            Turn {
+                id: "turn-2".to_string(),
+                items: vec![
+                    ThreadItem::UserMessage {
+                        id: "item-2".to_string(),
+                        content: vec![V2UserInput::Text {
+                            text: "latest user".to_string(),
+                            text_elements: Vec::new(),
+                        }],
+                    },
+                    ThreadItem::AgentMessage {
+                        id: "item-3".to_string(),
+                        text: "latest assistant".to_string(),
+                    },
+                ],
+                error: None,
+                status: TurnStatus::Completed,
+            },
+        ];
+
+        assert_eq!(turns, expected);
+    }
+
+    #[test]
+    fn build_turns_from_rollout_items_applies_compaction_and_rollback() {
+        let rollout_items = vec![
+            RolloutItem::ResponseItem(user_msg("old user")),
+            RolloutItem::ResponseItem(assistant_msg("old assistant")),
+            RolloutItem::Compacted(CompactedItem {
+                message: "summary".to_string(),
+                replacement_history: Some(vec![user_msg("summary user")]),
+            }),
+            RolloutItem::ResponseItem(user_msg("latest user")),
+            RolloutItem::ResponseItem(assistant_msg("latest assistant")),
+            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+                num_turns: 1,
+            })),
+        ];
+
+        let turns = build_turns_from_rollout_items(&rollout_items);
+        let expected = vec![Turn {
+            id: "turn-1".to_string(),
+            items: vec![ThreadItem::UserMessage {
+                id: "item-1".to_string(),
+                content: vec![V2UserInput::Text {
+                    text: "summary user".to_string(),
+                    text_elements: Vec::new(),
+                }],
+            }],
+            error: None,
+            status: TurnStatus::Completed,
+        }];
+
+        assert_eq!(turns, expected);
+    }
+
+    #[test]
+    fn build_turns_from_rollout_items_preserves_text_elements_from_user_message_events() {
+        let rollout_items = vec![
+            RolloutItem::ResponseItem(user_msg("hello")),
+            RolloutItem::EventMsg(EventMsg::UserMessage(user_message_event("hello", "<note>"))),
+        ];
+
+        let turns = build_turns_from_rollout_items(&rollout_items);
+        let expected = vec![Turn {
+            id: "turn-1".to_string(),
+            items: vec![ThreadItem::UserMessage {
+                id: "item-1".to_string(),
+                content: vec![V2UserInput::Text {
+                    text: "hello".to_string(),
+                    text_elements: vec![
+                        TextElement::new(
+                            ByteRange { start: 0, end: 5 },
+                            Some("<note>".to_string()),
+                        )
+                        .into(),
+                    ],
+                }],
+            }],
+            error: None,
+            status: TurnStatus::Completed,
+        }];
+
+        assert_eq!(turns, expected);
+    }
+
+    #[test]
+    fn build_turns_from_rollout_items_does_not_reuse_pre_compaction_user_message_events() {
+        let rollout_items = vec![
+            RolloutItem::ResponseItem(user_msg("old user")),
+            RolloutItem::EventMsg(EventMsg::UserMessage(user_message_event(
+                "old user", "<old>",
+            ))),
+            RolloutItem::Compacted(CompactedItem {
+                message: "summary".to_string(),
+                replacement_history: Some(vec![user_msg("summary user")]),
+            }),
+            RolloutItem::ResponseItem(user_msg("latest user")),
+            RolloutItem::EventMsg(EventMsg::UserMessage(user_message_event(
+                "latest user",
+                "<latest>",
+            ))),
+        ];
+
+        let turns = build_turns_from_rollout_items(&rollout_items);
+        let expected = vec![
+            Turn {
+                id: "turn-1".to_string(),
+                items: vec![ThreadItem::UserMessage {
+                    id: "item-1".to_string(),
+                    content: vec![V2UserInput::Text {
+                        text: "summary user".to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                }],
+                error: None,
+                status: TurnStatus::Completed,
+            },
+            Turn {
+                id: "turn-2".to_string(),
+                items: vec![ThreadItem::UserMessage {
+                    id: "item-2".to_string(),
+                    content: vec![V2UserInput::Text {
+                        text: "latest user".to_string(),
+                        text_elements: vec![
+                            TextElement::new(
+                                ByteRange {
+                                    start: 0,
+                                    end: "latest user".len(),
+                                },
+                                Some("<latest>".to_string()),
+                            )
+                            .into(),
+                        ],
+                    }],
+                }],
+                error: None,
+                status: TurnStatus::Completed,
+            },
+        ];
+
+        assert_eq!(turns, expected);
+    }
 
     #[test]
     fn validate_dynamic_tools_rejects_unsupported_input_schema() {

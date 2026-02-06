@@ -12,6 +12,7 @@ pub mod list;
 pub(crate) mod metadata;
 pub(crate) mod policy;
 pub mod recorder;
+pub mod replay;
 pub(crate) mod session_index;
 pub(crate) mod truncation;
 
@@ -24,6 +25,8 @@ pub use list::find_thread_path_by_id_str as find_conversation_path_by_id_str;
 pub use list::rollout_date_parts;
 pub use recorder::RolloutRecorder;
 pub use recorder::RolloutRecorderParams;
+pub use replay::replay_rollout_response_items;
+pub use replay::replay_rollout_response_items_with_initial_context;
 pub use session_index::find_thread_path_by_name_str;
 
 #[cfg(test)]
