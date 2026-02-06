@@ -5122,7 +5122,9 @@ impl CodexMessageProcessor {
             query,
             roots,
             cancellation_token,
+            include_dirs,
         } = params;
+        let include_dirs = include_dirs.unwrap_or(false);
 
         let cancel_flag = match cancellation_token.clone() {
             Some(token) => {
@@ -5141,7 +5143,7 @@ impl CodexMessageProcessor {
 
         let results = match query.as_str() {
             "" => vec![],
-            _ => run_fuzzy_file_search(query, roots, cancel_flag.clone()).await,
+            _ => run_fuzzy_file_search(query, roots, include_dirs, cancel_flag.clone()).await,
         };
 
         if let Some(token) = cancellation_token {

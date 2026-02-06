@@ -53,6 +53,7 @@ pub struct FileMatch {
     pub score: u32,
     pub path: PathBuf,
     pub root: PathBuf,
+    pub is_dir: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub indices: Option<Vec<u32>>, // Sorted & deduplicated when present
 }
@@ -93,6 +94,7 @@ pub struct FileSearchOptions {
     pub threads: NonZero<usize>,
     pub compute_indices: bool,
     pub respect_gitignore: bool,
+    pub include_dirs: bool,
 }
 
 impl Default for FileSearchOptions {
@@ -105,6 +107,7 @@ impl Default for FileSearchOptions {
             threads: NonZero::new(2).unwrap(),
             compute_indices: false,
             respect_gitignore: true,
+            include_dirs: false,
         }
     }
 }
@@ -163,6 +166,7 @@ fn create_session_inner(
         threads,
         compute_indices,
         respect_gitignore,
+        include_dirs,
     } = options;
 
     let Some(primary_search_directory) = search_directories.first() else {
@@ -191,6 +195,7 @@ fn create_session_inner(
         threads: threads.get(),
         compute_indices,
         respect_gitignore,
+        include_dirs,
         cancelled: cancelled.clone(),
         shutdown: Arc::new(AtomicBool::new(false)),
         reporter,
@@ -266,6 +271,7 @@ pub async fn run_main<T: Reporter>(
             threads,
             compute_indices,
             respect_gitignore: true,
+            include_dirs: false,
         },
         None,
     )?;
@@ -344,6 +350,7 @@ struct SessionInner {
     threads: usize,
     compute_indices: bool,
     respect_gitignore: bool,
+    include_dirs: bool,
     cancelled: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
     reporter: Arc<dyn SessionReporter>,
@@ -432,6 +439,7 @@ fn walker_worker(
         const CHECK_INTERVAL: usize = 1024;
         let mut n = 0;
         let search_directories = inner.search_directories.clone();
+        let include_dirs = inner.include_dirs;
         let injector = injector.clone();
         let cancelled = inner.cancelled.clone();
         let shutdown = inner.shutdown.clone();
@@ -441,7 +449,8 @@ fn walker_worker(
                 Ok(entry) => entry,
                 Err(_) => return ignore::WalkState::Continue,
             };
-            if entry.file_type().is_some_and(|ft| ft.is_dir()) {
+            let is_dir = entry.file_type().is_some_and(|ft| ft.is_dir());
+            if is_dir && !include_dirs {
                 return ignore::WalkState::Continue;
             }
             let path = entry.path();
@@ -449,8 +458,15 @@ fn walker_worker(
                 return ignore::WalkState::Continue;
             };
             if let Some((_, relative_path)) = get_file_path(path, &search_directories) {
+                if relative_path.is_empty() {
+                    return ignore::WalkState::Continue;
+                }
                 injector.push(Arc::from(full_path), |_, cols| {
-                    cols[0] = Utf32String::from(relative_path);
+                    cols[0] = if is_dir {
+                        Utf32String::from(format!("{relative_path}/"))
+                    } else {
+                        Utf32String::from(relative_path)
+                    };
                 });
             }
             n += 1;
@@ -549,6 +565,7 @@ fn matcher_worker(
                                 score: match_.score,
                                 path: PathBuf::from(relative_path),
                                 root: inner.search_directories[root_idx].clone(),
+                                is_dir: Path::new(full_path).is_dir(),
                                 indices,
                             })
                         })
@@ -895,6 +912,7 @@ mod tests {
             threads: NonZero::new(2).unwrap(),
             compute_indices: false,
             respect_gitignore: true,
+            include_dirs: false,
         };
         let results =
             run("file-000", vec![dir.path().to_path_buf()], options, None).expect("run ok");

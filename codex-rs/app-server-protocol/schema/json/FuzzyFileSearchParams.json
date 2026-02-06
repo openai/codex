@@ -7,6 +7,12 @@
         "null"
       ]
     },
+    "includeDirs": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
     "query": {
       "type": "string"
     },
