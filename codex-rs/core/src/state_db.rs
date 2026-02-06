@@ -73,7 +73,7 @@ pub(crate) async fn init_if_enabled(
                 .await;
         });
     }
-    require_backfill_complete(runtime, config.codex_home.as_path()).await
+    Some(runtime)
 }
 
 /// Get the DB if the feature is enabled and the DB exists.
