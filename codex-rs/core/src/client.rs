@@ -21,6 +21,19 @@
 //! warmed socket available). On first use in a turn, the session tries to adopt `Ready`; if not
 //! ready, it awaits `InFlight` and retries adoption before opening a new websocket. This prevents
 //! racing duplicate first-turn handshakes while keeping preconnect best-effort.
+//!
+//! ## Retry-Budget Tradeoff
+//!
+//! `stream_max_retries` applies to retryable turn stream failures, not to background startup
+//! preconnect handshakes. In failure cases this can produce two websocket handshakes on the first
+//! turn (startup preconnect, then turn-time connect) before HTTP fallback becomes sticky. We keep
+//! this split intentionally so opportunistic preconnect cannot consume the user-visible stream
+//! retry budget before any turn payload is sent.
+//!
+//! If this policy needs to change later, preconnect can be modeled as an explicit first connection
+//! attempt in the same retry budget as turn streaming. That would require plumbing websocket
+//! attempt accounting from connection acquisition into the turn retry loop and updating fallback
+//! expectations/tests accordingly.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -1111,6 +1124,10 @@ impl ModelClientSession {
     /// This is used after exhausting the provider retry budget, to force subsequent requests onto
     /// the HTTP transport. It also clears any warmed websocket preconnect state so future turns
     /// cannot accidentally adopt a stale socket after fallback has been activated.
+    ///
+    /// Startup preconnect handshakes are intentionally not counted against `stream_max_retries`.
+    /// See [`crate::client`] module docs ("Retry-Budget Tradeoff") for rationale and future
+    /// alternatives.
     ///
     /// Returns `true` if this call activated fallback, or `false` if fallback was already active.
     pub(crate) fn try_switch_fallback_transport(&mut self, otel_manager: &OtelManager) -> bool {
