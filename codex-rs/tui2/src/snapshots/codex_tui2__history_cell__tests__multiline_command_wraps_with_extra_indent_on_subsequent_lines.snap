@@ -1,0 +1,8 @@
+---
+source: tui2/src/history_cell.rs
+expression: rendered
+---
+• Ran set -o pipefail
+  │ cargo test
+  │ --all-features --quiet
+  └ (no output)

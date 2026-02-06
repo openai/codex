@@ -1,7 +1,7 @@
-//! Unified Exec: interactive process execution orchestrated with approvals + sandboxing.
+//! Unified Exec: interactive PTY execution orchestrated with approvals + sandboxing.
 //!
 //! Responsibilities
-//! - Manages interactive processes (create, reuse, buffer output with caps).
+//! - Manages interactive PTY sessions (create, reuse, buffer output with caps).
 //! - Uses the shared ToolOrchestrator to handle approval, sandbox selection, and
 //!   retry semantics in a single, descriptive flow.
 //! - Spawns the PTY from a sandbox‑transformed `ExecEnv`; on sandbox denial,
@@ -9,17 +9,17 @@
 //! - Uses the shared `is_likely_sandbox_denied` heuristic to keep denial messages
 //!   consistent with other exec paths.
 //!
-//! Flow at a glance (open process)
+//! Flow at a glance (open session)
 //! 1) Build a small request `{ command, cwd }`.
 //! 2) Orchestrator: approval (bypass/cache/prompt) → select sandbox → run.
 //! 3) Runtime: transform `CommandSpec` → `ExecEnv` → spawn PTY.
 //! 4) If denial, orchestrator retries with `SandboxType::None`.
-//! 5) Process handle is returned with streaming output + metadata.
+//! 5) Session is returned with streaming output + metadata.
 //!
-//! This keeps policy logic and user interaction centralized while the PTY/process
+//! This keeps policy logic and user interaction centralized while the PTY/session
 //! concerns remain isolated here. The implementation is split between:
-//! - `process.rs`: PTY process lifecycle + output buffering.
-//! - `process_manager.rs`: orchestration (approvals, sandboxing, reuse) and request handling.
+//! - `session.rs`: PTY session lifecycle + output buffering.
+//! - `session_manager.rs`: orchestration (approvals, sandboxing, reuse) and request handling.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -37,24 +37,39 @@ use crate::sandboxing::SandboxPermissions;
 
 mod async_watcher;
 mod errors;
-mod head_tail_buffer;
-mod process;
-mod process_manager;
+mod session;
+mod session_manager;
 
 pub(crate) use errors::UnifiedExecError;
-pub(crate) use process::UnifiedExecProcess;
+pub(crate) use session::UnifiedExecSession;
 
 pub(crate) const MIN_YIELD_TIME_MS: u64 = 250;
-// Minimum yield time for an empty `write_stdin`.
-pub(crate) const MIN_EMPTY_YIELD_TIME_MS: u64 = 5_000;
 pub(crate) const MAX_YIELD_TIME_MS: u64 = 30_000;
 pub(crate) const DEFAULT_MAX_OUTPUT_TOKENS: usize = 10_000;
 pub(crate) const UNIFIED_EXEC_OUTPUT_MAX_BYTES: usize = 1024 * 1024; // 1 MiB
 pub(crate) const UNIFIED_EXEC_OUTPUT_MAX_TOKENS: usize = UNIFIED_EXEC_OUTPUT_MAX_BYTES / 4;
-pub(crate) const MAX_UNIFIED_EXEC_PROCESSES: usize = 64;
+pub(crate) const MAX_UNIFIED_EXEC_SESSIONS: usize = 64;
 
-// Send a warning message to the models when it reaches this number of processes.
-pub(crate) const WARNING_UNIFIED_EXEC_PROCESSES: usize = 60;
+// Send a warning message to the models when it reaches this number of sessions.
+pub(crate) const WARNING_UNIFIED_EXEC_SESSIONS: usize = 60;
+
+#[derive(Debug, Default)]
+pub(crate) struct CommandTranscript {
+    pub data: Vec<u8>,
+}
+
+impl CommandTranscript {
+    pub fn append(&mut self, bytes: &[u8]) {
+        self.data.extend_from_slice(bytes);
+        if self.data.len() > UNIFIED_EXEC_OUTPUT_MAX_BYTES {
+            let excess = self
+                .data
+                .len()
+                .saturating_sub(UNIFIED_EXEC_OUTPUT_MAX_BYTES);
+            self.data.drain(..excess);
+        }
+    }
+}
 
 pub(crate) struct UnifiedExecContext {
     pub session: Arc<Session>,
@@ -79,10 +94,8 @@ pub(crate) struct ExecCommandRequest {
     pub yield_time_ms: u64,
     pub max_output_tokens: Option<usize>,
     pub workdir: Option<PathBuf>,
-    pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
-    pub prefix_rule: Option<Vec<String>>,
 }
 
 #[derive(Debug)]
@@ -108,36 +121,37 @@ pub(crate) struct UnifiedExecResponse {
 }
 
 #[derive(Default)]
-pub(crate) struct ProcessStore {
-    processes: HashMap<String, ProcessEntry>,
-    reserved_process_ids: HashSet<String>,
+pub(crate) struct SessionStore {
+    sessions: HashMap<String, SessionEntry>,
+    reserved_sessions_id: HashSet<String>,
 }
 
-impl ProcessStore {
-    fn remove(&mut self, process_id: &str) -> Option<ProcessEntry> {
-        self.reserved_process_ids.remove(process_id);
-        self.processes.remove(process_id)
+impl SessionStore {
+    fn remove(&mut self, session_id: &str) -> Option<SessionEntry> {
+        self.reserved_sessions_id.remove(session_id);
+        self.sessions.remove(session_id)
     }
 }
 
-pub(crate) struct UnifiedExecProcessManager {
-    process_store: Mutex<ProcessStore>,
+pub(crate) struct UnifiedExecSessionManager {
+    session_store: Mutex<SessionStore>,
 }
 
-impl Default for UnifiedExecProcessManager {
+impl Default for UnifiedExecSessionManager {
     fn default() -> Self {
         Self {
-            process_store: Mutex::new(ProcessStore::default()),
+            session_store: Mutex::new(SessionStore::default()),
         }
     }
 }
 
-struct ProcessEntry {
-    process: Arc<UnifiedExecProcess>,
+struct SessionEntry {
+    session: Arc<UnifiedExecSession>,
+    session_ref: Arc<Session>,
+    turn_ref: Arc<TurnContext>,
     call_id: String,
     process_id: String,
     command: Vec<String>,
-    tty: bool,
     last_used: tokio::time::Instant,
 }
 
@@ -159,7 +173,6 @@ pub(crate) fn generate_chunk_id() -> String {
 #[cfg(test)]
 #[cfg(unix)]
 mod tests {
-    use super::head_tail_buffer::HeadTailBuffer;
     use super::*;
     use crate::codex::Session;
     use crate::codex::TurnContext;
@@ -171,6 +184,8 @@ mod tests {
     use core_test_support::skip_if_sandbox;
     use std::sync::Arc;
     use tokio::time::Duration;
+
+    use super::session::OutputBufferState;
 
     async fn test_session_and_turn() -> (Arc<Session>, Arc<TurnContext>) {
         let (session, mut turn) = make_session_and_context().await;
@@ -203,10 +218,8 @@ mod tests {
                     yield_time_ms,
                     max_output_tokens: None,
                     workdir: None,
-                    tty: true,
                     sandbox_permissions: SandboxPermissions::UseDefault,
                     justification: None,
-                    prefix_rule: None,
                 },
                 &context,
             )
@@ -232,36 +245,21 @@ mod tests {
     }
 
     #[test]
-    fn push_chunk_preserves_prefix_and_suffix() {
-        let mut buffer = HeadTailBuffer::default();
+    fn push_chunk_trims_only_excess_bytes() {
+        let mut buffer = OutputBufferState::default();
         buffer.push_chunk(vec![b'a'; UNIFIED_EXEC_OUTPUT_MAX_BYTES]);
         buffer.push_chunk(vec![b'b']);
         buffer.push_chunk(vec![b'c']);
 
-        assert_eq!(buffer.retained_bytes(), UNIFIED_EXEC_OUTPUT_MAX_BYTES);
-        let snapshot = buffer.snapshot_chunks();
-
-        let first = snapshot.first().expect("expected at least one chunk");
-        assert_eq!(first.first(), Some(&b'a'));
-        assert!(snapshot.iter().any(|chunk| chunk.as_slice() == b"b"));
+        assert_eq!(buffer.total_bytes, UNIFIED_EXEC_OUTPUT_MAX_BYTES);
+        let snapshot = buffer.snapshot();
+        assert_eq!(snapshot.len(), 3);
         assert_eq!(
-            snapshot
-                .last()
-                .expect("expected at least one chunk")
-                .as_slice(),
-            b"c"
+            snapshot.first().unwrap().len(),
+            UNIFIED_EXEC_OUTPUT_MAX_BYTES - 2
         );
-    }
-
-    #[test]
-    fn head_tail_buffer_default_preserves_prefix_and_suffix() {
-        let mut buffer = HeadTailBuffer::default();
-        buffer.push_chunk(vec![b'a'; UNIFIED_EXEC_OUTPUT_MAX_BYTES]);
-        buffer.push_chunk(b"bc".to_vec());
-
-        let rendered = buffer.to_bytes();
-        assert_eq!(rendered.first(), Some(&b'a'));
-        assert!(rendered.ends_with(b"bc"));
+        assert_eq!(snapshot.get(2).unwrap(), &vec![b'c']);
+        assert_eq!(snapshot.get(1).unwrap(), &vec![b'b']);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -356,8 +354,6 @@ mod tests {
     async fn unified_exec_timeouts() -> anyhow::Result<()> {
         skip_if_sandbox!(Ok(()));
 
-        const TEST_VAR_VALUE: &str = "unified_exec_var_123";
-
         let (session, turn) = test_session_and_turn().await;
 
         let open_shell = exec_command(&session, &turn, "bash -i", 2_500).await?;
@@ -370,7 +366,7 @@ mod tests {
         write_stdin(
             &session,
             process_id,
-            format!("export CODEX_INTERACTIVE_SHELL_VAR={TEST_VAR_VALUE}\n").as_str(),
+            "export CODEX_INTERACTIVE_SHELL_VAR=codex\n",
             2_500,
         )
         .await?;
@@ -383,7 +379,7 @@ mod tests {
         )
         .await?;
         assert!(
-            !out_2.output.contains(TEST_VAR_VALUE),
+            !out_2.output.contains("codex"),
             "timeout too short should yield incomplete output"
         );
 
@@ -392,7 +388,7 @@ mod tests {
         let out_3 = write_stdin(&session, process_id, "", 100).await?;
 
         assert!(
-            out_3.output.contains(TEST_VAR_VALUE),
+            out_3.output.contains("codex"),
             "subsequent poll should retrieve output"
         );
 
@@ -428,10 +424,10 @@ mod tests {
             session
                 .services
                 .unified_exec_manager
-                .process_store
+                .session_store
                 .lock()
                 .await
-                .processes
+                .sessions
                 .is_empty()
         );
 
@@ -439,7 +435,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn reusing_completed_process_returns_unknown_process() -> anyhow::Result<()> {
+    async fn reusing_completed_session_returns_unknown_session() -> anyhow::Result<()> {
         skip_if_sandbox!(Ok(()));
 
         let (session, turn) = test_session_and_turn().await;
@@ -457,23 +453,23 @@ mod tests {
 
         let err = write_stdin(&session, process_id, "", 100)
             .await
-            .expect_err("expected unknown process error");
+            .expect_err("expected unknown session error");
 
         match err {
-            UnifiedExecError::UnknownProcessId { process_id: err_id } => {
+            UnifiedExecError::UnknownSessionId { process_id: err_id } => {
                 assert_eq!(err_id, process_id, "process id should match request");
             }
-            other => panic!("expected UnknownProcessId, got {other:?}"),
+            other => panic!("expected UnknownSessionId, got {other:?}"),
         }
 
         assert!(
             session
                 .services
                 .unified_exec_manager
-                .process_store
+                .session_store
                 .lock()
                 .await
-                .processes
+                .sessions
                 .is_empty()
         );
 

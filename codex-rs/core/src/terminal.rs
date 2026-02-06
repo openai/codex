@@ -47,8 +47,6 @@ pub enum TerminalName {
     Vte,
     /// Windows Terminal emulator.
     WindowsTerminal,
-    /// Dumb terminal (TERM=dumb).
-    Dumb,
     /// Unknown or missing terminal identification.
     Unknown,
 }
@@ -133,12 +131,7 @@ impl TerminalInfo {
 
     /// Creates terminal metadata from a `TERM` capability value.
     fn from_term(term: String, multiplexer: Option<Multiplexer>) -> Self {
-        let name = if term == "dumb" {
-            TerminalName::Dumb
-        } else {
-            TerminalName::Unknown
-        };
-        Self::new(name, None, None, Some(term), multiplexer)
+        Self::new(TerminalName::Unknown, None, None, Some(term), multiplexer)
     }
 
     /// Creates terminal metadata for unknown terminals.
@@ -173,7 +166,6 @@ impl TerminalInfo {
                 TerminalName::GnomeTerminal => "gnome-terminal".to_string(),
                 TerminalName::Vte => format_terminal_version("VTE", &self.version),
                 TerminalName::WindowsTerminal => "WindowsTerminal".to_string(),
-                TerminalName::Dumb => "dumb".to_string(),
                 TerminalName::Unknown => "unknown".to_string(),
             }
         };
@@ -443,7 +435,6 @@ fn terminal_name_from_term_program(value: &str) -> Option<TerminalName> {
         "gnometerminal" => Some(TerminalName::GnomeTerminal),
         "vte" => Some(TerminalName::Vte),
         "windowsterminal" => Some(TerminalName::WindowsTerminal),
-        "dumb" => Some(TerminalName::Dumb),
         _ => None,
     }
 }
@@ -1144,15 +1135,6 @@ mod tests {
             "xterm-256color",
             "term_fallback_user_agent"
         );
-
-        let env = FakeEnvironment::new().with_var("TERM", "dumb");
-        let terminal = detect_terminal_info_from_env(&env);
-        assert_eq!(
-            terminal,
-            terminal_info(TerminalName::Dumb, None, None, Some("dumb"), None),
-            "dumb_term_info"
-        );
-        assert_eq!(terminal.user_agent_token(), "dumb", "dumb_term_user_agent");
 
         let env = FakeEnvironment::new();
         let terminal = detect_terminal_info_from_env(&env);

@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use anyhow::Result;
 use codex_core::features::Feature;
 use core_test_support::assert_regex_match;
@@ -16,10 +14,6 @@ use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
 use serde_json::json;
 use test_case::test_case;
-
-/// Use this timeout if, empirically, a test seems to need more time than the
-/// default.
-const MEDIUM_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn shell_responses_with_timeout(
     call_id: &str,
@@ -76,11 +70,11 @@ async fn mount_shell_responses_with_timeout(
     call_id: &str,
     command: &str,
     login: Option<bool>,
-    timeout: Duration,
+    timeout_ms: i64,
 ) {
     mount_sse_sequence(
         harness.server(),
-        shell_responses_with_timeout(call_id, command, login, timeout.as_millis() as i64),
+        shell_responses_with_timeout(call_id, command, login, timeout_ms),
     )
     .await;
 }
@@ -215,14 +209,7 @@ async fn shell_command_times_out_with_timeout_ms() -> anyhow::Result<()> {
     } else {
         "sleep 5"
     };
-    mount_shell_responses_with_timeout(
-        &harness,
-        call_id,
-        command,
-        None,
-        Duration::from_millis(200),
-    )
-    .await;
+    mount_shell_responses_with_timeout(&harness, call_id, command, None, 200).await;
     harness
         .submit("run a long command with a short timeout")
         .await?;
@@ -253,12 +240,11 @@ async fn unicode_output(login: bool) -> anyhow::Result<()> {
     .await?;
 
     let call_id = "unicode_output";
-    mount_shell_responses_with_timeout(
+    mount_shell_responses(
         &harness,
         call_id,
         "git -c alias.say='!printf \"%s\" \"naïve_café\"' say",
         Some(login),
-        MEDIUM_TIMEOUT,
     )
     .await;
     harness.submit("run the command without login").await?;
@@ -283,12 +269,11 @@ async fn unicode_output_with_newlines(login: bool) -> anyhow::Result<()> {
     .await?;
 
     let call_id = "unicode_output";
-    mount_shell_responses_with_timeout(
+    mount_shell_responses(
         &harness,
         call_id,
         "echo 'line1\nnaïve café\nline3'",
         Some(login),
-        MEDIUM_TIMEOUT,
     )
     .await;
     harness.submit("run the command without login").await?;

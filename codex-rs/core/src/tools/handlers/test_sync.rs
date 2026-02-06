@@ -1,4 +1,3 @@
-use codex_protocol::models::FunctionCallOutputBody;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
@@ -14,7 +13,6 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
-use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 
@@ -73,7 +71,11 @@ impl ToolHandler for TestSyncHandler {
             }
         };
 
-        let args: TestSyncArgs = parse_arguments(&arguments)?;
+        let args: TestSyncArgs = serde_json::from_str(&arguments).map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "failed to parse function arguments: {err:?}"
+            ))
+        })?;
 
         if let Some(delay) = args.sleep_before_ms
             && delay > 0
@@ -92,7 +94,8 @@ impl ToolHandler for TestSyncHandler {
         }
 
         Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text("ok".to_string()),
+            content: "ok".to_string(),
+            content_items: None,
             success: Some(true),
         })
     }

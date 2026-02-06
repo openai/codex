@@ -105,28 +105,35 @@ fn append_locked_line(policy_path: &Path, line: &str) -> Result<(), AmendError> 
         source,
     })?;
 
-    file.seek(SeekFrom::Start(0))
-        .map_err(|source| AmendError::SeekPolicyFile {
+    let len = file
+        .metadata()
+        .map_err(|source| AmendError::PolicyMetadata {
             path: policy_path.to_path_buf(),
             source,
-        })?;
-    let mut contents = String::new();
-    file.read_to_string(&mut contents)
-        .map_err(|source| AmendError::ReadPolicyFile {
-            path: policy_path.to_path_buf(),
-            source,
-        })?;
+        })?
+        .len();
 
-    if contents.lines().any(|existing| existing == line) {
-        return Ok(());
-    }
-
-    if !contents.is_empty() && !contents.ends_with('\n') {
-        file.write_all(b"\n")
-            .map_err(|source| AmendError::WritePolicyFile {
+    // Ensure file ends in a newline before appending.
+    if len > 0 {
+        file.seek(SeekFrom::End(-1))
+            .map_err(|source| AmendError::SeekPolicyFile {
                 path: policy_path.to_path_buf(),
                 source,
             })?;
+        let mut last = [0; 1];
+        file.read_exact(&mut last)
+            .map_err(|source| AmendError::ReadPolicyFile {
+                path: policy_path.to_path_buf(),
+                source,
+            })?;
+
+        if last[0] != b'\n' {
+            file.write_all(b"\n")
+                .map_err(|source| AmendError::WritePolicyFile {
+                    path: policy_path.to_path_buf(),
+                    source,
+                })?;
+        }
     }
 
     file.write_all(format!("{line}\n").as_bytes())

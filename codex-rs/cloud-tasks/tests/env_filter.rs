@@ -5,23 +5,18 @@ use codex_cloud_tasks_client::MockClient;
 async fn mock_backend_varies_by_env() {
     let client = MockClient;
 
-    let root = CloudBackend::list_tasks(&client, None, None, None)
-        .await
-        .unwrap()
-        .tasks;
+    let root = CloudBackend::list_tasks(&client, None).await.unwrap();
     assert!(root.iter().any(|t| t.title.contains("Update README")));
 
-    let a = CloudBackend::list_tasks(&client, Some("env-A"), None, None)
+    let a = CloudBackend::list_tasks(&client, Some("env-A"))
         .await
-        .unwrap()
-        .tasks;
+        .unwrap();
     assert_eq!(a.len(), 1);
     assert_eq!(a[0].title, "A: First");
 
-    let b = CloudBackend::list_tasks(&client, Some("env-B"), None, None)
+    let b = CloudBackend::list_tasks(&client, Some("env-B"))
         .await
-        .unwrap()
-        .tasks;
+        .unwrap();
     assert_eq!(b.len(), 2);
     assert!(b[0].title.starts_with("B: "));
 }

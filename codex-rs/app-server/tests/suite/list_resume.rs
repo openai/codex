@@ -6,7 +6,7 @@ use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::ListConversationsParams;
 use codex_app_server_protocol::ListConversationsResponse;
-use codex_app_server_protocol::NewConversationParams;
+use codex_app_server_protocol::NewConversationParams; // reused for overrides shape
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ResumeConversationParams;
 use codex_app_server_protocol::ResumeConversationResponse;
@@ -307,8 +307,6 @@ async fn test_list_and_resume_conversations() -> Result<()> {
         content: vec![ContentItem::InputText {
             text: fork_history_text.to_string(),
         }],
-        end_turn: None,
-        phase: None,
     }];
     let resume_with_history_req_id = mcp
         .send_resume_conversation_request(ResumeConversationParams {

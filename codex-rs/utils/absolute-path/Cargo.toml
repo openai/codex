@@ -9,7 +9,6 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-dirs = { workspace = true }
 path-absolutize = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
@@ -19,6 +18,5 @@ ts-rs = { workspace = true, features = [
 ] }
 
 [dev-dependencies]
-pretty_assertions = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }

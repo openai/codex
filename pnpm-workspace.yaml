@@ -1,6 +1,5 @@
 packages:
-  - codex-cli
-  - codex-rs/responses-api-proxy/npm
+  - docs
   - sdk/typescript
   - shell-tool-mcp
   - google-workspace-mcp
@@ -8,7 +7,3 @@ packages:
 
 ignoredBuiltDependencies:
   - esbuild
-
-minimumReleaseAge: 10080
-
-blockExoticSubdeps: true

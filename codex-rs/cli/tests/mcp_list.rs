@@ -89,7 +89,6 @@ async fn list_and_get_render_expected_output() -> Result<()> {
           {
             "name": "docs",
             "enabled": true,
-            "disabled_reason": null,
             "transport": {
               "type": "stdio",
               "command": "docs-server",

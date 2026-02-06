@@ -3,22 +3,19 @@
 Skill Initializer - Creates a new skill from template
 
 Usage:
-    init_skill.py <skill-name> --path <path> [--resources scripts,references,assets] [--examples] [--interface key=value]
+    init_skill.py <skill-name> --path <path> [--resources scripts,references,assets] [--examples]
 
 Examples:
     init_skill.py my-new-skill --path skills/public
     init_skill.py my-new-skill --path skills/public --resources scripts,references
     init_skill.py my-api-helper --path skills/private --resources scripts --examples
     init_skill.py custom-skill --path /custom/location
-    init_skill.py my-skill --path skills/public --interface short_description="Short UI label"
 """
 
 import argparse
 import re
 import sys
 from pathlib import Path
-
-from generate_openai_yaml import write_openai_yaml
 
 MAX_SKILL_NAME_LENGTH = 64
 ALLOWED_RESOURCES = {"scripts", "references", "assets"}
@@ -255,7 +252,7 @@ def create_resource_dirs(skill_dir, skill_name, skill_title, resources, include_
                 print("[OK] Created assets/")
 
 
-def init_skill(skill_name, path, resources, include_examples, interface_overrides):
+def init_skill(skill_name, path, resources, include_examples):
     """
     Initialize a new skill directory with template SKILL.md.
 
@@ -296,15 +293,6 @@ def init_skill(skill_name, path, resources, include_examples, interface_override
         print(f"[ERROR] Error creating SKILL.md: {e}")
         return None
 
-    # Create agents/openai.yaml
-    try:
-        result = write_openai_yaml(skill_dir, skill_name, interface_overrides)
-        if not result:
-            return None
-    except Exception as e:
-        print(f"[ERROR] Error creating agents/openai.yaml: {e}")
-        return None
-
     # Create resource directories if requested
     if resources:
         try:
@@ -324,8 +312,7 @@ def init_skill(skill_name, path, resources, include_examples, interface_override
             print("2. Add resources to scripts/, references/, and assets/ as needed")
     else:
         print("2. Create resource directories only if needed (scripts/, references/, assets/)")
-    print("3. Update agents/openai.yaml if the UI metadata should differ")
-    print("4. Run the validator when ready to check the skill structure")
+    print("3. Run the validator when ready to check the skill structure")
 
     return skill_dir
 
@@ -345,12 +332,6 @@ def main():
         "--examples",
         action="store_true",
         help="Create example files inside the selected resource directories",
-    )
-    parser.add_argument(
-        "--interface",
-        action="append",
-        default=[],
-        help="Interface override in key=value format (repeatable)",
     )
     args = parser.parse_args()
 
@@ -385,7 +366,7 @@ def main():
         print("   Resources: none (create as needed)")
     print()
 
-    result = init_skill(skill_name, path, resources, args.examples, args.interface)
+    result = init_skill(skill_name, path, resources, args.examples)
 
     if result:
         sys.exit(0)

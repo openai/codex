@@ -1,0 +1,21 @@
+---
+source: tui/src/diff_render.rs
+assertion_line: 765
+expression: terminal.backend()
+---
+"• Proposed Change example.txt (+2 -2)                                           "
+"    1      line 1                                                               "
+"    2     -line 2                                                               "
+"    2     +line two changed                                                     "
+"    3      line 3                                                               "
+"    4      line 4                                                               "
+"    5      line 5                                                               "
+"    ⋮                                                                           "
+"    6      line 6                                                               "
+"    7      line 7                                                               "
+"    8      line 8                                                               "
+"    9     -line 9                                                               "
+"    9     +line nine changed                                                    "
+"    10     line 10                                                              "
+"                                                                                "
+"                                                                                "

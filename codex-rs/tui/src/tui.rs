@@ -10,7 +10,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
 
 use crossterm::Command;
 use crossterm::SynchronizedUpdate;
@@ -40,21 +39,18 @@ pub use self::frame_requester::FrameRequester;
 use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
 use crate::notifications::DesktopNotificationBackend;
+use crate::notifications::NotificationBackendKind;
 use crate::notifications::detect_backend;
 use crate::tui::event_stream::EventBroker;
 use crate::tui::event_stream::TuiEventStream;
 #[cfg(unix)]
 use crate::tui::job_control::SuspendContext;
-use codex_core::config::types::NotificationMethod;
 
 mod event_stream;
 mod frame_rate_limiter;
 mod frame_requester;
 #[cfg(unix)]
 mod job_control;
-
-/// Target frame interval for UI redraw scheduling.
-pub(crate) const TARGET_FRAME_INTERVAL: Duration = frame_rate_limiter::MIN_FRAME_INTERVAL;
 
 /// A type alias for the terminal type used in this application
 pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
@@ -214,8 +210,6 @@ pub fn init() -> Result<Terminal> {
     }
     set_modes()?;
 
-    flush_terminal_input_buffer();
-
     set_panic_hook();
 
     let backend = CrosstermBackend::new(stdout());
@@ -253,8 +247,6 @@ pub struct Tui {
     terminal_focused: Arc<AtomicBool>,
     enhanced_keys_supported: bool,
     notification_backend: Option<DesktopNotificationBackend>,
-    // When false, enter_alt_screen() becomes a no-op (for Zellij scrollback support)
-    alt_screen_enabled: bool,
 }
 
 impl Tui {
@@ -281,18 +273,8 @@ impl Tui {
             alt_screen_active: Arc::new(AtomicBool::new(false)),
             terminal_focused: Arc::new(AtomicBool::new(true)),
             enhanced_keys_supported,
-            notification_backend: Some(detect_backend(NotificationMethod::default())),
-            alt_screen_enabled: true,
+            notification_backend: Some(detect_backend()),
         }
-    }
-
-    /// Set whether alternate screen is enabled. When false, enter_alt_screen() becomes a no-op.
-    pub fn set_alt_screen_enabled(&mut self, enabled: bool) {
-        self.alt_screen_enabled = enabled;
-    }
-
-    pub fn set_notification_method(&mut self, method: NotificationMethod) {
-        self.notification_backend = Some(detect_backend(method));
     }
 
     pub fn frame_requester(&self) -> FrameRequester {
@@ -371,16 +353,36 @@ impl Tui {
         let message = message.as_ref().to_string();
         match backend.notify(&message) {
             Ok(()) => true,
-            Err(err) => {
-                let method = backend.method();
-                tracing::warn!(
-                    error = %err,
-                    method = %method,
-                    "Failed to emit terminal notification; disabling future notifications"
-                );
-                self.notification_backend = None;
-                false
-            }
+            Err(err) => match backend.kind() {
+                NotificationBackendKind::WindowsToast => {
+                    tracing::error!(
+                        error = %err,
+                        "Failed to send Windows toast notification; falling back to OSC 9"
+                    );
+                    self.notification_backend = Some(DesktopNotificationBackend::osc9());
+                    if let Some(backend) = self.notification_backend.as_mut() {
+                        if let Err(osc_err) = backend.notify(&message) {
+                            tracing::warn!(
+                                error = %osc_err,
+                                "Failed to emit OSC 9 notification after toast fallback; \
+                                 disabling future notifications"
+                            );
+                            self.notification_backend = None;
+                            return false;
+                        }
+                        return true;
+                    }
+                    false
+                }
+                NotificationBackendKind::Osc9 => {
+                    tracing::warn!(
+                        error = %err,
+                        "Failed to emit OSC 9 notification; disabling future notifications"
+                    );
+                    self.notification_backend = None;
+                    false
+                }
+            },
         }
     }
 
@@ -405,9 +407,6 @@ impl Tui {
     /// Enter alternate screen and expand the viewport to full terminal size, saving the current
     /// inline viewport for restoration when leaving.
     pub fn enter_alt_screen(&mut self) -> Result<()> {
-        if !self.alt_screen_enabled {
-            return Ok(());
-        }
         let _ = execute!(self.terminal.backend_mut(), EnterAlternateScreen);
         // Enable "alternate scroll" so terminals may translate wheel to arrows
         let _ = execute!(self.terminal.backend_mut(), EnableAlternateScroll);
@@ -427,9 +426,6 @@ impl Tui {
 
     /// Leave alternate screen and restore the previously saved inline viewport, if any.
     pub fn leave_alt_screen(&mut self) -> Result<()> {
-        if !self.alt_screen_enabled {
-            return Ok(());
-        }
         // Disable alternate scroll when leaving alt-screen
         let _ = execute!(self.terminal.backend_mut(), DisableAlternateScroll);
         let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);

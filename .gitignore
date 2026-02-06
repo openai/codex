@@ -9,7 +9,6 @@ node_modules
 
 # build
 dist/
-bazel-*
 build/
 out/
 storybook-static/

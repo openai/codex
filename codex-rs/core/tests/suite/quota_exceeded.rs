@@ -43,9 +43,7 @@ async fn quota_exceeded_emits_single_error_event() -> Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "quota?".into(),
-                text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -63,7 +61,7 @@ async fn quota_exceeded_emits_single_error_event() -> Result<()> {
                     "Quota exceeded. Check your plan and billing details."
                 );
             }
-            EventMsg::TurnComplete(_) => break,
+            EventMsg::TaskComplete(_) => break,
             _ => {}
         }
     }

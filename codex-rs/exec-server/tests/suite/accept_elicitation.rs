@@ -27,8 +27,6 @@ use std::os::unix::fs::symlink;
 use tempfile::TempDir;
 use tokio::process::Command;
 
-const USE_LOGIN_SHELL: bool = false;
-
 /// Verify that when using a read-only sandbox and an execpolicy that prompts,
 /// the proper elicitation is sent. Upon auto-approving the elicitation, the
 /// command should be run privileged outside the sandbox.
@@ -58,7 +56,7 @@ prefix_rule(
     // Create an MCP client that approves expected elicitation messages.
     let project_root = TempDir::new()?;
     let project_root_path = project_root.path().canonicalize().unwrap();
-    let git_path = resolve_git_path(USE_LOGIN_SHELL).await?;
+    let git_path = resolve_git_path().await?;
     let expected_elicitation_message = format!(
         "Allow agent to run `{} init .` in `{}`?",
         git_path,
@@ -100,7 +98,7 @@ prefix_rule(
             name: Cow::Borrowed("shell"),
             arguments: Some(object(json!(
                 {
-                    "login": USE_LOGIN_SHELL,
+                    "login": false,
                     "command": "git init .",
                     "workdir": project_root_path.to_string_lossy(),
                 }
@@ -168,10 +166,9 @@ fn ensure_codex_cli() -> Result<PathBuf> {
     Ok(codex_cli)
 }
 
-async fn resolve_git_path(use_login_shell: bool) -> Result<String> {
-    let bash_flag = if use_login_shell { "-lc" } else { "-c" };
+async fn resolve_git_path() -> Result<String> {
     let git = Command::new("bash")
-        .arg(bash_flag)
+        .arg("-lc")
         .arg("command -v git")
         .output()
         .await

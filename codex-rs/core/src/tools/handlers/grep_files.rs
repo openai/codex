@@ -1,4 +1,3 @@
-use codex_protocol::models::FunctionCallOutputBody;
 use std::path::Path;
 use std::time::Duration;
 
@@ -11,7 +10,6 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
-use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 
@@ -54,7 +52,11 @@ impl ToolHandler for GrepFilesHandler {
             }
         };
 
-        let args: GrepFilesArgs = parse_arguments(&arguments)?;
+        let args: GrepFilesArgs = serde_json::from_str(&arguments).map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "failed to parse function arguments: {err:?}"
+            ))
+        })?;
 
         let pattern = args.pattern.trim();
         if pattern.is_empty() {
@@ -87,12 +89,14 @@ impl ToolHandler for GrepFilesHandler {
 
         if search_results.is_empty() {
             Ok(ToolOutput::Function {
-                body: FunctionCallOutputBody::Text("No matches found.".to_string()),
+                content: "No matches found.".to_string(),
+                content_items: None,
                 success: Some(false),
             })
         } else {
             Ok(ToolOutput::Function {
-                body: FunctionCallOutputBody::Text(search_results.join("\n")),
+                content: search_results.join("\n"),
+                content_items: None,
                 success: Some(true),
             })
         }

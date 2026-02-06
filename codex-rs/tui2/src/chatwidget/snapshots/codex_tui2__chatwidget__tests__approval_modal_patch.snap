@@ -1,0 +1,17 @@
+---
+source: tui2/src/chatwidget/tests.rs
+expression: terminal.backend().vt100().screen().contents()
+---
+  Would you like to make the following edits?
+
+  Reason: The model wants to apply changes
+
+  README.md (+2 -0)
+
+    1 +hello
+    2 +world
+
+› 1. Yes, proceed (y)
+  2. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel

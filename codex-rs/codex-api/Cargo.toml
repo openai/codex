@@ -14,13 +14,11 @@ http = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }
-tokio-tungstenite = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tracing = { workspace = true }
 eventsource-stream = { workspace = true }
 regex-lite = { workspace = true }
 tokio-util = { workspace = true, features = ["codec"] }
-url = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }

@@ -8,7 +8,7 @@ use codex_api::AuthProvider;
 use codex_api::Provider;
 use codex_api::ResponseEvent;
 use codex_api::ResponsesClient;
-use codex_api::requests::responses::Compression;
+use codex_api::WireApi;
 use codex_client::HttpTransport;
 use codex_client::Request;
 use codex_client::Response;
@@ -60,11 +60,12 @@ impl AuthProvider for NoAuth {
     }
 }
 
-fn provider(name: &str) -> Provider {
+fn provider(name: &str, wire: WireApi) -> Provider {
     Provider {
         name: name.to_string(),
         base_url: "https://example.com/v1".to_string(),
         query_params: None,
+        wire,
         headers: HeaderMap::new(),
         retry: codex_api::provider::RetryConfig {
             max_attempts: 1,
@@ -120,15 +121,10 @@ async fn responses_stream_parses_items_and_completed_end_to_end() -> Result<()> 
 
     let body = build_responses_body(vec![item1, item2, completed]);
     let transport = FixtureSseTransport::new(body);
-    let client = ResponsesClient::new(transport, provider("openai"), NoAuth);
+    let client = ResponsesClient::new(transport, provider("openai", WireApi::Responses), NoAuth);
 
     let mut stream = client
-        .stream(
-            serde_json::json!({"echo": true}),
-            HeaderMap::new(),
-            Compression::None,
-            None,
-        )
+        .stream(serde_json::json!({"echo": true}), HeaderMap::new())
         .await?;
 
     let mut events = Vec::new();
@@ -190,15 +186,10 @@ async fn responses_stream_aggregates_output_text_deltas() -> Result<()> {
 
     let body = build_responses_body(vec![delta1, delta2, completed]);
     let transport = FixtureSseTransport::new(body);
-    let client = ResponsesClient::new(transport, provider("openai"), NoAuth);
+    let client = ResponsesClient::new(transport, provider("openai", WireApi::Responses), NoAuth);
 
     let stream = client
-        .stream(
-            serde_json::json!({"echo": true}),
-            HeaderMap::new(),
-            Compression::None,
-            None,
-        )
+        .stream(serde_json::json!({"echo": true}), HeaderMap::new())
         .await?;
 
     let mut stream = stream.aggregate();

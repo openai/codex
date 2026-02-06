@@ -29,7 +29,7 @@ use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::measure_rows_height;
 use super::selection_popup_common::render_rows;
 
-pub(crate) struct ExperimentalFeatureItem {
+pub(crate) struct BetaFeatureItem {
     pub feature: Feature,
     pub name: String,
     pub description: String,
@@ -37,7 +37,7 @@ pub(crate) struct ExperimentalFeatureItem {
 }
 
 pub(crate) struct ExperimentalFeaturesView {
-    features: Vec<ExperimentalFeatureItem>,
+    features: Vec<BetaFeatureItem>,
     state: ScrollState,
     complete: bool,
     app_event_tx: AppEventSender,
@@ -46,14 +46,11 @@ pub(crate) struct ExperimentalFeaturesView {
 }
 
 impl ExperimentalFeaturesView {
-    pub(crate) fn new(
-        features: Vec<ExperimentalFeatureItem>,
-        app_event_tx: AppEventSender,
-    ) -> Self {
+    pub(crate) fn new(features: Vec<BetaFeatureItem>, app_event_tx: AppEventSender) -> Self {
         let mut header = ColumnRenderable::new();
         header.push(Line::from("Experimental features".bold()));
         header.push(Line::from(
-            "Toggle experimental features. Changes are saved to config.toml.".dim(),
+            "Toggle beta features. Changes are saved to config.toml.".dim(),
         ));
 
         let mut view = Self {
@@ -175,16 +172,11 @@ impl BottomPaneView for ExperimentalFeaturesView {
                 ..
             } => self.move_down(),
             KeyEvent {
-                code: KeyCode::Char(' '),
+                code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
                 ..
             } => self.toggle_selected(),
             KeyEvent {
-                code: KeyCode::Enter,
-                modifiers: KeyModifiers::NONE,
-                ..
-            }
-            | KeyEvent {
                 code: KeyCode::Esc, ..
             } => {
                 self.on_ctrl_c();
@@ -292,9 +284,9 @@ impl Renderable for ExperimentalFeaturesView {
 fn experimental_popup_hint_line() -> Line<'static> {
     Line::from(vec![
         "Press ".into(),
-        key_hint::plain(KeyCode::Char(' ')).into(),
-        " to select or ".into(),
         key_hint::plain(KeyCode::Enter).into(),
+        " to toggle or ".into(),
+        key_hint::plain(KeyCode::Esc).into(),
         " to save for next conversation".into(),
     ])
 }

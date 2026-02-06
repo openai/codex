@@ -10,7 +10,6 @@ use wiremock::matchers::header;
 async fn exec_uses_codex_api_key_env_var() -> anyhow::Result<()> {
     let test = test_codex_exec();
     let server = start_mock_server().await;
-    let repo_root = codex_utils_cargo_bin::repo_root()?;
 
     mount_sse_once_match(
         &server,
@@ -22,7 +21,7 @@ async fn exec_uses_codex_api_key_env_var() -> anyhow::Result<()> {
     test.cmd_with_server(&server)
         .arg("--skip-git-repo-check")
         .arg("-C")
-        .arg(&repo_root)
+        .arg(env!("CARGO_MANIFEST_DIR"))
         .arg("echo testing codex api key")
         .assert()
         .success();
