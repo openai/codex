@@ -623,11 +623,31 @@ pub struct Tui {
     /// `current-dir`.
     #[serde(default)]
     pub status_line: Option<Vec<String>>,
+
+    /// Keybinding overrides for the TUI.
+    ///
+    /// This supports rebinding selected actions globally and by context.
+    /// Context bindings take precedence over `global` bindings.
+    #[serde(default)]
+    pub keymap: TuiKeymap,
 }
 
 const fn default_true() -> bool {
     true
 }
+
+pub use super::tui_keymap::KeybindingSpec;
+pub use super::tui_keymap::KeybindingsSpec;
+pub use super::tui_keymap::TuiApprovalKeymap;
+pub use super::tui_keymap::TuiChatKeymap;
+pub use super::tui_keymap::TuiComposerKeymap;
+pub use super::tui_keymap::TuiEditorKeymap;
+pub use super::tui_keymap::TuiGlobalKeymap;
+pub use super::tui_keymap::TuiKeymap;
+pub use super::tui_keymap::TuiKeymapPreset;
+pub use super::tui_keymap::TuiListKeymap;
+pub use super::tui_keymap::TuiOnboardingKeymap;
+pub use super::tui_keymap::TuiPagerKeymap;
 
 /// Settings for notices we display to users via the tui and app-server clients
 /// (primarily the Codex IDE extension). NOTE: these are different from

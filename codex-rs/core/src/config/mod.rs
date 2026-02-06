@@ -20,6 +20,7 @@ use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
 use crate::config::types::SkillsConfig;
 use crate::config::types::Tui;
+use crate::config::types::TuiKeymap;
 use crate::config::types::UriBasedFileOpener;
 use crate::config::types::WindowsSandboxModeToml;
 use crate::config::types::WindowsToml;
@@ -96,6 +97,7 @@ mod permissions;
 pub mod profile;
 pub mod schema;
 pub mod service;
+pub mod tui_keymap;
 pub mod types;
 pub use codex_config::Constrained;
 pub use codex_config::ConstraintError;
@@ -264,13 +266,20 @@ pub struct Config {
     /// - `always`: Always use alternate screen (original behavior).
     /// - `never`: Never use alternate screen (inline mode, preserves scrollback).
     pub tui_alternate_screen: AltScreenMode,
-
     /// Ordered list of status line item identifiers for the TUI.
     ///
     /// When unset, the TUI defaults to: `model-with-reasoning`, `context-remaining`, and
     /// `current-dir`.
     pub tui_status_line: Option<Vec<String>>,
 
+    /// Keybinding overrides for the TUI.
+    ///
+    /// Precedence is:
+    ///
+    /// 1. context table (`tui.keymap.chat`, `tui.keymap.composer`, etc.)
+    /// 2. `tui.keymap.global`
+    /// 3. built-in preset defaults (`latest` currently points to `v1`)
+    pub tui_keymap: TuiKeymap,
     /// The directory that should be treated as the current working directory
     /// for the session. All relative paths inside the business-logic layer are
     /// resolved against this path.
@@ -2067,6 +2076,11 @@ impl Config {
                 .map(|t| t.alternate_screen)
                 .unwrap_or_default(),
             tui_status_line: cfg.tui.as_ref().and_then(|t| t.status_line.clone()),
+            tui_keymap: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.keymap.clone())
+                .unwrap_or_default(),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);
@@ -2482,6 +2496,7 @@ allowed_domains = ["openai.com"]
                 show_tooltips: true,
                 alternate_screen: AltScreenMode::Auto,
                 status_line: None,
+                keymap: TuiKeymap::default(),
             }
         );
     }
@@ -4587,6 +4602,7 @@ model_verbosity = "high"
                 feedback_enabled: true,
                 tui_alternate_screen: AltScreenMode::Auto,
                 tui_status_line: None,
+                tui_keymap: TuiKeymap::default(),
                 otel: OtelConfig::default(),
             },
             o3_profile_config
@@ -4705,6 +4721,7 @@ model_verbosity = "high"
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
+            tui_keymap: TuiKeymap::default(),
             otel: OtelConfig::default(),
         };
 
@@ -4821,6 +4838,7 @@ model_verbosity = "high"
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
+            tui_keymap: TuiKeymap::default(),
             otel: OtelConfig::default(),
         };
 
@@ -4923,6 +4941,7 @@ model_verbosity = "high"
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
+            tui_keymap: TuiKeymap::default(),
             otel: OtelConfig::default(),
         };
 

@@ -500,6 +500,20 @@
         }
       ]
     },
+    "KeybindingsSpec": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ],
+      "description": "One action binding value in config.\n\nThis accepts either:\n\n1. A single key spec string (`\"ctrl-a\"`). 2. A list of key spec strings (`[\"ctrl-a\", \"alt-a\"]`).\n\nAn empty list explicitly unbinds the action in that scope."
+    },
     "MemoriesToml": {
       "additionalProperties": false,
       "description": "Memories settings loaded from config.toml.",
@@ -1279,6 +1293,93 @@
           "description": "Enable animations (welcome screen, shimmer effects, spinners). Defaults to `true`.",
           "type": "boolean"
         },
+        "keymap": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiKeymap"
+            }
+          ],
+          "default": {
+            "approval": {
+              "approve": null,
+              "approve_for_prefix": null,
+              "approve_for_session": null,
+              "cancel": null,
+              "decline": null,
+              "open_fullscreen": null
+            },
+            "chat": {
+              "confirm_edit_previous_message": null,
+              "edit_previous_message": null
+            },
+            "composer": {
+              "queue": null,
+              "submit": null,
+              "toggle_shortcuts": null
+            },
+            "editor": {
+              "delete_backward": null,
+              "delete_backward_word": null,
+              "delete_forward": null,
+              "delete_forward_word": null,
+              "insert_newline": null,
+              "kill_line_end": null,
+              "kill_line_start": null,
+              "move_down": null,
+              "move_left": null,
+              "move_line_end": null,
+              "move_line_start": null,
+              "move_right": null,
+              "move_up": null,
+              "move_word_left": null,
+              "move_word_right": null,
+              "yank": null
+            },
+            "global": {
+              "confirm_edit_previous_message": null,
+              "edit_previous_message": null,
+              "open_external_editor": null,
+              "open_transcript": null,
+              "queue": null,
+              "submit": null,
+              "toggle_shortcuts": null
+            },
+            "list": {
+              "accept": null,
+              "cancel": null,
+              "move_down": null,
+              "move_up": null
+            },
+            "onboarding": {
+              "cancel": null,
+              "confirm": null,
+              "move_down": null,
+              "move_up": null,
+              "quit": null,
+              "select_first": null,
+              "select_second": null,
+              "select_third": null,
+              "toggle_animation": null
+            },
+            "pager": {
+              "close": null,
+              "close_transcript": null,
+              "confirm_edit_message": null,
+              "edit_next_message": null,
+              "edit_previous_message": null,
+              "half_page_down": null,
+              "half_page_up": null,
+              "jump_bottom": null,
+              "jump_top": null,
+              "page_down": null,
+              "page_up": null,
+              "scroll_down": null,
+              "scroll_up": null
+            },
+            "preset": "latest"
+          },
+          "description": "Keybinding overrides for the TUI.\n\nThis supports rebinding selected actions globally and by context. Context bindings take precedence over `global` bindings."
+        },
         "notification_method": {
           "allOf": [
             {
@@ -1309,6 +1410,708 @@
             "type": "string"
           },
           "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "TuiApprovalKeymap": {
+      "additionalProperties": false,
+      "description": "Approval overlay keybindings.",
+      "properties": {
+        "approve": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Approve the primary option."
+        },
+        "approve_for_prefix": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Approve with exec-policy prefix when that option exists."
+        },
+        "approve_for_session": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Approve for session when that option exists."
+        },
+        "cancel": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Cancel an elicitation request."
+        },
+        "decline": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Decline and provide corrective guidance."
+        },
+        "open_fullscreen": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Open the full-screen approval details view."
+        }
+      },
+      "type": "object"
+    },
+    "TuiChatKeymap": {
+      "additionalProperties": false,
+      "description": "Chat context keybindings. These override corresponding `global` actions.",
+      "properties": {
+        "confirm_edit_previous_message": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Confirm editing the selected previous message."
+        },
+        "edit_previous_message": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "In an empty composer, begin or advance \"edit previous message\" flow."
+        }
+      },
+      "type": "object"
+    },
+    "TuiComposerKeymap": {
+      "additionalProperties": false,
+      "description": "Composer context keybindings. These override corresponding `global` actions.",
+      "properties": {
+        "queue": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Queue the current composer draft while a task is running."
+        },
+        "submit": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Submit the current composer draft."
+        },
+        "toggle_shortcuts": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Toggle the composer shortcut overlay."
+        }
+      },
+      "type": "object"
+    },
+    "TuiEditorKeymap": {
+      "additionalProperties": false,
+      "description": "Editor context keybindings for text editing inside text areas.",
+      "properties": {
+        "delete_backward": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Delete one grapheme to the left."
+        },
+        "delete_backward_word": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Delete the previous word."
+        },
+        "delete_forward": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Delete one grapheme to the right."
+        },
+        "delete_forward_word": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Delete the next word."
+        },
+        "insert_newline": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Insert a newline in the editor."
+        },
+        "kill_line_end": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Kill text from cursor to line end."
+        },
+        "kill_line_start": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Kill text from cursor to line start."
+        },
+        "move_down": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor down one visual line."
+        },
+        "move_left": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor left by one grapheme."
+        },
+        "move_line_end": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor to end of line."
+        },
+        "move_line_start": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor to beginning of line."
+        },
+        "move_right": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor right by one grapheme."
+        },
+        "move_up": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor up one visual line."
+        },
+        "move_word_left": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor to beginning of previous word."
+        },
+        "move_word_right": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor to end of next word."
+        },
+        "yank": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Yank the kill buffer."
+        }
+      },
+      "type": "object"
+    },
+    "TuiGlobalKeymap": {
+      "additionalProperties": false,
+      "description": "Global keybindings. These are used when a context does not define an override.",
+      "properties": {
+        "confirm_edit_previous_message": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Confirm editing the selected previous message."
+        },
+        "edit_previous_message": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "In an empty composer, begin or advance \"edit previous message\" flow."
+        },
+        "open_external_editor": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Open the external editor for the current draft."
+        },
+        "open_transcript": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Open the transcript overlay."
+        },
+        "queue": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Queue the current composer draft while a task is running."
+        },
+        "submit": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Submit the current composer draft."
+        },
+        "toggle_shortcuts": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Toggle the composer shortcut overlay."
+        }
+      },
+      "type": "object"
+    },
+    "TuiKeymap": {
+      "additionalProperties": false,
+      "description": "Raw keymap configuration from `[tui.keymap]`.\n\nEach context contains action-level overrides. Missing actions inherit from runtime preset defaults, and selected chat/composer actions can fall back through `global` during runtime resolution.",
+      "properties": {
+        "approval": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiApprovalKeymap"
+            }
+          ],
+          "default": {
+            "approve": null,
+            "approve_for_prefix": null,
+            "approve_for_session": null,
+            "cancel": null,
+            "decline": null,
+            "open_fullscreen": null
+          }
+        },
+        "chat": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiChatKeymap"
+            }
+          ],
+          "default": {
+            "confirm_edit_previous_message": null,
+            "edit_previous_message": null
+          }
+        },
+        "composer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiComposerKeymap"
+            }
+          ],
+          "default": {
+            "queue": null,
+            "submit": null,
+            "toggle_shortcuts": null
+          }
+        },
+        "editor": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiEditorKeymap"
+            }
+          ],
+          "default": {
+            "delete_backward": null,
+            "delete_backward_word": null,
+            "delete_forward": null,
+            "delete_forward_word": null,
+            "insert_newline": null,
+            "kill_line_end": null,
+            "kill_line_start": null,
+            "move_down": null,
+            "move_left": null,
+            "move_line_end": null,
+            "move_line_start": null,
+            "move_right": null,
+            "move_up": null,
+            "move_word_left": null,
+            "move_word_right": null,
+            "yank": null
+          }
+        },
+        "global": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiGlobalKeymap"
+            }
+          ],
+          "default": {
+            "confirm_edit_previous_message": null,
+            "edit_previous_message": null,
+            "open_external_editor": null,
+            "open_transcript": null,
+            "queue": null,
+            "submit": null,
+            "toggle_shortcuts": null
+          }
+        },
+        "list": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiListKeymap"
+            }
+          ],
+          "default": {
+            "accept": null,
+            "cancel": null,
+            "move_down": null,
+            "move_up": null
+          }
+        },
+        "onboarding": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiOnboardingKeymap"
+            }
+          ],
+          "default": {
+            "cancel": null,
+            "confirm": null,
+            "move_down": null,
+            "move_up": null,
+            "quit": null,
+            "select_first": null,
+            "select_second": null,
+            "select_third": null,
+            "toggle_animation": null
+          }
+        },
+        "pager": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiPagerKeymap"
+            }
+          ],
+          "default": {
+            "close": null,
+            "close_transcript": null,
+            "confirm_edit_message": null,
+            "edit_next_message": null,
+            "edit_previous_message": null,
+            "half_page_down": null,
+            "half_page_up": null,
+            "jump_bottom": null,
+            "jump_top": null,
+            "page_down": null,
+            "page_up": null,
+            "scroll_down": null,
+            "scroll_up": null
+          }
+        },
+        "preset": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiKeymapPreset"
+            }
+          ],
+          "default": "latest"
+        }
+      },
+      "type": "object"
+    },
+    "TuiKeymapPreset": {
+      "description": "Versioned keymap defaults.",
+      "oneOf": [
+        {
+          "description": "Pointer alias to the latest shipped preset.\n\nToday this resolves to `v1`.",
+          "enum": [
+            "latest"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Frozen keymap defaults that preserve legacy/current shortcut behavior.",
+          "enum": [
+            "v1"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "TuiListKeymap": {
+      "additionalProperties": false,
+      "description": "List selection context keybindings for popup-style selectable lists.",
+      "properties": {
+        "accept": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Accept current selection."
+        },
+        "cancel": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Cancel and close selection view."
+        },
+        "move_down": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move list selection down."
+        },
+        "move_up": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move list selection up."
+        }
+      },
+      "type": "object"
+    },
+    "TuiOnboardingKeymap": {
+      "additionalProperties": false,
+      "description": "Onboarding keybindings.",
+      "properties": {
+        "cancel": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Cancel current screen action."
+        },
+        "confirm": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Confirm current selection."
+        },
+        "move_down": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move selection down."
+        },
+        "move_up": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move selection up."
+        },
+        "quit": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Quit onboarding flow."
+        },
+        "select_first": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Pick first option."
+        },
+        "select_second": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Pick second option."
+        },
+        "select_third": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Pick third option."
+        },
+        "toggle_animation": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Cycle welcome animation variant."
+        }
+      },
+      "type": "object"
+    },
+    "TuiPagerKeymap": {
+      "additionalProperties": false,
+      "description": "Pager context keybindings for transcript and static overlays.",
+      "properties": {
+        "close": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Close the pager overlay."
+        },
+        "close_transcript": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Close the transcript overlay via its dedicated toggle key."
+        },
+        "confirm_edit_message": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "In backtrack preview mode, confirm selected message."
+        },
+        "edit_next_message": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "In backtrack preview mode, step to newer message."
+        },
+        "edit_previous_message": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "In backtrack preview mode, step to older message."
+        },
+        "half_page_down": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Scroll down by half a page."
+        },
+        "half_page_up": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Scroll up by half a page."
+        },
+        "jump_bottom": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Jump to the end."
+        },
+        "jump_top": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Jump to the beginning."
+        },
+        "page_down": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Scroll down by one page."
+        },
+        "page_up": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Scroll up by one page."
+        },
+        "scroll_down": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Scroll down by one row."
+        },
+        "scroll_up": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Scroll up by one row."
         }
       },
       "type": "object"
