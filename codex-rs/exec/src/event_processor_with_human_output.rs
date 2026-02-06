@@ -202,6 +202,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             self.render_agent_job_progress(update);
             return CodexStatus::Running;
         }
+        if self.progress_active && Self::should_suppress_during_progress(&msg) {
+            return CodexStatus::Running;
+        }
         if !Self::is_silent_event(&msg) {
             self.finish_progress_line();
         }
@@ -896,6 +899,29 @@ impl EventProcessorWithHumanOutput {
                 | EventMsg::ThreadRolledBack(_)
                 | EventMsg::RequestUserInput(_)
                 | EventMsg::DynamicToolCallRequest(_)
+        )
+    }
+
+    fn should_suppress_during_progress(msg: &EventMsg) -> bool {
+        matches!(
+            msg,
+            EventMsg::McpStartupUpdate(_)
+                | EventMsg::McpStartupComplete(_)
+                | EventMsg::McpToolCallBegin(_)
+                | EventMsg::McpToolCallEnd(_)
+                | EventMsg::WebSearchBegin(_)
+                | EventMsg::WebSearchEnd(_)
+                | EventMsg::ExecCommandBegin(_)
+                | EventMsg::ExecCommandOutputDelta(_)
+                | EventMsg::TerminalInteraction(_)
+                | EventMsg::ExecCommandEnd(_)
+                | EventMsg::ViewImageToolCall(_)
+                | EventMsg::ContextCompacted(_)
+                | EventMsg::TurnDiff(_)
+                | EventMsg::CollabAgentSpawnBegin(_)
+                | EventMsg::CollabAgentSpawnEnd(_)
+                | EventMsg::CollabAgentInteractionBegin(_)
+                | EventMsg::CollabAgentInteractionEnd(_)
         )
     }
 
