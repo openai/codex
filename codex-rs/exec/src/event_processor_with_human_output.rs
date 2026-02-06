@@ -82,6 +82,8 @@ pub(crate) struct EventProcessorWithHumanOutput {
     progress_active: bool,
     progress_last_len: usize,
     use_ansi_cursor: bool,
+    progress_anchor: bool,
+    progress_done: bool,
 }
 
 impl EventProcessorWithHumanOutput {
@@ -113,6 +115,8 @@ impl EventProcessorWithHumanOutput {
                 progress_active: false,
                 progress_last_len: 0,
                 use_ansi_cursor: cursor_ansi,
+                progress_anchor: false,
+                progress_done: false,
             }
         } else {
             Self {
@@ -134,6 +138,8 @@ impl EventProcessorWithHumanOutput {
                 progress_active: false,
                 progress_last_len: 0,
                 use_ansi_cursor: cursor_ansi,
+                progress_anchor: false,
+                progress_done: false,
             }
         }
     }
@@ -922,11 +928,17 @@ impl EventProcessorWithHumanOutput {
         if self.progress_active {
             self.progress_active = false;
             self.progress_last_len = 0;
+            self.progress_done = false;
             if self.use_ansi_cursor {
-                eprint!("\u{1b}[1G\u{1b}[2K\n");
+                if self.progress_anchor {
+                    eprint!("\u{1b}[1A\u{1b}[1G\u{1b}[2K\n");
+                } else {
+                    eprint!("\u{1b}[1G\u{1b}[2K\n");
+                }
             } else {
                 eprintln!();
             }
+            self.progress_anchor = false;
         }
     }
 
@@ -963,14 +975,28 @@ impl EventProcessorWithHumanOutput {
             }
             return;
         }
+        if done && self.progress_done {
+            return;
+        }
+        if !self.progress_active {
+            eprint!("\n");
+            self.progress_anchor = true;
+            self.progress_done = false;
+        }
         let mut output = String::new();
-        output.push_str("\u{1b}[1G\u{1b}[2K");
+        if self.progress_anchor {
+            output.push_str("\u{1b}[1A\u{1b}[1G\u{1b}[2K");
+        } else {
+            output.push_str("\u{1b}[1G\u{1b}[2K");
+        }
         output.push_str(&line);
         if done {
             output.push('\n');
             eprint!("{output}");
             self.progress_active = false;
             self.progress_last_len = 0;
+            self.progress_anchor = false;
+            self.progress_done = true;
             return;
         }
         eprint!("{output}");
