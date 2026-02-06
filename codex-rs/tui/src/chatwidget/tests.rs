@@ -782,6 +782,7 @@ fn test_otel_manager(config: &Config, model: &str) -> OtelManager {
         None,
         None,
         None,
+        "test_originator".to_string(),
         false,
         "test".to_string(),
         SessionSource::Cli,
