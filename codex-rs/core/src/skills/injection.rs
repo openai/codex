@@ -321,10 +321,10 @@ fn select_skills_from_mentions(
             continue;
         }
 
-        if !mentions.plain_names.contains(skill.name.as_str()) {
+        if blocked_plain_names.contains(skill.name.as_str()) {
             continue;
         }
-        if blocked_plain_names.contains(skill.name.as_str()) {
+        if !mentions.plain_names.contains(skill.name.as_str()) {
             continue;
         }
 
