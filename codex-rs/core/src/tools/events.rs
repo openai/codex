@@ -67,6 +67,7 @@ pub(crate) async fn emit_exec_command_begin(
     interaction_input: Option<String>,
     process_id: Option<&str>,
     description: Option<String>,
+    display_name: Option<String>,
 ) {
     ctx.session
         .send_event(
@@ -81,6 +82,7 @@ pub(crate) async fn emit_exec_command_begin(
                 source,
                 interaction_input,
                 description,
+                display_name,
             }),
         )
         .await;
@@ -94,6 +96,7 @@ pub(crate) enum ToolEmitter {
         parsed_cmd: Vec<ParsedCommand>,
         freeform: bool,
         description: Option<String>,
+        display_name: Option<String>,
     },
     ApplyPatch {
         changes: HashMap<PathBuf, FileChange>,
@@ -105,6 +108,8 @@ pub(crate) enum ToolEmitter {
         source: ExecCommandSource,
         parsed_cmd: Vec<ParsedCommand>,
         process_id: Option<String>,
+        description: Option<String>,
+        display_name: Option<String>,
     },
 }
 
@@ -115,6 +120,7 @@ impl ToolEmitter {
         source: ExecCommandSource,
         freeform: bool,
         description: Option<String>,
+        display_name: Option<String>,
     ) -> Self {
         let parsed_cmd = parse_command(&command);
         Self::Shell {
@@ -124,6 +130,7 @@ impl ToolEmitter {
             parsed_cmd,
             freeform,
             description,
+            display_name,
         }
     }
 
@@ -139,6 +146,8 @@ impl ToolEmitter {
         cwd: PathBuf,
         source: ExecCommandSource,
         process_id: Option<String>,
+        description: Option<String>,
+        display_name: Option<String>,
     ) -> Self {
         let parsed_cmd = parse_command(command);
         Self::UnifiedExec {
@@ -147,6 +156,8 @@ impl ToolEmitter {
             source,
             parsed_cmd,
             process_id,
+            description,
+            display_name,
         }
     }
 
@@ -159,13 +170,14 @@ impl ToolEmitter {
                     source,
                     parsed_cmd,
                     description,
+                    display_name,
                     ..
                 },
                 stage,
             ) => {
                 emit_exec_stage(
                     ctx,
-                    ExecCommandInput::new(command, cwd.as_path(), parsed_cmd, *source, None, None, description.clone()),
+                    ExecCommandInput::new(command, cwd.as_path(), parsed_cmd, *source, None, None, description.clone(), display_name.clone()),
                     stage,
                 )
                 .await;
@@ -237,6 +249,8 @@ impl ToolEmitter {
                     source,
                     parsed_cmd,
                     process_id,
+                    description,
+                    display_name,
                 },
                 stage,
             ) => {
@@ -249,7 +263,8 @@ impl ToolEmitter {
                         *source,
                         None,
                         process_id.as_deref(),
-                        None, // UnifiedExec doesn't have description yet
+                        description.clone(),
+                        display_name.clone(),
                     ),
                     stage,
                 )
@@ -336,6 +351,7 @@ struct ExecCommandInput<'a> {
     interaction_input: Option<&'a str>,
     process_id: Option<&'a str>,
     description: Option<String>,
+    display_name: Option<String>,
 }
 
 impl<'a> ExecCommandInput<'a> {
@@ -347,6 +363,7 @@ impl<'a> ExecCommandInput<'a> {
         interaction_input: Option<&'a str>,
         process_id: Option<&'a str>,
         description: Option<String>,
+        display_name: Option<String>,
     ) -> Self {
         Self {
             command,
@@ -356,6 +373,7 @@ impl<'a> ExecCommandInput<'a> {
             interaction_input,
             process_id,
             description,
+            display_name,
         }
     }
 }
@@ -385,6 +403,7 @@ async fn emit_exec_stage(
                 exec_input.interaction_input.map(str::to_owned),
                 exec_input.process_id,
                 exec_input.description,
+                exec_input.display_name,
             )
             .await;
         }
@@ -439,6 +458,7 @@ async fn emit_exec_end(
                 duration: exec_result.duration,
                 formatted_output: exec_result.formatted_output,
                 description: exec_input.description,
+                display_name: exec_input.display_name,
             }),
         )
         .await;

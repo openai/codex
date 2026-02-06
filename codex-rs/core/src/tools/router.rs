@@ -121,6 +121,7 @@ impl ToolRouter {
                             prefix_rule: None,
                             justification: None,
                             description: None,
+                            display_name: None,
                         };
                         Ok(Some(ToolCall {
                             tool_name: "local_shell".to_string(),

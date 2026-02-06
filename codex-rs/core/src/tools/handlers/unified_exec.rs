@@ -45,6 +45,12 @@ struct ExecCommandArgs {
     justification: Option<String>,
     #[serde(default)]
     prefix_rule: Option<Vec<String>>,
+    /// LLM-provided description of what this command does.
+    #[serde(default)]
+    description: Option<String>,
+    /// LLM-provided short semantic name (e.g., "Git Status", "Run Tests").
+    #[serde(default, rename = "displayName")]
+    display_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -138,6 +144,8 @@ impl ToolHandler for UnifiedExecHandler {
                     sandbox_permissions,
                     justification,
                     prefix_rule,
+                    description,
+                    display_name,
                     ..
                 } = args;
 
@@ -195,6 +203,8 @@ impl ToolHandler for UnifiedExecHandler {
                             sandbox_permissions,
                             justification,
                             prefix_rule,
+                            description,
+                            display_name,
                         },
                         &context,
                     )

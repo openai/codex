@@ -748,6 +748,11 @@ pub struct ShellToolCallParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub description: Option<String>,
+    /// LLM-provided short semantic name (e.g., "Git Status", "Run Tests").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    #[serde(rename = "displayName")]
+    pub display_name: Option<String>,
 }
 
 /// If the `name` of a `ResponseItem::FunctionCall` is `shell_command`, the
@@ -775,6 +780,11 @@ pub struct ShellCommandToolCallParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub description: Option<String>,
+    /// LLM-provided short semantic name (e.g., "Git Status", "Run Tests").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    #[serde(rename = "displayName")]
+    pub display_name: Option<String>,
 }
 
 /// Responses API compatible content items that can be returned by a tool call.

@@ -202,6 +202,8 @@ pub(crate) async fn emit_exec_end_for_unified_exec(
         cwd,
         ExecCommandSource::UnifiedExecStartup,
         process_id,
+        None, // description not available in async context
+        None, // display_name not available in async context
     );
     emitter
         .emit(event_ctx, ToolEventStage::Success(output))

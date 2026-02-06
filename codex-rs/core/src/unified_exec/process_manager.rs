@@ -146,6 +146,8 @@ impl UnifiedExecProcessManager {
             cwd.clone(),
             ExecCommandSource::UnifiedExecStartup,
             Some(request.process_id.clone()),
+            request.description.clone(),
+            request.display_name.clone(),
         );
         emitter.emit(event_ctx, ToolEventStage::Begin).await;
 

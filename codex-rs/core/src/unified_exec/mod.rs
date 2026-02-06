@@ -83,6 +83,10 @@ pub(crate) struct ExecCommandRequest {
     pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
     pub prefix_rule: Option<Vec<String>>,
+    /// LLM-provided description of what this command does.
+    pub description: Option<String>,
+    /// LLM-provided short semantic name (e.g., "Git Status", "Run Tests").
+    pub display_name: Option<String>,
 }
 
 #[derive(Debug)]
