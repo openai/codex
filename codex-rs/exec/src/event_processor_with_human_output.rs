@@ -81,12 +81,13 @@ pub(crate) struct EventProcessorWithHumanOutput {
     last_proposed_plan: Option<String>,
     progress_active: bool,
     progress_last_len: usize,
-    use_ansi: bool,
+    use_ansi_cursor: bool,
 }
 
 impl EventProcessorWithHumanOutput {
     pub(crate) fn create_with_ansi(
         with_ansi: bool,
+        cursor_ansi: bool,
         config: &Config,
         last_message_path: Option<PathBuf>,
     ) -> Self {
@@ -111,7 +112,7 @@ impl EventProcessorWithHumanOutput {
                 last_proposed_plan: None,
                 progress_active: false,
                 progress_last_len: 0,
-                use_ansi: true,
+                use_ansi_cursor: cursor_ansi,
             }
         } else {
             Self {
@@ -132,7 +133,7 @@ impl EventProcessorWithHumanOutput {
                 last_proposed_plan: None,
                 progress_active: false,
                 progress_last_len: 0,
-                use_ansi: false,
+                use_ansi_cursor: cursor_ansi,
             }
         }
     }
@@ -961,7 +962,7 @@ impl EventProcessorWithHumanOutput {
             eta.as_str(),
         );
         let done = processed >= update.total_items;
-        if !self.use_ansi {
+        if !self.use_ansi_cursor {
             eprintln!("{line}");
             if done {
                 self.progress_active = false;

@@ -122,6 +122,11 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             supports_color::on_cached(Stream::Stderr).is_some(),
         ),
     };
+    let cursor_ansi = match color {
+        cli::Color::Never => false,
+        cli::Color::Always => true,
+        cli::Color::Auto => std::io::stderr().is_terminal(),
+    };
 
     // Build fmt layer (existing logging) to compose with OTEL layer.
     let default_level = "error";
@@ -301,6 +306,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         true => Box::new(EventProcessorWithJsonOutput::new(last_message_file.clone())),
         _ => Box::new(EventProcessorWithHumanOutput::create_with_ansi(
             stderr_with_ansi,
+            cursor_ansi,
             &config,
             last_message_file.clone(),
         )),
