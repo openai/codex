@@ -1168,6 +1168,37 @@ mod tests {
 
     #[tokio::test]
     async fn build_agent_spawn_config_uses_turn_context_values() {
+        fn pick_allowed_approval_policy(
+            constraint: &crate::config::Constrained<AskForApproval>,
+            base: AskForApproval,
+        ) -> AskForApproval {
+            let candidates = [
+                AskForApproval::Never,
+                AskForApproval::UnlessTrusted,
+                AskForApproval::OnRequest,
+                AskForApproval::OnFailure,
+            ];
+            candidates
+                .into_iter()
+                .find(|candidate| *candidate != base && constraint.can_set(candidate).is_ok())
+                .unwrap_or(base)
+        }
+
+        fn pick_allowed_sandbox_policy(
+            constraint: &crate::config::Constrained<SandboxPolicy>,
+            base: SandboxPolicy,
+        ) -> SandboxPolicy {
+            let candidates = [
+                SandboxPolicy::new_read_only_policy(),
+                SandboxPolicy::new_workspace_write_policy(),
+                SandboxPolicy::DangerFullAccess,
+            ];
+            candidates
+                .into_iter()
+                .find(|candidate| *candidate != base && constraint.can_set(candidate).is_ok())
+                .unwrap_or(base)
+        }
+
         let (_session, mut turn) = make_session_and_context().await;
         let base_instructions = BaseInstructions {
             text: "base".to_string(),
@@ -1181,8 +1212,14 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         turn.cwd = temp_dir.path().to_path_buf();
         turn.codex_linux_sandbox_exe = Some(PathBuf::from("/bin/echo"));
-        turn.approval_policy = AskForApproval::Never;
-        turn.sandbox_policy = SandboxPolicy::DangerFullAccess;
+        turn.approval_policy = pick_allowed_approval_policy(
+            &turn.config.approval_policy,
+            *turn.config.approval_policy.get(),
+        );
+        turn.sandbox_policy = pick_allowed_sandbox_policy(
+            &turn.config.sandbox_policy,
+            turn.config.sandbox_policy.get().clone(),
+        );
 
         let config = build_agent_spawn_config(&base_instructions, &turn, 0).expect("spawn config");
         let mut expected = (*turn.config).clone();

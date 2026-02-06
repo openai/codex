@@ -8,7 +8,6 @@
 use crate::auth::AuthMode;
 use crate::error::EnvVarError;
 use codex_api::Provider as ApiProvider;
-use codex_api::is_azure_responses_wire_base_url;
 use codex_api::provider::RetryConfig as ApiRetryConfig;
 use http::HeaderMap;
 use http::header::HeaderName;
@@ -172,10 +171,6 @@ impl ModelProviderInfo {
             retry,
             stream_idle_timeout: self.stream_idle_timeout(),
         })
-    }
-
-    pub(crate) fn is_azure_responses_endpoint(&self) -> bool {
-        is_azure_responses_wire_base_url(&self.name, self.base_url.as_deref())
     }
 
     /// If `env_key` is Some, returns the API key for this provider if present

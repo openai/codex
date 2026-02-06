@@ -3,7 +3,7 @@ source: tui/src/chatwidget/tests.rs
 expression: popup
 ---
   Select Personality
-  Choose a communication style for Codex. Disable in /experimental.
+  Choose a communication style for Codex.
 
   1. Friendly             Warm, collaborative, and helpful.
 › 2. Pragmatic (current)  Concise, task-focused, and direct.

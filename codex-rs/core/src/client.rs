@@ -82,6 +82,8 @@ use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::tools::spec::create_tools_json_for_responses_api;
 
+pub const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
+pub const OPENAI_BETA_RESPONSES_WEBSOCKETS: &str = "responses_websockets=2026-02-04";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 pub const X_CODEX_TURN_METADATA_HEADER: &str = "x-codex-turn-metadata";
 pub const X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER: &str =
@@ -477,14 +479,8 @@ impl ModelClientSession {
         };
 
         if needs_new {
-            let mut headers = options.extra_headers.clone();
-            headers.extend(build_conversation_headers(options.conversation_id.clone()));
-            if self.client.state.include_timing_metrics {
-                headers.insert(
-                    X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER,
-                    HeaderValue::from_static("true"),
-                );
-            }
+            let headers =
+                build_websocket_connect_headers(options, self.client.state.include_timing_metrics);
             let websocket_telemetry = Self::build_websocket_telemetry(otel_manager);
             let new_conn: ApiWebSocketConnection =
                 ApiWebSocketResponsesClient::new(api_provider, api_auth)
@@ -783,6 +779,25 @@ fn build_responses_headers(
     }
     if let Some(header_value) = turn_metadata_header {
         headers.insert(X_CODEX_TURN_METADATA_HEADER, header_value.clone());
+    }
+    headers
+}
+
+fn build_websocket_connect_headers(
+    options: &ApiResponsesOptions,
+    include_timing_metrics: bool,
+) -> ApiHeaderMap {
+    let mut headers = options.extra_headers.clone();
+    headers.extend(build_conversation_headers(options.conversation_id.clone()));
+    headers.insert(
+        OPENAI_BETA_HEADER,
+        HeaderValue::from_static(OPENAI_BETA_RESPONSES_WEBSOCKETS),
+    );
+    if include_timing_metrics {
+        headers.insert(
+            X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER,
+            HeaderValue::from_static("true"),
+        );
     }
     headers
 }

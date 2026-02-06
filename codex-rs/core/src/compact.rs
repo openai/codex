@@ -9,7 +9,6 @@ use crate::codex::TurnContext;
 use crate::codex::get_last_assistant_message_from_turn;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
-use crate::features::Feature;
 use crate::protocol::CompactedItem;
 use crate::protocol::EventMsg;
 use crate::protocol::TurnContextItem;
@@ -34,11 +33,8 @@ pub const SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt
 pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_prefix.md");
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
 
-pub(crate) fn should_use_remote_compact_task(
-    session: &Session,
-    provider: &ModelProviderInfo,
-) -> bool {
-    provider.is_openai() && session.enabled(Feature::RemoteCompaction)
+pub(crate) fn should_use_remote_compact_task(provider: &ModelProviderInfo) -> bool {
+    provider.is_openai()
 }
 
 pub(crate) async fn run_inline_auto_compact_task(

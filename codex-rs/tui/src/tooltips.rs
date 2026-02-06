@@ -6,9 +6,13 @@ use rand::Rng;
 const ANNOUNCEMENT_TIP_URL: &str =
     "https://raw.githubusercontent.com/openai/codex/main/announcement_tip.toml";
 
+const IS_MACOS: bool = cfg!(target_os = "macos");
+
 const PAID_TOOLTIP: &str = "*New* Try the **Codex App** with 2x rate limits until *April 2nd*. Run 'codex app' or visit https://chatgpt.com/codex";
+const PAID_TOOLTIP_NON_MAC: &str = "*New* 2x rate limits until *April 2nd*.";
 const OTHER_TOOLTIP: &str =
     "*New* Build faster with the **Codex App**. Run 'codex app' or visit https://chatgpt.com/codex";
+const OTHER_TOOLTIP_NON_MAC: &str = "*New* Build faster with Codex.";
 const FREE_GO_TOOLTIP: &str =
     "*New* Codex is included in your plan for free through *March 2nd* – let’s build together.";
 
@@ -18,7 +22,15 @@ lazy_static! {
     static ref TOOLTIPS: Vec<&'static str> = RAW_TOOLTIPS
         .lines()
         .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter(|line| {
+            if line.is_empty() || line.starts_with('#') {
+                return false;
+            }
+            if !IS_MACOS && line.contains("codex app") {
+                return false;
+            }
+            true
+        })
         .collect();
     static ref ALL_TOOLTIPS: Vec<&'static str> = {
         let mut tips = Vec::new();
@@ -51,12 +63,24 @@ pub(crate) fn get_tooltip(plan: Option<PlanType>) -> Option<String> {
             | Some(PlanType::Team)
             | Some(PlanType::Enterprise)
             | Some(PlanType::Pro) => {
-                return Some(PAID_TOOLTIP.to_string());
+                let tooltip = if IS_MACOS {
+                    PAID_TOOLTIP
+                } else {
+                    PAID_TOOLTIP_NON_MAC
+                };
+                return Some(tooltip.to_string());
             }
             Some(PlanType::Go) | Some(PlanType::Free) => {
                 return Some(FREE_GO_TOOLTIP.to_string());
             }
-            _ => return Some(OTHER_TOOLTIP.to_string()),
+            _ => {
+                let tooltip = if IS_MACOS {
+                    OTHER_TOOLTIP
+                } else {
+                    OTHER_TOOLTIP_NON_MAC
+                };
+                return Some(tooltip.to_string());
+            }
         }
     }
 

@@ -96,11 +96,12 @@ Example (from OpenAI's official VSCode extension):
 - `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread; returns `{}` when the cleanup request is accepted.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications.
+- `turn/steer` — add user input to an already in-flight turn without starting a new turn; returns the active `turnId` that accepted the input.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
 - `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
 - `model/list` — list available models (with reasoning effort options and optional `upgrade` model ids).
-- `experimentalFeature/list` — list experimental feature flags with metadata (flag name, display name, description, announcement, enabled/default-enabled) and cursor pagination.
+- `experimentalFeature/list` — list feature flags with stage metadata (`beta`, `underDevelopment`, `stable`, etc.), enabled/default-enabled state, and cursor pagination. For non-beta flags, `displayName`/`description`/`announcement` are `null`.
 - `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination).
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
 - `skills/remote/read` — list public remote skills (**under development; do not call from production clients yet**).
@@ -374,6 +375,22 @@ Use `thread/backgroundTerminals/clean` to terminate all running background termi
 } }
 { "id": 35, "result": {} }
 ```
+
+### Example: Steer an active turn
+
+Use `turn/steer` to append additional user input to the currently active turn. This does not emit
+`turn/started` and does not accept turn context overrides.
+
+```json
+{ "method": "turn/steer", "id": 32, "params": {
+    "threadId": "thr_123",
+    "input": [ { "type": "text", "text": "Actually focus on failing tests first." } ],
+    "expectedTurnId": "turn_456"
+} }
+{ "id": 32, "result": { "turnId": "turn_456" } }
+```
+
+`expectedTurnId` is required. If there is no active turn (or `expectedTurnId` does not match the active turn), the request fails with an `invalid request` error.
 
 ### Example: Request a code review
 
@@ -908,6 +925,7 @@ Examples of descriptor strings:
 - `thread/start.mockExperimentalField` (field-level gate)
 
 ### For maintainers: Adding experimental fields and methods
+
 Use this checklist when introducing a field/method that should only be available when the client opts into experimental APIs.
 
 At runtime, clients must send `initialize` with `capabilities.experimentalApi = true` to use experimental methods or fields.
@@ -928,7 +946,7 @@ At runtime, clients must send `initialize` with `capabilities.experimentalApi = 
    # Include experimental API fields/methods in fixtures.
    just write-app-server-schema --experimental
    ```
-    
+
 5. Verify the protocol crate:
 
    ```bash

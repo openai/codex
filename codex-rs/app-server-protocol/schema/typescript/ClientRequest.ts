@@ -53,6 +53,7 @@ import type { ThreadStartParams } from "./v2/ThreadStartParams";
 import type { ThreadUnarchiveParams } from "./v2/ThreadUnarchiveParams";
 import type { TurnInterruptParams } from "./v2/TurnInterruptParams";
 import type { TurnStartParams } from "./v2/TurnStartParams";
+import type { TurnSteerParams } from "./v2/TurnSteerParams";
 
 /**
  * Request from the client to the server.
