@@ -1623,7 +1623,7 @@ mod tests {
         let (_session, mut turn) = make_session_and_context().await;
         let mut base_config = (*turn.config).clone();
         base_config.base_instructions = Some("caller-base".to_string());
-        turn.config = Arc::new(base_config.clone());
+        turn.config = Arc::new(base_config);
 
         let config = build_agent_resume_config(&turn, 0).expect("resume config");
 
@@ -1644,7 +1644,7 @@ mod tests {
             .expect("approval policy set");
         expected
             .sandbox_policy
-            .set(turn.sandbox_policy.clone())
+            .set(turn.sandbox_policy)
             .expect("sandbox policy set");
         assert_eq!(config, expected);
     }
