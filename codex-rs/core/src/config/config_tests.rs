@@ -41,6 +41,7 @@ use codex_config::types::SandboxWorkspaceWrite;
 use codex_config::types::SkillsConfig;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_config::types::Tui;
+use codex_config::types::TuiKeymap;
 use codex_config::types::TuiNotificationSettings;
 use codex_features::Feature;
 use codex_features::FeaturesToml;
@@ -364,6 +365,7 @@ fn config_toml_deserializes_model_availability_nux() {
             status_line: None,
             terminal_title: None,
             theme: None,
+            keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig {
                 shown_count: HashMap::from([
                     ("gpt-bar".to_string(), 4),
@@ -1060,6 +1062,7 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             status_line: None,
             terminal_title: None,
             theme: None,
+            keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
         }
     );
