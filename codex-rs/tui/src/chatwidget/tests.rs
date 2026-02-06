@@ -633,7 +633,7 @@ async fn interrupted_turn_restore_keeps_active_mode_for_resubmission() {
         text: "Implement the plan.".to_string(),
         local_images: Vec::new(),
         text_elements: Vec::new(),
-        mention_paths: HashMap::new(),
+        mention_bindings: Vec::new(),
     });
     chat.refresh_queued_user_messages();
 
