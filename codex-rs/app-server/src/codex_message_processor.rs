@@ -1741,10 +1741,7 @@ impl CodexMessageProcessor {
                 } = new_thread;
                 let rollout_path = match session_configured.rollout_path {
                     Some(path) => path,
-                    None => match self
-                        .resolve_rollout_path_for_thread_id(thread_id.clone())
-                        .await
-                    {
+                    None => match self.resolve_rollout_path_for_thread_id(thread_id).await {
                         Ok(path) => path,
                         Err(err) => {
                             self.outgoing.send_error(request_id, err).await;
