@@ -268,6 +268,11 @@ impl WebSocketHandshake {
 pub struct WebSocketConnectionConfig {
     pub requests: Vec<Vec<Value>>,
     pub response_headers: Vec<(String, String)>,
+    /// Optional delay inserted before accepting the websocket handshake.
+    ///
+    /// Tests use this to force startup preconnect into an in-flight state so first-turn adoption
+    /// paths can be exercised deterministically.
+    pub accept_delay: Option<Duration>,
 }
 
 pub struct WebSocketTestServer {
@@ -884,6 +889,7 @@ pub async fn start_websocket_server(connections: Vec<Vec<Vec<Value>>>) -> WebSoc
         .map(|requests| WebSocketConnectionConfig {
             requests,
             response_headers: Vec::new(),
+            accept_delay: None,
         })
         .collect();
     start_websocket_server_with_headers(connections).await
@@ -922,6 +928,10 @@ pub async fn start_websocket_server_with_headers(
             let Some(connection) = connection else {
                 continue;
             };
+
+            if let Some(delay) = connection.accept_delay {
+                tokio::time::sleep(delay).await;
+            }
 
             let response_headers = connection.response_headers.clone();
             let handshake_log = Arc::clone(&handshakes);

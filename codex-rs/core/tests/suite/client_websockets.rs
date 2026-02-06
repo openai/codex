@@ -252,6 +252,7 @@ async fn responses_websocket_emits_reasoning_included_event() {
     let server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
         requests: vec![vec![ev_response_created("resp-1"), ev_completed("resp-1")]],
         response_headers: vec![("X-Reasoning-Included".to_string(), "true".to_string())],
+        accept_delay: None,
     }])
     .await;
 
@@ -322,6 +323,7 @@ async fn responses_websocket_emits_rate_limit_events() {
             ("X-Models-Etag".to_string(), "etag-123".to_string()),
             ("X-Reasoning-Included".to_string(), "true".to_string()),
         ],
+        accept_delay: None,
     }])
     .await;
 

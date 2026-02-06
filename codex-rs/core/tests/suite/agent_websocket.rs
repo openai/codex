@@ -1,10 +1,12 @@
 use anyhow::Result;
+use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_done;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::ev_shell_command_call;
 use core_test_support::responses::start_websocket_server;
+use core_test_support::responses::start_websocket_server_with_headers;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
@@ -87,6 +89,29 @@ async fn websocket_preconnect_happens_on_session_start() -> Result<()> {
         "expected websocket preconnect handshake during session startup"
     );
 
+    test.submit_turn("hello").await?;
+
+    assert_eq!(server.handshakes().len(), 1);
+    assert_eq!(server.single_connection().len(), 1);
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_first_turn_waits_for_inflight_preconnect() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
+        requests: vec![vec![ev_response_created("resp-1"), ev_completed("resp-1")]],
+        response_headers: Vec::new(),
+        // Delay handshake so submit_turn() observes startup preconnect as in-flight.
+        accept_delay: Some(Duration::from_millis(150)),
+    }])
+    .await;
+
+    let mut builder = test_codex();
+    let test = builder.build_with_websocket_server(&server).await?;
     test.submit_turn("hello").await?;
 
     assert_eq!(server.handshakes().len(), 1);
