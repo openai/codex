@@ -503,7 +503,7 @@ async fn run_ratatui_app(
                 initial_config.chatgpt_base_url.clone(),
             );
         }
-        
+
         // If the user made an explicit trust decision, or we showed the login flow, reload config
         // so current process state reflects persisted trust/auth changes.
         if onboarding_result.directory_trust_decision.is_some() || show_login_screen {
