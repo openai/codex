@@ -184,6 +184,8 @@ SELECT
     tokens_used,
     first_user_message,
     conversation_modalities,
+    initial_model,
+    model_history,
     archived_at,
     git_sha,
     git_branch,
@@ -304,6 +306,8 @@ SELECT
     tokens_used,
     first_user_message,
     conversation_modalities,
+    initial_model,
+    model_history,
     archived_at,
     git_sha,
     git_branch,
@@ -443,6 +447,11 @@ FROM threads
 
     /// Insert or replace thread metadata directly.
     pub async fn upsert_thread(&self, metadata: &crate::ThreadMetadata) -> anyhow::Result<()> {
+        let model_history = metadata
+            .model_history
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
         sqlx::query(
             r#"
 INSERT INTO threads (
@@ -460,12 +469,14 @@ INSERT INTO threads (
     tokens_used,
     first_user_message,
     conversation_modalities,
+    initial_model,
+    model_history,
     archived,
     archived_at,
     git_sha,
     git_branch,
     git_origin_url
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
@@ -480,6 +491,8 @@ ON CONFLICT(id) DO UPDATE SET
     tokens_used = excluded.tokens_used,
     first_user_message = excluded.first_user_message,
     conversation_modalities = excluded.conversation_modalities,
+    initial_model = excluded.initial_model,
+    model_history = excluded.model_history,
     archived = excluded.archived,
     archived_at = excluded.archived_at,
     git_sha = excluded.git_sha,
@@ -501,6 +514,8 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.tokens_used)
         .bind(metadata.first_user_message.as_deref().unwrap_or_default())
         .bind(metadata.conversation_modalities)
+        .bind(metadata.initial_model.as_deref())
+        .bind(model_history)
         .bind(metadata.archived_at.is_some())
         .bind(metadata.archived_at.map(datetime_to_epoch_seconds))
         .bind(metadata.git_sha.as_deref())
@@ -1430,6 +1445,8 @@ mod tests {
             conversation_modalities: Some(
                 codex_protocol::openai_models::INPUT_MODALITY_TEXT_MASK,
             ),
+            initial_model: Some("gpt-5.1-codex".to_string()),
+            model_history: Some(vec!["gpt-5.1-codex".to_string()]),
             archived_at: None,
             git_sha: None,
             git_branch: None,

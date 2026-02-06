@@ -1120,7 +1120,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 {
                     Ok(summary) => {
                         let conversation_modalities = resolve_conversation_modalities(
-                            conversation.state_db(),
+                            conversation.state_db().as_ref(),
                             conversation_id,
                             None,
                             Some(rollout_path.as_path()),

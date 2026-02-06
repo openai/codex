@@ -6,6 +6,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
+use serde_json::Value;
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 use std::path::PathBuf;
@@ -80,6 +81,10 @@ pub struct ThreadMetadata {
     pub first_user_message: Option<String>,
     /// Tri-state conversation modalities bitmask (NULL means unknown).
     pub conversation_modalities: Option<i64>,
+    /// First model selected in this thread, if known.
+    pub initial_model: Option<String>,
+    /// Bounded history of model slugs in recency order (JSON array).
+    pub model_history: Option<Vec<String>>,
     /// The archive timestamp, if the thread is archived.
     pub archived_at: Option<DateTime<Utc>>,
     /// The git commit SHA, if known.
@@ -123,6 +128,10 @@ pub struct ThreadMetadataBuilder {
     pub git_origin_url: Option<String>,
     /// Tri-state conversation modalities bitmask, if known.
     pub conversation_modalities: Option<i64>,
+    /// First model selected in this thread, if known.
+    pub initial_model: Option<String>,
+    /// Bounded history of model slugs in recency order.
+    pub model_history: Option<Vec<String>>,
 }
 
 impl ThreadMetadataBuilder {
@@ -148,9 +157,9 @@ impl ThreadMetadataBuilder {
             git_sha: None,
             git_branch: None,
             git_origin_url: None,
-            conversation_modalities: Some(
-                codex_protocol::openai_models::INPUT_MODALITY_TEXT_MASK,
-            ),
+            conversation_modalities: None,
+            initial_model: None,
+            model_history: None,
         }
     }
 
@@ -181,9 +190,9 @@ impl ThreadMetadataBuilder {
             approval_mode,
             tokens_used: 0,
             first_user_message: None,
-            conversation_modalities: self.conversation_modalities.or(Some(
-                codex_protocol::openai_models::INPUT_MODALITY_TEXT_MASK,
-            )),
+            conversation_modalities: self.conversation_modalities,
+            initial_model: self.initial_model.clone(),
+            model_history: self.model_history.clone(),
             archived_at: self.archived_at.map(canonicalize_datetime),
             git_sha: self.git_sha.clone(),
             git_branch: self.git_branch.clone(),
@@ -238,6 +247,12 @@ impl ThreadMetadata {
         if self.conversation_modalities != other.conversation_modalities {
             diffs.push("conversation_modalities");
         }
+        if self.initial_model != other.initial_model {
+            diffs.push("initial_model");
+        }
+        if self.model_history != other.model_history {
+            diffs.push("model_history");
+        }
         if self.archived_at != other.archived_at {
             diffs.push("archived_at");
         }
@@ -274,6 +289,8 @@ pub(crate) struct ThreadRow {
     tokens_used: i64,
     first_user_message: String,
     conversation_modalities: Option<i64>,
+    initial_model: Option<String>,
+    model_history: Option<Vec<String>>,
     archived_at: Option<i64>,
     git_sha: Option<String>,
     git_branch: Option<String>,
@@ -297,6 +314,8 @@ impl ThreadRow {
             tokens_used: row.try_get("tokens_used")?,
             first_user_message: row.try_get("first_user_message")?,
             conversation_modalities: row.try_get("conversation_modalities")?,
+            initial_model: row.try_get("initial_model")?,
+            model_history: parse_model_history(row.try_get("model_history")?)?,
             archived_at: row.try_get("archived_at")?,
             git_sha: row.try_get("git_sha")?,
             git_branch: row.try_get("git_branch")?,
@@ -324,6 +343,8 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             tokens_used,
             first_user_message,
             conversation_modalities,
+            initial_model,
+            model_history,
             archived_at,
             git_sha,
             git_branch,
@@ -344,11 +365,33 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             tokens_used,
             first_user_message: (!first_user_message.is_empty()).then_some(first_user_message),
             conversation_modalities,
+            initial_model,
+            model_history,
             archived_at: archived_at.map(epoch_seconds_to_datetime).transpose()?,
             git_sha,
             git_branch,
             git_origin_url,
         })
+    }
+}
+
+fn parse_model_history(raw: Option<String>) -> Result<Option<Vec<String>>> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    if raw.trim().is_empty() {
+        return Ok(None);
+    }
+    let value: Value = serde_json::from_str(&raw)?;
+    match value {
+        Value::Array(items) => Ok(Some(
+            items
+                .into_iter()
+                .filter_map(|item| item.as_str().map(|text| text.to_string()))
+                .collect(),
+        )),
+        Value::Null => Ok(None),
+        _ => Err(anyhow::anyhow!("invalid model_history payload")),
     }
 }
 

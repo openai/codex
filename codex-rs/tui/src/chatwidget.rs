@@ -3152,13 +3152,6 @@ impl ChatWidget {
     /// When the model does not advertise image support, we keep the draft unchanged and surface a
     /// warning event so users can switch models or remove attachments.
     pub(crate) fn attach_image(&mut self, path: PathBuf) {
-        if !self.current_model_supports_images() {
-            self.add_to_history(history_cell::new_warning_event(
-                self.image_inputs_not_supported_message(),
-            ));
-            self.request_redraw();
-            return;
-        }
         tracing::info!("attach_image path={path:?}");
         self.bottom_pane.attach_image(path);
         self.request_redraw();
@@ -3646,16 +3639,6 @@ impl ChatWidget {
         if text.is_empty() && local_images.is_empty() {
             return;
         }
-        if !local_images.is_empty() && !self.current_model_supports_images() {
-            self.restore_blocked_image_submission(
-                text,
-                text_elements,
-                local_images,
-                mention_bindings,
-            );
-            return;
-        }
-
         let mut items: Vec<UserInput> = Vec::new();
 
         // Special-case: "!cmd" executes a local shell command instead of sending to the model.
@@ -6075,34 +6058,8 @@ impl ChatWidget {
             .unwrap_or(false)
     }
 
-    /// Return whether the effective model currently advertises image-input support.
-    ///
-    /// We intentionally default to `true` when model metadata cannot be read so transient catalog
-    /// failures do not hard-block user input in the UI.
-    fn current_model_supports_images(&self) -> bool {
-        let model = self.current_model();
-        self.models_manager
-            .try_list_models(&self.config)
-            .ok()
-            .and_then(|models| {
-                models
-                    .into_iter()
-                    .find(|preset| preset.model == model)
-                    .map(|preset| preset.input_modalities.contains(&InputModality::Image))
-            })
-            .unwrap_or(true)
-    }
-
     fn sync_image_paste_enabled(&mut self) {
-        let enabled = self.current_model_supports_images();
-        self.bottom_pane.set_image_paste_enabled(enabled);
-    }
-
-    fn image_inputs_not_supported_message(&self) -> String {
-        format!(
-            "Model {} does not support image inputs. Remove images or switch models.",
-            self.current_model()
-        )
+        self.bottom_pane.set_image_paste_enabled(true);
     }
 
     #[allow(dead_code)] // Used in tests

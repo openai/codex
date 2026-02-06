@@ -1,4 +1,5 @@
 use crate::model::ThreadMetadata;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
@@ -10,6 +11,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 const IMAGE_ONLY_USER_MESSAGE_PLACEHOLDER: &str = "[Image]";
+const MODEL_HISTORY_LIMIT: usize = 10;
 
 /// Apply a rollout item to the metadata structure.
 pub fn apply_rollout_item(
@@ -57,6 +59,7 @@ fn apply_turn_context(metadata: &mut ThreadMetadata, turn_ctx: &TurnContextItem)
     metadata.cwd = turn_ctx.cwd.clone();
     metadata.sandbox_policy = enum_to_string(&turn_ctx.sandbox_policy);
     metadata.approval_mode = enum_to_string(&turn_ctx.approval_policy);
+    update_model_history(metadata, turn_ctx.model.as_str());
 }
 
 fn apply_event_msg(metadata: &mut ThreadMetadata, event: &EventMsg) {
@@ -86,6 +89,9 @@ fn apply_event_msg(metadata: &mut ThreadMetadata, event: &EventMsg) {
                     codex_protocol::openai_models::INPUT_MODALITY_TEXT_MASK
                         | codex_protocol::openai_models::INPUT_MODALITY_IMAGE_MASK,
                 );
+            } else if metadata.conversation_modalities.is_none() {
+                metadata.conversation_modalities =
+                    Some(codex_protocol::openai_models::INPUT_MODALITY_TEXT_MASK);
             }
         }
         _ => {}
@@ -98,8 +104,42 @@ fn apply_response_item(metadata: &mut ThreadMetadata, item: &ResponseItem) {
             codex_protocol::openai_models::INPUT_MODALITY_TEXT_MASK
                 | codex_protocol::openai_models::INPUT_MODALITY_IMAGE_MASK,
         );
+    } else if metadata.conversation_modalities.is_none() && response_item_has_input_text(item) {
+        metadata.conversation_modalities =
+            Some(codex_protocol::openai_models::INPUT_MODALITY_TEXT_MASK);
     }
     // Title and first_user_message are derived from EventMsg::UserMessage only.
+}
+
+fn response_item_has_input_text(item: &ResponseItem) -> bool {
+    match item {
+        ResponseItem::Message { content, .. } => {
+            content
+                .iter()
+                .any(|item| matches!(item, ContentItem::InputText { .. } | ContentItem::OutputText { .. }))
+        }
+        _ => false,
+    }
+}
+
+fn update_model_history(metadata: &mut ThreadMetadata, model: &str) {
+    if model.is_empty() {
+        return;
+    }
+
+    if metadata.initial_model.is_none() {
+        metadata.initial_model = Some(model.to_string());
+    }
+
+    let history = metadata.model_history.get_or_insert_with(Vec::new);
+    if let Some(pos) = history.iter().position(|slug| slug == model) {
+        history.remove(pos);
+    }
+    history.push(model.to_string());
+    if history.len() > MODEL_HISTORY_LIMIT {
+        let overflow = history.len() - MODEL_HISTORY_LIMIT;
+        history.drain(0..overflow);
+    }
 }
 
 fn strip_user_message_prefix(text: &str) -> &str {
@@ -242,6 +282,8 @@ mod tests {
             tokens_used: 1,
             first_user_message: None,
             conversation_modalities: None,
+            initial_model: None,
+            model_history: None,
             archived_at: None,
             git_sha: None,
             git_branch: None,

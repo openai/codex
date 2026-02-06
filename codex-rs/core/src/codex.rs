@@ -222,8 +222,10 @@ use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
@@ -231,6 +233,8 @@ use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
 use tokio::sync::watch;
+
+const BLIND_IMAGE_PLACEHOLDER_TEXT: &str = "Placeholder for what used to be an image.";
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -3859,7 +3863,19 @@ pub(crate) async fn run_turn(
         }
 
         // Construct the input that we will send to the model.
-        let sampling_request_input: Vec<ResponseItem> = { sess.clone_history().await.for_prompt() };
+        let mut sampling_request_input: Vec<ResponseItem> = {
+            sess.clone_history().await.for_prompt()
+        };
+        if !turn_context
+            .model_info
+            .input_modalities
+            .contains(&InputModality::Image)
+        {
+            let (sanitized, replaced) = substitute_blind_images(sampling_request_input);
+            if replaced {
+                sampling_request_input = sanitized;
+            }
+        }
 
         let sampling_request_input_messages = sampling_request_input
             .iter()
@@ -4068,6 +4084,46 @@ fn filter_codex_apps_mcp_tools(
 
 fn codex_apps_connector_id(tool: &crate::mcp_connection_manager::ToolInfo) -> Option<&str> {
     tool.connector_id.as_deref()
+}
+
+fn substitute_blind_images(mut items: Vec<ResponseItem>) -> (Vec<ResponseItem>, bool) {
+    let mut replaced = false;
+    for item in &mut items {
+        match item {
+            ResponseItem::Message { content, .. } => {
+                let mut new_content = Vec::with_capacity(content.len());
+                for content_item in content.drain(..) {
+                    match content_item {
+                        ContentItem::InputImage { .. } => {
+                            replaced = true;
+                            new_content.push(ContentItem::InputText {
+                                text: BLIND_IMAGE_PLACEHOLDER_TEXT.to_string(),
+                            });
+                        }
+                        other => new_content.push(other),
+                    }
+                }
+                *content = new_content;
+            }
+            ResponseItem::FunctionCallOutput { output, .. } => {
+                if let Some(content_items) = output.content_items_mut() {
+                    for content_item in content_items.iter_mut() {
+                        if matches!(
+                            content_item,
+                            FunctionCallOutputContentItem::InputImage { .. }
+                        ) {
+                            *content_item = FunctionCallOutputContentItem::InputText {
+                                text: BLIND_IMAGE_PLACEHOLDER_TEXT.to_string(),
+                            };
+                            replaced = true;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    (items, replaced)
 }
 
 struct SamplingRequestToolSelection<'a> {
