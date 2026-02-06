@@ -171,7 +171,19 @@ impl ExecBuffer {
 
 pub struct JsReplManager {
     node_path: Option<PathBuf>,
-    codex_home: PathBuf,
+    js_repl_home: PathBuf,
+    vendor_node_modules: PathBuf,
+    user_node_modules: PathBuf,
+    npm_config_path: PathBuf,
+    npm_cache_dir: PathBuf,
+    npm_tmp_dir: PathBuf,
+    npm_prefix_dir: PathBuf,
+    xdg_config_dir: PathBuf,
+    xdg_cache_dir: PathBuf,
+    xdg_data_dir: PathBuf,
+    yarn_cache_dir: PathBuf,
+    pnpm_store_dir: PathBuf,
+    corepack_home: PathBuf,
     tmp_dir: tempfile::TempDir,
     kernel: Mutex<Option<KernelState>>,
     exec_lock: Arc<Semaphore>,
@@ -184,13 +196,42 @@ impl JsReplManager {
         node_path: Option<PathBuf>,
         codex_home: PathBuf,
     ) -> Result<Arc<Self>, FunctionCallError> {
+        let js_repl_home = codex_home.join("js_repl");
         let tmp_dir = tempfile::tempdir().map_err(|err| {
             FunctionCallError::RespondToModel(format!("failed to create js_repl temp dir: {err}"))
+        })?;
+        let (
+            vendor_node_modules,
+            user_node_modules,
+            npm_config_path,
+            npm_cache_dir,
+            npm_tmp_dir,
+            npm_prefix_dir,
+            xdg_config_dir,
+            xdg_cache_dir,
+            xdg_data_dir,
+            yarn_cache_dir,
+            pnpm_store_dir,
+            corepack_home,
+        ) = prepare_js_repl_home(&js_repl_home).await.map_err(|err| {
+            FunctionCallError::RespondToModel(format!("failed to prepare js_repl home: {err}"))
         })?;
 
         let manager = Arc::new(Self {
             node_path,
-            codex_home,
+            js_repl_home,
+            vendor_node_modules,
+            user_node_modules,
+            npm_config_path,
+            npm_cache_dir,
+            npm_tmp_dir,
+            npm_prefix_dir,
+            xdg_config_dir,
+            xdg_cache_dir,
+            xdg_data_dir,
+            yarn_cache_dir,
+            pnpm_store_dir,
+            corepack_home,
             tmp_dir,
             kernel: Mutex::new(None),
             exec_lock: Arc::new(Semaphore::new(1)),
@@ -350,10 +391,7 @@ impl JsReplManager {
             .await
             .insert(req_id.clone(), ExecBuffer::new());
 
-        self.poll_kernels
-            .lock()
-            .await
-            .insert(req_id.clone(), state);
+        self.poll_kernels.lock().await.insert(req_id.clone(), state);
 
         let payload = HostToKernel::Exec {
             id: req_id.clone(),
@@ -501,17 +539,7 @@ impl JsReplManager {
             .map_err(|err| err.to_string())?;
 
         let mut env = create_env(&turn.shell_environment_policy, thread_id);
-        env.insert(
-            "CODEX_JS_TMP_DIR".to_string(),
-            self.tmp_dir.path().to_string_lossy().to_string(),
-        );
-        env.insert(
-            "CODEX_JS_REPL_HOME".to_string(),
-            self.codex_home
-                .join("js_repl")
-                .to_string_lossy()
-                .to_string(),
-        );
+        self.configure_js_repl_env(&mut env);
 
         let spec = CommandSpec {
             program: node_path.to_string_lossy().to_string(),
@@ -794,7 +822,9 @@ impl JsReplManager {
         }
         let mut store = exec_store.lock().await;
         for exec_id in &affected_exec_ids {
-            if let Some(entry) = store.get_mut(exec_id) && !entry.done {
+            if let Some(entry) = store.get_mut(exec_id)
+                && !entry.done
+            {
                 entry.done = true;
                 entry.error = Some("js_repl kernel exited unexpectedly".to_string());
                 entry.notify.notify_waiters();
@@ -995,6 +1025,125 @@ impl JsReplManager {
         }
     }
 
+    fn configure_js_repl_env(&self, env: &mut HashMap<String, String>) {
+        scrub_js_repl_env(env);
+
+        env.insert(
+            "CODEX_JS_TMP_DIR".to_string(),
+            self.tmp_dir.path().to_string_lossy().to_string(),
+        );
+        env.insert(
+            "CODEX_JS_REPL_HOME".to_string(),
+            self.js_repl_home.to_string_lossy().to_string(),
+        );
+        env.insert(
+            "CODEX_JS_REPL_VENDOR_NODE_MODULES".to_string(),
+            self.vendor_node_modules.to_string_lossy().to_string(),
+        );
+        env.insert(
+            "CODEX_JS_REPL_USER_NODE_MODULES".to_string(),
+            self.user_node_modules.to_string_lossy().to_string(),
+        );
+
+        if let Ok(node_path) = std::env::join_paths([
+            self.vendor_node_modules.as_path(),
+            self.user_node_modules.as_path(),
+        ]) {
+            env.insert(
+                "NODE_PATH".to_string(),
+                node_path.to_string_lossy().to_string(),
+            );
+        }
+        env.insert(
+            "NODE_REPL_HISTORY".to_string(),
+            self.js_repl_home
+                .join("node_repl_history")
+                .to_string_lossy()
+                .to_string(),
+        );
+
+        env.insert(
+            "HOME".to_string(),
+            self.js_repl_home.to_string_lossy().to_string(),
+        );
+        if cfg!(windows) {
+            env.insert(
+                "USERPROFILE".to_string(),
+                self.js_repl_home.to_string_lossy().to_string(),
+            );
+            env.insert(
+                "APPDATA".to_string(),
+                self.js_repl_home
+                    .join("appdata")
+                    .to_string_lossy()
+                    .to_string(),
+            );
+            env.insert(
+                "LOCALAPPDATA".to_string(),
+                self.js_repl_home
+                    .join("localappdata")
+                    .to_string_lossy()
+                    .to_string(),
+            );
+        }
+
+        env.insert(
+            "XDG_CONFIG_HOME".to_string(),
+            self.xdg_config_dir.to_string_lossy().to_string(),
+        );
+        env.insert(
+            "XDG_CACHE_HOME".to_string(),
+            self.xdg_cache_dir.to_string_lossy().to_string(),
+        );
+        env.insert(
+            "XDG_DATA_HOME".to_string(),
+            self.xdg_data_dir.to_string_lossy().to_string(),
+        );
+
+        let npm_config_path = self.npm_config_path.to_string_lossy().to_string();
+        set_env_with_upper(env, "npm_config_userconfig", &npm_config_path);
+        set_env_with_upper(env, "npm_config_globalconfig", &npm_config_path);
+        set_env_with_upper(
+            env,
+            "npm_config_cache",
+            self.npm_cache_dir.to_string_lossy().as_ref(),
+        );
+        set_env_with_upper(
+            env,
+            "npm_config_tmp",
+            self.npm_tmp_dir.to_string_lossy().as_ref(),
+        );
+        set_env_with_upper(
+            env,
+            "npm_config_prefix",
+            self.npm_prefix_dir.to_string_lossy().as_ref(),
+        );
+        set_env_with_upper(env, "npm_config_update_notifier", "false");
+        set_env_with_upper(env, "npm_config_fund", "false");
+        set_env_with_upper(env, "npm_config_audit", "false");
+
+        env.insert(
+            "YARN_CACHE_FOLDER".to_string(),
+            self.yarn_cache_dir.to_string_lossy().to_string(),
+        );
+        env.insert(
+            "YARN_RC_FILENAME".to_string(),
+            self.js_repl_home
+                .join(".codex-yarnrc")
+                .to_string_lossy()
+                .to_string(),
+        );
+
+        env.insert(
+            "PNPM_STORE_PATH".to_string(),
+            self.pnpm_store_dir.to_string_lossy().to_string(),
+        );
+        env.insert(
+            "COREPACK_HOME".to_string(),
+            self.corepack_home.to_string_lossy().to_string(),
+        );
+    }
+
     async fn read_stderr(stderr: tokio::process::ChildStderr, shutdown: CancellationToken) {
         let mut reader = BufReader::new(stderr).lines();
 
@@ -1022,6 +1171,25 @@ fn is_freeform_tool(specs: &[ToolSpec], name: &str) -> bool {
     specs
         .iter()
         .any(|spec| spec.name() == name && matches!(spec, ToolSpec::Freeform(_)))
+}
+
+fn scrub_js_repl_env(env: &mut HashMap<String, String>) {
+    let prefixes = ["NODE_", "NPM_CONFIG_", "YARN_", "PNPM_", "COREPACK_"];
+    let keys: Vec<String> = env.keys().cloned().collect();
+    for key in keys {
+        let upper = key.to_ascii_uppercase();
+        if prefixes.iter().any(|prefix| upper.starts_with(prefix)) {
+            env.remove(&key);
+        }
+    }
+}
+
+fn set_env_with_upper(env: &mut HashMap<String, String>, key: &str, value: &str) {
+    env.insert(key.to_string(), value.to_string());
+    let upper = key.to_ascii_uppercase();
+    if upper != key {
+        env.insert(upper, value.to_string());
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1147,6 +1315,77 @@ fn clamp_poll_ms(value: Option<u64>) -> u64 {
         .clamp(JS_REPL_POLL_MIN_MS, JS_REPL_POLL_MAX_MS)
 }
 
+async fn prepare_js_repl_home(
+    js_repl_home: &Path,
+) -> Result<
+    (
+        PathBuf,
+        PathBuf,
+        PathBuf,
+        PathBuf,
+        PathBuf,
+        PathBuf,
+        PathBuf,
+        PathBuf,
+        PathBuf,
+        PathBuf,
+        PathBuf,
+        PathBuf,
+    ),
+    std::io::Error,
+> {
+    let vendor_root = js_repl_home.join("codex_node_modules");
+    let vendor_node_modules = vendor_root.join("node_modules");
+    let user_node_modules = js_repl_home.join("node_modules");
+    let npm_config_path = js_repl_home.join("npmrc");
+    let npm_cache_dir = js_repl_home.join("npm-cache");
+    let npm_tmp_dir = js_repl_home.join("npm-tmp");
+    let npm_prefix_dir = js_repl_home.join("npm-prefix");
+    let xdg_config_dir = js_repl_home.join("xdg-config");
+    let xdg_cache_dir = js_repl_home.join("xdg-cache");
+    let xdg_data_dir = js_repl_home.join("xdg-data");
+    let yarn_cache_dir = js_repl_home.join("yarn-cache");
+    let pnpm_store_dir = js_repl_home.join("pnpm-store");
+    let corepack_home = js_repl_home.join("corepack");
+
+    for dir in [
+        js_repl_home,
+        &vendor_root,
+        &vendor_node_modules,
+        &user_node_modules,
+        &npm_cache_dir,
+        &npm_tmp_dir,
+        &npm_prefix_dir,
+        &xdg_config_dir,
+        &xdg_cache_dir,
+        &xdg_data_dir,
+        &yarn_cache_dir,
+        &pnpm_store_dir,
+        &corepack_home,
+    ] {
+        tokio::fs::create_dir_all(dir).await?;
+    }
+
+    if tokio::fs::metadata(&npm_config_path).await.is_err() {
+        tokio::fs::write(&npm_config_path, b"").await?;
+    }
+
+    Ok((
+        vendor_node_modules,
+        user_node_modules,
+        npm_config_path,
+        npm_cache_dir,
+        npm_tmp_dir,
+        npm_prefix_dir,
+        xdg_config_dir,
+        xdg_cache_dir,
+        xdg_data_dir,
+        yarn_cache_dir,
+        pnpm_store_dir,
+        corepack_home,
+    ))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct NodeVersion {
     major: u64,
@@ -1255,10 +1494,52 @@ pub(crate) fn resolve_node(config_path: Option<&Path>) -> Option<PathBuf> {
         return Some(path.to_path_buf());
     }
 
+    if let Ok(exec_path) = std::env::current_exe()
+        && let Some(candidate) = resolve_bundled_node(&exec_path)
+    {
+        return Some(candidate);
+    }
+
     if let Ok(path) = which::which("node") {
         return Some(path);
     }
 
+    None
+}
+
+fn resolve_bundled_node(exec_path: &Path) -> Option<PathBuf> {
+    let target = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "aarch64-apple-darwin",
+        ("macos", "x86_64") => "x86_64-apple-darwin",
+        ("linux", "x86_64") => "x86_64-unknown-linux-musl",
+        ("linux", "aarch64") => "aarch64-unknown-linux-musl",
+        ("windows", "x86_64") => "x86_64-pc-windows-msvc",
+        ("windows", "aarch64") => "aarch64-pc-windows-msvc",
+        _ => return None,
+    };
+
+    let mut path = exec_path.to_path_buf();
+    if let Some(parent) = path.parent() {
+        path = parent.to_path_buf();
+    }
+    let mut dir = path;
+    for _ in 0..4 {
+        if dir.join("vendor").exists() {
+            break;
+        }
+        dir = match dir.parent() {
+            Some(parent) => parent.to_path_buf(),
+            None => break,
+        };
+    }
+    let candidate = dir
+        .join("vendor")
+        .join(target)
+        .join("node")
+        .join(if cfg!(windows) { "node.exe" } else { "node" });
+    if candidate.exists() {
+        return Some(candidate);
+    }
     None
 }
 
@@ -1569,6 +1850,133 @@ mod tests {
             .await
             .expect_err("expected missing exec id error");
         assert_eq!(err.to_string(), "js_repl exec id not found");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn js_repl_isolated_module_resolution() -> anyhow::Result<()> {
+        if resolve_node(None).is_none() || std::env::var_os("CODEX_SANDBOX").is_some() {
+            return Ok(());
+        }
+
+        let (session, mut turn) = make_session_and_context().await;
+        turn.approval_policy = AskForApproval::Never;
+        turn.sandbox_policy = SandboxPolicy::DangerFullAccess;
+        turn.shell_environment_policy
+            .r#set
+            .insert("NODE_OPTIONS".to_string(), "--trace-warnings".to_string());
+        turn.shell_environment_policy.r#set.insert(
+            "npm_config_userconfig".to_string(),
+            "/tmp/should-not-see".to_string(),
+        );
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager: Arc<JsReplManager> = turn.js_repl.manager().await?;
+
+        let code = r#"
+const fs = await import("node:fs/promises");
+const path = await import("node:path");
+const replHome = process.env.CODEX_JS_REPL_HOME;
+const vendorRoot = process.env.CODEX_JS_REPL_VENDOR_NODE_MODULES;
+const userRoot = process.env.CODEX_JS_REPL_USER_NODE_MODULES;
+
+const dupeVendorDir = path.join(vendorRoot, "dupe");
+await fs.mkdir(dupeVendorDir, { recursive: true });
+await fs.writeFile(
+  path.join(dupeVendorDir, "package.json"),
+  JSON.stringify({ name: "dupe", type: "module", main: "index.js" })
+);
+await fs.writeFile(path.join(dupeVendorDir, "index.js"), 'export const source = "vendor";');
+
+const dupeUserDir = path.join(userRoot, "dupe");
+await fs.mkdir(dupeUserDir, { recursive: true });
+await fs.writeFile(
+  path.join(dupeUserDir, "package.json"),
+  JSON.stringify({ name: "dupe", type: "module", main: "index.js" })
+);
+await fs.writeFile(path.join(dupeUserDir, "index.js"), 'export const source = "user";');
+
+const userOnlyDir = path.join(userRoot, "user_only");
+await fs.mkdir(userOnlyDir, { recursive: true });
+await fs.writeFile(
+  path.join(userOnlyDir, "package.json"),
+  JSON.stringify({ name: "user_only", type: "module", main: "index.js" })
+);
+await fs.writeFile(path.join(userOnlyDir, "index.js"), 'export const source = "user_only";');
+
+const dupe = await import("dupe");
+const userOnly = await import("user_only");
+
+console.log(
+  JSON.stringify({
+    env: {
+      nodeOptions: process.env.NODE_OPTIONS ?? null,
+      npmUserConfig: process.env.npm_config_userconfig ?? null,
+      replHome,
+      vendorRoot,
+      userRoot,
+    },
+    dupe: dupe.source,
+    userOnly: userOnly.source,
+  })
+);
+"#;
+
+        let output = manager
+            .execute(
+                session,
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: code.to_string(),
+                    timeout_ms: Some(15_000),
+                    poll: false,
+                },
+            )
+            .await?
+            .output;
+        let parsed: serde_json::Value =
+            serde_json::from_str(output.trim()).unwrap_or_else(|_| serde_json::json!({}));
+        let env = parsed
+            .get("env")
+            .and_then(serde_json::Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let repl_home = env
+            .get("replHome")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let npm_user_config = env
+            .get("npmUserConfig")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let vendor_root = env
+            .get("vendorRoot")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let user_root = env
+            .get("userRoot")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+
+        assert_eq!(
+            parsed.get("dupe").and_then(serde_json::Value::as_str),
+            Some("vendor")
+        );
+        assert_eq!(
+            parsed.get("userOnly").and_then(serde_json::Value::as_str),
+            Some("user_only")
+        );
+        assert_eq!(env.get("nodeOptions"), Some(&serde_json::Value::Null));
+        assert!(npm_user_config.contains(repl_home));
+        assert!(vendor_root.contains(repl_home));
+        assert!(
+            Path::new(vendor_root).ends_with(Path::new("codex_node_modules").join("node_modules"))
+        );
+        assert!(user_root.contains(repl_home));
+
         Ok(())
     }
 }

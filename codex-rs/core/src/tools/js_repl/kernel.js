@@ -86,6 +86,24 @@ const builtinModuleSet = new Set([
   ...builtinModules,
   ...builtinModules.map((name) => `node:${name}`),
 ]);
+const replHome = process.env.CODEX_JS_REPL_HOME || process.cwd();
+const vendorNodeModules =
+  process.env.CODEX_JS_REPL_VENDOR_NODE_MODULES ||
+  path.join(replHome, "codex_node_modules", "node_modules");
+const userNodeModules =
+  process.env.CODEX_JS_REPL_USER_NODE_MODULES || path.join(replHome, "node_modules");
+
+function resolvePath(candidate) {
+  try {
+    return require.resolve(candidate);
+  } catch {
+    return null;
+  }
+}
+
+function resolveFromRoot(root, specifier) {
+  return resolvePath(path.join(root, specifier));
+}
 
 /** @type {Map<string, (msg: any) => void>} */
 const pendingShell = new Map();
@@ -111,7 +129,12 @@ function resolveSpecifier(specifier) {
     return { kind: "path", path: path.resolve(process.cwd(), specifier) };
   }
 
-  return { kind: "bare", specifier };
+  const resolved =
+    resolveFromRoot(vendorNodeModules, specifier) || resolveFromRoot(userNodeModules, specifier);
+  if (!resolved) {
+    throw new Error(`Module not found: ${specifier}`);
+  }
+  return { kind: "path", path: resolved };
 }
 
 function importResolved(resolved) {
@@ -123,9 +146,6 @@ function importResolved(resolved) {
   }
   if (resolved.kind === "path") {
     return import(pathToFileURL(resolved.path).href);
-  }
-  if (resolved.kind === "bare") {
-    return import(resolved.specifier);
   }
   throw new Error(`Unsupported module resolution kind: ${resolved.kind}`);
 }
