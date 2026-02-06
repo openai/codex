@@ -254,10 +254,12 @@ pub(crate) fn process_compacted_history(
     // Re-inject canonical context from the current session since we stripped it
     // from the pre-compaction history. Keep it right before the last user
     // message so older user messages remain earlier in the transcript.
-    if let Some(last_user_index) = compacted_history
-        .iter()
-        .rposition(|item| matches!(item, ResponseItem::Message { role, .. } if role == "user"))
-    {
+    if let Some(last_user_index) = compacted_history.iter().rposition(|item| {
+        matches!(
+            crate::event_mapping::parse_turn_item(item),
+            Some(TurnItem::UserMessage(_))
+        )
+    }) {
         compacted_history.splice(last_user_index..last_user_index, initial_context);
     } else {
         compacted_history.extend(initial_context);
@@ -853,13 +855,22 @@ mod tests {
     }
 
     #[test]
-    fn process_compacted_history_inserts_context_before_last_user_message_only() {
+    fn process_compacted_history_inserts_context_before_last_real_user_message_only() {
         let compacted_history = vec![
             ResponseItem::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
                     text: "older user".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: format!("{SUMMARY_PREFIX}\nsummary text"),
                 }],
                 end_turn: None,
                 phase: None,
@@ -891,6 +902,15 @@ mod tests {
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
                     text: "older user".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: format!("{SUMMARY_PREFIX}\nsummary text"),
                 }],
                 end_turn: None,
                 phase: None,
