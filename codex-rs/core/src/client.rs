@@ -793,10 +793,6 @@ impl ModelClientSession {
         }
     }
 
-    fn responses_websockets_v2_enabled(&self) -> bool {
-        self.client.responses_websockets_v2_enabled()
-    }
-
     fn get_incremental_items(&self, input_items: &[ResponseItem]) -> Option<Vec<ResponseItem>> {
         // Checks whether the current request input is an incremental append to the previous request.
         // If items in the new request contain all the items from the previous request we build
@@ -876,7 +872,7 @@ impl ModelClientSession {
         api_prompt: &ApiPrompt,
         options: &ApiResponsesOptions,
     ) -> ResponsesWsRequest {
-        let responses_websockets_v2_enabled = self.responses_websockets_v2_enabled();
+        let responses_websockets_v2_enabled = self.client.responses_websockets_v2_enabled();
         let incremental_items = self.get_incremental_items(&api_prompt.input);
         if let Some(append_items) = incremental_items {
             if responses_websockets_v2_enabled
