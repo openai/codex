@@ -4652,15 +4652,6 @@ async fn try_run_sampling_request(
                     )
                     .await
                     {
-                        log_post_sampling_token_usage_and_maybe_compact(
-                            &sess,
-                            &turn_context,
-                            auto_compact_limit,
-                            needs_follow_up,
-                            in_flight.is_empty(),
-                            "stream_item_done_plan",
-                        )
-                        .await;
                         continue;
                     }
                 }
@@ -4682,15 +4673,6 @@ async fn try_run_sampling_request(
                     last_agent_message = Some(agent_message);
                 }
                 needs_follow_up |= output_result.needs_follow_up;
-                log_post_sampling_token_usage_and_maybe_compact(
-                    &sess,
-                    &turn_context,
-                    auto_compact_limit,
-                    needs_follow_up,
-                    in_flight.is_empty(),
-                    "stream_item_done",
-                )
-                .await;
             }
             ResponseEvent::OutputItemAdded(item) => {
                 if let Some(turn_item) = handle_non_tool_response_item(&item, plan_mode).await {
