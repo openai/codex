@@ -103,6 +103,7 @@ use crate::client::ModelClient;
 use crate::client::ModelClientSession;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
+use crate::codex_thread::RolloutPersistenceStatus;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::compact::collect_user_messages;
 use crate::config::Config;
@@ -313,7 +314,7 @@ impl Codex {
         // Resolve base instructions for the session. Priority order:
         // 1. config.base_instructions override
         // 2. conversation history => session_meta.base_instructions
-        // 3. base_intructions for current model
+        // 3. base_instructions for current model
         let model_info = models_manager.get_model_info(model.as_str(), &config).await;
         let base_instructions = config
             .base_instructions
@@ -481,6 +482,12 @@ impl Codex {
 
     pub(crate) fn state_db(&self) -> Option<state_db::StateDbHandle> {
         self.session.state_db()
+    }
+
+    pub(crate) async fn ensure_rollout_persisted_for_api(
+        &self,
+    ) -> CodexResult<RolloutPersistenceStatus> {
+        self.session.ensure_rollout_persisted_for_api().await
     }
 }
 
@@ -858,26 +865,9 @@ impl Session {
 
         let forked_from_id = initial_history.forked_from_id();
 
-        let (conversation_id, rollout_params) = match &initial_history {
-            InitialHistory::New | InitialHistory::Forked(_) => {
-                let conversation_id = ThreadId::default();
-                (
-                    conversation_id,
-                    RolloutRecorderParams::new(
-                        conversation_id,
-                        forked_from_id,
-                        session_source,
-                        BaseInstructions {
-                            text: session_configuration.base_instructions.clone(),
-                        },
-                        session_configuration.dynamic_tools.clone(),
-                    ),
-                )
-            }
-            InitialHistory::Resumed(resumed_history) => (
-                resumed_history.conversation_id,
-                RolloutRecorderParams::resume(resumed_history.rollout_path.clone()),
-            ),
+        let conversation_id = match &initial_history {
+            InitialHistory::New | InitialHistory::Forked(_) => ThreadId::default(),
+            InitialHistory::Resumed(resumed_history) => resumed_history.conversation_id,
         };
         let state_builder = match &initial_history {
             InitialHistory::Resumed(resumed) => metadata::builder_from_items(
@@ -894,17 +884,52 @@ impl Session {
         // - load history metadata
         let rollout_fut = async {
             if config.ephemeral {
-                Ok::<_, anyhow::Error>((None, None))
+                Ok::<_, anyhow::Error>((None, None, None))
             } else {
                 let state_db_ctx = state_db::init_if_enabled(&config, None).await;
-                let rollout_recorder = RolloutRecorder::new(
-                    &config,
-                    rollout_params,
-                    state_db_ctx.clone(),
-                    state_builder.clone(),
-                )
-                .await?;
-                Ok((Some(rollout_recorder), state_db_ctx))
+                match &initial_history {
+                    InitialHistory::New => {
+                        let rollout_params = RolloutRecorderParams::new(
+                            conversation_id,
+                            forked_from_id,
+                            session_source.clone(),
+                            BaseInstructions {
+                                text: session_configuration.base_instructions.clone(),
+                            },
+                            session_configuration.dynamic_tools.clone(),
+                        );
+                        Ok((None, state_db_ctx, Some(rollout_params)))
+                    }
+                    InitialHistory::Forked(_) => {
+                        let rollout_params = RolloutRecorderParams::new(
+                            conversation_id,
+                            forked_from_id,
+                            session_source.clone(),
+                            BaseInstructions {
+                                text: session_configuration.base_instructions.clone(),
+                            },
+                            session_configuration.dynamic_tools.clone(),
+                        );
+                        let rollout_recorder = RolloutRecorder::new(
+                            &config,
+                            rollout_params,
+                            state_db_ctx.clone(),
+                            state_builder.clone(),
+                        )
+                        .await?;
+                        Ok((Some(rollout_recorder), state_db_ctx, None))
+                    }
+                    InitialHistory::Resumed(resumed_history) => {
+                        let rollout_recorder = RolloutRecorder::new(
+                            &config,
+                            RolloutRecorderParams::resume(resumed_history.rollout_path.clone()),
+                            state_db_ctx.clone(),
+                            state_builder.clone(),
+                        )
+                        .await?;
+                        Ok((Some(rollout_recorder), state_db_ctx, None))
+                    }
+                }
             }
         };
 
@@ -929,10 +954,11 @@ impl Session {
             (auth, mcp_servers, auth_statuses),
         ) = tokio::join!(rollout_fut, history_meta_fut, auth_and_mcp_fut);
 
-        let (rollout_recorder, state_db_ctx) = rollout_recorder_and_state_db.map_err(|e| {
-            error!("failed to initialize rollout recorder: {e:#}");
-            e
-        })?;
+        let (rollout_recorder, state_db_ctx, pending_rollout_create) =
+            rollout_recorder_and_state_db.map_err(|e| {
+                error!("failed to initialize rollout recorder: {e:#}");
+                e
+            })?;
         let rollout_path = rollout_recorder
             .as_ref()
             .map(|rec| rec.rollout_path.clone());
@@ -1042,6 +1068,8 @@ impl Session {
             ),
             hooks: Hooks::new(config.as_ref()),
             rollout: Mutex::new(rollout_recorder),
+            rollout_init_lock: Mutex::new(()),
+            pending_rollout_create: Mutex::new(pending_rollout_create),
             user_shell: Arc::new(default_shell),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             exec_policy,
@@ -1183,6 +1211,78 @@ impl Session {
         }
     }
 
+    async fn ensure_rollout_initialized_for_turn(
+        &self,
+        turn_context: &TurnContext,
+    ) -> std::io::Result<()> {
+        let _rollout_init_lock = self.services.rollout_init_lock.lock().await;
+        {
+            let rollout = self.services.rollout.lock().await;
+            if rollout.is_some() {
+                return Ok(());
+            }
+        }
+
+        let params = {
+            let mut pending = self.services.pending_rollout_create.lock().await;
+            pending.take()
+        };
+        let Some(params) = params else {
+            return Ok(());
+        };
+
+        let recorder = match RolloutRecorder::new(
+            turn_context.config.as_ref(),
+            params.clone(),
+            self.services.state_db.clone(),
+            None,
+        )
+        .await
+        {
+            Ok(recorder) => recorder,
+            Err(err) => {
+                let mut pending = self.services.pending_rollout_create.lock().await;
+                if pending.is_none() {
+                    *pending = Some(params);
+                }
+                return Err(err);
+            }
+        };
+
+        let mut rollout = self.services.rollout.lock().await;
+        if rollout.is_none() {
+            *rollout = Some(recorder);
+        }
+        Ok(())
+    }
+
+    async fn ensure_rollout_persisted_for_api(&self) -> CodexResult<RolloutPersistenceStatus> {
+        let turn_context = self.new_default_turn().await;
+        if turn_context.config.ephemeral {
+            return Ok(RolloutPersistenceStatus::Ephemeral);
+        }
+
+        self.ensure_rollout_initialized_for_turn(&turn_context)
+            .await?;
+        self.seed_initial_context_if_needed(&turn_context).await;
+        self.flush_rollout().await;
+
+        let rollout_path = {
+            let rollout = self.services.rollout.lock().await;
+            rollout
+                .as_ref()
+                .map(|recorder| recorder.rollout_path.clone())
+        };
+        let Some(rollout_path) = rollout_path else {
+            return Err(CodexErr::Fatal(format!(
+                "rollout recorder missing for thread {}",
+                self.conversation_id
+            )));
+        };
+
+        Ok(RolloutPersistenceStatus::Persisted(rollout_path))
+    }
+
     fn next_internal_sub_id(&self) -> String {
         let id = self
             .next_internal_sub_id
@@ -1211,14 +1311,8 @@ impl Session {
         let turn_context = self.new_default_turn().await;
         match conversation_history {
             InitialHistory::New => {
-                // Build and record initial items (user instructions + environment context)
-                let items = self.build_initial_context(&turn_context).await;
-                self.record_conversation_items(&turn_context, &items).await;
-                {
-                    let mut state = self.state.lock().await;
-                    state.initial_context_seeded = true;
-                }
-                // Ensure initial items are visible to immediate readers (e.g., tests, forks).
+                // Defer initial context persistence until the first turn starts.
+                // This lets turn/start overrides be reflected in the seeded context.
                 self.flush_rollout().await;
             }
             InitialHistory::Resumed(resumed_history) => {
@@ -2917,6 +3011,20 @@ mod handlers {
 
         // Attempt to inject input into current task.
         if let Err(SteerInputError::NoActiveTurn(items)) = sess.steer_input(items, None).await {
+            if let Err(err) = sess
+                .ensure_rollout_initialized_for_turn(&current_context)
+                .await
+            {
+                sess.send_event_raw(Event {
+                    id: current_context.sub_id.clone(),
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: format!("failed to initialize rollout recorder: {err}"),
+                        codex_error_info: Some(CodexErrorInfo::Other),
+                    }),
+                })
+                .await;
+                return;
+            }
             sess.seed_initial_context_if_needed(&current_context).await;
             let resumed_model = sess.take_pending_resume_previous_model().await;
             let update_items = sess.build_settings_update_items(
@@ -4882,6 +4990,7 @@ mod tests {
     use codex_protocol::models::FunctionCallOutputBody;
     use codex_protocol::models::FunctionCallOutputPayload;
 
+    use crate::codex_thread::RolloutPersistenceStatus;
     use crate::protocol::CompactedItem;
     use crate::protocol::CreditsSnapshot;
     use crate::protocol::InitialHistory;
@@ -5083,6 +5192,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn record_initial_history_new_defers_initial_context_until_first_turn() {
+        let (session, turn_context) = make_session_and_context().await;
+        {
+            let mut state = session.state.lock().await;
+            state.initial_context_seeded = false;
+        }
+
+        session.record_initial_history(InitialHistory::New).await;
+
+        let history = session.state.lock().await.clone_history();
+        assert_eq!(history.raw_items(), Vec::<ResponseItem>::new());
+
+        session.seed_initial_context_if_needed(&turn_context).await;
+        let expected = session.build_initial_context(&turn_context).await;
+        let history = session.state.lock().await.clone_history();
+        assert_eq!(history.raw_items(), expected);
+    }
+
+    #[tokio::test]
     async fn resumed_history_seeds_initial_context_on_first_turn_only() {
         let (session, turn_context) = make_session_and_context().await;
         let (rollout_items, mut expected) = sample_rollout(&session, &turn_context).await;
@@ -5237,6 +5365,170 @@ mod tests {
         expected.extend(session.build_initial_context(&turn_context).await);
         let history = session.state.lock().await.clone_history();
         assert_eq!(expected, history.raw_items());
+    }
+
+    #[tokio::test]
+    async fn lazy_rollout_creation_writes_session_meta_then_initial_context_then_turn_context() {
+        let (session, turn_context) = make_session_and_context().await;
+        {
+            let mut state = session.state.lock().await;
+            state.initial_context_seeded = false;
+        }
+        let base_instructions = session.get_base_instructions().await;
+        let session_source = {
+            let state = session.state.lock().await;
+            state.session_configuration.session_source.clone()
+        };
+        {
+            let mut pending = session.services.pending_rollout_create.lock().await;
+            *pending = Some(RolloutRecorderParams::new(
+                session.conversation_id,
+                None,
+                session_source,
+                base_instructions,
+                Vec::new(),
+            ));
+        }
+
+        let conversation_id = session.conversation_id.to_string();
+        let rollout_path = crate::rollout::find_thread_path_by_id_str(
+            &turn_context.config.codex_home,
+            &conversation_id,
+        )
+        .await
+        .expect("lookup rollout path before first turn");
+        assert_eq!(rollout_path, None);
+
+        session
+            .ensure_rollout_initialized_for_turn(&turn_context)
+            .await
+            .expect("initialize rollout recorder lazily");
+        session.seed_initial_context_if_needed(&turn_context).await;
+        session
+            .persist_rollout_items(&[RolloutItem::TurnContext(TurnContextItem {
+                cwd: turn_context.cwd.clone(),
+                approval_policy: turn_context.approval_policy,
+                sandbox_policy: turn_context.sandbox_policy.clone(),
+                model: turn_context.model_info.slug.clone(),
+                personality: turn_context.personality,
+                collaboration_mode: Some(turn_context.collaboration_mode.clone()),
+                effort: turn_context.reasoning_effort,
+                summary: turn_context.reasoning_summary,
+                user_instructions: turn_context.user_instructions.clone(),
+                developer_instructions: turn_context.developer_instructions.clone(),
+                final_output_json_schema: turn_context.final_output_json_schema.clone(),
+                truncation_policy: Some(turn_context.truncation_policy.into()),
+            })])
+            .await;
+        session.flush_rollout().await;
+
+        let rollout_path = crate::rollout::find_thread_path_by_id_str(
+            &turn_context.config.codex_home,
+            &conversation_id,
+        )
+        .await
+        .expect("lookup rollout path after first turn")
+        .expect("rollout path should exist");
+        let (items, _, _) = RolloutRecorder::load_rollout_items(&rollout_path)
+            .await
+            .expect("load rollout items");
+
+        assert!(matches!(items.first(), Some(RolloutItem::SessionMeta(_))));
+        let initial_context_len = session.build_initial_context(&turn_context).await.len();
+        assert_eq!(
+            items
+                .iter()
+                .skip(1)
+                .take(initial_context_len)
+                .filter(|item| matches!(item, RolloutItem::ResponseItem(_)))
+                .count(),
+            initial_context_len
+        );
+        assert!(matches!(items.last(), Some(RolloutItem::TurnContext(_))));
+    }
+
+    #[tokio::test]
+    async fn ensure_rollout_persisted_for_api_is_idempotent() {
+        let (session, turn_context) = make_session_and_context().await;
+        {
+            let mut state = session.state.lock().await;
+            state.initial_context_seeded = false;
+        }
+
+        let base_instructions = session.get_base_instructions().await;
+        let session_source = {
+            let state = session.state.lock().await;
+            state.session_configuration.session_source.clone()
+        };
+        {
+            let mut pending = session.services.pending_rollout_create.lock().await;
+            *pending = Some(RolloutRecorderParams::new(
+                session.conversation_id,
+                None,
+                session_source,
+                base_instructions,
+                Vec::new(),
+            ));
+        }
+
+        let first = session
+            .ensure_rollout_persisted_for_api()
+            .await
+            .expect("first persistence call");
+        let second = session
+            .ensure_rollout_persisted_for_api()
+            .await
+            .expect("second persistence call");
+
+        let first_path = match first {
+            RolloutPersistenceStatus::Persisted(path) => path,
+            RolloutPersistenceStatus::Ephemeral => panic!("expected persisted rollout"),
+        };
+        let second_path = match second {
+            RolloutPersistenceStatus::Persisted(path) => path,
+            RolloutPersistenceStatus::Ephemeral => panic!("expected persisted rollout"),
+        };
+        assert_eq!(first_path, second_path);
+
+        let (items, _, _) = RolloutRecorder::load_rollout_items(&first_path)
+            .await
+            .expect("load rollout items");
+        assert!(matches!(items.first(), Some(RolloutItem::SessionMeta(_))));
+
+        let initial_context_len = session.build_initial_context(&turn_context).await.len();
+        assert_eq!(
+            items
+                .iter()
+                .filter(|item| matches!(item, RolloutItem::ResponseItem(_)))
+                .count(),
+            initial_context_len
+        );
+    }
+
+    #[tokio::test]
+    async fn ensure_rollout_persisted_for_api_returns_ephemeral_when_session_is_ephemeral() {
+        let (session, _) = make_session_and_context().await;
+        {
+            let mut state = session.state.lock().await;
+            let mut config = (*state.session_configuration.original_config_do_not_use).clone();
+            config.ephemeral = true;
+            state.session_configuration.original_config_do_not_use = Arc::new(config);
+        }
+
+        let outcome = session
+            .ensure_rollout_persisted_for_api()
+            .await
+            .expect("ephemeral persistence check");
+        assert_eq!(outcome, RolloutPersistenceStatus::Ephemeral);
+
+        let codex_home = session.codex_home().await;
+        let rollout_path = crate::rollout::find_thread_path_by_id_str(
+            &codex_home,
+            &session.conversation_id.to_string(),
+        )
+        .await
+        .expect("lookup rollout path");
+        assert_eq!(rollout_path, None);
     }
 
     #[tokio::test]
@@ -5795,6 +6087,8 @@ mod tests {
             ),
             hooks: Hooks::new(&config),
             rollout: Mutex::new(None),
+            rollout_init_lock: Mutex::new(()),
+            pending_rollout_create: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             exec_policy,
@@ -5925,6 +6219,8 @@ mod tests {
             ),
             hooks: Hooks::new(&config),
             rollout: Mutex::new(None),
+            rollout_init_lock: Mutex::new(()),
+            pending_rollout_create: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             exec_policy,

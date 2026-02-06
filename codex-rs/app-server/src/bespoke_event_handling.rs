@@ -71,6 +71,7 @@ use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::build_turns_from_event_msgs;
 use codex_core::CodexThread;
+use codex_core::RolloutPersistenceStatus;
 use codex_core::parse_command::shlex_join;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::CodexErrorInfo as CoreCodexErrorInfo;
@@ -1062,14 +1063,26 @@ pub(crate) async fn apply_bespoke_event_handling(
             };
 
             if let Some(request_id) = pending {
-                let Some(rollout_path) = conversation.rollout_path() else {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: "thread has no persisted rollout".to_string(),
-                        data: None,
-                    };
-                    outgoing.send_error(request_id, error).await;
-                    return;
+                let rollout_path = match conversation.ensure_rollout_persisted_for_api().await {
+                    Ok(RolloutPersistenceStatus::Persisted(path)) => path,
+                    Ok(RolloutPersistenceStatus::Ephemeral) => {
+                        let error = JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: "thread has no persisted rollout".to_string(),
+                            data: None,
+                        };
+                        outgoing.send_error(request_id, error).await;
+                        return;
+                    }
+                    Err(err) => {
+                        let error = JSONRPCErrorError {
+                            code: INTERNAL_ERROR_CODE,
+                            message: format!("failed to persist rollout for rollback: {err}"),
+                            data: None,
+                        };
+                        outgoing.send_error(request_id, error).await;
+                        return;
+                    }
                 };
                 let response = match read_summary_from_rollout(
                     rollout_path.as_path(),

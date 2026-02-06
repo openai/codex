@@ -16,6 +16,12 @@ use tokio::sync::watch;
 
 use crate::state_db::StateDbHandle;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RolloutPersistenceStatus {
+    Persisted(PathBuf),
+    Ephemeral,
+}
+
 #[derive(Clone, Debug)]
 pub struct ThreadConfigSnapshot {
     pub model: String,
@@ -74,6 +80,10 @@ impl CodexThread {
 
     pub fn rollout_path(&self) -> Option<PathBuf> {
         self.rollout_path.clone()
+    }
+
+    pub async fn ensure_rollout_persisted_for_api(&self) -> CodexResult<RolloutPersistenceStatus> {
+        self.codex.ensure_rollout_persisted_for_api().await
     }
 
     pub fn state_db(&self) -> Option<StateDbHandle> {

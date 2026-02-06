@@ -72,9 +72,14 @@ async fn thread_resume_returns_original_thread() -> Result<()> {
     let ThreadResumeResponse {
         thread: resumed, ..
     } = to_response::<ThreadResumeResponse>(resume_resp)?;
-    let mut expected = thread;
-    expected.updated_at = resumed.updated_at;
-    assert_eq!(resumed, expected);
+    assert_eq!(resumed.id, thread.id);
+    assert_eq!(resumed.model_provider, thread.model_provider);
+    assert_eq!(resumed.source, thread.source);
+    assert_eq!(resumed.cwd, thread.cwd);
+    assert!(
+        resumed.path.is_some(),
+        "thread/resume should materialize rollout persistence on demand"
+    );
 
     Ok(())
 }
@@ -322,7 +327,23 @@ async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
     .await??;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
 
-    let thread_path = thread.path.clone().expect("thread path");
+    let first_resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let first_resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(first_resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        thread: resumed_by_id,
+        ..
+    } = to_response::<ThreadResumeResponse>(first_resume_resp)?;
+    let thread_path = resumed_by_id.path.clone().expect("thread path");
+
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: "not-a-valid-thread-id".to_string(),
@@ -339,7 +360,7 @@ async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
     let ThreadResumeResponse {
         thread: resumed, ..
     } = to_response::<ThreadResumeResponse>(resume_resp)?;
-    let mut expected = thread;
+    let mut expected = resumed_by_id;
     expected.updated_at = resumed.updated_at;
     assert_eq!(resumed, expected);
 

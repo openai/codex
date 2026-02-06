@@ -9,7 +9,10 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
+use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::UserInput;
 use codex_core::config::set_project_trust_level;
+use codex_core::find_thread_path_by_id_str;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::openai_models::ReasoningEffort;
 use std::path::Path;
@@ -59,6 +62,11 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
         thread.created_at > 0,
         "created_at should be a positive UNIX timestamp"
     );
+    let rollout_path = find_thread_path_by_id_str(codex_home.path(), &thread.id).await?;
+    assert!(
+        rollout_path.is_none(),
+        "fresh threads should not create rollout files until first turn"
+    );
 
     // A corresponding thread/started notification should arrive.
     let notif: JSONRPCNotification = timeout(
@@ -69,6 +77,33 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
     let started: ThreadStartedNotification =
         serde_json::from_value(notif.params.expect("params must be present"))?;
     assert_eq!(started.thread, thread);
+
+    // First turn should create the rollout file lazily.
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let _: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    let _: JSONRPCNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    let rollout_path = find_thread_path_by_id_str(codex_home.path(), &thread.id).await?;
+    assert!(
+        rollout_path.is_some(),
+        "first completed turn should create rollout file"
+    );
 
     Ok(())
 }
