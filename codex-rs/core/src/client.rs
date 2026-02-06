@@ -814,7 +814,9 @@ impl ModelClientSession {
                 Ok(response_id) if !response_id.is_empty() => {
                     self.websocket_last_response_id = Some(response_id);
                 }
-                Ok(_) | Err(TryRecvError::Closed) => {}
+                Ok(_) | Err(TryRecvError::Closed) => {
+                    self.websocket_last_response_id = None;
+                }
                 Err(TryRecvError::Empty) => {
                     self.websocket_last_response_id_rx = Some(receiver);
                 }
