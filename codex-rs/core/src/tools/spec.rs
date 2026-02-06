@@ -522,6 +522,29 @@ fn create_send_input_tool() -> ToolSpec {
     })
 }
 
+fn create_resume_agent_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "id".to_string(),
+        JsonSchema::String {
+            description: Some("Agent id to resume.".to_string()),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "resume_agent".to_string(),
+        description:
+            "Resume a previously closed agent by id so it can receive send_input and wait calls."
+                .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["id".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
 fn create_wait_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -1410,10 +1433,12 @@ pub(crate) fn build_specs(
         let collab_handler = Arc::new(CollabHandler);
         builder.push_spec(create_spawn_agent_tool());
         builder.push_spec(create_send_input_tool());
+        builder.push_spec(create_resume_agent_tool());
         builder.push_spec(create_wait_tool());
         builder.push_spec(create_close_agent_tool());
         builder.register_handler("spawn_agent", collab_handler.clone());
         builder.register_handler("send_input", collab_handler.clone());
+        builder.register_handler("resume_agent", collab_handler.clone());
         builder.register_handler("wait", collab_handler.clone());
         builder.register_handler("close_agent", collab_handler);
     }
@@ -1670,7 +1695,13 @@ mod tests {
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
         assert_contains_tool_names(
             &tools,
-            &["spawn_agent", "send_input", "wait", "close_agent"],
+            &[
+                "spawn_agent",
+                "send_input",
+                "resume_agent",
+                "wait",
+                "close_agent",
+            ],
         );
     }
 
