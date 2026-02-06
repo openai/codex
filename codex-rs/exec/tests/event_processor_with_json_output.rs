@@ -860,6 +860,8 @@ fn exec_command_end_success_produces_completed_command_item() {
             parsed_cmd: parsed_cmd.clone(),
             source: ExecCommandSource::Agent,
             interaction_input: None,
+            description: None,
+            display_name: None,
         }),
     );
     let out_begin = ep.collect_thread_events(&begin);
@@ -896,6 +898,8 @@ fn exec_command_end_success_produces_completed_command_item() {
             exit_code: 0,
             duration: Duration::from_millis(5),
             formatted_output: String::new(),
+            description: None,
+            display_name: None,
         }),
     );
     let out_ok = ep.collect_thread_events(&end_ok);
@@ -937,6 +941,8 @@ fn command_execution_output_delta_updates_item_progress() {
             parsed_cmd: parsed_cmd.clone(),
             source: ExecCommandSource::Agent,
             interaction_input: None,
+            description: None,
+            display_name: None,
         }),
     );
     let out_begin = ep.collect_thread_events(&begin);
@@ -983,6 +989,8 @@ fn command_execution_output_delta_updates_item_progress() {
             exit_code: 0,
             duration: Duration::from_millis(3),
             formatted_output: String::new(),
+            description: None,
+            display_name: None,
         }),
     );
     let out_end = ep.collect_thread_events(&end);
@@ -1021,6 +1029,8 @@ fn exec_command_end_failure_produces_failed_command_item() {
             parsed_cmd: parsed_cmd.clone(),
             source: ExecCommandSource::Agent,
             interaction_input: None,
+            description: None,
+            display_name: None,
         }),
     );
     assert_eq!(
@@ -1056,6 +1066,8 @@ fn exec_command_end_failure_produces_failed_command_item() {
             exit_code: 1,
             duration: Duration::from_millis(2),
             formatted_output: String::new(),
+            description: None,
+            display_name: None,
         }),
     );
     let out_fail = ep.collect_thread_events(&end_fail);
@@ -1097,6 +1109,8 @@ fn exec_command_end_without_begin_is_ignored() {
             exit_code: 0,
             duration: Duration::from_millis(1),
             formatted_output: String::new(),
+            description: None,
+            display_name: None,
         }),
     );
     let out = ep.collect_thread_events(&end_only);

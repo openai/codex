@@ -1612,6 +1612,8 @@ fn begin_exec_with_source(
         parsed_cmd,
         source,
         interaction_input,
+        description: None,
+        display_name: None,
     };
     chat.handle_codex_event(Event {
         id: call_id.to_string(),
@@ -1637,6 +1639,8 @@ fn begin_unified_exec_startup(
         parsed_cmd: Vec::new(),
         source: ExecCommandSource::UnifiedExecStartup,
         interaction_input: None,
+        description: None,
+        display_name: None,
     };
     chat.handle_codex_event(Event {
         id: call_id.to_string(),
@@ -1681,6 +1685,8 @@ fn end_exec(
         source,
         interaction_input,
         process_id,
+        description,
+        display_name,
     } = begin_event;
     chat.handle_codex_event(Event {
         id: call_id.clone(),
@@ -1699,6 +1705,8 @@ fn end_exec(
             exit_code,
             duration: std::time::Duration::from_millis(5),
             formatted_output: aggregated,
+            description,
+            display_name,
         }),
     });
 }
@@ -4959,6 +4967,8 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
             parsed_cmd: parsed_cmd.clone(),
             source: ExecCommandSource::Agent,
             interaction_input: None,
+            description: None,
+            display_name: None,
         }),
     });
     chat.handle_codex_event(Event {
@@ -4978,6 +4988,8 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
             exit_code: 0,
             duration: std::time::Duration::from_millis(16000),
             formatted_output: String::new(),
+            description: None,
+            display_name: None,
         }),
     });
     chat.handle_codex_event(Event {
