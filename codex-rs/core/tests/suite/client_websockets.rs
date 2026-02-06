@@ -693,6 +693,8 @@ async fn responses_websocket_v2_after_error_uses_full_create_without_previous_re
             harness.effort,
             harness.summary,
             None,
+            &harness.sandbox_policy,
+            harness.windows_sandbox_level,
         )
         .await
         .expect("websocket stream failed");
