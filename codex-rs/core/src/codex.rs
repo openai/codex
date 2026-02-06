@@ -981,6 +981,7 @@ impl Session {
             auth.and_then(CodexAuth::get_account_id),
             auth.and_then(CodexAuth::get_account_email),
             auth_mode,
+            crate::default_client::originator().value,
             config.otel.log_user_prompt,
             terminal::user_agent(),
             session_configuration.session_source.clone(),
@@ -1060,7 +1061,9 @@ impl Session {
                 session_configuration.provider.clone(),
                 session_configuration.session_source.clone(),
                 config.model_verbosity,
-                config.features.enabled(Feature::ResponsesWebsockets),
+                config.features.enabled(Feature::ResponsesWebsockets)
+                    || config.features.enabled(Feature::ResponsesWebsocketsV2),
+                config.features.enabled(Feature::ResponsesWebsocketsV2),
                 config.features.enabled(Feature::EnableRequestCompression),
                 config.features.enabled(Feature::RuntimeMetrics),
                 Self::build_model_client_beta_features_header(config.as_ref()),
@@ -3672,8 +3675,10 @@ pub(crate) async fn run_turn(
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, event).await;
-    if total_usage_tokens >= auto_compact_limit {
-        run_auto_compact(&sess, &turn_context).await;
+    if total_usage_tokens >= auto_compact_limit
+        && run_auto_compact(&sess, &turn_context).await.is_err()
+    {
+        return None;
     }
 
     let skills_outcome = Some(
@@ -3855,7 +3860,9 @@ pub(crate) async fn run_turn(
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if token_limit_reached && needs_follow_up {
-                    run_auto_compact(&sess, &turn_context).await;
+                    if run_auto_compact(&sess, &turn_context).await.is_err() {
+                        return None;
+                    }
                     continue;
                 }
 
@@ -3913,12 +3920,13 @@ pub(crate) async fn run_turn(
     last_agent_message
 }
 
-async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) {
+async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) -> CodexResult<()> {
     if should_use_remote_compact_task(&turn_context.provider) {
-        run_inline_remote_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await;
+        run_inline_remote_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await?;
     } else {
-        run_inline_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await;
+        run_inline_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await?;
     }
+    Ok(())
 }
 
 fn filter_connectors_for_input(
@@ -5768,6 +5776,7 @@ mod tests {
             None,
             Some("test@test.com".to_string()),
             Some(TelemetryAuthMode::Chatgpt),
+            "test_originator".to_string(),
             false,
             "test".to_string(),
             session_source,
@@ -5866,7 +5875,9 @@ mod tests {
                 session_configuration.provider.clone(),
                 session_configuration.session_source.clone(),
                 config.model_verbosity,
-                config.features.enabled(Feature::ResponsesWebsockets),
+                config.features.enabled(Feature::ResponsesWebsockets)
+                    || config.features.enabled(Feature::ResponsesWebsocketsV2),
+                config.features.enabled(Feature::ResponsesWebsocketsV2),
                 config.features.enabled(Feature::EnableRequestCompression),
                 config.features.enabled(Feature::RuntimeMetrics),
                 Session::build_model_client_beta_features_header(config.as_ref()),
@@ -5996,7 +6007,9 @@ mod tests {
                 session_configuration.provider.clone(),
                 session_configuration.session_source.clone(),
                 config.model_verbosity,
-                config.features.enabled(Feature::ResponsesWebsockets),
+                config.features.enabled(Feature::ResponsesWebsockets)
+                    || config.features.enabled(Feature::ResponsesWebsocketsV2),
+                config.features.enabled(Feature::ResponsesWebsocketsV2),
                 config.features.enabled(Feature::EnableRequestCompression),
                 config.features.enabled(Feature::RuntimeMetrics),
                 Session::build_model_client_beta_features_header(config.as_ref()),
