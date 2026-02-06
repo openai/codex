@@ -168,6 +168,7 @@ export type { ThreadActiveFlag } from "./ThreadActiveFlag";
 export type { ThreadArchiveParams } from "./ThreadArchiveParams";
 export type { ThreadArchiveResponse } from "./ThreadArchiveResponse";
 export type { ThreadArchivedNotification } from "./ThreadArchivedNotification";
+export type { ThreadClosedNotification } from "./ThreadClosedNotification";
 export type { ThreadCompactStartParams } from "./ThreadCompactStartParams";
 export type { ThreadCompactStartResponse } from "./ThreadCompactStartResponse";
 export type { ThreadForkParams } from "./ThreadForkParams";
@@ -204,6 +205,9 @@ export type { ThreadTokenUsageUpdatedNotification } from "./ThreadTokenUsageUpda
 export type { ThreadUnarchiveParams } from "./ThreadUnarchiveParams";
 export type { ThreadUnarchiveResponse } from "./ThreadUnarchiveResponse";
 export type { ThreadUnarchivedNotification } from "./ThreadUnarchivedNotification";
+export type { ThreadUnsubscribeParams } from "./ThreadUnsubscribeParams";
+export type { ThreadUnsubscribeResponse } from "./ThreadUnsubscribeResponse";
+export type { ThreadUnsubscribeStatus } from "./ThreadUnsubscribeStatus";
 export type { TokenUsageBreakdown } from "./TokenUsageBreakdown";
 export type { ToolRequestUserInputAnswer } from "./ToolRequestUserInputAnswer";
 export type { ToolRequestUserInputOption } from "./ToolRequestUserInputOption";

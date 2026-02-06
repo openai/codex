@@ -66,6 +66,7 @@ use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadSetNameParams;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadUnarchiveParams;
+use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnStartParams;
@@ -431,6 +432,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/name/set", params).await
+    }
+
+    /// Send a `thread/unsubscribe` JSON-RPC request.
+    pub async fn send_thread_unsubscribe_request(
+        &mut self,
+        params: ThreadUnsubscribeParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/unsubscribe", params).await
     }
 
     /// Send a `thread/unarchive` JSON-RPC request.
