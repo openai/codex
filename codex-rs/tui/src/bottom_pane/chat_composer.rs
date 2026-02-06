@@ -2014,7 +2014,7 @@ impl ChatComposer {
                         original_input.clone(),
                         original_text_elements,
                         original_local_image_paths,
-                        original_mention_bindings.clone(),
+                        original_mention_bindings,
                     );
                     self.pending_pastes.clone_from(&original_pending_pastes);
                     self.textarea.set_cursor(original_input.len());
@@ -2035,7 +2035,7 @@ impl ChatComposer {
                             original_input.clone(),
                             original_text_elements,
                             original_local_image_paths,
-                            original_mention_bindings.clone(),
+                            original_mention_bindings,
                         );
                         self.pending_pastes.clone_from(&original_pending_pastes);
                         self.textarea.set_cursor(original_input.len());

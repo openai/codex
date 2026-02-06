@@ -429,7 +429,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             short_description: None,
             interface: None,
             dependencies: None,
-            path: repo_skill_path.clone(),
+            path: repo_skill_path,
             scope: SkillScope::Repo,
         },
         SkillMetadata {
