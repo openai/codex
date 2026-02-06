@@ -82,8 +82,6 @@ pub(crate) struct EventProcessorWithHumanOutput {
     progress_active: bool,
     progress_last_len: usize,
     use_ansi_cursor: bool,
-    progress_wrapped: bool,
-    progress_saved: bool,
 }
 
 impl EventProcessorWithHumanOutput {
@@ -115,8 +113,6 @@ impl EventProcessorWithHumanOutput {
                 progress_active: false,
                 progress_last_len: 0,
                 use_ansi_cursor: cursor_ansi,
-                progress_wrapped: false,
-                progress_saved: false,
             }
         } else {
             Self {
@@ -138,8 +134,6 @@ impl EventProcessorWithHumanOutput {
                 progress_active: false,
                 progress_last_len: 0,
                 use_ansi_cursor: cursor_ansi,
-                progress_wrapped: false,
-                progress_saved: false,
             }
         }
     }
@@ -925,6 +919,7 @@ impl EventProcessorWithHumanOutput {
                 | EventMsg::ExecCommandOutputDelta(_)
                 | EventMsg::TerminalInteraction(_)
                 | EventMsg::ExecCommandEnd(_)
+                | EventMsg::BackgroundEvent(_)
                 | EventMsg::ViewImageToolCall(_)
                 | EventMsg::ContextCompacted(_)
                 | EventMsg::TurnDiff(_)
@@ -940,15 +935,7 @@ impl EventProcessorWithHumanOutput {
             self.progress_active = false;
             self.progress_last_len = 0;
             if self.use_ansi_cursor {
-                if self.progress_wrapped {
-                    if self.progress_saved {
-                        eprint!("\u{1b}[u\u{1b}[2K");
-                        self.progress_saved = false;
-                    }
-                    eprint!("\u{1b}[?25h\u{1b}[?7h");
-                    self.progress_wrapped = false;
-                }
-                eprintln!();
+                eprint!("\r\u{1b}[2K\n");
             } else {
                 eprintln!();
             }
@@ -988,21 +975,12 @@ impl EventProcessorWithHumanOutput {
             }
             return;
         }
-        if !self.progress_active {
-            eprint!("\u{1b}[?25l\u{1b}[?7l\u{1b}[s");
-            self.progress_wrapped = true;
-            self.progress_saved = true;
-        }
         let mut output = String::new();
-        output.push_str("\u{1b}[u\u{1b}[2K");
+        output.push('\r');
+        output.push_str("\u{1b}[2K");
         output.push_str(&line);
         if done {
-            if self.progress_wrapped {
-                output.push_str("\u{1b}[?25h\u{1b}[?7h");
-                self.progress_wrapped = false;
-            }
             output.push('\n');
-            self.progress_saved = false;
             eprint!("{output}");
             self.progress_active = false;
             self.progress_last_len = 0;
@@ -1028,7 +1006,11 @@ fn format_agent_job_progress_line(
 ) -> String {
     let rest = format!("{processed}/{total} {percent}% f{failed} r{running} p{pending} eta {eta}");
     let prefix = format!("job {job_label}");
-    let mut bar_width = 20usize;
+    let base_len = prefix.len() + rest.len() + 4;
+    let mut bar_width = columns
+        .and_then(|columns| columns.checked_sub(base_len))
+        .filter(|available| *available > 0)
+        .unwrap_or(20usize);
     let with_bar = |width: usize| {
         let filled = ((processed as f64 / total as f64) * width as f64)
             .round()
@@ -1049,7 +1031,6 @@ fn format_agent_job_progress_line(
                 }
                 return truncated;
             }
-            let base_len = prefix.len() + rest.len() + 4;
             let available = columns.saturating_sub(base_len);
             if available == 0 {
                 return min_line;
