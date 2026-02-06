@@ -239,7 +239,7 @@ async fn remote_compact_runs_automatically() -> Result<()> {
 
 #[cfg_attr(target_os = "windows", ignore)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_auto_compact_runs_during_multi_tool_output_drain() -> Result<()> {
+async fn remote_auto_compact_runs_after_multi_tool_output_drain() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let first_call_id = "first-large-call";
@@ -257,7 +257,7 @@ async fn remote_auto_compact_runs_during_multi_tool_output_drain() -> Result<()>
     .await?;
     let codex = harness.test().codex.clone();
 
-    let responses_mock = responses::mount_sse_sequence(
+    responses::mount_sse_sequence(
         harness.server(),
         vec![
             sse(vec![
@@ -298,15 +298,8 @@ async fn remote_auto_compact_runs_during_multi_tool_output_drain() -> Result<()>
     assert!(
         compact_request
             .function_call_output_text(second_call_id)
-            .is_none(),
-        "expected compaction request before the second drained tool output"
-    );
-
-    assert!(
-        responses_mock
-            .function_call_output_text(second_call_id)
             .is_some(),
-        "expected second tool output to be sent in follow-up sampling request"
+        "expected compaction request to include the second drained tool output"
     );
 
     Ok(())

@@ -3759,6 +3759,7 @@ pub(crate) async fn run_turn(
                     &turn_context,
                     auto_compact_limit,
                     needs_follow_up,
+                    true,
                     "run_turn",
                 )
                 .await;
@@ -3836,6 +3837,7 @@ async fn log_post_sampling_token_usage_and_maybe_compact(
     turn_context: &Arc<TurnContext>,
     auto_compact_limit: i64,
     needs_follow_up: bool,
+    allow_auto_compact: bool,
     checkpoint: &'static str,
 ) -> bool {
     let total_usage_tokens = sess.get_total_token_usage().await;
@@ -3850,11 +3852,12 @@ async fn log_post_sampling_token_usage_and_maybe_compact(
         auto_compact_limit,
         token_limit_reached,
         needs_follow_up,
+        allow_auto_compact,
         checkpoint,
         "post sampling token usage"
     );
 
-    if token_limit_reached && needs_follow_up {
+    if allow_auto_compact && token_limit_reached && needs_follow_up {
         run_auto_compact(sess, turn_context).await;
     }
 
@@ -4500,6 +4503,7 @@ async fn drain_in_flight(
                     &turn_context,
                     auto_compact_limit,
                     true,
+                    in_flight.is_empty(),
                     "drain_in_flight",
                 )
                 .await;
@@ -4653,6 +4657,7 @@ async fn try_run_sampling_request(
                             &turn_context,
                             auto_compact_limit,
                             needs_follow_up,
+                            in_flight.is_empty(),
                             "stream_item_done_plan",
                         )
                         .await;
@@ -4682,6 +4687,7 @@ async fn try_run_sampling_request(
                     &turn_context,
                     auto_compact_limit,
                     needs_follow_up,
+                    in_flight.is_empty(),
                     "stream_item_done",
                 )
                 .await;
