@@ -77,7 +77,8 @@ struct WaitAgentJobArgs {
 #[derive(Debug, Deserialize)]
 struct ExportAgentJobCsvArgs {
     job_id: String,
-    path: Option<String>,
+    #[serde(alias = "path")]
+    output_csv_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -117,7 +118,7 @@ struct WaitAgentJobResult {
 #[derive(Debug, Serialize)]
 struct ExportAgentJobCsvResult {
     job_id: String,
-    path: String,
+    output_csv_path: String,
     row_count: usize,
 }
 
@@ -332,6 +333,15 @@ mod run_agent_job {
             .ok_or_else(|| {
                 FunctionCallError::RespondToModel(format!("agent job {job_id} not found"))
             })?;
+        if !job_runner_active(job_id.as_str()).await {
+            db.reset_agent_job_running_items(job_id.as_str())
+                .await
+                .map_err(|err| {
+                    FunctionCallError::RespondToModel(format!(
+                        "failed to reset running items for agent job {job_id}: {err}"
+                    ))
+                })?;
+        }
         let options = build_runner_options(
             &session,
             &turn,
@@ -465,7 +475,7 @@ mod export_agent_job_csv {
                     "failed to load items for agent job {job_id}: {err}"
                 ))
             })?;
-        let output_path = args.path.map_or_else(
+        let output_path = args.output_csv_path.map_or_else(
             || PathBuf::from(job.output_csv_path.clone()),
             |path| turn.resolve_path(Some(path)),
         );
@@ -488,7 +498,7 @@ mod export_agent_job_csv {
             })?;
         let content = serde_json::to_string(&ExportAgentJobCsvResult {
             job_id,
-            path: output_display,
+            output_csv_path: output_display,
             row_count: items.len(),
         })
         .map_err(|err| {
@@ -652,6 +662,14 @@ async fn cleanup_finished_runners() {
     runners.retain(|_, handle| !handle.is_finished());
 }
 
+async fn job_runner_active(job_id: &str) -> bool {
+    cleanup_finished_runners().await;
+    let runners = ACTIVE_JOB_RUNNERS.lock().await;
+    runners
+        .get(job_id)
+        .is_some_and(|handle| !handle.is_finished())
+}
+
 async fn run_agent_job_loop(
     session: Arc<Session>,
     db: Arc<codex_state::StateRuntime>,
@@ -707,6 +725,12 @@ async fn run_agent_job_loop(
                 {
                     Ok(thread_id) => thread_id,
                     Err(CodexErr::AgentLimitReached { .. }) => {
+                        db.mark_agent_job_item_pending(
+                            job_id.as_str(),
+                            item.item_id.as_str(),
+                            None,
+                        )
+                        .await?;
                         break;
                     }
                     Err(err) => {
@@ -923,7 +947,7 @@ fn build_worker_prompt(
 ) -> anyhow::Result<String> {
     let job_id = job.id.as_str();
     let item_id = item.item_id.as_str();
-    let instruction = job.instruction.as_str();
+    let instruction = render_instruction_template(job.instruction.as_str(), &item.row_json);
     let output_schema = job
         .output_schema_json
         .as_ref()
@@ -949,6 +973,31 @@ After the tool call succeeds, stop.",
     ))
 }
 
+fn render_instruction_template(instruction: &str, row_json: &Value) -> String {
+    const OPEN_BRACE_SENTINEL: &str = "__CODEX_OPEN_BRACE__";
+    const CLOSE_BRACE_SENTINEL: &str = "__CODEX_CLOSE_BRACE__";
+
+    let mut rendered = instruction
+        .replace("{{", OPEN_BRACE_SENTINEL)
+        .replace("}}", CLOSE_BRACE_SENTINEL);
+    let Some(row) = row_json.as_object() else {
+        return rendered
+            .replace(OPEN_BRACE_SENTINEL, "{")
+            .replace(CLOSE_BRACE_SENTINEL, "}");
+    };
+    for (key, value) in row {
+        let placeholder = format!("{{{key}}}");
+        let replacement = value
+            .as_str()
+            .map(str::to_string)
+            .unwrap_or_else(|| value.to_string());
+        rendered = rendered.replace(placeholder.as_str(), replacement.as_str());
+    }
+    rendered
+        .replace(OPEN_BRACE_SENTINEL, "{")
+        .replace(CLOSE_BRACE_SENTINEL, "}")
+}
+
 async fn render_job_status(
     db: Arc<codex_state::StateRuntime>,
     job_id: &str,
@@ -965,11 +1014,7 @@ async fn render_job_status(
     let progress = db.get_agent_job_progress(job_id).await.map_err(|err| {
         FunctionCallError::RespondToModel(format!("failed to fetch progress for {job_id}: {err}"))
     })?;
-    cleanup_finished_runners().await;
-    let runners = ACTIVE_JOB_RUNNERS.lock().await;
-    let runner_active = runners
-        .get(job_id)
-        .is_some_and(|handle| !handle.is_finished());
+    let runner_active = job_runner_active(job_id).await;
     Ok(AgentJobToolResult {
         job_id: job.id,
         status: job.status.as_str().to_string(),
@@ -1169,5 +1214,31 @@ mod tests {
         assert_eq!(csv_escape("simple"), "simple");
         assert_eq!(csv_escape("a,b"), "\"a,b\"");
         assert_eq!(csv_escape("a\"b"), "\"a\"\"b\"");
+    }
+
+    #[test]
+    fn render_instruction_template_expands_placeholders_and_escapes_braces() {
+        let row = json!({
+            "path": "src/lib.rs",
+            "area": "test",
+            "file path": "docs/readme.md",
+        });
+        let rendered = render_instruction_template(
+            "Review {path} in {area}. Also see {file path}. Use {{literal}}.",
+            &row,
+        );
+        assert_eq!(
+            rendered,
+            "Review src/lib.rs in test. Also see docs/readme.md. Use {literal}."
+        );
+    }
+
+    #[test]
+    fn render_instruction_template_leaves_unknown_placeholders() {
+        let row = json!({
+            "path": "src/lib.rs",
+        });
+        let rendered = render_instruction_template("Check {path} then {missing}", &row);
+        assert_eq!(rendered, "Check src/lib.rs then {missing}");
     }
 }

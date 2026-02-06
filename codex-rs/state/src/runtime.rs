@@ -1008,6 +1008,35 @@ WHERE job_id = ? AND item_id = ? AND status = ?
         Ok(result.rows_affected() > 0)
     }
 
+    pub async fn mark_agent_job_item_pending(
+        &self,
+        job_id: &str,
+        item_id: &str,
+        error_message: Option<&str>,
+    ) -> anyhow::Result<bool> {
+        let now = Utc::now().timestamp();
+        let result = sqlx::query(
+            r#"
+UPDATE agent_job_items
+SET
+    status = ?,
+    assigned_thread_id = NULL,
+    updated_at = ?,
+    last_error = ?
+WHERE job_id = ? AND item_id = ? AND status = ?
+            "#,
+        )
+        .bind(AgentJobItemStatus::Pending.as_str())
+        .bind(now)
+        .bind(error_message)
+        .bind(job_id)
+        .bind(item_id)
+        .bind(AgentJobItemStatus::Running.as_str())
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     pub async fn set_agent_job_item_thread(
         &self,
         job_id: &str,
@@ -1134,6 +1163,54 @@ WHERE
         .execute(self.pool.as_ref())
         .await?;
         Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn reset_agent_job_running_items(&self, job_id: &str) -> anyhow::Result<()> {
+        let now = Utc::now().timestamp();
+        sqlx::query(
+            r#"
+UPDATE agent_job_items
+SET
+    status = ?,
+    completed_at = ?,
+    updated_at = ?,
+    assigned_thread_id = NULL,
+    last_error = NULL
+WHERE
+    job_id = ?
+    AND status = ?
+    AND result_json IS NOT NULL
+            "#,
+        )
+        .bind(AgentJobItemStatus::Completed.as_str())
+        .bind(now)
+        .bind(now)
+        .bind(job_id)
+        .bind(AgentJobItemStatus::Running.as_str())
+        .execute(self.pool.as_ref())
+        .await?;
+
+        sqlx::query(
+            r#"
+UPDATE agent_job_items
+SET
+    status = ?,
+    updated_at = ?,
+    assigned_thread_id = NULL,
+    last_error = ?
+WHERE
+    job_id = ?
+    AND status = ?
+            "#,
+        )
+        .bind(AgentJobItemStatus::Pending.as_str())
+        .bind(now)
+        .bind("reset to pending after resume")
+        .bind(job_id)
+        .bind(AgentJobItemStatus::Running.as_str())
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(())
     }
 
     pub async fn get_agent_job_progress(&self, job_id: &str) -> anyhow::Result<AgentJobProgress> {
@@ -1422,12 +1499,16 @@ mod tests {
     use super::StateRuntime;
     use super::ThreadMetadata;
     use super::state_db_filename;
+    use crate::AgentJobCreateParams;
+    use crate::AgentJobItemCreateParams;
+    use crate::AgentJobItemStatus;
     use chrono::DateTime;
     use chrono::Utc;
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::SandboxPolicy;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
     use sqlx::Row;
     use std::path::Path;
     use std::path::PathBuf;
@@ -1518,6 +1599,88 @@ mod tests {
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn reset_running_items_for_resume_updates_statuses() {
+        let codex_home = unique_temp_dir();
+        tokio::fs::create_dir_all(&codex_home)
+            .await
+            .expect("create codex_home");
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let job_id = Uuid::new_v4().to_string();
+        let job = runtime
+            .create_agent_job(
+                &AgentJobCreateParams {
+                    id: job_id.clone(),
+                    name: "resume-test".to_string(),
+                    instruction: "do work".to_string(),
+                    auto_export: true,
+                    output_schema_json: None,
+                    input_headers: vec!["path".to_string()],
+                    input_csv_path: "/tmp/input.csv".to_string(),
+                    output_csv_path: "/tmp/output.csv".to_string(),
+                },
+                &[
+                    AgentJobItemCreateParams {
+                        item_id: "row-1".to_string(),
+                        row_index: 0,
+                        source_id: None,
+                        row_json: json!({ "path": "a.txt" }),
+                    },
+                    AgentJobItemCreateParams {
+                        item_id: "row-2".to_string(),
+                        row_index: 1,
+                        source_id: None,
+                        row_json: json!({ "path": "b.txt" }),
+                    },
+                ],
+            )
+            .await
+            .expect("create job");
+
+        runtime
+            .mark_agent_job_item_running(job.id.as_str(), "row-1")
+            .await
+            .expect("mark running");
+        runtime
+            .report_agent_job_item_result(job.id.as_str(), "row-1", "thread-1", &json!({"ok":true}))
+            .await
+            .expect("report result");
+
+        runtime
+            .mark_agent_job_item_running(job.id.as_str(), "row-2")
+            .await
+            .expect("mark running");
+        runtime
+            .set_agent_job_item_thread(job.id.as_str(), "row-2", "thread-2")
+            .await
+            .expect("set thread");
+
+        runtime
+            .reset_agent_job_running_items(job.id.as_str())
+            .await
+            .expect("reset running items");
+
+        let completed = runtime
+            .list_agent_job_items(job.id.as_str(), Some(AgentJobItemStatus::Completed), None)
+            .await
+            .expect("list completed");
+        let pending = runtime
+            .list_agent_job_items(job.id.as_str(), Some(AgentJobItemStatus::Pending), None)
+            .await
+            .expect("list pending");
+
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].item_id, "row-1");
+        assert_eq!(completed[0].assigned_thread_id, None);
+
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].item_id, "row-2");
+        assert_eq!(pending[0].assigned_thread_id, None);
     }
 
     #[tokio::test]

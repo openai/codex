@@ -18,7 +18,9 @@ Create a new job from a CSV input and immediately start it.
 
 Required args:
 - `csv_path`: path to the CSV file (first row is headers).
-- `instruction`: instruction to apply to each row.
+- `instruction`: instruction template to apply to each row. Use `{column_name}` placeholders to
+  inject values from the CSV row (column names are case-sensitive and may include spaces).
+  Use `{{` and `}}` for literal braces.
 
 Optional args:
 - `id_column`: header column name to use as a stable item id.
@@ -30,11 +32,13 @@ Optional args:
 
 ### `run_agent_job`
 
-Start or resume an existing job by id.
+Resume an existing job by id. Jobs auto-start when created. When resuming, any items
+left in `running` state are reset to `pending` unless they already reported a result.
 
 ### `get_agent_job_status`
 
-Return job status and progress counters.
+Return job status and progress counters. Most flows should prefer `wait_agent_job`
+to deterministically block until completion.
 
 ### `wait_agent_job`
 
@@ -42,7 +46,8 @@ Wait for a job to complete, or return after a timeout.
 
 ### `export_agent_job_csv`
 
-Export the current job results to CSV using the stored headers and results.
+Export the current job results to CSV using the stored headers and results. You can
+optionally override the destination path.
 
 ### `report_agent_job_result`
 
@@ -52,10 +57,11 @@ Workers must call this exactly once to report a JSON object for their assigned i
 
 1. Jobs are stored in SQLite with per-item state (pending/running/completed/failed).
 2. The job runner spawns subagents up to `max_concurrency`.
-3. Each worker processes one item and calls `report_agent_job_result`.
-4. The runner marks items completed after the worker finishes.
-5. If `auto_export` is true, the runner writes a CSV snapshot on successful completion.
-6. CSV export can also be generated manually by a single writer from the SQLite store.
+3. The job instruction is rendered per row by substituting `{column_name}` placeholders.
+4. Each worker processes one item and calls `report_agent_job_result`.
+5. The runner marks items completed after the worker finishes.
+6. If `auto_export` is true, the runner writes a CSV snapshot on successful completion.
+7. CSV export can also be generated manually by a single writer from the SQLite store.
 
 ## CSV Output
 

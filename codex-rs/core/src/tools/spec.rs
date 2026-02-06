@@ -493,7 +493,10 @@ fn create_spawn_agents_on_csv_tool() -> ToolSpec {
     properties.insert(
         "instruction".to_string(),
         JsonSchema::String {
-            description: Some("Instruction to apply to each CSV row.".to_string()),
+            description: Some(
+                "Instruction template to apply to each CSV row. Use {column_name} placeholders to inject values from the row."
+                    .to_string(),
+            ),
         },
     );
     properties.insert(
@@ -526,7 +529,7 @@ fn create_spawn_agents_on_csv_tool() -> ToolSpec {
         "max_concurrency".to_string(),
         JsonSchema::Number {
             description: Some(
-                "Maximum concurrent workers for this job. Defaults to a safe value capped by config."
+                "Maximum concurrent workers for this job. Defaults to 64 and is capped by config."
                     .to_string(),
             ),
         },
@@ -542,7 +545,8 @@ fn create_spawn_agents_on_csv_tool() -> ToolSpec {
     );
     ToolSpec::Function(ResponsesApiTool {
         name: "spawn_agents_on_csv".to_string(),
-        description: "Create and run a batch agent job over a CSV file.".to_string(),
+        description: "Create and start a job that spawns subagents to process each CSV row."
+            .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -557,14 +561,14 @@ fn create_run_agent_job_tool() -> ToolSpec {
     properties.insert(
         "job_id".to_string(),
         JsonSchema::String {
-            description: Some("Identifier of the job to start.".to_string()),
+            description: Some("Identifier of the job to resume.".to_string()),
         },
     );
     properties.insert(
         "max_concurrency".to_string(),
         JsonSchema::Number {
             description: Some(
-                "Maximum concurrent workers for this job. Defaults to a safe value capped by config."
+                "Maximum concurrent workers for this job. Defaults to 64 and is capped by config."
                     .to_string(),
             ),
         },
@@ -580,7 +584,7 @@ fn create_run_agent_job_tool() -> ToolSpec {
     );
     ToolSpec::Function(ResponsesApiTool {
         name: "run_agent_job".to_string(),
-        description: "Start or resume execution of an existing agent job.".to_string(),
+        description: "Resume execution of an existing agent job.".to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -647,7 +651,7 @@ fn create_export_agent_job_csv_tool() -> ToolSpec {
         },
     );
     properties.insert(
-        "path".to_string(),
+        "output_csv_path".to_string(),
         JsonSchema::String {
             description: Some("Optional output CSV path override.".to_string()),
         },
