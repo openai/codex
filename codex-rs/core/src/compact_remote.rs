@@ -85,7 +85,7 @@ pub(crate) async fn run_remote_compaction(
         )
         .await?;
     new_history = sess
-        .process_compacted_history(turn_context, new_history)
+        .process_compacted_history(turn_context.as_ref(), new_history)
         .await;
 
     if !ghost_snapshots.is_empty() {
