@@ -1,0 +1,13 @@
+---
+source: tui/src/update_prompt.rs
+expression: terminal.backend()
+---
+  ✨ Update available! 0.0.0 -> 9.9.9
+
+  Release notes: https://github.com/openai/codex/releases/latest
+
+› 1. Update now (runs `npm install -g @openai/codex@latest`)                    
+  2. Skip
+  3. Skip until next version
+
+  Press enter to continue

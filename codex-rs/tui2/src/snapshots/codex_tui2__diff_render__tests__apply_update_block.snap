@@ -1,0 +1,16 @@
+---
+source: tui2/src/diff_render.rs
+expression: terminal.backend()
+---
+"• Edited example.txt (+1 -1)                                                    "
+"    1  line one                                                                 "
+"    2 -line two                                                                 "
+"    2 +line two changed                                                         "
+"    3  line three                                                               "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "

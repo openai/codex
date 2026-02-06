@@ -16,7 +16,7 @@ pub use sandbox_mode_cli_arg::SandboxModeCliArg;
 #[cfg(feature = "cli")]
 pub mod format_env_display;
 
-#[cfg(feature = "cli")]
+#[cfg(any(feature = "cli", test))]
 mod config_override;
 
 #[cfg(feature = "cli")]

@@ -1,4 +1,3 @@
-use core_test_support::responses;
 use serde_json::json;
 use std::path::Path;
 
@@ -15,30 +14,85 @@ pub fn create_shell_command_sse_response(
         "workdir": workdir.map(|w| w.to_string_lossy()),
         "timeout_ms": timeout_ms
     }))?;
-    Ok(responses::sse(vec![
-        responses::ev_response_created("resp-1"),
-        responses::ev_function_call(call_id, "shell_command", &tool_call_arguments),
-        responses::ev_completed("resp-1"),
-    ]))
+    let tool_call = json!({
+        "choices": [
+            {
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "id": call_id,
+                            "function": {
+                                "name": "shell_command",
+                                "arguments": tool_call_arguments
+                            }
+                        }
+                    ]
+                },
+                "finish_reason": "tool_calls"
+            }
+        ]
+    });
+
+    let sse = format!(
+        "data: {}\n\ndata: DONE\n\n",
+        serde_json::to_string(&tool_call)?
+    );
+    Ok(sse)
 }
 
 pub fn create_final_assistant_message_sse_response(message: &str) -> anyhow::Result<String> {
-    Ok(responses::sse(vec![
-        responses::ev_response_created("resp-1"),
-        responses::ev_assistant_message("msg-1", message),
-        responses::ev_completed("resp-1"),
-    ]))
+    let assistant_message = json!({
+        "choices": [
+            {
+                "delta": {
+                    "content": message
+                },
+                "finish_reason": "stop"
+            }
+        ]
+    });
+
+    let sse = format!(
+        "data: {}\n\ndata: DONE\n\n",
+        serde_json::to_string(&assistant_message)?
+    );
+    Ok(sse)
 }
 
 pub fn create_apply_patch_sse_response(
     patch_content: &str,
     call_id: &str,
 ) -> anyhow::Result<String> {
-    Ok(responses::sse(vec![
-        responses::ev_response_created("resp-1"),
-        responses::ev_apply_patch_shell_command_call_via_heredoc(call_id, patch_content),
-        responses::ev_completed("resp-1"),
-    ]))
+    // Use shell_command to call apply_patch with heredoc format
+    let command = format!("apply_patch <<'EOF'\n{patch_content}\nEOF");
+    let tool_call_arguments = serde_json::to_string(&json!({
+        "command": command
+    }))?;
+
+    let tool_call = json!({
+        "choices": [
+            {
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "id": call_id,
+                            "function": {
+                                "name": "shell_command",
+                                "arguments": tool_call_arguments
+                            }
+                        }
+                    ]
+                },
+                "finish_reason": "tool_calls"
+            }
+        ]
+    });
+
+    let sse = format!(
+        "data: {}\n\ndata: DONE\n\n",
+        serde_json::to_string(&tool_call)?
+    );
+    Ok(sse)
 }
 
 pub fn create_exec_command_sse_response(call_id: &str) -> anyhow::Result<String> {
@@ -54,32 +108,28 @@ pub fn create_exec_command_sse_response(call_id: &str) -> anyhow::Result<String>
         "cmd": command.join(" "),
         "yield_time_ms": 500
     }))?;
-    Ok(responses::sse(vec![
-        responses::ev_response_created("resp-1"),
-        responses::ev_function_call(call_id, "exec_command", &tool_call_arguments),
-        responses::ev_completed("resp-1"),
-    ]))
-}
+    let tool_call = json!({
+        "choices": [
+            {
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "id": call_id,
+                            "function": {
+                                "name": "exec_command",
+                                "arguments": tool_call_arguments
+                            }
+                        }
+                    ]
+                },
+                "finish_reason": "tool_calls"
+            }
+        ]
+    });
 
-pub fn create_request_user_input_sse_response(call_id: &str) -> anyhow::Result<String> {
-    let tool_call_arguments = serde_json::to_string(&json!({
-        "questions": [{
-            "id": "confirm_path",
-            "header": "Confirm",
-            "question": "Proceed with the plan?",
-            "options": [{
-                "label": "Yes (Recommended)",
-                "description": "Continue the current plan."
-            }, {
-                "label": "No",
-                "description": "Stop and revisit the approach."
-            }]
-        }]
-    }))?;
-
-    Ok(responses::sse(vec![
-        responses::ev_response_created("resp-1"),
-        responses::ev_function_call(call_id, "request_user_input", &tool_call_arguments),
-        responses::ev_completed("resp-1"),
-    ]))
+    let sse = format!(
+        "data: {}\n\ndata: DONE\n\n",
+        serde_json::to_string(&tool_call)?
+    );
+    Ok(sse)
 }

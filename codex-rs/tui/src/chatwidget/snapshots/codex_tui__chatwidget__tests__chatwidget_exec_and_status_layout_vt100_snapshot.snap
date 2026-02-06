@@ -9,9 +9,9 @@ expression: term.backend().vt100().screen().contents()
   └ Search Change Approved
     Read diff_render.rs
 
-• Investigating rendering code (0s • esc to interrupt)
+• Investigating rendering code - **Investigating rendering code** (0s • esc to i
 
 
 › Summarize recent commits
 
-  tab to queue message                                       100% context left
+  100% context left

@@ -1,9 +1,8 @@
 #![expect(clippy::expect_used)]
 
-use codex_utils_cargo_bin::CargoBinError;
 use tempfile::TempDir;
 
-use codex_core::CodexThread;
+use codex_core::CodexConversation;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
@@ -160,7 +159,35 @@ pub fn load_sse_fixture_with_id_from_str(raw: &str, id: &str) -> String {
         .collect()
 }
 
-pub async fn wait_for_event<F>(codex: &CodexThread, predicate: F) -> codex_core::protocol::EventMsg
+/// Same as [`load_sse_fixture`], but replaces the placeholder `__ID__` in the
+/// fixture template with the supplied identifier before parsing. This lets a
+/// single JSON template be reused by multiple tests that each need a unique
+/// `response_id`.
+pub fn load_sse_fixture_with_id(path: impl AsRef<std::path::Path>, id: &str) -> String {
+    let raw = std::fs::read_to_string(path).expect("read fixture template");
+    let replaced = raw.replace("__ID__", id);
+    let events: Vec<serde_json::Value> =
+        serde_json::from_str(&replaced).expect("parse JSON fixture");
+    events
+        .into_iter()
+        .map(|e| {
+            let kind = e
+                .get("type")
+                .and_then(|v| v.as_str())
+                .expect("fixture event missing type");
+            if e.as_object().map(|o| o.len() == 1).unwrap_or(false) {
+                format!("event: {kind}\n\n")
+            } else {
+                format!("event: {kind}\ndata: {e}\n\n")
+            }
+        })
+        .collect()
+}
+
+pub async fn wait_for_event<F>(
+    codex: &CodexConversation,
+    predicate: F,
+) -> codex_core::protocol::EventMsg
 where
     F: FnMut(&codex_core::protocol::EventMsg) -> bool,
 {
@@ -168,7 +195,7 @@ where
     wait_for_event_with_timeout(codex, predicate, Duration::from_secs(1)).await
 }
 
-pub async fn wait_for_event_match<T, F>(codex: &CodexThread, matcher: F) -> T
+pub async fn wait_for_event_match<T, F>(codex: &CodexConversation, matcher: F) -> T
 where
     F: Fn(&codex_core::protocol::EventMsg) -> Option<T>,
 {
@@ -177,7 +204,7 @@ where
 }
 
 pub async fn wait_for_event_with_timeout<F>(
-    codex: &CodexThread,
+    codex: &CodexConversation,
     mut predicate: F,
     wait_time: tokio::time::Duration,
 ) -> codex_core::protocol::EventMsg
@@ -188,7 +215,7 @@ where
     use tokio::time::timeout;
     loop {
         // Allow a bit more time to accommodate async startup work (e.g. config IO, tool discovery)
-        let ev = timeout(wait_time.max(Duration::from_secs(10)), codex.next_event())
+        let ev = timeout(wait_time.max(Duration::from_secs(5)), codex.next_event())
             .await
             .expect("timeout waiting for event")
             .expect("stream ended unexpectedly");
@@ -223,10 +250,6 @@ pub fn format_with_current_shell_display_non_login(command: &str) -> String {
     let args = format_with_current_shell_non_login(command);
     shlex::try_join(args.iter().map(String::as_str))
         .expect("serialize current shell command without login")
-}
-
-pub fn stdio_server_bin() -> Result<String, CargoBinError> {
-    codex_utils_cargo_bin::cargo_bin("test_stdio_server").map(|p| p.to_string_lossy().to_string())
 }
 
 pub mod fs_wait {

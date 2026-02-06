@@ -10,7 +10,45 @@ use crate::util::resolve_path;
 
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
-use codex_protocol::config_types::WindowsSandboxLevel;
+
+#[cfg(target_os = "windows")]
+use std::sync::atomic::AtomicBool;
+#[cfg(target_os = "windows")]
+use std::sync::atomic::Ordering;
+
+#[cfg(target_os = "windows")]
+static WINDOWS_SANDBOX_ENABLED: AtomicBool = AtomicBool::new(false);
+#[cfg(target_os = "windows")]
+static WINDOWS_ELEVATED_SANDBOX_ENABLED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(target_os = "windows")]
+pub fn set_windows_sandbox_enabled(enabled: bool) {
+    WINDOWS_SANDBOX_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+#[cfg(not(target_os = "windows"))]
+#[allow(dead_code)]
+pub fn set_windows_sandbox_enabled(_enabled: bool) {}
+
+#[cfg(target_os = "windows")]
+pub fn set_windows_elevated_sandbox_enabled(enabled: bool) {
+    WINDOWS_ELEVATED_SANDBOX_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+#[cfg(not(target_os = "windows"))]
+#[allow(dead_code)]
+pub fn set_windows_elevated_sandbox_enabled(_enabled: bool) {}
+
+#[cfg(target_os = "windows")]
+pub fn is_windows_elevated_sandbox_enabled() -> bool {
+    WINDOWS_ELEVATED_SANDBOX_ENABLED.load(Ordering::Relaxed)
+}
+
+#[cfg(not(target_os = "windows"))]
+#[allow(dead_code)]
+pub fn is_windows_elevated_sandbox_enabled() -> bool {
+    false
+}
 
 #[derive(Debug, PartialEq)]
 pub enum SafetyCheck {
@@ -29,7 +67,6 @@ pub fn assess_patch_safety(
     policy: AskForApproval,
     sandbox_policy: &SandboxPolicy,
     cwd: &Path,
-    windows_sandbox_level: WindowsSandboxLevel,
 ) -> SafetyCheck {
     if action.is_empty() {
         return SafetyCheck::Reject {
@@ -67,7 +104,7 @@ pub fn assess_patch_safety(
             // Only auto‑approve when we can actually enforce a sandbox. Otherwise
             // fall back to asking the user because the patch may touch arbitrary
             // paths outside the project.
-            match get_platform_sandbox(windows_sandbox_level != WindowsSandboxLevel::Disabled) {
+            match get_platform_sandbox() {
                 Some(sandbox_type) => SafetyCheck::AutoApprove {
                     sandbox_type,
                     user_explicitly_approved: false,
@@ -85,17 +122,19 @@ pub fn assess_patch_safety(
     }
 }
 
-pub fn get_platform_sandbox(windows_sandbox_enabled: bool) -> Option<SandboxType> {
+pub fn get_platform_sandbox() -> Option<SandboxType> {
     if cfg!(target_os = "macos") {
         Some(SandboxType::MacosSeatbelt)
     } else if cfg!(target_os = "linux") {
         Some(SandboxType::LinuxSeccomp)
     } else if cfg!(target_os = "windows") {
-        if windows_sandbox_enabled {
-            Some(SandboxType::WindowsRestrictedToken)
-        } else {
-            None
+        #[cfg(target_os = "windows")]
+        {
+            if WINDOWS_SANDBOX_ENABLED.load(Ordering::Relaxed) {
+                return Some(SandboxType::WindowsRestrictedToken);
+            }
         }
+        None
     } else {
         None
     }
@@ -238,13 +277,7 @@ mod tests {
         };
 
         assert_eq!(
-            assess_patch_safety(
-                &add_inside,
-                AskForApproval::OnRequest,
-                &policy,
-                &cwd,
-                WindowsSandboxLevel::Disabled
-            ),
+            assess_patch_safety(&add_inside, AskForApproval::OnRequest, &policy, &cwd,),
             SafetyCheck::AutoApprove {
                 sandbox_type: SandboxType::None,
                 user_explicitly_approved: false,

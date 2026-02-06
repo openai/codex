@@ -12,12 +12,8 @@ use std::env;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::LazyLock;
-use std::sync::Mutex as StdMutex;
 use std::time::Duration;
-use std::time::Instant;
 
-use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::auth::McpAuthStatusEntry;
 use anyhow::Context;
 use anyhow::Result;
@@ -26,8 +22,6 @@ use async_channel::Sender;
 use codex_async_utils::CancelErr;
 use codex_async_utils::OrCancelExt;
 use codex_protocol::approvals::ElicitationRequestEvent;
-use codex_protocol::mcp::CallToolResult;
-use codex_protocol::mcp::RequestId as ProtocolRequestId;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::McpStartupCompleteEvent;
@@ -42,23 +36,22 @@ use codex_rmcp_client::SendElicitation;
 use futures::future::BoxFuture;
 use futures::future::FutureExt;
 use futures::future::Shared;
-use rmcp::model::ClientCapabilities;
-use rmcp::model::ElicitationCapability;
-use rmcp::model::Implementation;
-use rmcp::model::InitializeRequestParam;
-use rmcp::model::ListResourceTemplatesResult;
-use rmcp::model::ListResourcesResult;
-use rmcp::model::PaginatedRequestParam;
-use rmcp::model::ProtocolVersion;
-use rmcp::model::ReadResourceRequestParam;
-use rmcp::model::ReadResourceResult;
-use rmcp::model::RequestId;
-use rmcp::model::Resource;
-use rmcp::model::ResourceTemplate;
-use rmcp::model::Tool;
+use mcp_types::ClientCapabilities;
+use mcp_types::Implementation;
+use mcp_types::ListResourceTemplatesRequestParams;
+use mcp_types::ListResourceTemplatesResult;
+use mcp_types::ListResourcesRequestParams;
+use mcp_types::ListResourcesResult;
+use mcp_types::ReadResourceRequestParams;
+use mcp_types::ReadResourceResult;
+use mcp_types::RequestId;
+use mcp_types::Resource;
+use mcp_types::ResourceTemplate;
+use mcp_types::Tool;
 
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::json;
 use sha1::Digest;
 use sha1::Sha1;
 use tokio::sync::Mutex;
@@ -86,62 +79,26 @@ pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 /// Default timeout for individual tool calls.
 const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
 
-const CODEX_APPS_TOOLS_CACHE_TTL: Duration = Duration::from_secs(3600);
-
-/// The Responses API requires tool names to match `^[a-zA-Z0-9_-]+$`.
-/// MCP server/tool names are user-controlled, so sanitize the fully-qualified
-/// name we expose to the model by replacing any disallowed character with `_`.
-fn sanitize_responses_api_tool_name(name: &str) -> String {
-    let mut sanitized = String::with_capacity(name.len());
-    for c in name.chars() {
-        if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
-            sanitized.push(c);
-        } else {
-            sanitized.push('_');
-        }
-    }
-
-    if sanitized.is_empty() {
-        "_".to_string()
-    } else {
-        sanitized
-    }
-}
-
-fn sha1_hex(s: &str) -> String {
-    let mut hasher = Sha1::new();
-    hasher.update(s.as_bytes());
-    let sha1 = hasher.finalize();
-    format!("{sha1:x}")
-}
-
 fn qualify_tools<I>(tools: I) -> HashMap<String, ToolInfo>
 where
     I: IntoIterator<Item = ToolInfo>,
 {
     let mut used_names = HashSet::new();
-    let mut seen_raw_names = HashSet::new();
     let mut qualified_tools = HashMap::new();
     for tool in tools {
-        let qualified_name_raw = format!(
+        let mut qualified_name = format!(
             "mcp{}{}{}{}",
             MCP_TOOL_NAME_DELIMITER, tool.server_name, MCP_TOOL_NAME_DELIMITER, tool.tool_name
         );
-        if !seen_raw_names.insert(qualified_name_raw.clone()) {
-            warn!("skipping duplicated tool {}", qualified_name_raw);
-            continue;
-        }
-
-        // Start from a "pretty" name (sanitized), then deterministically disambiguate on
-        // collisions by appending a hash of the *raw* (unsanitized) qualified name. This
-        // ensures tools like `foo.bar` and `foo_bar` don't collapse to the same key.
-        let mut qualified_name = sanitize_responses_api_tool_name(&qualified_name_raw);
-
-        // Enforce length constraints early; use the raw name for the hash input so the
-        // output remains stable even when sanitization changes.
         if qualified_name.len() > MAX_TOOL_NAME_LENGTH {
-            let sha1_str = sha1_hex(&qualified_name_raw);
+            let mut hasher = Sha1::new();
+            hasher.update(qualified_name.as_bytes());
+            let sha1 = hasher.finalize();
+            let sha1_str = format!("{sha1:x}");
+
+            // Truncate to make room for the hash suffix
             let prefix_len = MAX_TOOL_NAME_LENGTH - sha1_str.len();
+
             qualified_name = format!("{}{}", &qualified_name[..prefix_len], sha1_str);
         }
 
@@ -162,18 +119,7 @@ pub(crate) struct ToolInfo {
     pub(crate) server_name: String,
     pub(crate) tool_name: String,
     pub(crate) tool: Tool,
-    pub(crate) connector_id: Option<String>,
-    pub(crate) connector_name: Option<String>,
 }
-
-#[derive(Clone)]
-struct CachedCodexAppsTools {
-    expires_at: Instant,
-    tools: Vec<ToolInfo>,
-}
-
-static CODEX_APPS_TOOLS_CACHE: LazyLock<StdMutex<Option<CachedCodexAppsTools>>> =
-    LazyLock::new(|| StdMutex::new(None));
 
 type ResponderMap = HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>;
 
@@ -215,14 +161,7 @@ impl ElicitationRequestManager {
                         id: "mcp_elicitation_request".to_string(),
                         msg: EventMsg::ElicitationRequest(ElicitationRequestEvent {
                             server_name,
-                            id: match id.clone() {
-                                rmcp::model::NumberOrString::String(value) => {
-                                    ProtocolRequestId::String(value.to_string())
-                                }
-                                rmcp::model::NumberOrString::Number(value) => {
-                                    ProtocolRequestId::Integer(value)
-                                }
-                            },
+                            id,
                             message: elicitation.message,
                         }),
                     })
@@ -327,21 +266,29 @@ pub struct SandboxState {
     pub sandbox_policy: SandboxPolicy,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub sandbox_cwd: PathBuf,
-    #[serde(default)]
-    pub use_linux_sandbox_bwrap: bool,
 }
 
 /// A thin wrapper around a set of running [`RmcpClient`] instances.
-#[derive(Default)]
 pub(crate) struct McpConnectionManager {
     clients: HashMap<String, AsyncManagedClient>,
     elicitation_requests: ElicitationRequestManager,
+    sandbox_state: Arc<std::sync::RwLock<Option<SandboxState>>>,
+}
+
+impl Default for McpConnectionManager {
+    fn default() -> Self {
+        Self {
+            clients: HashMap::new(),
+            elicitation_requests: ElicitationRequestManager::default(),
+            sandbox_state: Arc::new(std::sync::RwLock::new(None)),
+        }
+    }
 }
 
 impl McpConnectionManager {
     pub async fn initialize(
         &mut self,
-        mcp_servers: &HashMap<String, McpServerConfig>,
+        mcp_servers: HashMap<String, McpServerConfig>,
         store_mode: OAuthCredentialsStoreMode,
         auth_entries: HashMap<String, McpAuthStatusEntry>,
         tx_event: Sender<Event>,
@@ -351,10 +298,17 @@ impl McpConnectionManager {
         if cancel_token.is_cancelled() {
             return;
         }
+        {
+            let mut guard = self
+                .sandbox_state
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *guard = Some(initial_sandbox_state.clone());
+        }
         let mut clients = HashMap::new();
         let mut join_set = JoinSet::new();
         let elicitation_requests = ElicitationRequestManager::default();
-        let mcp_servers = mcp_servers.clone();
+        let sandbox_state = Arc::clone(&self.sandbox_state);
         for (server_name, cfg) in mcp_servers.into_iter().filter(|(_, cfg)| cfg.enabled) {
             let cancel_token = cancel_token.child_token();
             let _ = emit_update(
@@ -376,7 +330,7 @@ impl McpConnectionManager {
             clients.insert(server_name.clone(), async_managed_client.clone());
             let tx_event = tx_event.clone();
             let auth_entry = auth_entries.get(&server_name).cloned();
-            let sandbox_state = initial_sandbox_state.clone();
+            let sandbox_state = Arc::clone(&sandbox_state);
             join_set.spawn(async move {
                 let outcome = async_managed_client.client().await;
                 if cancel_token.is_cancelled() {
@@ -384,10 +338,15 @@ impl McpConnectionManager {
                 }
                 let status = match &outcome {
                     Ok(_) => {
-                        // Send sandbox state notification immediately after Ready
-                        if let Err(e) = async_managed_client
-                            .notify_sandbox_state_change(&sandbox_state)
-                            .await
+                        // Send the latest sandbox state notification immediately after Ready.
+                        let sandbox_state_snapshot = sandbox_state
+                            .read()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .clone();
+                        if let Some(sandbox_state_snapshot) = sandbox_state_snapshot
+                            && let Err(e) = async_managed_client
+                                .notify_sandbox_state_change(&sandbox_state_snapshot)
+                                .await
                         {
                             warn!(
                                 "Failed to notify sandbox state to MCP server {server_name}: {e:#}",
@@ -443,13 +402,19 @@ impl McpConnectionManager {
         });
     }
 
-    async fn client_by_name(&self, name: &str) -> Result<ManagedClient> {
-        self.clients
+    fn client_by_name_ready_only(&self, name: &str) -> Result<ManagedClient> {
+        let client = self
+            .clients
             .get(name)
-            .ok_or_else(|| anyhow!("unknown MCP server '{name}'"))?
-            .client()
-            .await
-            .context("failed to get client")
+            .ok_or_else(|| anyhow!("unknown MCP server '{name}'"))?;
+
+        match client.client.clone().now_or_never() {
+            Some(Ok(managed)) => Ok(managed),
+            Some(Err(err)) => Err(anyhow!(err)).context("failed to get client"),
+            None => Err(anyhow!(
+                "MCP server '{name}' is still starting (it may be waiting for credentials, permission, or a vault password). Complete the prompt or run `codex mcp login {name}`"
+            )),
+        }
     }
 
     pub async fn resolve_elicitation(
@@ -463,45 +428,82 @@ impl McpConnectionManager {
             .await
     }
 
-    pub(crate) async fn wait_for_server_ready(&self, server_name: &str, timeout: Duration) -> bool {
-        let Some(async_managed_client) = self.clients.get(server_name) else {
-            return false;
-        };
-
-        match tokio::time::timeout(timeout, async_managed_client.client()).await {
-            Ok(Ok(_)) => true,
-            Ok(Err(_)) | Err(_) => false,
-        }
-    }
-
     /// Returns a single map that contains all tools. Each key is the
     /// fully-qualified name for the tool.
     #[instrument(level = "trace", skip_all)]
     pub async fn list_all_tools(&self) -> HashMap<String, ToolInfo> {
         let mut tools = HashMap::new();
-        for (server_name, managed_client) in &self.clients {
-            let client = managed_client.client().await.ok();
-            if let Some(client) = client {
-                let rmcp_client = client.client;
-                let tool_timeout = client.tool_timeout;
-                let tool_filter = client.tool_filter;
-                let mut server_tools = client.tools;
-
-                if server_name == CODEX_APPS_MCP_SERVER_NAME {
-                    match list_tools_for_client(server_name, &rmcp_client, tool_timeout).await {
-                        Ok(fresh_or_cached_tools) => {
-                            server_tools = fresh_or_cached_tools;
-                        }
-                        Err(err) => {
-                            warn!(
-                                "Failed to refresh tools for MCP server '{server_name}', using startup snapshot: {err:#}"
-                            );
-                        }
-                    }
-                }
-
-                tools.extend(qualify_tools(filter_tools(server_tools, tool_filter)));
+        for managed_client in self.clients.values() {
+            if let Ok(client) = managed_client.client().await {
+                tools.extend(qualify_tools(filter_tools(
+                    client.tools,
+                    client.tool_filter,
+                )));
             }
+        }
+        tools
+    }
+
+    /// Returns tools for MCP servers that become ready within `wait_for_ready`.
+    ///
+    /// Servers that are still starting (e.g. waiting on user elicitation) are
+    /// skipped once the timeout elapses. This is intended for turn startup,
+    /// where MCP startup must not block indefinitely but we still want to avoid
+    /// a race where a just-started MCP server isn't ready yet.
+    #[instrument(level = "trace", skip_all)]
+    pub async fn list_all_tools_bounded(
+        &self,
+        wait_for_ready: Duration,
+    ) -> HashMap<String, ToolInfo> {
+        if wait_for_ready.is_zero() {
+            return self.list_all_tools_ready_only();
+        }
+
+        let clients_snapshot: Vec<AsyncManagedClient> = self.clients.values().cloned().collect();
+        let mut join_set = JoinSet::new();
+        for managed_client in clients_snapshot {
+            join_set.spawn(async move {
+                tokio::time::timeout(wait_for_ready, managed_client.client.clone()).await
+            });
+        }
+
+        let mut tools = HashMap::new();
+        while let Some(join_res) = join_set.join_next().await {
+            let Ok(outcome) = join_res else {
+                continue;
+            };
+            let Ok(Ok(client)) = outcome else {
+                continue;
+            };
+            tools.extend(qualify_tools(filter_tools(
+                client.tools,
+                client.tool_filter,
+            )));
+        }
+
+        tools
+    }
+
+    /// Returns a single map that contains tools for MCP servers that have
+    /// finished starting (either successfully or with an error). Servers that
+    /// are still starting (e.g., waiting on user elicitation) are skipped.
+    ///
+    /// This is intended for latency-sensitive call sites (like building the
+    /// tool list for a turn) where MCP startup must not block progress.
+    #[instrument(level = "trace", skip_all)]
+    pub fn list_all_tools_ready_only(&self) -> HashMap<String, ToolInfo> {
+        let mut tools = HashMap::new();
+        for managed_client in self.clients.values() {
+            let Some(outcome) = managed_client.client.clone().now_or_never() else {
+                continue;
+            };
+            let Ok(client) = outcome else {
+                continue;
+            };
+            tools.extend(qualify_tools(filter_tools(
+                client.tools,
+                client.tool_filter,
+            )));
         }
         tools
     }
@@ -515,7 +517,10 @@ impl McpConnectionManager {
 
         for (server_name, async_managed_client) in clients_snapshot {
             let server_name = server_name.clone();
-            let Ok(managed_client) = async_managed_client.client().await else {
+            let Some(outcome) = async_managed_client.client.clone().now_or_never() else {
+                continue;
+            };
+            let Ok(managed_client) = outcome else {
                 continue;
             };
             let timeout = managed_client.tool_timeout;
@@ -526,7 +531,7 @@ impl McpConnectionManager {
                 let mut cursor: Option<String> = None;
 
                 loop {
-                    let params = cursor.as_ref().map(|next| PaginatedRequestParam {
+                    let params = cursor.as_ref().map(|next| ListResourcesRequestParams {
                         cursor: Some(next.clone()),
                     });
                     let response = match client.list_resources(params, timeout).await {
@@ -580,7 +585,10 @@ impl McpConnectionManager {
 
         for (server_name, async_managed_client) in clients_snapshot {
             let server_name_cloned = server_name.clone();
-            let Ok(managed_client) = async_managed_client.client().await else {
+            let Some(outcome) = async_managed_client.client.clone().now_or_never() else {
+                continue;
+            };
+            let Ok(managed_client) = outcome else {
                 continue;
             };
             let client = managed_client.client.clone();
@@ -591,9 +599,11 @@ impl McpConnectionManager {
                 let mut cursor: Option<String> = None;
 
                 loop {
-                    let params = cursor.as_ref().map(|next| PaginatedRequestParam {
-                        cursor: Some(next.clone()),
-                    });
+                    let params = cursor
+                        .as_ref()
+                        .map(|next| ListResourceTemplatesRequestParams {
+                            cursor: Some(next.clone()),
+                        });
                     let response = match client.list_resource_templates(params, timeout).await {
                         Ok(result) => result,
                         Err(err) => return (server_name_cloned, Err(err)),
@@ -646,44 +656,28 @@ impl McpConnectionManager {
         server: &str,
         tool: &str,
         arguments: Option<serde_json::Value>,
-    ) -> Result<CallToolResult> {
-        let client = self.client_by_name(server).await?;
+    ) -> Result<mcp_types::CallToolResult> {
+        let client = self.client_by_name_ready_only(server)?;
         if !client.tool_filter.allows(tool) {
             return Err(anyhow!(
                 "tool '{tool}' is disabled for MCP server '{server}'"
             ));
         }
 
-        let result: rmcp::model::CallToolResult = client
+        client
             .client
             .call_tool(tool.to_string(), arguments, client.tool_timeout)
             .await
-            .with_context(|| format!("tool call failed for `{server}/{tool}`"))?;
-
-        let content = result
-            .content
-            .into_iter()
-            .map(|content| {
-                serde_json::to_value(content)
-                    .unwrap_or_else(|_| serde_json::Value::String("<content>".to_string()))
-            })
-            .collect();
-
-        Ok(CallToolResult {
-            content,
-            structured_content: result.structured_content,
-            is_error: result.is_error,
-            meta: result.meta.and_then(|meta| serde_json::to_value(meta).ok()),
-        })
+            .with_context(|| format!("tool call failed for `{server}/{tool}`"))
     }
 
     /// List resources from the specified server.
     pub async fn list_resources(
         &self,
         server: &str,
-        params: Option<PaginatedRequestParam>,
+        params: Option<ListResourcesRequestParams>,
     ) -> Result<ListResourcesResult> {
-        let managed = self.client_by_name(server).await?;
+        let managed = self.client_by_name_ready_only(server)?;
         let timeout = managed.tool_timeout;
 
         managed
@@ -697,9 +691,9 @@ impl McpConnectionManager {
     pub async fn list_resource_templates(
         &self,
         server: &str,
-        params: Option<PaginatedRequestParam>,
+        params: Option<ListResourceTemplatesRequestParams>,
     ) -> Result<ListResourceTemplatesResult> {
-        let managed = self.client_by_name(server).await?;
+        let managed = self.client_by_name_ready_only(server)?;
         let client = managed.client.clone();
         let timeout = managed.tool_timeout;
 
@@ -713,9 +707,9 @@ impl McpConnectionManager {
     pub async fn read_resource(
         &self,
         server: &str,
-        params: ReadResourceRequestParam,
+        params: ReadResourceRequestParams,
     ) -> Result<ReadResourceResult> {
-        let managed = self.client_by_name(server).await?;
+        let managed = self.client_by_name_ready_only(server)?;
         let client = managed.client.clone();
         let timeout = managed.tool_timeout;
         let uri = params.uri.clone();
@@ -726,36 +720,58 @@ impl McpConnectionManager {
             .with_context(|| format!("resources/read failed for `{server}` ({uri})"))
     }
 
-    pub async fn parse_tool_name(&self, tool_name: &str) -> Option<(String, String)> {
-        self.list_all_tools()
-            .await
-            .get(tool_name)
-            .map(|tool| (tool.server_name.clone(), tool.tool_name.clone()))
+    pub fn parse_tool_name(&self, tool_name: &str) -> Option<(String, String)> {
+        if !tool_name.starts_with("mcp__") {
+            return None;
+        }
+
+        if let Some(tool) = self.list_all_tools_ready_only().get(tool_name) {
+            return Some((tool.server_name.clone(), tool.tool_name.clone()));
+        }
+
+        let mut parts = tool_name.split(MCP_TOOL_NAME_DELIMITER);
+        let prefix = parts.next()?;
+        if prefix != "mcp" {
+            return None;
+        }
+        let server_name = parts.next()?;
+        if !self.clients.contains_key(server_name) {
+            return None;
+        }
+        let tool: String = parts.collect::<Vec<_>>().join(MCP_TOOL_NAME_DELIMITER);
+        if tool.is_empty() {
+            return None;
+        }
+        Some((server_name.to_string(), tool))
     }
 
     pub async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
-        let mut join_set = JoinSet::new();
-
-        for async_managed_client in self.clients.values() {
-            let sandbox_state = sandbox_state.clone();
-            let async_managed_client = async_managed_client.clone();
-            join_set.spawn(async move {
-                async_managed_client
-                    .notify_sandbox_state_change(&sandbox_state)
-                    .await
-            });
+        {
+            let mut guard = self
+                .sandbox_state
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *guard = Some(sandbox_state.clone());
         }
 
-        while let Some(join_res) = join_set.join_next().await {
-            match join_res {
-                Ok(Ok(())) => {}
-                Ok(Err(err)) => {
+        for async_managed_client in self.clients.values() {
+            let Some(outcome) = async_managed_client.client.clone().now_or_never() else {
+                continue;
+            };
+            let Ok(_) = outcome else {
+                continue;
+            };
+
+            let sandbox_state = sandbox_state.clone();
+            let async_managed_client = async_managed_client.clone();
+            tokio::spawn(async move {
+                if let Err(err) = async_managed_client
+                    .notify_sandbox_state_change(&sandbox_state)
+                    .await
+                {
                     warn!("Failed to notify sandbox state change to MCP server: {err:#}");
                 }
-                Err(err) => {
-                    warn!("Task panic when notifying sandbox state change to MCP server: {err:#}");
-                }
-            }
+            });
         }
 
         Ok(())
@@ -816,32 +832,6 @@ fn filter_tools(tools: Vec<ToolInfo>, filter: ToolFilter) -> Vec<ToolInfo> {
         .collect()
 }
 
-fn normalize_codex_apps_tool_title(
-    server_name: &str,
-    connector_name: Option<&str>,
-    value: &str,
-) -> String {
-    if server_name != CODEX_APPS_MCP_SERVER_NAME {
-        return value.to_string();
-    }
-
-    let Some(connector_name) = connector_name
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-    else {
-        return value.to_string();
-    };
-
-    let prefix = format!("{connector_name}_");
-    if let Some(stripped) = value.strip_prefix(&prefix)
-        && !stripped.is_empty()
-    {
-        return stripped.to_string();
-    }
-
-    value.to_string()
-}
-
 fn resolve_bearer_token(
     server_name: &str,
     bearer_token_env_var: Option<&str>,
@@ -896,25 +886,25 @@ async fn start_server_task(
     tx_event: Sender<Event>,
     elicitation_requests: ElicitationRequestManager,
 ) -> Result<ManagedClient, StartupOutcomeError> {
-    let params = InitializeRequestParam {
+    let params = mcp_types::InitializeRequestParams {
         capabilities: ClientCapabilities {
             experimental: None,
             roots: None,
             sampling: None,
             // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
             // indicates this should be an empty object.
-            elicitation: Some(ElicitationCapability {
-                schema_validation: None,
-            }),
+            elicitation: Some(json!({})),
         },
         client_info: Implementation {
             name: "codex-mcp-client".to_owned(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
             title: Some("Codex".into()),
-            icons: None,
-            website_url: None,
+            // This field is used by Codex when it is an MCP
+            // server: it should not be used when Codex is
+            // an MCP client.
+            user_agent: None,
         },
-        protocol_version: ProtocolVersion::V_2025_06_18,
+        protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_owned(),
     };
 
     let send_elicitation = elicitation_requests.make_sender(server_name.clone(), tx_event);
@@ -995,71 +985,14 @@ async fn list_tools_for_client(
     client: &Arc<RmcpClient>,
     timeout: Option<Duration>,
 ) -> Result<Vec<ToolInfo>> {
-    if server_name == CODEX_APPS_MCP_SERVER_NAME
-        && let Some(cached_tools) = read_cached_codex_apps_tools()
-    {
-        return Ok(cached_tools);
-    }
-
-    let tools = list_tools_for_client_uncached(server_name, client, timeout).await?;
-    if server_name == CODEX_APPS_MCP_SERVER_NAME {
-        write_cached_codex_apps_tools(&tools);
-    }
-    Ok(tools)
-}
-
-fn read_cached_codex_apps_tools() -> Option<Vec<ToolInfo>> {
-    let mut cache_guard = CODEX_APPS_TOOLS_CACHE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let now = Instant::now();
-
-    if let Some(cached) = cache_guard.as_ref()
-        && now < cached.expires_at
-    {
-        return Some(cached.tools.clone());
-    }
-
-    *cache_guard = None;
-    None
-}
-
-fn write_cached_codex_apps_tools(tools: &[ToolInfo]) {
-    let mut cache_guard = CODEX_APPS_TOOLS_CACHE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    *cache_guard = Some(CachedCodexAppsTools {
-        expires_at: Instant::now() + CODEX_APPS_TOOLS_CACHE_TTL,
-        tools: tools.to_vec(),
-    });
-}
-
-async fn list_tools_for_client_uncached(
-    server_name: &str,
-    client: &Arc<RmcpClient>,
-    timeout: Option<Duration>,
-) -> Result<Vec<ToolInfo>> {
-    let resp = client.list_tools_with_connector_ids(None, timeout).await?;
+    let resp = client.list_tools(None, timeout).await?;
     Ok(resp
         .tools
         .into_iter()
-        .map(|tool| {
-            let connector_name = tool.connector_name;
-            let mut tool_def = tool.tool;
-            if let Some(title) = tool_def.title.as_deref() {
-                let normalized_title =
-                    normalize_codex_apps_tool_title(server_name, connector_name.as_deref(), title);
-                if tool_def.title.as_deref() != Some(normalized_title.as_str()) {
-                    tool_def.title = Some(normalized_title);
-                }
-            }
-            ToolInfo {
-                server_name: server_name.to_owned(),
-                tool_name: tool_def.name.to_string(),
-                tool: tool_def,
-                connector_id: tool.connector_id,
-                connector_name,
-            }
+        .map(|tool| ToolInfo {
+            server_name: server_name.to_owned(),
+            tool_name: tool.name.clone(),
+            tool,
         })
         .collect())
 }
@@ -1138,26 +1071,25 @@ mod mcp_init_error_display_tests {}
 mod tests {
     use super::*;
     use codex_protocol::protocol::McpAuthStatus;
-    use rmcp::model::JsonObject;
+    use mcp_types::ToolInputSchema;
     use std::collections::HashSet;
-    use std::sync::Arc;
 
     fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
         ToolInfo {
             server_name: server_name.to_string(),
             tool_name: tool_name.to_string(),
             tool: Tool {
-                name: tool_name.to_string().into(),
-                title: None,
-                description: Some(format!("Test tool: {tool_name}").into()),
-                input_schema: Arc::new(JsonObject::default()),
-                output_schema: None,
                 annotations: None,
-                icons: None,
-                meta: None,
+                description: Some(format!("Test tool: {tool_name}")),
+                input_schema: ToolInputSchema {
+                    properties: None,
+                    required: None,
+                    r#type: "object".to_string(),
+                },
+                name: tool_name.to_string(),
+                output_schema: None,
+                title: None,
             },
-            connector_id: None,
-            connector_name: None,
         }
     }
 
@@ -1221,28 +1153,6 @@ mod tests {
         assert_eq!(
             keys[1],
             "mcp__my_server__yet_anot419a82a89325c1b477274a41f8c65ea5f3a7f341"
-        );
-    }
-
-    #[test]
-    fn test_qualify_tools_sanitizes_invalid_characters() {
-        let tools = vec![create_test_tool("server.one", "tool.two")];
-
-        let qualified_tools = qualify_tools(tools);
-
-        assert_eq!(qualified_tools.len(), 1);
-        let (qualified_name, tool) = qualified_tools.into_iter().next().expect("one tool");
-        assert_eq!(qualified_name, "mcp__server_one__tool_two");
-
-        // The key is sanitized for OpenAI, but we keep original parts for the actual MCP call.
-        assert_eq!(tool.server_name, "server.one");
-        assert_eq!(tool.tool_name, "tool.two");
-
-        assert!(
-            qualified_name
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
-            "qualified name must be Responses API compatible: {qualified_name:?}"
         );
     }
 
@@ -1325,12 +1235,10 @@ mod tests {
                     env_http_headers: None,
                 },
                 enabled: true,
-                disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
-                scopes: None,
             },
             auth_status: McpAuthStatus::Unsupported,
         };
@@ -1371,12 +1279,10 @@ mod tests {
                     env_http_headers: None,
                 },
                 enabled: true,
-                disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
-                scopes: None,
             },
             auth_status: McpAuthStatus::Unsupported,
         };

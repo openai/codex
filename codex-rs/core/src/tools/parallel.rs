@@ -17,7 +17,6 @@ use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolPayload;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolRouter;
-use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 
@@ -120,7 +119,7 @@ impl ToolCallRuntime {
             _ => ResponseInputItem::FunctionCallOutput {
                 call_id: call.call_id.clone(),
                 output: FunctionCallOutputPayload {
-                    body: FunctionCallOutputBody::Text(Self::abort_message(call, secs)),
+                    content: Self::abort_message(call, secs),
                     ..Default::default()
                 },
             },

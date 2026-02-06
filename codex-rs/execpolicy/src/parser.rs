@@ -212,20 +212,11 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
         decision: Option<&'v str>,
         r#match: Option<UnpackList<Value<'v>>>,
         not_match: Option<UnpackList<Value<'v>>>,
-        justification: Option<&'v str>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<NoneType> {
         let decision = match decision {
             Some(raw) => Decision::parse(raw)?,
             None => Decision::Allow,
-        };
-
-        let justification = match justification {
-            Some(raw) if raw.trim().is_empty() => {
-                return Err(Error::InvalidRule("justification cannot be empty".to_string()).into());
-            }
-            Some(raw) => Some(raw.to_string()),
-            None => None,
         };
 
         let pattern_tokens = parse_pattern(pattern)?;
@@ -255,7 +246,6 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
                         rest: rest.clone(),
                     },
                     decision,
-                    justification: justification.clone(),
                 }) as RuleRef
             })
             .collect();

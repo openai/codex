@@ -1,6 +1,4 @@
 use codex_client::Request;
-use http::HeaderMap;
-use http::HeaderValue;
 
 /// Provides bearer and account identity information for API requests.
 ///
@@ -14,20 +12,16 @@ pub trait AuthProvider: Send + Sync {
     }
 }
 
-pub(crate) fn add_auth_headers_to_header_map<A: AuthProvider>(auth: &A, headers: &mut HeaderMap) {
+pub(crate) fn add_auth_headers<A: AuthProvider>(auth: &A, mut req: Request) -> Request {
     if let Some(token) = auth.bearer_token()
-        && let Ok(header) = HeaderValue::from_str(&format!("Bearer {token}"))
+        && let Ok(header) = format!("Bearer {token}").parse()
     {
-        let _ = headers.insert(http::header::AUTHORIZATION, header);
+        let _ = req.headers.insert(http::header::AUTHORIZATION, header);
     }
     if let Some(account_id) = auth.account_id()
-        && let Ok(header) = HeaderValue::from_str(&account_id)
+        && let Ok(header) = account_id.parse()
     {
-        let _ = headers.insert("ChatGPT-Account-ID", header);
+        let _ = req.headers.insert("ChatGPT-Account-ID", header);
     }
-}
-
-pub(crate) fn add_auth_headers<A: AuthProvider>(auth: &A, mut req: Request) -> Request {
-    add_auth_headers_to_header_map(auth, &mut req.headers);
     req
 }

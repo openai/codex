@@ -1,3 +1,0 @@
-*** Begin Patch
-*** Delete File: obsolete.txt
-*** End Patch

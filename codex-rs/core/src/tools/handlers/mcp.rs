@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use std::sync::Arc;
 
 use crate::function_tool::FunctionCallError;
 use crate::mcp_tool_call::handle_mcp_tool_call;
@@ -8,7 +7,6 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use codex_protocol::models::ResponseInputItem;
 
 pub struct McpHandler;
 
@@ -44,7 +42,7 @@ impl ToolHandler for McpHandler {
         let arguments_str = raw_arguments;
 
         let response = handle_mcp_tool_call(
-            Arc::clone(&session),
+            session.as_ref(),
             turn.as_ref(),
             call_id.clone(),
             server,
@@ -54,11 +52,20 @@ impl ToolHandler for McpHandler {
         .await;
 
         match response {
-            ResponseInputItem::McpToolCallOutput { result, .. } => Ok(ToolOutput::Mcp { result }),
-            ResponseInputItem::FunctionCallOutput { output, .. } => {
-                let success = output.success;
-                let body = output.body;
-                Ok(ToolOutput::Function { body, success })
+            codex_protocol::models::ResponseInputItem::McpToolCallOutput { result, .. } => {
+                Ok(ToolOutput::Mcp { result })
+            }
+            codex_protocol::models::ResponseInputItem::FunctionCallOutput { output, .. } => {
+                let codex_protocol::models::FunctionCallOutputPayload {
+                    content,
+                    content_items,
+                    success,
+                } = output;
+                Ok(ToolOutput::Function {
+                    content,
+                    content_items,
+                    success,
+                })
             }
             _ => Err(FunctionCallError::RespondToModel(
                 "mcp handler received unexpected response variant".to_string(),

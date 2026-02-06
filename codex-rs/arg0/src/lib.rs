@@ -1,4 +1,3 @@
-use std::fs::File;
 use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
@@ -11,24 +10,8 @@ use tempfile::TempDir;
 const LINUX_SANDBOX_ARG0: &str = "codex-linux-sandbox";
 const APPLY_PATCH_ARG0: &str = "apply_patch";
 const MISSPELLED_APPLY_PATCH_ARG0: &str = "applypatch";
-const LOCK_FILENAME: &str = ".lock";
 
-/// Keeps the per-session PATH entry alive and locked for the process lifetime.
-pub struct Arg0PathEntryGuard {
-    _temp_dir: TempDir,
-    _lock_file: File,
-}
-
-impl Arg0PathEntryGuard {
-    fn new(temp_dir: TempDir, lock_file: File) -> Self {
-        Self {
-            _temp_dir: temp_dir,
-            _lock_file: lock_file,
-        }
-    }
-}
-
-pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
+pub fn arg0_dispatch() -> Option<TempDir> {
     // Determine if we were invoked via the special alias.
     let mut args = std::env::args_os();
     let argv0 = args.next().unwrap_or_default();
@@ -162,56 +145,12 @@ where
 /// that `apply_patch` can be on the PATH without requiring the user to
 /// install a separate `apply_patch` executable, simplifying the deployment of
 /// Codex CLI.
-/// Note: In debug builds the temp-dir guard is disabled to ease local testing.
 ///
 /// IMPORTANT: This function modifies the PATH environment variable, so it MUST
 /// be called before multiple threads are spawned.
-pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<Arg0PathEntryGuard> {
-    let codex_home = codex_core::config::find_codex_home()?;
-    #[cfg(not(debug_assertions))]
-    {
-        // Guard against placing helpers in system temp directories outside debug builds.
-        let temp_root = std::env::temp_dir();
-        if codex_home.starts_with(&temp_root) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!(
-                    "Refusing to create helper binaries under temporary dir {temp_root:?} (codex_home: {codex_home:?})"
-                ),
-            ));
-        }
-    }
-
-    std::fs::create_dir_all(&codex_home)?;
-    // Use a CODEX_HOME-scoped temp root to avoid cluttering the top-level directory.
-    let temp_root = codex_home.join("tmp").join("arg0");
-    std::fs::create_dir_all(&temp_root)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-
-        // Ensure only the current user can access the temp directory.
-        std::fs::set_permissions(&temp_root, std::fs::Permissions::from_mode(0o700))?;
-    }
-
-    // Best-effort cleanup of stale per-session dirs. Ignore failures so startup proceeds.
-    if let Err(err) = janitor_cleanup(&temp_root) {
-        eprintln!("WARNING: failed to clean up stale arg0 temp dirs: {err}");
-    }
-
-    let temp_dir = tempfile::Builder::new()
-        .prefix("codex-arg0")
-        .tempdir_in(&temp_root)?;
+pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<TempDir> {
+    let temp_dir = TempDir::new()?;
     let path = temp_dir.path();
-
-    let lock_path = path.join(LOCK_FILENAME);
-    let lock_file = File::options()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&lock_path)?;
-    lock_file.try_lock()?;
 
     for filename in &[
         APPLY_PATCH_ARG0,
@@ -262,107 +201,5 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<Arg0PathEntryGu
         std::env::set_var("PATH", updated_path_env_var);
     }
 
-    Ok(Arg0PathEntryGuard::new(temp_dir, lock_file))
-}
-
-fn janitor_cleanup(temp_root: &Path) -> std::io::Result<()> {
-    let entries = match std::fs::read_dir(temp_root) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(err) => return Err(err),
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-
-        // Skip the directory if locking fails or the lock is currently held.
-        let Some(_lock_file) = try_lock_dir(&path)? else {
-            continue;
-        };
-
-        match std::fs::remove_dir_all(&path) {
-            Ok(()) => {}
-            // Expected TOCTOU race: directory can disappear after read_dir/lock checks.
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(err) => return Err(err),
-        }
-    }
-
-    Ok(())
-}
-
-fn try_lock_dir(dir: &Path) -> std::io::Result<Option<File>> {
-    let lock_path = dir.join(LOCK_FILENAME);
-    let lock_file = match File::options().read(true).write(true).open(&lock_path) {
-        Ok(file) => file,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(err),
-    };
-
-    match lock_file.try_lock() {
-        Ok(()) => Ok(Some(lock_file)),
-        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
-        Err(err) => Err(err.into()),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::LOCK_FILENAME;
-    use super::janitor_cleanup;
-    use std::fs;
-    use std::fs::File;
-    use std::path::Path;
-
-    fn create_lock(dir: &Path) -> std::io::Result<File> {
-        let lock_path = dir.join(LOCK_FILENAME);
-        File::options()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(lock_path)
-    }
-
-    #[test]
-    fn janitor_skips_dirs_without_lock_file() -> std::io::Result<()> {
-        let root = tempfile::tempdir()?;
-        let dir = root.path().join("no-lock");
-        fs::create_dir(&dir)?;
-
-        janitor_cleanup(root.path())?;
-
-        assert!(dir.exists());
-        Ok(())
-    }
-
-    #[test]
-    fn janitor_skips_dirs_with_held_lock() -> std::io::Result<()> {
-        let root = tempfile::tempdir()?;
-        let dir = root.path().join("locked");
-        fs::create_dir(&dir)?;
-        let lock_file = create_lock(&dir)?;
-        lock_file.try_lock()?;
-
-        janitor_cleanup(root.path())?;
-
-        assert!(dir.exists());
-        Ok(())
-    }
-
-    #[test]
-    fn janitor_removes_dirs_with_unlocked_lock() -> std::io::Result<()> {
-        let root = tempfile::tempdir()?;
-        let dir = root.path().join("stale");
-        fs::create_dir(&dir)?;
-        create_lock(&dir)?;
-
-        janitor_cleanup(root.path())?;
-
-        assert!(!dir.exists());
-        Ok(())
-    }
+    Ok(temp_dir)
 }

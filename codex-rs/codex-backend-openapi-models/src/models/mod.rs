@@ -3,10 +3,6 @@
 // Currently export only the types referenced by the workspace
 // The process for this will change
 
-// Config
-pub mod config_file_response;
-pub use self::config_file_response::ConfigFileResponse;
-
 // Cloud Tasks
 pub mod code_task_details_response;
 pub use self::code_task_details_response::CodeTaskDetailsResponse;

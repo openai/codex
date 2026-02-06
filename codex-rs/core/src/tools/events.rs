@@ -100,6 +100,7 @@ pub(crate) enum ToolEmitter {
         command: Vec<String>,
         cwd: PathBuf,
         source: ExecCommandSource,
+        interaction_input: Option<String>,
         parsed_cmd: Vec<ParsedCommand>,
         process_id: Option<String>,
     },
@@ -140,6 +141,7 @@ impl ToolEmitter {
             command: command.to_vec(),
             cwd,
             source,
+            interaction_input: None, // TODO(jif) drop this field in the protocol.
             parsed_cmd,
             process_id,
         }
@@ -229,6 +231,7 @@ impl ToolEmitter {
                     command,
                     cwd,
                     source,
+                    interaction_input,
                     parsed_cmd,
                     process_id,
                 },
@@ -241,7 +244,7 @@ impl ToolEmitter {
                         cwd.as_path(),
                         parsed_cmd,
                         *source,
-                        None,
+                        interaction_input.as_deref(),
                         process_id.as_deref(),
                     ),
                     stage,
@@ -302,12 +305,7 @@ impl ToolEmitter {
                 // Normalize common rejection messages for exec tools so tests and
                 // users see a clear, consistent phrase.
                 let normalized = if msg == "rejected by user" {
-                    match self {
-                        Self::Shell { .. } | Self::UnifiedExec { .. } => {
-                            "exec command rejected by user".to_string()
-                        }
-                        Self::ApplyPatch { .. } => "patch rejected by user".to_string(),
-                    }
+                    "exec command rejected by user".to_string()
                 } else {
                     msg
                 };

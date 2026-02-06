@@ -66,12 +66,11 @@ pub(crate) async fn spawn_child_async(
 
     #[cfg(unix)]
     unsafe {
-        let detach_from_tty = matches!(stdio_policy, StdioPolicy::RedirectForShellTool);
         #[cfg(target_os = "linux")]
         let parent_pid = libc::getpid();
         cmd.pre_exec(move || {
-            if detach_from_tty {
-                codex_utils_pty::process_group::detach_from_tty()?;
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
             }
 
             // This relies on prctl(2), so it only works on Linux.
@@ -79,7 +78,18 @@ pub(crate) async fn spawn_child_async(
             {
                 // This prctl call effectively requests, "deliver SIGTERM when my
                 // current parent dies."
-                codex_utils_pty::process_group::set_parent_death_signal(parent_pid)?;
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+
+                // Though if there was a race condition and this pre_exec() block is
+                // run _after_ the parent (i.e., the Codex process) has already
+                // exited, then parent will be the closest configured "subreaper"
+                // ancestor process, or PID 1 (init). If the Codex process has exited
+                // already, so should the child process.
+                if libc::getppid() != parent_pid {
+                    libc::raise(libc::SIGTERM);
+                }
             }
             Ok(())
         });

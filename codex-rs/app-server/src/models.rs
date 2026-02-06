@@ -2,18 +2,19 @@ use std::sync::Arc;
 
 use codex_app_server_protocol::Model;
 use codex_app_server_protocol::ReasoningEffortOption;
-use codex_core::ThreadManager;
+use codex_core::ConversationManager;
 use codex_core::config::Config;
-use codex_core::models_manager::manager::RefreshStrategy;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 
-pub async fn supported_models(thread_manager: Arc<ThreadManager>, config: &Config) -> Vec<Model> {
-    thread_manager
-        .list_models(config, RefreshStrategy::OnlineIfUncached)
+pub async fn supported_models(
+    conversation_manager: Arc<ConversationManager>,
+    config: &Config,
+) -> Vec<Model> {
+    conversation_manager
+        .list_models(config)
         .await
         .into_iter()
-        .filter(|preset| preset.show_in_picker)
         .map(model_from_preset)
         .collect()
 }
@@ -22,15 +23,12 @@ fn model_from_preset(preset: ModelPreset) -> Model {
     Model {
         id: preset.id.to_string(),
         model: preset.model.to_string(),
-        upgrade: preset.upgrade.map(|upgrade| upgrade.id),
         display_name: preset.display_name.to_string(),
         description: preset.description.to_string(),
         supported_reasoning_efforts: reasoning_efforts_from_preset(
             preset.supported_reasoning_efforts,
         ),
         default_reasoning_effort: preset.default_reasoning_effort,
-        input_modalities: preset.input_modalities,
-        supports_personality: preset.supports_personality,
         is_default: preset.is_default,
     }
 }

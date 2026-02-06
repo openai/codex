@@ -5,7 +5,7 @@ expression: terminal.backend()
 
 > Codex just got an upgrade. Introducing gpt-5.1-codex-max.
 
-  We recommend switching from gpt-5.3-codex to
+  We recommend switching from gpt-5-codex to
   gpt-5.1-codex-max.
 
   Codex-optimized flagship for deep and fast reasoning.

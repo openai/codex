@@ -1,5 +1,4 @@
 use crate::types::CodeTaskDetailsResponse;
-use crate::types::ConfigFileResponse;
 use crate::types::CreditStatusDetails;
 use crate::types::PaginatedListTaskListItem;
 use crate::types::RateLimitStatusPayload;
@@ -74,8 +73,8 @@ impl Client {
         })
     }
 
-    pub fn from_auth(base_url: impl Into<String>, auth: &CodexAuth) -> Result<Self> {
-        let token = auth.get_token().map_err(anyhow::Error::from)?;
+    pub async fn from_auth(base_url: impl Into<String>, auth: &CodexAuth) -> Result<Self> {
+        let token = auth.get_token().await.map_err(anyhow::Error::from)?;
         let mut client = Self::new(base_url)?
             .with_user_agent(get_codex_user_agent())
             .with_bearer_token(token);
@@ -175,7 +174,6 @@ impl Client {
         limit: Option<i32>,
         task_filter: Option<&str>,
         environment_id: Option<&str>,
-        cursor: Option<&str>,
     ) -> Result<PaginatedListTaskListItem> {
         let url = match self.path_style {
             PathStyle::CodexApi => format!("{}/api/codex/tasks/list", self.base_url),
@@ -189,11 +187,6 @@ impl Client {
         };
         let req = if let Some(tf) = task_filter {
             req.query(&[("task_filter", tf)])
-        } else {
-            req
-        };
-        let req = if let Some(c) = cursor {
-            req.query(&[("cursor", c)])
         } else {
             req
         };
@@ -243,20 +236,6 @@ impl Client {
         let req = self.http.get(&url).headers(self.headers());
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         self.decode_json::<TurnAttemptsSiblingTurnsResponse>(&url, &ct, &body)
-    }
-
-    /// Fetch the managed requirements file from codex-backend.
-    ///
-    /// `GET /api/codex/config/requirements` (Codex API style) or
-    /// `GET /wham/config/requirements` (ChatGPT backend-api style).
-    pub async fn get_config_requirements_file(&self) -> Result<ConfigFileResponse> {
-        let url = match self.path_style {
-            PathStyle::CodexApi => format!("{}/api/codex/config/requirements", self.base_url),
-            PathStyle::ChatGptApi => format!("{}/wham/config/requirements", self.base_url),
-        };
-        let req = self.http.get(&url).headers(self.headers());
-        let (body, ct) = self.exec_request(req, "GET", &url).await?;
-        self.decode_json::<ConfigFileResponse>(&url, &ct, &body)
     }
 
     /// Create a new task (user turn) by POSTing to the appropriate backend path
@@ -351,7 +330,6 @@ impl Client {
     fn map_plan_type(plan_type: crate::types::PlanType) -> AccountPlanType {
         match plan_type {
             crate::types::PlanType::Free => AccountPlanType::Free,
-            crate::types::PlanType::Go => AccountPlanType::Go,
             crate::types::PlanType::Plus => AccountPlanType::Plus,
             crate::types::PlanType::Pro => AccountPlanType::Pro,
             crate::types::PlanType::Team => AccountPlanType::Team,
@@ -359,6 +337,7 @@ impl Client {
             crate::types::PlanType::Enterprise => AccountPlanType::Enterprise,
             crate::types::PlanType::Edu | crate::types::PlanType::Education => AccountPlanType::Edu,
             crate::types::PlanType::Guest
+            | crate::types::PlanType::Go
             | crate::types::PlanType::FreeWorkspace
             | crate::types::PlanType::Quorum
             | crate::types::PlanType::K12 => AccountPlanType::Unknown,

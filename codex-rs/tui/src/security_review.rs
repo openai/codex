@@ -154,12 +154,12 @@ const BUG_SPEC_CONTEXT_MAX_CHARS: usize = 40_000;
 const BUG_FILE_CONTEXT_FALLBACK_MAX_CHARS: usize = 60_000;
 const BUG_FILE_CONTEXT_RETRY_MAX_CHARS: usize = 20_000;
 const ANALYSIS_CONTEXT_MAX_CHARS: usize = 6_000;
-const AUTO_SCOPE_MODEL: &str = "gpt-5.3-codex";
+const AUTO_SCOPE_MODEL: &str = "gpt-5-codex";
 const FILE_TRIAGE_MODEL: &str = "gpt-5.2-codex";
 const SPEC_GENERATION_MODEL: &str = "gpt-5.2";
 const BUG_MODEL: &str = "gpt-5.2";
 const DEFAULT_VALIDATION_MODEL: &str = "gpt-5.2";
-const THREAT_MODEL_MODEL: &str = "gpt-5.3-codex";
+const THREAT_MODEL_MODEL: &str = "gpt-5-codex";
 const CLASSIFICATION_PROMPT_SPEC_LIMIT: usize = 16_000;
 // prompts moved to `security_prompts.rs`
 const BUG_RERANK_CHUNK_SIZE: usize = 1;
