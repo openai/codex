@@ -86,11 +86,6 @@
         "null"
       ]
     },
-    "experimentalRawEvents": {
-      "default": false,
-      "description": "If true, opt into emitting raw response items on the event stream.\n\nThis is for internal use only (e.g. Codex Cloud). (TODO): Figure out a better way to categorize internal / experimental events & protocols.",
-      "type": "boolean"
-    },
     "model": {
       "type": [
         "string",
