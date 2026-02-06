@@ -267,7 +267,8 @@ fn rewrite_skill_mentions(
 ) -> String {
     let mut pending_explicit_app_paths = HashSet::new();
     for name in mentions.plain_names() {
-        if let Some(path) = connector_paths_by_slug.get(name) {
+        let connector_slug = name.to_ascii_lowercase();
+        if let Some(path) = connector_paths_by_slug.get(&connector_slug) {
             pending_explicit_app_paths.insert(path.clone());
         }
     }
@@ -328,9 +329,10 @@ fn rewrite_skill_mentions(
             }
 
             let name = &text[name_start..name_end];
+            let connector_slug = name.to_ascii_lowercase();
             if !is_common_env_var(name)
                 && let Some(path) = connector_paths_by_slug
-                    .get(name)
+                    .get(&connector_slug)
                     .or_else(|| skill_paths_by_name.get(name))
             {
                 out.push_str(&text[cursor..index]);
@@ -1206,5 +1208,33 @@ mod tests {
 
         assert_eq!(rewritten, text);
         assert_eq!(explicit_app_paths, HashSet::<String>::new());
+    }
+
+    #[test]
+    fn rewrite_skill_mentions_matches_connector_slugs_case_insensitively() {
+        let text = "use $GitHub";
+        let mentions = extract_tool_mentions(text);
+        let skill_paths_by_name = HashMap::new();
+        let skill_paths_by_normalized_path = HashMap::new();
+        let connector_paths_by_slug =
+            HashMap::from([("github".to_string(), "app://github-id".to_string())]);
+        let connector_ids = HashSet::from(["github-id".to_string()]);
+        let mut explicit_app_paths = HashSet::new();
+
+        let rewritten = rewrite_skill_mentions(
+            text,
+            &mentions,
+            &skill_paths_by_name,
+            &skill_paths_by_normalized_path,
+            &connector_paths_by_slug,
+            &connector_ids,
+            &mut explicit_app_paths,
+        );
+
+        assert_eq!(rewritten, "use [$GitHub](app://github-id)");
+        assert_eq!(
+            explicit_app_paths,
+            HashSet::from(["app://github-id".to_string()])
+        );
     }
 }
