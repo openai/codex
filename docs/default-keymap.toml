@@ -1,0 +1,116 @@
+# Codex TUI keymap template (v1 defaults)
+#
+# Copy the sections you need into ~/.codex/config.toml.
+#
+# Canonical source (Codex repo):
+# https://github.com/openai/codex/blob/main/docs/default-keymap.toml
+# Implementation reference: docs/tui-keymap.md
+#
+# Value format:
+# - action = "ctrl-a"                    # one key
+# - action = ["ctrl-a", "alt-a"]        # multiple keys for one action
+# - action = []                            # explicit unbind for that action
+#
+# Precedence (highest first):
+# 1. [tui.keymap.<context>] override
+# 2. [tui.keymap.global] fallback (only for chat/composer actions)
+# 3. preset defaults
+
+[tui.keymap]
+# Preset alias for built-in defaults.
+# "latest" currently points to "v1".
+preset = "latest"
+
+[tui.keymap.global]
+# Open transcript overlay.
+open_transcript = "ctrl-t"
+# Open external editor for current draft.
+open_external_editor = "ctrl-g"
+# Begin/advance "edit previous message" when composer is empty.
+edit_previous_message = "esc"
+# Confirm selected message in edit-previous flow.
+confirm_edit_previous_message = "enter"
+# Submit current draft.
+submit = "enter"
+# Queue current draft while a task is running.
+queue = "tab"
+# Toggle composer shortcut overlay.
+# Include both forms because some terminals report `?` with SHIFT and others don't.
+toggle_shortcuts = ["?", "shift-?"]
+
+[tui.keymap.chat]
+# Overrides [tui.keymap.global] for chat-only behavior.
+edit_previous_message = "esc"
+confirm_edit_previous_message = "enter"
+
+[tui.keymap.composer]
+# Overrides [tui.keymap.global] for composer behavior.
+submit = "enter"
+queue = "tab"
+toggle_shortcuts = ["?", "shift-?"]
+
+[tui.keymap.editor]
+# Text input editor bindings.
+insert_newline = ["ctrl-j", "ctrl-m", "enter", "shift-enter"]
+move_left = ["left", "ctrl-b"]
+move_right = ["right", "ctrl-f"]
+move_up = ["up", "ctrl-p"]
+move_down = ["down", "ctrl-n"]
+move_word_left = ["alt-b", "alt-left", "ctrl-left"]
+move_word_right = ["alt-f", "alt-right", "ctrl-right"]
+move_line_start = ["home", "ctrl-a"]
+move_line_end = ["end", "ctrl-e"]
+delete_backward = ["backspace", "ctrl-h"]
+delete_forward = ["delete", "ctrl-d"]
+delete_backward_word = ["alt-backspace", "ctrl-w", "ctrl-alt-h"]
+delete_forward_word = ["alt-delete"]
+kill_line_start = ["ctrl-u"]
+kill_line_end = ["ctrl-k"]
+yank = ["ctrl-y"]
+
+[tui.keymap.pager]
+# Transcript/static overlay navigation.
+scroll_up = ["up", "k"]
+scroll_down = ["down", "j"]
+page_up = ["page-up", "shift-space", "ctrl-b"]
+page_down = ["page-down", "space", "ctrl-f"]
+half_page_up = ["ctrl-u"]
+half_page_down = ["ctrl-d"]
+jump_top = ["home"]
+jump_bottom = ["end"]
+close = ["q", "ctrl-c"]
+close_transcript = ["ctrl-t"]
+# Backtrack controls inside transcript overlay.
+edit_previous_message = ["esc", "left"]
+edit_next_message = ["right"]
+confirm_edit_message = ["enter"]
+
+[tui.keymap.list]
+# Generic list/picker navigation.
+move_up = ["up", "ctrl-p", "k"]
+move_down = ["down", "ctrl-n", "j"]
+accept = ["enter"]
+cancel = ["esc"]
+
+[tui.keymap.approval]
+# Approval modal actions.
+# Include ctrl+shift fallback for terminals that preserve SHIFT on Ctrl letter chords.
+open_fullscreen = ["ctrl-a", "ctrl-shift-a"]
+approve = ["y"]
+approve_for_session = ["a"]
+approve_for_prefix = ["p"]
+decline = ["esc", "n"]
+cancel = ["c"]
+
+[tui.keymap.onboarding]
+# Onboarding/auth/trust screens.
+move_up = ["up", "k"]
+move_down = ["down", "j"]
+select_first = ["1", "y"]
+select_second = ["2", "n"]
+select_third = ["3"]
+confirm = ["enter"]
+cancel = ["esc"]
+quit = ["q", "ctrl-c", "ctrl-d"]
+# Include ctrl+shift fallback for terminals that preserve SHIFT on Ctrl punctuation chords.
+toggle_animation = ["ctrl-.", "ctrl-shift-."]
