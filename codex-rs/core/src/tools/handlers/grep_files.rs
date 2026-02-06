@@ -7,8 +7,8 @@ use serde::Deserialize;
 use tokio::process::Command;
 use tokio::time::timeout;
 
-use crate::function_tool::FunctionCallError;
 use crate::file_ignore::FileIgnore;
+use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -84,8 +84,15 @@ impl ToolHandler for GrepFilesHandler {
         });
 
         let file_ignore = invocation.session.services.file_ignore.read().await;
-        let search_results =
-            run_rg_search(pattern, include.as_deref(), &search_path, limit, &turn.cwd, &*file_ignore).await?;
+        let search_results = run_rg_search(
+            pattern,
+            include.as_deref(),
+            &search_path,
+            limit,
+            &turn.cwd,
+            &*file_ignore,
+        )
+        .await?;
 
         if search_results.is_empty() {
             Ok(ToolOutput::Function {
@@ -186,9 +193,11 @@ fn parse_results(stdout: &[u8], limit: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ConfigBuilder;
+    use crate::file_ignore::FileIgnore;
+    use pretty_assertions::assert_eq;
     use std::process::Command as StdCommand;
     use tempfile::tempdir;
-    use crate::file_ignore::FileIgnore;
 
     #[test]
     fn parses_basic_results() {
@@ -275,6 +284,32 @@ mod tests {
         let ignore = FileIgnore::new();
         let results = run_rg_search("alpha", None, dir, 5, dir, &ignore).await?;
         assert!(results.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_search_respects_aiignore() -> anyhow::Result<()> {
+        if !rg_available() {
+            return Ok(());
+        }
+        let codex_home = tempdir().expect("create codex home");
+        let repo = tempdir().expect("create repo dir");
+        std::fs::write(repo.path().join(".aiignore"), "ignored.txt\n")?;
+        std::fs::write(repo.path().join("ignored.txt"), "alpha ignored")?;
+        std::fs::write(repo.path().join("kept.txt"), "alpha kept")?;
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(repo.path().to_path_buf()))
+            .build()
+            .await?;
+        let mut ignore = FileIgnore::new();
+        ignore.load(&config).await;
+
+        let results = run_rg_search("alpha", None, repo.path(), 10, repo.path(), &ignore).await?;
+        assert_eq!(results.len(), 1);
+        assert!(results.iter().any(|path| path.ends_with("kept.txt")));
+        assert!(!results.iter().any(|path| path.ends_with("ignored.txt")));
         Ok(())
     }
 

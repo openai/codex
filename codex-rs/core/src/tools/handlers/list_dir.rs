@@ -10,9 +10,9 @@ use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Deserialize;
 use tokio::fs;
 
+use crate::file_ignore::FileIgnore;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
-use crate::file_ignore::FileIgnore;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
@@ -228,7 +228,7 @@ async fn collect_entries(
 }
 
 fn format_entry_name(path: &Path) -> String {
-    let normalized = path.to_string_lossy().replace("\", "/");
+    let normalized = path.to_string_lossy().replace("\\", "/");
     if normalized.len() > MAX_ENTRY_LENGTH {
         take_bytes_at_char_boundary(&normalized, MAX_ENTRY_LENGTH).to_string()
     } else {
@@ -290,9 +290,9 @@ impl From<&FileType> for DirEntryKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::file_ignore::FileIgnore;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
-    use crate::file_ignore::FileIgnore;
 
     #[tokio::test]
     async fn lists_directory_entries() {

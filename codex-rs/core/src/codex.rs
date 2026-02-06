@@ -5726,6 +5726,7 @@ mod tests {
         mark_state_initial_context_seeded(&mut state);
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
 
+        let file_ignore = Arc::new(RwLock::new(FileIgnore::new()));
         let file_watcher = Arc::new(FileWatcher::noop());
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -5740,6 +5741,7 @@ mod tests {
             user_shell: Arc::new(default_user_shell()),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             exec_policy,
+            file_ignore,
             auth_manager: auth_manager.clone(),
             otel_manager: otel_manager.clone(),
             models_manager: Arc::clone(&models_manager),
@@ -5856,6 +5858,7 @@ mod tests {
         mark_state_initial_context_seeded(&mut state);
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
 
+        let file_ignore = Arc::new(RwLock::new(FileIgnore::new()));
         let file_watcher = Arc::new(FileWatcher::noop());
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -5870,6 +5873,7 @@ mod tests {
             user_shell: Arc::new(default_user_shell()),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             exec_policy,
+            file_ignore,
             auth_manager: Arc::clone(&auth_manager),
             otel_manager: otel_manager.clone(),
             models_manager: Arc::clone(&models_manager),

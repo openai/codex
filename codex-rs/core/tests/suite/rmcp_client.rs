@@ -518,8 +518,17 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
         .env("MCP_TEST_VALUE", expected_env_value)
         .spawn()?;
 
-    wait_for_streamable_http_server(&mut http_server_child, &bind_addr, Duration::from_secs(5))
-        .await?;
+    if matches!(
+        wait_for_streamable_http_server(
+            &mut http_server_child,
+            &bind_addr,
+            Duration::from_secs(5),
+        )
+        .await?,
+        StreamableHttpServerStatus::Skipped
+    ) {
+        return Ok(());
+    }
 
     let fixture = test_codex()
         .with_config(move |config| {
@@ -697,8 +706,17 @@ async fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
         .env("MCP_TEST_VALUE", expected_env_value)
         .spawn()?;
 
-    wait_for_streamable_http_server(&mut http_server_child, &bind_addr, Duration::from_secs(5))
-        .await?;
+    if matches!(
+        wait_for_streamable_http_server(
+            &mut http_server_child,
+            &bind_addr,
+            Duration::from_secs(5),
+        )
+        .await?,
+        StreamableHttpServerStatus::Skipped
+    ) {
+        return Ok(());
+    }
 
     let temp_home = tempdir()?;
     let _guard = EnvVarGuard::set("CODEX_HOME", temp_home.path().as_os_str());
@@ -828,15 +846,26 @@ async fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
     Ok(())
 }
 
+enum StreamableHttpServerStatus {
+    Ready,
+    Skipped,
+}
+
 async fn wait_for_streamable_http_server(
     server_child: &mut Child,
     address: &str,
     timeout: Duration,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<StreamableHttpServerStatus> {
     let deadline = Instant::now() + timeout;
 
     loop {
         if let Some(status) = server_child.try_wait()? {
+            if status.code() == Some(77) {
+                println!(
+                    "Skipping test because streamable HTTP server cannot bind in this environment."
+                );
+                return Ok(StreamableHttpServerStatus::Skipped);
+            }
             return Err(anyhow::anyhow!(
                 "streamable HTTP server exited early with status {status}"
             ));
@@ -851,7 +880,7 @@ async fn wait_for_streamable_http_server(
         }
 
         match tokio::time::timeout(remaining, TcpStream::connect(address)).await {
-            Ok(Ok(_)) => return Ok(()),
+            Ok(Ok(_)) => return Ok(StreamableHttpServerStatus::Ready),
             Ok(Err(error)) => {
                 if Instant::now() >= deadline {
                     return Err(anyhow::anyhow!(

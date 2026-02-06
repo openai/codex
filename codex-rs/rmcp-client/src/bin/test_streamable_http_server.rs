@@ -256,7 +256,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!(
                 "failed to bind to {bind_addr}: {err}. make sure the process has network access"
             );
-            return Ok(());
+            std::process::exit(77);
         }
         Err(err) => return Err(err.into()),
     };

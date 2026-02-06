@@ -1,4 +1,5 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 use tokio::fs;
 use wildmatch::WildMatch;
 
@@ -17,10 +18,11 @@ const DEFAULT_SENSITIVE_PATTERNS: &[&str] = &[
     "**/.ssh/**",
     "**/.aws/**",
 ];
+const IGNORE_FILENAMES: &[&str] = &[".codexignore", ".aiignore"];
 
 #[derive(Debug, Clone, Default)]
 pub struct FileIgnore {
-    /// Full paths to the ignore files loaded (e.g. .codexignore).
+    /// Full paths to the ignore files loaded (e.g. .codexignore, .aiignore).
     /// Used to pass to tools like `rg` via `--ignore-file`.
     ignore_files: Vec<PathBuf>,
     /// Combined list of deny patterns (defaults + loaded from files).
@@ -40,16 +42,16 @@ impl FileIgnore {
     }
 
     pub async fn load(&mut self, config: &Config) {
-        // Global ignore file
-        let global_ignore = config.codex_home.join(".codexignore");
-        if fs::try_exists(&global_ignore).await.unwrap_or(false) {
-            self.add_ignore_file(global_ignore).await;
-        }
+        for filename in IGNORE_FILENAMES {
+            let global_ignore = config.codex_home.join(filename);
+            if fs::try_exists(&global_ignore).await.unwrap_or(false) {
+                self.add_ignore_file(global_ignore).await;
+            }
 
-        // Repo/Project local ignore file
-        let local_ignore = config.cwd.join(".codexignore");
-        if fs::try_exists(&local_ignore).await.unwrap_or(false) {
-            self.add_ignore_file(local_ignore).await;
+            let local_ignore = config.cwd.join(filename);
+            if fs::try_exists(&local_ignore).await.unwrap_or(false) {
+                self.add_ignore_file(local_ignore).await;
+            }
         }
     }
 
@@ -92,7 +94,7 @@ impl FileIgnore {
         }
 
         // Handle glob patterns.
-        
+
         // 1. Try matching the full path string
         if WildMatch::new(pattern).matches(path_str) {
             return true;
@@ -100,7 +102,7 @@ impl FileIgnore {
 
         // 2. If pattern has no slash, match against filename
         if !pattern.contains('/') {
-             if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
+            if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
                 if WildMatch::new(pattern).matches(file_name) {
                     return true;
                 }
@@ -127,6 +129,9 @@ impl FileIgnore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ConfigBuilder;
+    use pretty_assertions::assert_eq;
+    use tempfile::tempdir;
 
     #[test]
     fn test_is_denied_defaults() {
@@ -135,7 +140,7 @@ mod tests {
         assert!(ignore.is_denied(Path::new("src/.env")));
         assert!(ignore.is_denied(Path::new("foo/.ssh/id_rsa")));
         assert!(ignore.is_denied(Path::new("prod.pem")));
-        
+
         assert!(!ignore.is_denied(Path::new("src/main.rs")));
         assert!(!ignore.is_denied(Path::new("README.md")));
     }
@@ -147,9 +152,9 @@ mod tests {
 
         assert!(ignore.is_denied(Path::new("secret/file.txt")));
         assert!(ignore.is_denied(Path::new("src/secret/key")));
-        
+
         // Should not match partial name if not component
-        assert!(!ignore.is_denied(Path::new("mysecret/file.txt"))); 
+        assert!(!ignore.is_denied(Path::new("mysecret/file.txt")));
     }
 
     #[test]
@@ -159,7 +164,31 @@ mod tests {
 
         assert!(ignore.is_denied(Path::new("config.secret")));
         assert!(ignore.is_denied(Path::new("src/config.secret")));
-        
+
         assert!(!ignore.is_denied(Path::new("config.public")));
+    }
+
+    #[tokio::test]
+    async fn load_includes_aiignore_from_home_and_repo() -> anyhow::Result<()> {
+        let codex_home = tempdir().expect("create codex home");
+        let repo = tempdir().expect("create repo dir");
+        let global_ignore = codex_home.path().join(".aiignore");
+        let local_ignore = repo.path().join(".aiignore");
+        std::fs::write(&global_ignore, "global-secret.txt\n")?;
+        std::fs::write(&local_ignore, "local-secret.txt\n")?;
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(repo.path().to_path_buf()))
+            .build()
+            .await?;
+
+        let mut ignore = FileIgnore::new();
+        ignore.load(&config).await;
+
+        assert_eq!(ignore.ignore_files(), vec![global_ignore, local_ignore]);
+        assert!(ignore.is_denied(Path::new("global-secret.txt")));
+        assert!(ignore.is_denied(Path::new("local-secret.txt")));
+        Ok(())
     }
 }
