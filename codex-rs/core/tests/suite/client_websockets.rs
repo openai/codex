@@ -12,6 +12,8 @@ use codex_core::WireApi;
 use codex_core::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
+use codex_core::protocol::EventMsg;
+use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_otel::OtelManager;
 use codex_otel::TelemetryAuthMode;
@@ -22,6 +24,7 @@ use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::WebSocketTestServer;
@@ -30,6 +33,8 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::start_websocket_server;
 use core_test_support::responses::start_websocket_server_with_headers;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
 use futures::FutureExt;
 use futures::StreamExt;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
@@ -389,6 +394,93 @@ async fn responses_websocket_emits_rate_limit_events() {
     assert_eq!(credits.balance.as_deref(), Some("123"));
     assert_eq!(saw_models_etag.as_deref(), Some("etag-123"));
     assert!(saw_reasoning_included);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_usage_limit_error_emits_rate_limit_event() {
+    skip_if_no_network!();
+
+    let usage_limit_error = json!({
+        "type": "error",
+        "status_code": 429,
+        "error": {
+            "type": "usage_limit_reached",
+            "message": "The usage limit has been reached",
+            "plan_type": "pro",
+            "resets_at": 1704067242,
+            "resets_in_seconds": 1234
+        },
+        "headers": {
+            "x-codex-primary-used-percent": "100.0",
+            "x-codex-secondary-used-percent": "87.5",
+            "x-codex-primary-over-secondary-limit-percent": "95.0",
+            "x-codex-primary-window-minutes": "15",
+            "x-codex-secondary-window-minutes": "60"
+        }
+    });
+
+    let server = start_websocket_server(vec![vec![vec![usage_limit_error]]]).await;
+    let mut builder = test_codex().with_config(|config| {
+        config.model_provider.request_max_retries = Some(0);
+        config.model_provider.stream_max_retries = Some(0);
+    });
+    let test = builder
+        .build_with_websocket_server(&server)
+        .await
+        .expect("build websocket codex");
+
+    let submission_id = test
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .expect("submission should succeed while emitting usage limit error events");
+
+    let token_event =
+        wait_for_event(&test.codex, |msg| matches!(msg, EventMsg::TokenCount(_))).await;
+    let EventMsg::TokenCount(event) = token_event else {
+        unreachable!();
+    };
+
+    let event_json = serde_json::to_value(&event).expect("serialize token count event");
+    pretty_assertions::assert_eq!(
+        event_json,
+        json!({
+            "info": null,
+            "source": "rate_limits",
+            "rate_limits": {
+                "primary": {
+                    "used_percent": 100.0,
+                    "window_minutes": 15,
+                    "resets_at": null
+                },
+                "secondary": {
+                    "used_percent": 87.5,
+                    "window_minutes": 60,
+                    "resets_at": null
+                },
+                "credits": null,
+                "plan_type": null
+            }
+        })
+    );
+
+    let error_event = wait_for_event(&test.codex, |msg| matches!(msg, EventMsg::Error(_))).await;
+    let EventMsg::Error(error_event) = error_event else {
+        unreachable!();
+    };
+    assert!(
+        error_event.message.to_lowercase().contains("usage limit"),
+        "unexpected error message for submission {submission_id}: {}",
+        error_event.message
+    );
 
     server.shutdown().await;
 }
