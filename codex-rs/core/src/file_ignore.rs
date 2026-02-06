@@ -18,11 +18,11 @@ const DEFAULT_SENSITIVE_PATTERNS: &[&str] = &[
     "**/.ssh/**",
     "**/.aws/**",
 ];
-const IGNORE_FILENAMES: &[&str] = &[".codexignore", ".aiignore"];
+const IGNORE_FILENAMES: &[&str] = &[".codexignore", ".aiignore", ".agentignore"];
 
 #[derive(Debug, Clone, Default)]
 pub struct FileIgnore {
-    /// Full paths to the ignore files loaded (e.g. .codexignore, .aiignore).
+    /// Full paths to the ignore files loaded (e.g. .codexignore, .aiignore, .agentignore).
     /// Used to pass to tools like `rg` via `--ignore-file`.
     ignore_files: Vec<PathBuf>,
     /// Combined list of deny patterns (defaults + loaded from files).
