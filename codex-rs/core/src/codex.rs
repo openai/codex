@@ -1768,10 +1768,7 @@ impl Session {
                 }
                 RolloutItem::Compacted(compacted) => {
                     if let Some(replacement) = &compacted.replacement_history {
-                        history.replace(
-                            self.process_compacted_history(turn_context, replacement.clone())
-                                .await,
-                        );
+                        history.replace(replacement.clone());
                     } else {
                         let user_messages = collect_user_messages(history.raw_items());
                         let rebuilt = compact::build_compacted_history(
@@ -4677,7 +4674,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reconstruct_history_refreshes_developer_instructions_for_replacement_history() {
+    async fn reconstruct_history_uses_replacement_history_verbatim() {
         let (session, turn_context) = make_session_and_context().await;
         let summary_item = ResponseItem::Message {
             id: None,
@@ -4688,43 +4685,28 @@ mod tests {
             end_turn: None,
             phase: None,
         };
+        let replacement_history = vec![
+            summary_item.clone(),
+            ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "stale developer instructions".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ];
         let rollout_items = vec![RolloutItem::Compacted(CompactedItem {
             message: String::new(),
-            replacement_history: Some(vec![
-                summary_item.clone(),
-                ResponseItem::Message {
-                    id: None,
-                    role: "developer".to_string(),
-                    content: vec![ContentItem::InputText {
-                        text: "stale developer instructions".to_string(),
-                    }],
-                    end_turn: None,
-                    phase: None,
-                },
-            ]),
+            replacement_history: Some(replacement_history.clone()),
         })];
 
         let reconstructed = session
             .reconstruct_history_from_rollout(&turn_context, &rollout_items)
             .await;
 
-        let has_stale_message = reconstructed.iter().any(|item| {
-            matches!(
-                item,
-                ResponseItem::Message { role, content, .. }
-                    if role == "developer"
-                        && content.iter().any(|part| matches!(
-                            part,
-                            ContentItem::InputText { text }
-                                if text == "stale developer instructions"
-                        ))
-            )
-        });
-        assert!(!has_stale_message);
-
-        let mut expected = session.build_initial_context(&turn_context).await;
-        expected.push(summary_item);
-        assert_eq!(reconstructed, expected);
+        assert_eq!(reconstructed, replacement_history);
     }
 
     #[tokio::test]
