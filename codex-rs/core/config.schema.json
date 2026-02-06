@@ -224,6 +224,9 @@
             "js_repl": {
               "type": "boolean"
             },
+            "js_repl_tools_only": {
+              "type": "boolean"
+            },
             "memory_tool": {
               "type": "boolean"
             },
@@ -1271,6 +1274,9 @@
           "type": "boolean"
         },
         "js_repl": {
+          "type": "boolean"
+        },
+        "js_repl_tools_only": {
           "type": "boolean"
         },
         "memory_tool": {

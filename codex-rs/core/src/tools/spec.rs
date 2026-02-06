@@ -32,6 +32,7 @@ pub(crate) struct ToolsConfig {
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
     pub js_repl_enabled: bool,
+    pub js_repl_tools_only: bool,
     pub collab_tools: bool,
     pub collaboration_modes_tools: bool,
     pub memory_tools: bool,
@@ -54,6 +55,8 @@ impl ToolsConfig {
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_js_repl = features.enabled(Feature::JsRepl);
+        let include_js_repl_tools_only =
+            include_js_repl && features.enabled(Feature::JsReplToolsOnly);
         let include_collab_tools = features.enabled(Feature::Collab);
         let include_collaboration_modes_tools = features.enabled(Feature::CollaborationModes);
         let include_memory_tools = features.enabled(Feature::MemoryTool);
@@ -89,6 +92,7 @@ impl ToolsConfig {
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
             js_repl_enabled: include_js_repl,
+            js_repl_tools_only: include_js_repl_tools_only,
             collab_tools: include_collab_tools,
             collaboration_modes_tools: include_collaboration_modes_tools,
             memory_tools: include_memory_tools,
@@ -98,8 +102,15 @@ impl ToolsConfig {
     }
 }
 
-pub(crate) fn filter_tools_for_model(tools: Vec<ToolSpec>, _config: &ToolsConfig) -> Vec<ToolSpec> {
+pub(crate) fn filter_tools_for_model(tools: Vec<ToolSpec>, config: &ToolsConfig) -> Vec<ToolSpec> {
+    if !config.js_repl_tools_only {
+        return tools;
+    }
+
     tools
+        .into_iter()
+        .filter(|spec| matches!(spec.name(), "js_repl" | "js_repl_reset"))
+        .collect()
 }
 
 /// Generic JSON‑Schema subset needed for our tool definitions
@@ -1586,6 +1597,27 @@ mod tests {
         }
     }
 
+    fn assert_contains_tool_specs(tools: &[ToolSpec], expected_subset: &[&str]) {
+        use std::collections::HashSet;
+        let mut names = HashSet::new();
+        let mut duplicates = Vec::new();
+        for name in tools.iter().map(tool_name) {
+            if !names.insert(name) {
+                duplicates.push(name);
+            }
+        }
+        assert!(
+            duplicates.is_empty(),
+            "duplicate tool entries detected: {duplicates:?}"
+        );
+        for expected in expected_subset {
+            assert!(
+                names.contains(expected),
+                "expected tool {expected} to be present; had: {names:?}"
+            );
+        }
+    }
+
     fn shell_tool_name(config: &ToolsConfig) -> Option<&'static str> {
         match config.shell_type {
             ConfigShellToolType::Default => Some("shell"),
@@ -1815,6 +1847,75 @@ mod tests {
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
         assert_contains_tool_names(&tools, &["js_repl", "js_repl_reset"]);
+    }
+
+    #[test]
+    fn js_repl_tools_only_filters_model_tools() {
+        let config = test_config();
+        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::JsRepl);
+        features.enable(Feature::JsReplToolsOnly);
+
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+        });
+        let (tools, _) = build_specs(&tools_config, None, &[]).build();
+        let filtered = filter_tools_for_model(
+            tools.iter().map(|tool| tool.spec.clone()).collect(),
+            &tools_config,
+        );
+        assert_contains_tool_specs(&filtered, &["js_repl", "js_repl_reset"]);
+        assert!(
+            !filtered.iter().any(|tool| tool_name(tool) == "shell"),
+            "expected non-js_repl tools to be hidden when js_repl_tools_only is enabled"
+        );
+    }
+
+    #[test]
+    fn js_repl_tools_only_hides_dynamic_tools_from_model_tools() {
+        let config = test_config();
+        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::JsRepl);
+        features.enable(Feature::JsReplToolsOnly);
+
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+        });
+        let dynamic_tools = vec![DynamicToolSpec {
+            name: "dynamic_echo".to_string(),
+            description: "echo dynamic payload".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"}
+                },
+                "required": ["text"],
+                "additionalProperties": false
+            }),
+        }];
+        let (tools, _) = build_specs(&tools_config, None, &dynamic_tools).build();
+        assert!(
+            tools.iter().any(|tool| tool.spec.name() == "dynamic_echo"),
+            "expected dynamic tool in full router specs"
+        );
+
+        let filtered = filter_tools_for_model(
+            tools.iter().map(|tool| tool.spec.clone()).collect(),
+            &tools_config,
+        );
+        assert!(
+            !filtered
+                .iter()
+                .any(|tool| tool_name(tool) == "dynamic_echo"),
+            "expected dynamic tools to be hidden from direct model tools in js_repl_tools_only mode"
+        );
+        assert_contains_tool_specs(&filtered, &["js_repl", "js_repl_reset"]);
     }
 
     fn assert_model_tools(

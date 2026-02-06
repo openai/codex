@@ -663,7 +663,13 @@ impl JsReplManager {
         };
 
         match router
-            .dispatch_tool_call(exec.session, exec.turn, exec.tracker, call)
+            .dispatch_tool_call(
+                exec.session,
+                exec.turn,
+                exec.tracker,
+                call,
+                crate::tools::router::ToolCallSource::JsRepl,
+            )
             .await
         {
             Ok(response) => match serde_json::to_value(response) {

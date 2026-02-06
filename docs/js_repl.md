@@ -11,6 +11,16 @@
 js_repl = true
 ```
 
+`js_repl_tools_only` can be enabled to force direct model tool calls through `js_repl`:
+
+```toml
+[features]
+js_repl = true
+js_repl_tools_only = true
+```
+
+When enabled, direct model tool calls are restricted to `js_repl` and `js_repl_reset`; other tools remain available via `await codex.tool(...)` inside js_repl.
+
 ## Node runtime
 
 `js_repl` requires a Node version that meets or exceeds `codex-rs/node-version.txt`.

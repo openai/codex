@@ -85,7 +85,13 @@ impl ToolCallRuntime {
                         };
 
                         router
-                            .dispatch_tool_call(session, turn, tracker, call.clone())
+                            .dispatch_tool_call(
+                                session,
+                                turn,
+                                tracker,
+                                call.clone(),
+                                crate::tools::router::ToolCallSource::Model,
+                            )
                             .instrument(dispatch_span.clone())
                             .await
                     } => res,

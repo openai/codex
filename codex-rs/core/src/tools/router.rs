@@ -28,6 +28,12 @@ pub struct ToolCall {
     pub payload: ToolPayload,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ToolCallSource {
+    Model,
+    JsRepl,
+}
+
 pub struct ToolRouter {
     registry: ToolRegistry,
     specs: Vec<ConfiguredToolSpec>,
@@ -138,6 +144,7 @@ impl ToolRouter {
         turn: Arc<TurnContext>,
         tracker: SharedTurnDiffTracker,
         call: ToolCall,
+        source: ToolCallSource,
     ) -> Result<ResponseInputItem, FunctionCallError> {
         let ToolCall {
             tool_name,
@@ -146,6 +153,21 @@ impl ToolRouter {
         } = call;
         let payload_outputs_custom = matches!(payload, ToolPayload::Custom { .. });
         let failure_call_id = call_id.clone();
+
+        if source == ToolCallSource::Model
+            && turn.tools_config.js_repl_tools_only
+            && !matches!(tool_name.as_str(), "js_repl" | "js_repl_reset")
+        {
+            let err = FunctionCallError::RespondToModel(
+                "direct tool calls are disabled; use js_repl and codex.tool(...) instead"
+                    .to_string(),
+            );
+            return Ok(Self::failure_response(
+                failure_call_id,
+                payload_outputs_custom,
+                err,
+            ));
+        }
 
         let invocation = ToolInvocation {
             session,
@@ -187,5 +209,121 @@ impl ToolRouter {
                 },
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use codex_protocol::models::ResponseInputItem;
+
+    use super::ToolCall;
+    use super::ToolCallSource;
+    use super::ToolRouter;
+    use crate::codex::make_session_and_context;
+    use crate::tools::context::ToolPayload;
+    use crate::turn_diff_tracker::TurnDiffTracker;
+
+    #[tokio::test]
+    async fn js_repl_tools_only_blocks_direct_tool_calls() -> anyhow::Result<()> {
+        let (session, mut turn) = make_session_and_context().await;
+        turn.tools_config.js_repl_tools_only = true;
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let mcp_tools = session
+            .services
+            .mcp_connection_manager
+            .read()
+            .await
+            .list_all_tools()
+            .await;
+        let router = ToolRouter::from_config(
+            &turn.tools_config,
+            Some(
+                mcp_tools
+                    .into_iter()
+                    .map(|(name, tool)| (name, tool.tool))
+                    .collect(),
+            ),
+            turn.dynamic_tools.as_slice(),
+        );
+
+        let call = ToolCall {
+            tool_name: "shell".to_string(),
+            call_id: "call-1".to_string(),
+            payload: ToolPayload::Function {
+                arguments: "{}".to_string(),
+            },
+        };
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+        let response = router
+            .dispatch_tool_call(session, turn, tracker, call, ToolCallSource::Model)
+            .await?;
+
+        match response {
+            ResponseInputItem::FunctionCallOutput { output, .. } => {
+                let content = output.text_content().unwrap_or_default();
+                assert!(
+                    content.contains("direct tool calls are disabled"),
+                    "unexpected tool call message: {content}",
+                );
+            }
+            other => panic!("expected function call output, got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn js_repl_tools_only_allows_js_repl_source_calls() -> anyhow::Result<()> {
+        let (session, mut turn) = make_session_and_context().await;
+        turn.tools_config.js_repl_tools_only = true;
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let mcp_tools = session
+            .services
+            .mcp_connection_manager
+            .read()
+            .await
+            .list_all_tools()
+            .await;
+        let router = ToolRouter::from_config(
+            &turn.tools_config,
+            Some(
+                mcp_tools
+                    .into_iter()
+                    .map(|(name, tool)| (name, tool.tool))
+                    .collect(),
+            ),
+            turn.dynamic_tools.as_slice(),
+        );
+
+        let call = ToolCall {
+            tool_name: "shell".to_string(),
+            call_id: "call-2".to_string(),
+            payload: ToolPayload::Function {
+                arguments: "{}".to_string(),
+            },
+        };
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+        let response = router
+            .dispatch_tool_call(session, turn, tracker, call, ToolCallSource::JsRepl)
+            .await?;
+
+        match response {
+            ResponseInputItem::FunctionCallOutput { output, .. } => {
+                let content = output.text_content().unwrap_or_default();
+                assert!(
+                    !content.contains("direct tool calls are disabled"),
+                    "js_repl source should bypass direct-call policy gate"
+                );
+            }
+            other => panic!("expected function call output, got {other:?}"),
+        }
+
+        Ok(())
     }
 }
