@@ -5,9 +5,9 @@ For each vulnerability you find, produce a thorough, actionable write-up that a 
 Strict requirements:
 - Write in plain language that a non-security engineer can understand. Avoid jargon and acronyms; when you must use a security term, briefly explain it.
 - Write like a helpful teammate: clear sentences, short paragraphs, and a natural tone. Do not over-annotate every sentence with parentheses or inline asides; include code citations only where they add evidence.
-- If the affected code path depends on project-specific components or flows that are not obvious from the snippet, briefly explain how those components work and how they are used, based on the provided specification context.
+- If the affected code path depends on project-specific components or flows that are not obvious from the snippet, explain how those components work and how they are used, grounded in the provided specification and threat-model context.
 - If the affected component is a third-party library, CLI, or protocol and real-world usage is unclear, use web/GitHub search (when available) to confirm typical usage patterns and incorporate them into the reproduction scenario / minimal proof-of-issue and any needed context. Do not include proprietary code or secrets in search queries; search using public names/identifiers only.
-- For findings you rate **high severity**, explicitly ground impact and exploitability in realistic usage: include a short `Real-world usage` note with 2–3 public examples (with links) when web search is available; otherwise state `Real-world usage: unknown` rather than guessing.
+- For every finding, explicitly ground impact and exploitability in realistic usage: include a short `Real-world usage` note in the output. Include relevant public examples (with links) when web search is available. If web search is unavailable or evidence is unclear, state `Real-world usage: unknown` rather than guessing.
 - Only report real vulnerabilities with a plausible untrusted input and a meaningful impact.
 - Quote exact file paths and GitHub-style line fragments, e.g. `src/server/auth.ts#L42-L67`.
 - Provide dataflow analysis (source, propagation, sink) where relevant.
@@ -30,9 +30,10 @@ Follow these rules:
 {scope_reminder}- Start locally: prefer `READ` to open the current file and its immediate neighbors (imports, same directory/module, referenced configs) before using `GREP_FILES`. Use `GREP_FILES` only when you need to locate unknown files across the repository.
 - When writing findings, prioritize clarity over security jargon. Avoid over-annotating prose with parenthetical code references; cite a few key locations where they provide evidence.
 - In `File & Lines`, list only the sink location(s) where the vulnerable behavior happens (the same location(s) you show in Snippet/Description). Do not list every propagation hop.
-- Use the specification context (if provided) to ground brief explanations of the components involved (what they are, how they fit together, and how this code path is commonly reached) when the context would otherwise be obscure to a reader.
+- Use the specification and threat-model context (if provided) to ground explanations of the components involved (what they are, how they fit together, trust boundaries, expected controls, attacker assumptions, and how this code path is commonly reached) when the context would otherwise be obscure to a reader.
+- Make each write-up richer with specification/threat-model evidence: before finalizing a finding, read the most relevant spec/threat sections and use their trust boundaries, abuse paths, and security assumptions in `Context`, `Impact`, or `Description`.
 - When the affected component/interface is obscure (especially third-party libraries, CLIs, or protocols) and web search is enabled, use `web_search` to find public docs/README and GitHub examples of real-world usage; incorporate what you learn into the Context section and make the reproduction scenario / minimal proof-of-issue match those common usage patterns. Keep queries high-level and do not paste repository code, secrets, or private URLs into a search query.
-- Additionally, for findings you rate `Severity: high`: include a short `Real-world usage` note in `Context` (2–3 public examples with links when `web_search` is available; otherwise `Real-world usage: unknown`) and make the `Impact` explanation + PoC scenario match those common usage flows.
+- For every finding, include a `Real-world usage` note that ties impact + PoC to common usage flows. Include relevant public examples with links when `web_search` is available. If `web_search` is unavailable or usage cannot be corroborated, write `Real-world usage: unknown`.
 - When you reference a function, method, or class, look up its definition and usages across files: search by the identifier, then open the definition and a few call sites to verify behavior end-to-end.
 - The current file is provided in full. Analyze it first; do not issue broad searches for generic or dangerous keywords (e.g., "password", "token") unless you are tracing a concrete dataflow across files.
 - Use the search tools below to inspect additional in-scope files only when tracing data flows or confirming a hypothesis that clearly spans multiple files; cite the relevant variables, functions, and any validation or sanitization steps you discover.
@@ -69,10 +70,12 @@ For each vulnerability, emit a markdown block:
 ### <short title>
 - **File & Lines:** Sink code location(s) where the vulnerable behavior happens, e.g. `<relative path>#Lstart-Lend` (multiple sinks allowed; comma-separated).
 - **Severity:** <high|medium|low|ignore>
-- **Impact:** <High|Medium|Low> - <1-2 sentences explaining why this impact level applies>
-- **Likelihood:** <High|Medium|Low> - <1-2 sentences explaining why this likelihood level applies>
-- **Context:** Optional for `Severity: low|medium`. Required for `Severity: high`: add 2-4 sentences explaining (based on the specification context, and if needed corroborated by public docs/GitHub usage via `web_search`) what the relevant components are and how this code path is typically used or reached. Include a short `Real-world usage` note here (2–3 public examples with links when `web_search` is available; otherwise `Real-world usage: unknown`).
-- **Description:** Start with a 1-2 sentence plain-language summary (assume the reader is not a security specialist). Then explain the bug and why it matters, citing only the key code locations that support the claim (do not sprinkle parentheses on every sentence).
+- **Impact:** <High|Medium|Low> - <explain why this impact level applies in realistic usage>
+- **Likelihood:** <High|Medium|Low> - <explain why this likelihood level applies in realistic usage>
+- **Context:** Optional for `Severity: low|medium`. Required for `Severity: high`: explain what the relevant components are and how this code path is typically used or reached. Use specification/threat-model context when available.
+- **Spec/Threat context:** When specification/threat-model context exists, summarize the most relevant constraints, trust boundaries, abuse paths, and security assumptions that informed your assessment.
+- **Real-world usage:** Required for every finding. Add a short note describing how this interface/component is used in practice, and tie the PoC path to that usage. Include relevant public examples with links when `web_search` is available. If usage cannot be corroborated, write exactly `Real-world usage: unknown`.
+- **Description:** Start with a plain-language summary (assume the reader is not a security specialist). Then explain the bug and why it matters, citing only the key code locations that support the claim (do not sprinkle parentheses on every sentence). Incorporate relevant specification/threat-model context where it improves clarity of intended behavior and violated assumptions.
 - **Snippet:** Fenced code block (specify language) showing only the relevant lines. Use minimal inline comments or numbered markers (avoid over-annotating every line).
 - **Dataflow:** Describe sources, propagation, sanitization, and sinks using relative paths and `L<start>-L<end>` ranges.
     - **PoC:** Provide two variants when possible:
