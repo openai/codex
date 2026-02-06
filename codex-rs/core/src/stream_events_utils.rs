@@ -155,7 +155,7 @@ pub(crate) async fn handle_output_item_done(
         }
         // CRAFT AGENTS: Tool execution was blocked by PreToolUse hook.
         Err(FunctionCallError::Blocked(reason)) => {
-            let msg = format!("Tool blocked: {}", reason);
+            let msg = format!("Tool blocked: {reason}");
             tracing::info!(msg);
 
             let response = ResponseInputItem::FunctionCallOutput {

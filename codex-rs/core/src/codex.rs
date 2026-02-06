@@ -1646,15 +1646,13 @@ impl Session {
         self.send_event(turn_context, event).await;
 
         // Return the response, defaulting to Allow if the channel is closed (e.g., task aborted).
-        rx_response
-            .await
-            .unwrap_or_else(|_| ToolCallPreExecuteResponse {
-                decision: ToolCallPreExecuteDecision::Allow,
-                reason: None,
-                modified_input: None,
-                prompt_metadata: None,
-                user_response: None,
-            })
+        rx_response.await.unwrap_or(ToolCallPreExecuteResponse {
+            decision: ToolCallPreExecuteDecision::Allow,
+            reason: None,
+            modified_input: None,
+            prompt_metadata: None,
+            user_response: None,
+        })
     }
 
     pub async fn request_patch_approval(
