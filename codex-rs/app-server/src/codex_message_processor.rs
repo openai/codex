@@ -154,7 +154,6 @@ use codex_core::CodexThread;
 use codex_core::Cursor as RolloutCursor;
 use codex_core::InitialHistory;
 use codex_core::NewThread;
-use codex_core::RolloutPersistenceStatus;
 use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
 use codex_core::SteerInputError;
@@ -1844,7 +1843,7 @@ impl CodexMessageProcessor {
 
         match self
             .thread_manager
-            .start_thread_with_tools_deferred_rollout(config, core_dynamic_tools)
+            .start_thread_with_tools(config, core_dynamic_tools)
             .await
         {
             Ok(new_conv) => {
@@ -5182,40 +5181,25 @@ impl CodexMessageProcessor {
         &self,
         thread_id: ThreadId,
     ) -> Result<PathBuf, JSONRPCErrorError> {
-        if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
-            match thread.ensure_rollout_persisted().await {
-                Ok(RolloutPersistenceStatus::Persisted(path)) => return Ok(path),
-                Ok(RolloutPersistenceStatus::Ephemeral) => {
-                    return Err(JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!(
-                            "thread `{thread_id}` is ephemeral and has no persisted rollout"
-                        ),
-                        data: None,
-                    });
-                }
-                Err(err) => {
-                    return Err(JSONRPCErrorError {
-                        code: INTERNAL_ERROR_CODE,
-                        message: format!(
-                            "failed to persist rollout for thread id {thread_id}: {err}"
-                        ),
-                        data: None,
-                    });
-                }
-            }
-        }
-
-        match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string()).await {
-            Ok(Some(path)) => Ok(path),
-            Ok(None) => Err(JSONRPCErrorError {
+        match self
+            .thread_manager
+            .resolve_rollout_path_for_thread_id(thread_id)
+            .await
+        {
+            Ok(path) => Ok(path),
+            Err(CodexErr::ThreadNotFound(_)) => Err(JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
                 message: format!("no rollout found for thread id {thread_id}"),
                 data: None,
             }),
-            Err(err) => Err(JSONRPCErrorError {
+            Err(CodexErr::InvalidRequest(message)) => Err(JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("failed to locate thread id {thread_id}: {err}"),
+                message,
+                data: None,
+            }),
+            Err(err) => Err(JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: err.to_string(),
                 data: None,
             }),
         }

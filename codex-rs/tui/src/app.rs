@@ -645,6 +645,26 @@ impl App {
         }
     }
 
+    async fn resolve_rollout_path_for_thread(
+        &mut self,
+        thread_id: ThreadId,
+    ) -> std::result::Result<PathBuf, String> {
+        let path = self
+            .server
+            .resolve_rollout_path_for_thread_id(thread_id)
+            .await
+            .map_err(|err| err.to_string())?;
+        self.chat_widget.set_rollout_path(Some(path.clone()));
+        Ok(path)
+    }
+
+    async fn resolve_active_rollout_path(&mut self) -> std::result::Result<PathBuf, String> {
+        let Some(thread_id) = self.chat_widget.thread_id() else {
+            return Err("Current session is not ready yet.".to_string());
+        };
+        self.resolve_rollout_path_for_thread(thread_id).await
+    }
+
     async fn shutdown_current_thread(&mut self) {
         if let Some(thread_id) = self.chat_widget.thread_id() {
             // Clear any in-flight rollback guard when switching threads.
@@ -1443,49 +1463,66 @@ impl App {
                 );
                 self.chat_widget
                     .add_plain_history_lines(vec!["/fork".magenta().into()]);
-                if let Some(path) = self.chat_widget.rollout_path() {
-                    match self
-                        .server
-                        .fork_thread(usize::MAX, self.config.clone(), path.clone())
-                        .await
-                    {
-                        Ok(forked) => {
-                            self.shutdown_current_thread().await;
-                            let init = self.chatwidget_init_for_forked_or_resumed_thread(
-                                tui,
-                                self.config.clone(),
-                            );
-                            self.chat_widget = ChatWidget::new_from_existing(
-                                init,
-                                forked.thread,
-                                forked.session_configured,
-                            );
-                            self.reset_thread_event_state();
-                            if let Some(summary) = summary {
-                                let mut lines: Vec<Line<'static>> =
-                                    vec![summary.usage_line.clone().into()];
-                                if let Some(command) = summary.resume_command {
-                                    let spans = vec![
-                                        "To continue this session, run ".into(),
-                                        command.cyan(),
-                                    ];
-                                    lines.push(spans.into());
-                                }
-                                self.chat_widget.add_plain_history_lines(lines);
+                let path = match self.resolve_active_rollout_path().await {
+                    Ok(path) => path,
+                    Err(err) => {
+                        self.chat_widget
+                            .add_error_message(format!("Failed to fork current session: {err}"));
+                        tui.frame_requester().schedule_frame();
+                        return Ok(AppRunControl::Continue);
+                    }
+                };
+                match self
+                    .server
+                    .fork_thread(usize::MAX, self.config.clone(), path.clone())
+                    .await
+                {
+                    Ok(forked) => {
+                        self.shutdown_current_thread().await;
+                        let init = self
+                            .chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
+                        self.chat_widget = ChatWidget::new_from_existing(
+                            init,
+                            forked.thread,
+                            forked.session_configured,
+                        );
+                        self.reset_thread_event_state();
+                        if let Some(summary) = summary {
+                            let mut lines: Vec<Line<'static>> =
+                                vec![summary.usage_line.clone().into()];
+                            if let Some(command) = summary.resume_command {
+                                let spans =
+                                    vec!["To continue this session, run ".into(), command.cyan()];
+                                lines.push(spans.into());
                             }
-                        }
-                        Err(err) => {
-                            let path_display = path.display();
-                            self.chat_widget.add_error_message(format!(
-                                "Failed to fork current session from {path_display}: {err}"
-                            ));
+                            self.chat_widget.add_plain_history_lines(lines);
                         }
                     }
-                } else {
-                    self.chat_widget
-                        .add_error_message("Current session is not ready to fork yet.".to_string());
+                    Err(err) => {
+                        let path_display = path.display();
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to fork current session from {path_display}: {err}"
+                        ));
+                    }
                 }
 
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::ShowRolloutPath => {
+                match self.resolve_active_rollout_path().await {
+                    Ok(path) => {
+                        self.chat_widget.add_info_message(
+                            format!("Current rollout path: {}", path.display()),
+                            None,
+                        );
+                    }
+                    Err(err) => {
+                        self.chat_widget.add_info_message(
+                            format!("Rollout path is not available yet: {err}"),
+                            None,
+                        );
+                    }
+                }
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::InsertHistoryCell(cell) => {
@@ -1639,9 +1676,24 @@ impl App {
                 category,
                 include_logs,
             } => {
+                if include_logs
+                    && self.chat_widget.rollout_path().is_none()
+                    && let Some(thread_id) = self.chat_widget.thread_id()
+                    && let Err(err) = self.resolve_rollout_path_for_thread(thread_id).await
+                {
+                    tracing::debug!("failed to materialize rollout path for feedback note: {err}");
+                }
                 self.chat_widget.open_feedback_note(category, include_logs);
             }
             AppEvent::OpenFeedbackConsent { category } => {
+                if self.chat_widget.rollout_path().is_none()
+                    && let Some(thread_id) = self.chat_widget.thread_id()
+                    && let Err(err) = self.resolve_rollout_path_for_thread(thread_id).await
+                {
+                    tracing::debug!(
+                        "failed to materialize rollout path for feedback consent: {err}"
+                    );
+                }
                 self.chat_widget.open_feedback_consent(category);
             }
             AppEvent::LaunchExternalEditor => {

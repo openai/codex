@@ -3308,14 +3308,7 @@ impl ChatWidget {
                 self.add_connectors_output();
             }
             SlashCommand::Rollout => {
-                if let Some(path) = self.rollout_path() {
-                    self.add_info_message(
-                        format!("Current rollout path: {}", path.display()),
-                        None,
-                    );
-                } else {
-                    self.add_info_message("Rollout path is not available yet.".to_string(), None);
-                }
+                self.app_event_tx.send(AppEvent::ShowRolloutPath);
             }
             SlashCommand::TestApproval => {
                 use codex_core::protocol::EventMsg;
@@ -6693,6 +6686,11 @@ impl ChatWidget {
     pub(crate) fn thread_name(&self) -> Option<String> {
         self.thread_name.clone()
     }
+
+    pub(crate) fn set_rollout_path(&mut self, rollout_path: Option<PathBuf>) {
+        self.current_rollout_path = rollout_path;
+    }
+
     pub(crate) fn rollout_path(&self) -> Option<PathBuf> {
         self.current_rollout_path.clone()
     }

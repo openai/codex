@@ -267,7 +267,6 @@ impl Codex {
         skills_manager: Arc<SkillsManager>,
         file_watcher: Arc<FileWatcher>,
         conversation_history: InitialHistory,
-        defer_new_rollout_creation: bool,
         session_source: SessionSource,
         agent_control: AgentControl,
         dynamic_tools: Vec<DynamicToolSpec>,
@@ -276,6 +275,7 @@ impl Codex {
         let (tx_event, rx_event) = async_channel::unbounded();
 
         let loaded_skills = skills_manager.skills_for_config(&config);
+        let defer_new_rollout_creation = matches!(&conversation_history, InitialHistory::New);
 
         for err in &loaded_skills.errors {
             error!(
