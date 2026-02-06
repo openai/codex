@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -39,6 +40,10 @@ struct FileWatcherInner {
 }
 
 const WATCHER_THROTTLE_INTERVAL: Duration = Duration::from_secs(1);
+const WATCHER_LOOP_DETECT_WINDOW: Duration = Duration::from_secs(30);
+const WATCHER_LOOP_DETECT_EVENT_THRESHOLD: usize = 10;
+const WATCHER_LOOP_SUPPRESS_INTERVAL: Duration = Duration::from_secs(60);
+const WATCHER_SUPPRESSED_PATH_LOG_LIMIT: usize = 20;
 
 /// Coalesces bursts of paths and emits at most once per interval.
 struct ThrottledPaths {
@@ -88,6 +93,88 @@ pub(crate) struct FileWatcher {
     inner: Option<Mutex<FileWatcherInner>>,
     state: Arc<RwLock<WatchState>>,
     tx: broadcast::Sender<FileWatcherEvent>,
+}
+
+#[derive(Debug)]
+struct LoopProtection {
+    recent_event_times: VecDeque<Instant>,
+    suppression_until: Option<Instant>,
+    suppressed_path_counts: HashMap<PathBuf, usize>,
+}
+
+impl LoopProtection {
+    fn new() -> Self {
+        Self {
+            recent_event_times: VecDeque::new(),
+            suppression_until: None,
+            suppressed_path_counts: HashMap::new(),
+        }
+    }
+
+    // Returns path-count stats only when suppression expires at `now`. Path
+    // counters are reset before returning.
+    fn refresh(&mut self, now: Instant) -> Option<Vec<(PathBuf, usize)>> {
+        if let Some(until) = self.suppression_until
+            && now >= until
+        {
+            self.suppression_until = None;
+            let mut sampled_suppressed_path_counts: Vec<(PathBuf, usize)> =
+                self.suppressed_path_counts.drain().collect();
+            sampled_suppressed_path_counts.sort_unstable_by(
+                |(path_a, count_a), (path_b, count_b)| {
+                    count_b.cmp(count_a).then_with(|| path_a.cmp(path_b))
+                },
+            );
+            if sampled_suppressed_path_counts.len() > WATCHER_SUPPRESSED_PATH_LOG_LIMIT {
+                sampled_suppressed_path_counts.truncate(WATCHER_SUPPRESSED_PATH_LOG_LIMIT);
+            }
+
+            return Some(sampled_suppressed_path_counts);
+        }
+
+        None
+    }
+
+    // Returns `true` only when this call crosses the loop threshold and starts
+    // suppression.
+    fn record_classified_event(&mut self, now: Instant) -> bool {
+        while let Some(front) = self.recent_event_times.front().copied() {
+            if now.duration_since(front) <= WATCHER_LOOP_DETECT_WINDOW {
+                break;
+            }
+            self.recent_event_times.pop_front();
+        }
+
+        self.recent_event_times.push_back(now);
+
+        if self.suppression_until.is_none()
+            && self.recent_event_times.len() >= WATCHER_LOOP_DETECT_EVENT_THRESHOLD
+        {
+            self.suppression_until = Some(now + WATCHER_LOOP_SUPPRESS_INTERVAL);
+            self.suppressed_path_counts.clear();
+            return true;
+        }
+
+        false
+    }
+
+    fn is_suppressed(&self, now: Instant) -> bool {
+        self.suppression_until.is_some_and(|until| now < until)
+    }
+
+    fn should_continue_suppression(&self) -> bool {
+        self.recent_event_times.len() >= WATCHER_LOOP_DETECT_EVENT_THRESHOLD
+    }
+
+    fn start_suppression_window(&mut self, now: Instant) {
+        self.suppression_until = Some(now + WATCHER_LOOP_SUPPRESS_INTERVAL);
+    }
+
+    fn record_suppressed(&mut self, paths: &[PathBuf]) {
+        for path in paths {
+            *self.suppressed_path_counts.entry(path.clone()).or_insert(0) += 1;
+        }
+    }
 }
 
 impl FileWatcher {
@@ -149,9 +236,26 @@ impl FileWatcher {
             handle.spawn(async move {
                 let now = Instant::now();
                 let mut skills = ThrottledPaths::new(now);
+                let mut protection = LoopProtection::new();
 
                 loop {
                     let now = Instant::now();
+                    if let Some(suppressed_path_counts) = protection.refresh(now) {
+                        let path_counts = suppressed_path_counts
+                            .iter()
+                            .map(|(path, count)| format!("{}:{count}", path.display()))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        if protection.should_continue_suppression() {
+                            protection.start_suppression_window(now);
+                            warn!(
+                                "file watcher suppression stats: [{path_counts}] (continuing for {WATCHER_LOOP_SUPPRESS_INTERVAL:?})",
+                                path_counts
+                            );
+                        } else {
+                            warn!("file watcher suppression stats: [{path_counts}] (ended)",);
+                        }
+                    }
                     let next_deadline = skills.next_deadline(now);
                     let timer_deadline = next_deadline
                         .unwrap_or_else(|| now + Duration::from_secs(60 * 60 * 24 * 365));
@@ -164,10 +268,17 @@ impl FileWatcher {
                                 Some(Ok(event)) => {
                                     let skills_paths = classify_event(&event, &state);
                                     let now = Instant::now();
+                                    if !skills_paths.is_empty() && protection.record_classified_event(now) {
+                                        let trigger_path =
+                                            first_path_for_log(&skills_paths).unwrap_or("<unknown>");
+                                        warn!(
+                                            "file watcher entering suppression for {WATCHER_LOOP_SUPPRESS_INTERVAL:?}; trigger path: {trigger_path}"
+                                        );
+                                    }
                                     skills.add(skills_paths);
 
                                     if let Some(paths) = skills.take_ready(now) {
-                                        let _ = tx.send(FileWatcherEvent::SkillsChanged { paths });
+                                        emit_skills_changed(&tx, &mut protection, paths, now);
                                     }
                                 }
                                 Some(Err(err)) => {
@@ -178,7 +289,7 @@ impl FileWatcher {
                                     // see the latest state.
                                     let now = Instant::now();
                                     if let Some(paths) = skills.take_pending(now) {
-                                        let _ = tx.send(FileWatcherEvent::SkillsChanged { paths });
+                                        emit_skills_changed(&tx, &mut protection, paths, now);
                                     }
                                     break;
                                 }
@@ -187,7 +298,7 @@ impl FileWatcher {
                         _ = &mut timer => {
                             let now = Instant::now();
                             if let Some(paths) = skills.take_ready(now) {
-                                let _ = tx.send(FileWatcherEvent::SkillsChanged { paths });
+                                emit_skills_changed(&tx, &mut protection, paths, now);
                             }
                         }
                     }
@@ -235,6 +346,35 @@ impl FileWatcher {
         }
         guard.watched_paths.insert(watch_path, mode);
     }
+}
+
+fn emit_skills_changed(
+    tx: &broadcast::Sender<FileWatcherEvent>,
+    protection: &mut LoopProtection,
+    paths: Vec<PathBuf>,
+    now: Instant,
+) {
+    if paths.is_empty() {
+        return;
+    }
+
+    if protection.is_suppressed(now) {
+        protection.record_suppressed(&paths);
+        return;
+    }
+
+    let _ = tx.send(FileWatcherEvent::SkillsChanged { paths });
+}
+
+fn first_path_for_log(paths: &[PathBuf]) -> Option<String> {
+    let mut unique_paths: Vec<PathBuf> = paths
+        .iter()
+        .cloned()
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    unique_paths.sort_unstable();
+    unique_paths.first().map(|path| path.display().to_string())
 }
 
 fn classify_event(event: &Event, state: &RwLock<WatchState>) -> Vec<PathBuf> {
@@ -315,18 +455,22 @@ mod tests {
     }
 
     #[test]
-    fn classify_event_filters_to_skills_roots() {
+    fn classify_event_filters_to_registered_roots() {
         let root = path("/tmp/skills");
         let state = RwLock::new(WatchState {
             skills_roots: HashSet::from([root.clone()]),
         });
         let event = notify_event(vec![
             root.join("demo/SKILL.md"),
+            root.join("demo/README.md"),
             path("/tmp/other/not-a-skill.txt"),
         ]);
 
         let classified = classify_event(&event, &state);
-        assert_eq!(classified, vec![root.join("demo/SKILL.md")]);
+        assert_eq!(
+            classified,
+            vec![root.join("demo/SKILL.md"), root.join("demo/README.md")]
+        );
     }
 
     #[test]
@@ -359,6 +503,35 @@ mod tests {
 
         let state = watcher.state.read().expect("state lock");
         assert_eq!(state.skills_roots.len(), 2);
+    }
+
+    #[test]
+    fn loop_protection_enters_and_exits_suppression() {
+        let start = Instant::now();
+        let mut protection = LoopProtection::new();
+
+        for _ in 0..(WATCHER_LOOP_DETECT_EVENT_THRESHOLD - 1) {
+            assert!(!protection.record_classified_event(start));
+        }
+        assert!(protection.record_classified_event(start));
+        assert!(protection.is_suppressed(start));
+
+        protection.record_suppressed(&[path("/tmp/skills/a")]);
+        protection.record_suppressed(&[path("/tmp/skills/b"), path("/tmp/skills/c")]);
+
+        let summary = protection
+            .refresh(start + WATCHER_LOOP_SUPPRESS_INTERVAL)
+            .expect("suppression summary");
+        assert_eq!(
+            summary,
+            vec![
+                (path("/tmp/skills/a"), 1),
+                (path("/tmp/skills/b"), 1),
+                (path("/tmp/skills/c"), 1)
+            ]
+        );
+        assert!(!protection.is_suppressed(start + WATCHER_LOOP_SUPPRESS_INTERVAL));
+        assert!(!protection.record_classified_event(start + WATCHER_LOOP_SUPPRESS_INTERVAL));
     }
 
     #[tokio::test]
