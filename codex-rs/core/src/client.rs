@@ -88,8 +88,8 @@ use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::tools::spec::create_tools_json_for_responses_api;
-use crate::turn_metadata::TURN_METADATA_HEADER_TIMEOUT;
 use crate::turn_metadata::build_turn_metadata_header;
+use crate::turn_metadata::resolve_turn_metadata_header_with_timeout;
 
 pub const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
 pub const OPENAI_BETA_RESPONSES_WEBSOCKETS: &str = "responses_websockets=2026-02-04";
@@ -117,11 +117,7 @@ struct ModelClientState {
     ///
     /// The slot is consumed on read to avoid accidentally sharing one socket across
     /// multiple concurrent turn sessions.
-    preconnected_websocket: Mutex<Option<ApiWebSocketConnection>>,
-    /// Sticky routing token captured from a preconnected websocket handshake.
-    ///
-    /// This is consumed together with `preconnected_websocket`.
-    preconnected_turn_state: Mutex<Option<String>>,
+    preconnected_websocket: Mutex<Option<PreconnectedWebSocket>>,
 }
 
 impl std::fmt::Debug for ModelClientState {
@@ -159,6 +155,15 @@ struct CurrentClientSetup {
     auth: Option<CodexAuth>,
     api_provider: codex_api::Provider,
     api_auth: CoreAuthProvider,
+}
+
+/// One-shot preconnected websocket slot consumed by the next turn.
+///
+/// This bundles the socket with optional sticky-routing state captured during
+/// handshake so they are taken and cleared atomically.
+struct PreconnectedWebSocket {
+    connection: ApiWebSocketConnection,
+    turn_state: Option<String>,
 }
 
 /// A session-scoped client for model-provider API calls.
@@ -240,7 +245,6 @@ impl ModelClient {
                 beta_features_header,
                 disable_websockets: AtomicBool::new(false),
                 preconnected_websocket: Mutex::new(None),
-                preconnected_turn_state: Mutex::new(None),
             }),
         }
     }
@@ -268,12 +272,11 @@ impl ModelClient {
     pub fn pre_establish_connection(&self, otel_manager: OtelManager, cwd: PathBuf) {
         let model_client = self.clone();
         tokio::spawn(async move {
-            let turn_metadata_header: Option<String> = tokio::time::timeout(
-                TURN_METADATA_HEADER_TIMEOUT,
+            let turn_metadata_header = resolve_turn_metadata_header_with_timeout(
                 build_turn_metadata_header(cwd.as_path()),
+                None,
             )
-            .await
-            .unwrap_or_default();
+            .await;
             let _ = model_client
                 .preconnect(&otel_manager, turn_metadata_header.as_deref())
                 .await;
@@ -447,39 +450,20 @@ impl ModelClient {
     /// This centralizes setup used by both preconnect and normal request paths so they stay in
     /// lockstep when auth/provider resolution changes.
     async fn current_client_setup(&self) -> Result<CurrentClientSetup> {
-        let auth = self.current_auth().await;
-        let (api_provider, api_auth) = self.provider_and_auth_from_auth(auth.clone())?;
+        let auth = match self.state.auth_manager.as_ref() {
+            Some(manager) => manager.auth().await,
+            None => None,
+        };
+        let api_provider = self
+            .state
+            .provider
+            .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
+        let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
         Ok(CurrentClientSetup {
             auth,
             api_provider,
             api_auth,
         })
-    }
-
-    /// Reads the latest auth snapshot from session auth manager, if configured.
-    ///
-    /// This is intentionally centralized so all call paths share the same auth fetch timing.
-    async fn current_auth(&self) -> Option<CodexAuth> {
-        match self.state.auth_manager.as_ref() {
-            Some(manager) => manager.auth().await,
-            None => None,
-        }
-    }
-
-    /// Resolves provider and auth adapter values expected by `codex-api`.
-    ///
-    /// This keeps auth/provider translation in one place so preconnect and request paths cannot
-    /// drift when provider mapping behavior changes.
-    fn provider_and_auth_from_auth(
-        &self,
-        auth: Option<CodexAuth>,
-    ) -> Result<(codex_api::Provider, CoreAuthProvider)> {
-        let api_provider = self
-            .state
-            .provider
-            .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
-        let api_auth = auth_provider_from_auth(auth, &self.state.provider)?;
-        Ok((api_provider, api_auth))
     }
 
     /// Opens a websocket connection using the same header and telemetry wiring as normal turns.
@@ -533,7 +517,7 @@ impl ModelClient {
     }
 
     /// Consumes the warmed websocket slot.
-    fn take_preconnected_websocket(&self) -> Option<ApiWebSocketConnection> {
+    fn take_preconnected_websocket(&self) -> Option<PreconnectedWebSocket> {
         let mut slot = self
             .state
             .preconnected_websocket
@@ -555,26 +539,10 @@ impl ModelClient {
             .preconnected_websocket
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *slot = Some(connection);
-        let mut slot_turn_state = self
-            .state
-            .preconnected_turn_state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *slot_turn_state = turn_state;
-    }
-
-    /// Consumes the turn-state captured by the warmed websocket handshake.
-    ///
-    /// This must be consumed together with `take_preconnected_websocket` to avoid replaying stale
-    /// state onto unrelated turns.
-    fn take_preconnected_turn_state(&self) -> Option<String> {
-        let mut slot = self
-            .state
-            .preconnected_turn_state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        slot.take()
+        *slot = Some(PreconnectedWebSocket {
+            connection,
+            turn_state,
+        });
     }
 
     /// Drops the warmed websocket slot and associated captured turn-state.
@@ -588,20 +556,10 @@ impl ModelClient {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         *slot = None;
-        let mut slot_turn_state = self
-            .state
-            .preconnected_turn_state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *slot_turn_state = None;
     }
 }
 
 impl ModelClientSession {
-    fn disable_websockets(&self) -> bool {
-        self.client.state.disable_websockets.load(Ordering::Relaxed)
-    }
-
     fn activate_http_fallback(&self, websocket_enabled: bool) -> bool {
         websocket_enabled
             && !self
@@ -609,10 +567,6 @@ impl ModelClientSession {
                 .state
                 .disable_websockets
                 .swap(true, Ordering::Relaxed)
-    }
-
-    fn responses_websocket_enabled(&self) -> bool {
-        self.client.responses_websocket_enabled()
     }
 
     fn build_responses_request(prompt: &Prompt) -> Result<ApiPrompt> {
@@ -761,8 +715,12 @@ impl ModelClientSession {
         options: &ApiResponsesOptions,
     ) -> std::result::Result<&ApiWebSocketConnection, ApiError> {
         // Prefer the session-level preconnect slot before creating a new websocket.
-        if let Some(connection) = self.try_use_preconnected_websocket() {
-            if let Some(turn_state) = self.client.take_preconnected_turn_state() {
+        if let Some(preconnected) = self.try_use_preconnected_websocket() {
+            let PreconnectedWebSocket {
+                connection,
+                turn_state,
+            } = preconnected;
+            if let Some(turn_state) = turn_state {
                 let _ = self.turn_state.set(turn_state);
             }
             self.connection = Some(connection);
@@ -801,7 +759,7 @@ impl ModelClientSession {
     ///
     /// If a turn-local connection already exists, this intentionally does nothing to avoid
     /// replacing an active connection mid-turn.
-    fn try_use_preconnected_websocket(&mut self) -> Option<ApiWebSocketConnection> {
+    fn try_use_preconnected_websocket(&mut self) -> Option<PreconnectedWebSocket> {
         if self.connection.is_some() {
             return None;
         }
@@ -989,7 +947,7 @@ impl ModelClientSession {
         match wire_api {
             WireApi::Responses => {
                 let websocket_enabled =
-                    self.responses_websocket_enabled() && !self.disable_websockets();
+                    self.client.responses_websocket_enabled() && !self.client.disable_websockets();
 
                 if websocket_enabled {
                     self.stream_responses_websocket(
@@ -1024,7 +982,7 @@ impl ModelClientSession {
     ///
     /// Returns `true` if this call activated fallback, or `false` if fallback was already active.
     pub(crate) fn try_switch_fallback_transport(&mut self, otel_manager: &OtelManager) -> bool {
-        let websocket_enabled = self.responses_websocket_enabled();
+        let websocket_enabled = self.client.responses_websocket_enabled();
         let activated = self.activate_http_fallback(websocket_enabled);
         if activated {
             warn!("falling back to HTTP");

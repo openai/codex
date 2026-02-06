@@ -37,8 +37,8 @@ use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::terminal;
 use crate::truncate::TruncationPolicy;
-use crate::turn_metadata::TURN_METADATA_HEADER_TIMEOUT;
 use crate::turn_metadata::build_turn_metadata_header;
+use crate::turn_metadata::resolve_turn_metadata_header_with_timeout;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -550,21 +550,11 @@ impl TurnContext {
     }
 
     pub async fn resolve_turn_metadata_header(&self) -> Option<String> {
-        match tokio::time::timeout(
-            TURN_METADATA_HEADER_TIMEOUT,
+        resolve_turn_metadata_header_with_timeout(
             self.build_turn_metadata_header(),
+            self.turn_metadata_header.get().cloned().flatten(),
         )
         .await
-        {
-            Ok(header) => header,
-            Err(_) => {
-                warn!(
-                    "timed out after {}ms while building turn metadata header",
-                    TURN_METADATA_HEADER_TIMEOUT.as_millis()
-                );
-                self.turn_metadata_header.get().cloned().flatten()
-            }
-        }
     }
 
     pub fn spawn_turn_metadata_header_task(self: &Arc<Self>) {
