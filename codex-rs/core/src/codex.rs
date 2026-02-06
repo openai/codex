@@ -3655,9 +3655,9 @@ pub(crate) async fn run_turn(
     });
     sess.send_event(&turn_context, event).await;
     if total_usage_tokens >= auto_compact_limit
-        && let Err(e) = run_auto_compact(&sess, &turn_context).await
+        && run_auto_compact(&sess, &turn_context).await.is_err()
     {
-        return Some(e.to_string());
+        return None;
     }
 
     let skills_outcome = Some(
@@ -3839,8 +3839,8 @@ pub(crate) async fn run_turn(
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if token_limit_reached && needs_follow_up {
-                    if let Err(e) = run_auto_compact(&sess, &turn_context).await {
-                        return Some(e.to_string());
+                    if run_auto_compact(&sess, &turn_context).await.is_err() {
+                        return None;
                     }
                     continue;
                 }

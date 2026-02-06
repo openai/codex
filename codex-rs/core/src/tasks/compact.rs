@@ -31,8 +31,11 @@ impl SessionTask for CompactTask {
                 1,
                 &[("type", "remote")],
             );
-            if let Err(e) = crate::compact_remote::run_remote_compact_task(session, ctx).await {
-                return Some(e.to_string());
+            if crate::compact_remote::run_remote_compact_task(session, ctx)
+                .await
+                .is_err()
+            {
+                return None;
             }
         } else {
             let _ = session.services.otel_manager.counter(
@@ -40,8 +43,11 @@ impl SessionTask for CompactTask {
                 1,
                 &[("type", "local")],
             );
-            if let Err(e) = crate::compact::run_compact_task(session, ctx, input).await {
-                return Some(e.to_string());
+            if crate::compact::run_compact_task(session, ctx, input)
+                .await
+                .is_err()
+            {
+                return None;
             }
         }
 
