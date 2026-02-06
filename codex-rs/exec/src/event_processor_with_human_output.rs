@@ -81,6 +81,7 @@ pub(crate) struct EventProcessorWithHumanOutput {
     last_proposed_plan: Option<String>,
     progress_active: bool,
     progress_last_len: usize,
+    use_ansi: bool,
 }
 
 impl EventProcessorWithHumanOutput {
@@ -110,6 +111,7 @@ impl EventProcessorWithHumanOutput {
                 last_proposed_plan: None,
                 progress_active: false,
                 progress_last_len: 0,
+                use_ansi: true,
             }
         } else {
             Self {
@@ -130,6 +132,7 @@ impl EventProcessorWithHumanOutput {
                 last_proposed_plan: None,
                 progress_active: false,
                 progress_last_len: 0,
+                use_ansi: false,
             }
         }
     }
@@ -937,22 +940,35 @@ impl EventProcessorWithHumanOutput {
         let total = update.total_items.max(1);
         let processed = update.completed_items + update.failed_items;
         let percent = (processed as f64 / total as f64 * 100.0).round() as i64;
-        let bar_width = 20;
-        let filled = ((processed as f64 / total as f64) * bar_width as f64)
-            .round()
-            .clamp(0.0, bar_width as f64) as usize;
-        let mut bar = "#".repeat(filled);
-        bar.push_str(&"-".repeat(bar_width - filled));
         let job_label = update.job_id.chars().take(8).collect::<String>();
         let eta = update
             .eta_seconds
             .map(|secs| format_duration(Duration::from_secs(secs)))
             .unwrap_or_else(|| "--".to_string());
-        let line = format!(
-            "job {job_label} [{bar}] {processed}/{total} {percent}% f{} r{} p{} eta {eta}",
-            update.failed_items, update.running_items, update.pending_items
+        let columns = std::env::var("COLUMNS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0);
+        let line = format_agent_job_progress_line(
+            columns,
+            job_label.as_str(),
+            processed,
+            total,
+            percent,
+            update.failed_items,
+            update.running_items,
+            update.pending_items,
+            eta.as_str(),
         );
         let done = processed >= update.total_items;
+        if !self.use_ansi {
+            eprintln!("{line}");
+            if done {
+                self.progress_active = false;
+                self.progress_last_len = 0;
+            }
+            return;
+        }
         let mut output = String::new();
         output.push_str("\u{1b}[2K");
         output.push_str("\u{1b}[0G");
@@ -968,6 +984,52 @@ impl EventProcessorWithHumanOutput {
         self.progress_active = true;
         self.progress_last_len = line.len();
     }
+}
+
+fn format_agent_job_progress_line(
+    columns: Option<usize>,
+    job_label: &str,
+    processed: usize,
+    total: usize,
+    percent: i64,
+    failed: usize,
+    running: usize,
+    pending: usize,
+    eta: &str,
+) -> String {
+    let rest = format!("{processed}/{total} {percent}% f{failed} r{running} p{pending} eta {eta}");
+    let prefix = format!("job {job_label}");
+    let mut bar_width = 20usize;
+    let with_bar = |width: usize| {
+        let filled = ((processed as f64 / total as f64) * width as f64)
+            .round()
+            .clamp(0.0, width as f64) as usize;
+        let mut bar = "#".repeat(filled);
+        bar.push_str(&"-".repeat(width - filled));
+        format!("{prefix} [{bar}] {rest}")
+    };
+    let mut line = with_bar(bar_width);
+    if let Some(columns) = columns {
+        if line.len() > columns {
+            let min_line = format!("{prefix} {rest}");
+            if min_line.len() > columns {
+                let mut truncated = min_line;
+                if columns > 2 && truncated.len() > columns {
+                    truncated.truncate(columns - 2);
+                    truncated.push_str("..");
+                }
+                return truncated;
+            }
+            let base_len = prefix.len() + rest.len() + 4;
+            let available = columns.saturating_sub(base_len);
+            if available == 0 {
+                return min_line;
+            }
+            bar_width = available.min(bar_width).max(1);
+            line = with_bar(bar_width);
+        }
+    }
+    line
 }
 
 fn escape_command(command: &[String]) -> String {
