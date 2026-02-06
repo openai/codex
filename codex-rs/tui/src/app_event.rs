@@ -19,6 +19,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 
 use crate::bottom_pane::ApprovalRequest;
+use crate::bottom_pane::StatusLineItem;
 use crate::history_cell::HistoryCell;
 
 use codex_core::features::Feature;
@@ -292,6 +293,18 @@ pub(crate) enum AppEvent {
 
     /// Launch the external editor after a normal draw has completed.
     LaunchExternalEditor,
+
+    /// Async update of the current git branch for status line rendering.
+    StatusLineBranchUpdated {
+        cwd: PathBuf,
+        branch: Option<String>,
+    },
+    /// Apply a user-confirmed status-line item ordering/selection.
+    StatusLineSetup {
+        items: Vec<StatusLineItem>,
+    },
+    /// Dismiss the status-line setup UI without changing config.
+    StatusLineSetupCancelled,
 }
 
 /// The exit strategy requested by the UI layer.

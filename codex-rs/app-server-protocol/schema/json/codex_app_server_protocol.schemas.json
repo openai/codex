@@ -869,6 +869,30 @@
             },
             "method": {
               "enum": [
+                "turn/steer"
+              ],
+              "title": "Turn/steerRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/TurnSteerParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Turn/steerRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "turn/interrupt"
               ],
               "title": "Turn/interruptRequestMethod",
@@ -932,6 +956,30 @@
             "params"
           ],
           "title": "Model/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "experimentalFeature/list"
+              ],
+              "title": "ExperimentalFeature/listRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ExperimentalFeatureListParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "ExperimentalFeature/listRequest",
           "type": "object"
         },
         {
@@ -11204,6 +11252,143 @@
         "title": "ErrorNotification",
         "type": "object"
       },
+      "ExperimentalFeature": {
+        "properties": {
+          "announcement": {
+            "description": "Announcement copy shown to users when the feature is introduced. Null when this feature is not in beta.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "defaultEnabled": {
+            "description": "Whether this feature is enabled by default.",
+            "type": "boolean"
+          },
+          "description": {
+            "description": "Short summary describing what the feature does. Null when this feature is not in beta.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "displayName": {
+            "description": "User-facing display name shown in the experimental features UI. Null when this feature is not in beta.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled": {
+            "description": "Whether this feature is currently enabled in the loaded config.",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "Stable key used in config.toml and CLI flag toggles.",
+            "type": "string"
+          },
+          "stage": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/ExperimentalFeatureStage"
+              }
+            ],
+            "description": "Lifecycle stage of this feature flag."
+          }
+        },
+        "required": [
+          "defaultEnabled",
+          "enabled",
+          "name",
+          "stage"
+        ],
+        "type": "object"
+      },
+      "ExperimentalFeatureListParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "cursor": {
+            "description": "Opaque pagination cursor returned by a previous call.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "description": "Optional page size; defaults to a reasonable server-side value.",
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "title": "ExperimentalFeatureListParams",
+        "type": "object"
+      },
+      "ExperimentalFeatureListResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/definitions/v2/ExperimentalFeature"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "description": "Opaque cursor to pass to the next call to continue after the last item. If None, there are no more items to return.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "ExperimentalFeatureListResponse",
+        "type": "object"
+      },
+      "ExperimentalFeatureStage": {
+        "oneOf": [
+          {
+            "description": "Feature is available for user testing and feedback.",
+            "enum": [
+              "beta"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Feature is still being built and not ready for broad use.",
+            "enum": [
+              "underDevelopment"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Feature is production-ready.",
+            "enum": [
+              "stable"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Feature is deprecated and should be avoided.",
+            "enum": [
+              "deprecated"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Feature flag is retained only for backwards compatibility.",
+            "enum": [
+              "removed"
+            ],
+            "type": "string"
+          }
+        ]
+      },
       "FeedbackUploadParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -15567,6 +15752,44 @@
           "inProgress"
         ],
         "type": "string"
+      },
+      "TurnSteerParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "expectedTurnId": {
+            "description": "Required active turn id precondition. The request fails when it does not match the currently active turn.",
+            "type": "string"
+          },
+          "input": {
+            "items": {
+              "$ref": "#/definitions/v2/UserInput"
+            },
+            "type": "array"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "expectedTurnId",
+          "input",
+          "threadId"
+        ],
+        "title": "TurnSteerParams",
+        "type": "object"
+      },
+      "TurnSteerResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "turnId"
+        ],
+        "title": "TurnSteerResponse",
+        "type": "object"
       },
       "UserInput": {
         "oneOf": [

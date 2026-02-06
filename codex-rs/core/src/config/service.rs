@@ -774,7 +774,7 @@ unified_exec = true
         service
             .write_value(ConfigValueWriteParams {
                 file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
-                key_path: "features.remote_compaction".to_string(),
+                key_path: "features.remote_models".to_string(),
                 value: serde_json::json!(true),
                 merge_strategy: MergeStrategy::Replace,
                 expected_version: None,
@@ -794,7 +794,7 @@ hide_full_access_warning = true
 
 [features]
 unified_exec = true
-remote_compaction = true
+remote_models = true
 "#;
         assert_eq!(updated, expected);
         Ok(())

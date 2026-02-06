@@ -4,9 +4,9 @@
 //! configuration and state needed to talk to a provider (auth, provider selection, conversation id,
 //! and feature-gated request behavior).
 //!
-//! Per-turn settings (model selection, reasoning controls, telemetry context, web search
-//! eligibility, and turn metadata) are passed explicitly to streaming and unary methods so that the
-//! turn lifetime is visible at the call site.
+//! Per-turn settings (model selection, reasoning controls, telemetry context, and turn metadata)
+//! are passed explicitly to streaming and unary methods so that the turn lifetime is visible at the
+//! call site.
 //!
 //! A [`ModelClientSession`] is created per turn and is used to stream one or more Responses API
 //! requests during that turn. It caches a Responses WebSocket connection (opened lazily) and
@@ -82,7 +82,8 @@ use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::tools::spec::create_tools_json_for_responses_api;
 
-pub const WEB_SEARCH_ELIGIBLE_HEADER: &str = "x-oai-web-search-eligible";
+pub const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
+pub const OPENAI_BETA_RESPONSES_WEBSOCKETS: &str = "responses_websockets=2026-02-04";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 pub const X_CODEX_TURN_METADATA_HEADER: &str = "x-codex-turn-metadata";
 pub const X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER: &str =
@@ -115,9 +116,8 @@ struct ModelClientState {
 /// WebSocket fallback is session-scoped: once a turn activates the HTTP fallback, subsequent turns
 /// will also use HTTP for the remainder of the session.
 ///
-/// Turn-scoped settings (model selection, reasoning controls, telemetry context, web search
-/// eligibility, and turn metadata) are passed explicitly to the relevant methods to keep turn
-/// lifetime visible at the call site.
+/// Turn-scoped settings (model selection, reasoning controls, telemetry context, and turn metadata)
+/// are passed explicitly to the relevant methods to keep turn lifetime visible at the call site.
 ///
 /// This type is cheap to clone.
 #[derive(Debug, Clone)]
@@ -225,7 +225,7 @@ impl ModelClient {
         let api_provider = self
             .state
             .provider
-            .to_api_provider(auth.as_ref().map(CodexAuth::internal_auth_mode))?;
+            .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
         let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
         let transport = ReqwestTransport::new(build_reqwest_client());
         let request_telemetry = Self::build_request_telemetry(otel_manager);
@@ -271,7 +271,7 @@ impl ModelClient {
         let api_provider = self
             .state
             .provider
-            .to_api_provider(auth.as_ref().map(CodexAuth::internal_auth_mode))?;
+            .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
         let api_auth = auth_provider_from_auth(auth, &self.state.provider)?;
         let transport = ReqwestTransport::new(build_reqwest_client());
         let request_telemetry = Self::build_request_telemetry(otel_manager);
@@ -349,7 +349,6 @@ impl ModelClientSession {
         model_info: &ModelInfo,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
-        web_search_eligible: bool,
         turn_metadata_header: Option<&str>,
         compression: Compression,
     ) -> ApiResponsesOptions {
@@ -404,7 +403,6 @@ impl ModelClientSession {
             session_source: Some(self.client.state.session_source.clone()),
             extra_headers: build_responses_headers(
                 self.client.state.beta_features_header.as_deref(),
-                web_search_eligible,
                 Some(&self.turn_state),
                 turn_metadata_header.as_ref(),
             ),
@@ -481,14 +479,8 @@ impl ModelClientSession {
         };
 
         if needs_new {
-            let mut headers = options.extra_headers.clone();
-            headers.extend(build_conversation_headers(options.conversation_id.clone()));
-            if self.client.state.include_timing_metrics {
-                headers.insert(
-                    X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER,
-                    HeaderValue::from_static("true"),
-                );
-            }
+            let headers =
+                build_websocket_connect_headers(options, self.client.state.include_timing_metrics);
             let websocket_telemetry = Self::build_websocket_telemetry(otel_manager);
             let new_conn: ApiWebSocketConnection =
                 ApiWebSocketResponsesClient::new(api_provider, api_auth)
@@ -529,7 +521,6 @@ impl ModelClientSession {
         otel_manager: &OtelManager,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
-        web_search_eligible: bool,
         turn_metadata_header: Option<&str>,
     ) -> Result<ResponseStream> {
         if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
@@ -557,7 +548,7 @@ impl ModelClientSession {
                 .client
                 .state
                 .provider
-                .to_api_provider(auth.as_ref().map(CodexAuth::internal_auth_mode))?;
+                .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
             let api_auth = auth_provider_from_auth(auth.clone(), &self.client.state.provider)?;
             let transport = ReqwestTransport::new(build_reqwest_client());
             let (request_telemetry, sse_telemetry) = Self::build_streaming_telemetry(otel_manager);
@@ -571,7 +562,6 @@ impl ModelClientSession {
                 model_info,
                 effort,
                 summary,
-                web_search_eligible,
                 turn_metadata_header,
                 compression,
             );
@@ -604,7 +594,6 @@ impl ModelClientSession {
         otel_manager: &OtelManager,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
-        web_search_eligible: bool,
         turn_metadata_header: Option<&str>,
     ) -> Result<ResponseStream> {
         let auth_manager = self.client.state.auth_manager.clone();
@@ -622,7 +611,7 @@ impl ModelClientSession {
                 .client
                 .state
                 .provider
-                .to_api_provider(auth.as_ref().map(CodexAuth::internal_auth_mode))?;
+                .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
             let api_auth = auth_provider_from_auth(auth.clone(), &self.client.state.provider)?;
             let compression = self.responses_request_compression(auth.as_ref());
 
@@ -631,7 +620,6 @@ impl ModelClientSession {
                 model_info,
                 effort,
                 summary,
-                web_search_eligible,
                 turn_metadata_header,
                 compression,
             );
@@ -687,9 +675,9 @@ impl ModelClientSession {
     /// Streams a single model request within the current turn.
     ///
     /// The caller is responsible for passing per-turn settings explicitly (model selection,
-    /// reasoning settings, telemetry context, web search eligibility, and turn metadata). This
-    /// method will prefer the Responses WebSocket transport when enabled and healthy, and will
-    /// fall back to the HTTP Responses API transport otherwise.
+    /// reasoning settings, telemetry context, and turn metadata). This method will prefer the
+    /// Responses WebSocket transport when enabled and healthy, and will fall back to the HTTP
+    /// Responses API transport otherwise.
     pub async fn stream(
         &mut self,
         prompt: &Prompt,
@@ -697,7 +685,6 @@ impl ModelClientSession {
         otel_manager: &OtelManager,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
-        web_search_eligible: bool,
         turn_metadata_header: Option<&str>,
     ) -> Result<ResponseStream> {
         let wire_api = self.client.state.provider.wire_api;
@@ -713,7 +700,6 @@ impl ModelClientSession {
                         otel_manager,
                         effort,
                         summary,
-                        web_search_eligible,
                         turn_metadata_header,
                     )
                     .await
@@ -724,7 +710,6 @@ impl ModelClientSession {
                         otel_manager,
                         effort,
                         summary,
-                        web_search_eligible,
                         turn_metadata_header,
                     )
                     .await
@@ -772,12 +757,10 @@ fn build_api_prompt(prompt: &Prompt, instructions: String, tools_json: Vec<Value
 /// These headers implement Codex-specific conventions:
 ///
 /// - `x-codex-beta-features`: comma-separated beta feature keys enabled for the session.
-/// - `x-oai-web-search-eligible`: whether this turn is allowed to use web search.
 /// - `x-codex-turn-state`: sticky routing token captured earlier in the turn.
 /// - `x-codex-turn-metadata`: optional per-turn metadata for observability.
 fn build_responses_headers(
     beta_features_header: Option<&str>,
-    web_search_eligible: bool,
     turn_state: Option<&Arc<OnceLock<String>>>,
     turn_metadata_header: Option<&HeaderValue>,
 ) -> ApiHeaderMap {
@@ -788,10 +771,6 @@ fn build_responses_headers(
     {
         headers.insert("x-codex-beta-features", header_value);
     }
-    headers.insert(
-        WEB_SEARCH_ELIGIBLE_HEADER,
-        HeaderValue::from_static(if web_search_eligible { "true" } else { "false" }),
-    );
     if let Some(turn_state) = turn_state
         && let Some(state) = turn_state.get()
         && let Ok(header_value) = HeaderValue::from_str(state)
@@ -800,6 +779,25 @@ fn build_responses_headers(
     }
     if let Some(header_value) = turn_metadata_header {
         headers.insert(X_CODEX_TURN_METADATA_HEADER, header_value.clone());
+    }
+    headers
+}
+
+fn build_websocket_connect_headers(
+    options: &ApiResponsesOptions,
+    include_timing_metrics: bool,
+) -> ApiHeaderMap {
+    let mut headers = options.extra_headers.clone();
+    headers.extend(build_conversation_headers(options.conversation_id.clone()));
+    headers.insert(
+        OPENAI_BETA_HEADER,
+        HeaderValue::from_static(OPENAI_BETA_RESPONSES_WEBSOCKETS),
+    );
+    if include_timing_metrics {
+        headers.insert(
+            X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER,
+            HeaderValue::from_static("true"),
+        );
     }
     headers
 }

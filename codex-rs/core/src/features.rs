@@ -97,8 +97,6 @@ pub enum Feature {
     WindowsSandbox,
     /// Use the elevated Windows sandbox pipeline (setup + runner).
     WindowsSandboxElevated,
-    /// Remote compaction enabled (only for ChatGPT auth)
-    RemoteCompaction,
     /// Refresh remote models and emit AppReady once the list is available.
     RemoteModels,
     /// Experimental shell snapshotting.
@@ -107,6 +105,8 @@ pub enum Feature {
     RuntimeMetrics,
     /// Persist rollout metadata to a local SQLite database.
     Sqlite,
+    /// Enable the get_memory tool backed by SQLite thread memories.
+    MemoryTool,
     /// Append additional AGENTS.md guidance to user instructions.
     ChildAgentsMd,
     /// Enforce UTF8 output in Powershell.
@@ -450,6 +450,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::MemoryTool,
+        key: "memory_tool",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::ChildAgentsMd,
         key: "child_agents_md",
         stage: Stage::UnderDevelopment,
@@ -490,12 +496,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "elevated_windows_sandbox",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::RemoteCompaction,
-        key: "remote_compaction",
-        stage: Stage::UnderDevelopment,
-        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::RemoteModels,

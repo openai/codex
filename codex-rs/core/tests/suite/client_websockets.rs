@@ -14,6 +14,7 @@ use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::SessionSource;
 use codex_otel::OtelManager;
+use codex_otel::TelemetryAuthMode;
 use codex_otel::metrics::MetricsClient;
 use codex_otel::metrics::MetricsConfig;
 use codex_protocol::ThreadId;
@@ -39,6 +40,8 @@ use tempfile::TempDir;
 use tracing_test::traced_test;
 
 const MODEL: &str = "gpt-5.2-codex";
+const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
+const OPENAI_BETA_RESPONSES_WEBSOCKETS: &str = "responses_websockets=2026-02-04";
 
 struct WebsocketTestHarness {
     _codex_home: TempDir,
@@ -46,7 +49,6 @@ struct WebsocketTestHarness {
     model_info: ModelInfo,
     effort: Option<ReasoningEffortConfig>,
     summary: ReasoningSummary,
-    web_search_eligible: bool,
     otel_manager: OtelManager,
 }
 
@@ -74,6 +76,11 @@ async fn responses_websocket_streams_request() {
     assert_eq!(body["model"].as_str(), Some(MODEL));
     assert_eq!(body["stream"], serde_json::Value::Bool(true));
     assert_eq!(body["input"].as_array().map(Vec::len), Some(1));
+    let handshake = server.single_handshake();
+    assert_eq!(
+        handshake.header(OPENAI_BETA_HEADER),
+        Some(OPENAI_BETA_RESPONSES_WEBSOCKETS.to_string())
+    );
 
     server.shutdown().await;
 }
@@ -120,7 +127,11 @@ async fn responses_websocket_includes_timing_metrics_header_when_runtime_metrics
             "type": "responsesapi.websocket_timing",
             "timing_metrics": {
                 "responses_duration_excl_engine_and_client_tool_time_ms": 120,
-                "engine_service_total_ms": 450
+                "engine_service_total_ms": 450,
+                "engine_iapi_ttft_total_ms": 310,
+                "engine_service_ttft_total_ms": 340,
+                "engine_iapi_tbt_across_engine_calls_ms": 220,
+                "engine_service_tbt_across_engine_calls_ms": 260
             }
         }),
         ev_completed("resp-1"),
@@ -147,6 +158,10 @@ async fn responses_websocket_includes_timing_metrics_header_when_runtime_metrics
         .expect("runtime metrics summary");
     assert_eq!(summary.responses_api_overhead_ms, 120);
     assert_eq!(summary.responses_api_inference_time_ms, 450);
+    assert_eq!(summary.responses_api_engine_iapi_ttft_ms, 310);
+    assert_eq!(summary.responses_api_engine_service_ttft_ms, 340);
+    assert_eq!(summary.responses_api_engine_iapi_tbt_ms, 220);
+    assert_eq!(summary.responses_api_engine_service_tbt_ms, 260);
 
     server.shutdown().await;
 }
@@ -197,7 +212,6 @@ async fn responses_websocket_emits_reasoning_included_event() {
             &harness.otel_manager,
             harness.effort,
             harness.summary,
-            harness.web_search_eligible,
             None,
         )
         .await
@@ -268,7 +282,6 @@ async fn responses_websocket_emits_rate_limit_events() {
             &harness.otel_manager,
             harness.effort,
             harness.summary,
-            harness.web_search_eligible,
             None,
         )
         .await
@@ -446,7 +459,7 @@ async fn websocket_harness_with_runtime_metrics(
         model_info.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
-        auth_manager.get_auth_mode(),
+        auth_manager.auth_mode().map(TelemetryAuthMode::from),
         false,
         "test".to_string(),
         SessionSource::Exec,
@@ -454,7 +467,6 @@ async fn websocket_harness_with_runtime_metrics(
     .with_metrics(metrics);
     let effort = None;
     let summary = ReasoningSummary::Auto;
-    let web_search_eligible = true;
     let client = ModelClient::new(
         None,
         conversation_id,
@@ -473,7 +485,6 @@ async fn websocket_harness_with_runtime_metrics(
         model_info,
         effort,
         summary,
-        web_search_eligible,
         otel_manager,
     }
 }
@@ -490,7 +501,6 @@ async fn stream_until_complete(
             &harness.otel_manager,
             harness.effort,
             harness.summary,
-            harness.web_search_eligible,
             None,
         )
         .await

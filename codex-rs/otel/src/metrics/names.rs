@@ -12,3 +12,11 @@ pub(crate) const RESPONSES_API_OVERHEAD_DURATION_METRIC: &str =
     "codex.responses_api_overhead.duration_ms";
 pub(crate) const RESPONSES_API_INFERENCE_TIME_DURATION_METRIC: &str =
     "codex.responses_api_inference_time.duration_ms";
+pub(crate) const RESPONSES_API_ENGINE_IAPI_TTFT_DURATION_METRIC: &str =
+    "codex.responses_api_engine_iapi_ttft.duration_ms";
+pub(crate) const RESPONSES_API_ENGINE_SERVICE_TTFT_DURATION_METRIC: &str =
+    "codex.responses_api_engine_service_ttft.duration_ms";
+pub(crate) const RESPONSES_API_ENGINE_IAPI_TBT_DURATION_METRIC: &str =
+    "codex.responses_api_engine_iapi_tbt.duration_ms";
+pub(crate) const RESPONSES_API_ENGINE_SERVICE_TBT_DURATION_METRIC: &str =
+    "codex.responses_api_engine_service_tbt.duration_ms";

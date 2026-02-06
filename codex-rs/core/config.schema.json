@@ -190,13 +190,13 @@
             "include_apply_patch_tool": {
               "type": "boolean"
             },
+            "memory_tool": {
+              "type": "boolean"
+            },
             "personality": {
               "type": "boolean"
             },
             "powershell_utf8": {
-              "type": "boolean"
-            },
-            "remote_compaction": {
               "type": "boolean"
             },
             "remote_models": {
@@ -1046,6 +1046,14 @@
           "default": true,
           "description": "Show startup tooltips in the TUI welcome screen. Defaults to `true`.",
           "type": "boolean"
+        },
+        "status_line": {
+          "default": null,
+          "description": "Ordered list of status line item identifiers.\n\nWhen set, the TUI renders the selected items as the status line.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "type": "object"
@@ -1212,13 +1220,13 @@
         "include_apply_patch_tool": {
           "type": "boolean"
         },
+        "memory_tool": {
+          "type": "boolean"
+        },
         "personality": {
           "type": "boolean"
         },
         "powershell_utf8": {
-          "type": "boolean"
-        },
-        "remote_compaction": {
           "type": "boolean"
         },
         "remote_models": {
