@@ -47,7 +47,7 @@ pub(crate) fn build_command_spec(
 /// the original script:
 ///
 ///   shell -lc "<script>"
-///   => user_shell -c ". SNAPSHOT (best effort); exec shell -lc <script>"
+///   => user_shell -c ". SNAPSHOT (best effort); exec shell -c <script>"
 ///
 /// This wrapper script uses POSIX constructs (`if`, `.`, `exec`) so it can
 /// be run by Bash/Zsh/sh. On non-matching commands this is a no-op.
@@ -78,7 +78,7 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     let original_script = shell_single_quote(&command[2]);
     let snapshot_path = shell_single_quote(snapshot_path.as_ref());
     let rewritten_script = format!(
-        "if . '{snapshot_path}' >/dev/null 2>&1; then :; fi; exec '{original_shell}' -lc '{original_script}'"
+        "if . '{snapshot_path}' >/dev/null 2>&1; then :; fi; exec '{original_shell}' -c '{original_script}'"
     );
 
     vec![shell_path.to_string(), "-c".to_string(), rewritten_script]
@@ -131,7 +131,7 @@ mod tests {
         assert_eq!(rewritten[0], "/bin/zsh");
         assert_eq!(rewritten[1], "-c");
         assert!(rewritten[2].contains("if . '"));
-        assert!(rewritten[2].contains("exec '/bin/bash' -lc 'echo hello'"));
+        assert!(rewritten[2].contains("exec '/bin/bash' -c 'echo hello'"));
     }
 
     #[test]
@@ -148,7 +148,7 @@ mod tests {
 
         let rewritten = maybe_wrap_shell_lc_with_snapshot(&command, &session_shell);
 
-        assert!(rewritten[2].contains(r#"exec '/bin/bash' -lc 'echo '"'"'hello'"'"''"#));
+        assert!(rewritten[2].contains(r#"exec '/bin/bash' -c 'echo '"'"'hello'"'"''"#));
     }
 
     #[test]
@@ -168,7 +168,7 @@ mod tests {
         assert_eq!(rewritten[0], "/bin/bash");
         assert_eq!(rewritten[1], "-c");
         assert!(rewritten[2].contains("if . '"));
-        assert!(rewritten[2].contains("exec '/bin/zsh' -lc 'echo hello'"));
+        assert!(rewritten[2].contains("exec '/bin/zsh' -c 'echo hello'"));
     }
 
     #[test]
@@ -188,6 +188,6 @@ mod tests {
         assert_eq!(rewritten[0], "/bin/sh");
         assert_eq!(rewritten[1], "-c");
         assert!(rewritten[2].contains("if . '"));
-        assert!(rewritten[2].contains("exec '/bin/bash' -lc 'echo hello'"));
+        assert!(rewritten[2].contains("exec '/bin/bash' -c 'echo hello'"));
     }
 }
