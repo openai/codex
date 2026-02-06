@@ -112,6 +112,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         prompt,
         output_schema: output_schema_path,
         config_overrides,
+        progress_cursor,
     } = cli;
 
     let (_stdout_with_ansi, stderr_with_ansi) = match color {
@@ -122,10 +123,14 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             supports_color::on_cached(Stream::Stderr).is_some(),
         ),
     };
-    let cursor_ansi = match color {
-        cli::Color::Never => false,
-        cli::Color::Always => true,
-        cli::Color::Auto => stderr_with_ansi || std::io::stderr().is_terminal(),
+    let cursor_ansi = if progress_cursor {
+        true
+    } else {
+        match color {
+            cli::Color::Never => false,
+            cli::Color::Always => true,
+            cli::Color::Auto => stderr_with_ansi || std::io::stderr().is_terminal(),
+        }
     };
 
     // Build fmt layer (existing logging) to compose with OTEL layer.
