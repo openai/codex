@@ -245,12 +245,13 @@ async fn remote_compact_trims_function_call_history_to_fit_context_window() -> R
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
             .with_config(|config| {
                 config.model_context_window = Some(2_000);
+                config.model_auto_compact_token_limit = Some(200_000);
             }),
     )
     .await?;
     let codex = harness.test().codex.clone();
 
-    let response_log = responses::mount_sse_sequence(
+    responses::mount_sse_sequence(
         harness.server(),
         vec![
             sse(vec![
@@ -299,17 +300,139 @@ async fn remote_compact_trims_function_call_history_to_fit_context_window() -> R
     codex.submit(Op::Compact).await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
+    let compact_request = compact_mock.single_request();
+    let user_messages = compact_request.message_input_texts("user");
     assert!(
-        response_log
-            .function_call_output_text(retained_call_id)
-            .is_some(),
-        "expected retained shell call to produce function_call_output before compaction"
+        user_messages
+            .iter()
+            .any(|message| message == first_user_message),
+        "expected compact request to retain earlier user history"
     );
     assert!(
-        response_log
-            .function_call_output_text(trimmed_call_id)
-            .is_some(),
-        "expected trimmed shell call to produce function_call_output before compaction"
+        user_messages
+            .iter()
+            .any(|message| message == second_user_message),
+        "expected compact request to retain the user boundary message"
+    );
+
+    assert!(
+        compact_request.has_function_call(retained_call_id)
+            && compact_request
+                .function_call_output_text(retained_call_id)
+                .is_some(),
+        "expected compact request to keep the older function call/result pair"
+    );
+    assert!(
+        !compact_request.has_function_call(trimmed_call_id)
+            && compact_request
+                .function_call_output_text(trimmed_call_id)
+                .is_none(),
+        "expected compact request to drop the trailing function call/result pair past the boundary"
+    );
+
+    assert_eq!(
+        compact_request.inputs_of_type("function_call").len(),
+        1,
+        "expected exactly one function call after trimming"
+    );
+    assert_eq!(
+        compact_request.inputs_of_type("function_call_output").len(),
+        1,
+        "expected exactly one function call output after trimming"
+    );
+
+    Ok(())
+}
+
+#[cfg_attr(target_os = "windows", ignore)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_remote_compact_trims_function_call_history_to_fit_context_window() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let first_user_message = "turn with retained shell call";
+    let second_user_message = "turn with trimmed shell call";
+    let retained_call_id = "retained-call";
+    let trimmed_call_id = "trimmed-call";
+    let retained_command = "echo retained-shell-output";
+    let trimmed_command = "yes x | head -n 3000";
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.model_context_window = Some(2_000);
+                config.model_auto_compact_token_limit = Some(200_000);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            sse(vec![
+                responses::ev_shell_command_call(retained_call_id, retained_command),
+                responses::ev_completed_with_tokens("retained-call-response", 100),
+            ]),
+            sse(vec![
+                responses::ev_assistant_message("retained-assistant", "retained complete"),
+                responses::ev_completed("retained-final-response"),
+            ]),
+            sse(vec![
+                responses::ev_shell_command_call(trimmed_call_id, trimmed_command),
+                responses::ev_completed_with_tokens("trimmed-call-response", 100),
+            ]),
+            sse(vec![responses::ev_completed_with_tokens(
+                "trimmed-final-response",
+                500_000,
+            )]),
+            sse(vec![
+                responses::ev_assistant_message("post-compact-assistant", "post compact complete"),
+                responses::ev_completed("post-compact-final-response"),
+            ]),
+        ],
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: first_user_message.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: second_user_message.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let compact_mock =
+        responses::mount_compact_json_once(harness.server(), serde_json::json!({ "output": [] }))
+            .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "turn that triggers auto compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    assert_eq!(
+        compact_mock.requests().len(),
+        1,
+        "expected exactly one remote compact request"
     );
 
     let compact_request = compact_mock.single_request();
