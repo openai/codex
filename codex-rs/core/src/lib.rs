@@ -14,6 +14,7 @@ pub mod bash;
 mod client;
 mod client_common;
 pub mod codex;
+pub use codex::SteerInputError;
 mod codex_thread;
 mod compact_remote;
 pub use codex_thread::CodexThread;

@@ -17,6 +17,35 @@
       },
       "type": "object"
     },
+    "AppConfig": {
+      "properties": {
+        "disabled_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AppDisabledReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "AppDisabledReason": {
+      "enum": [
+        "unknown",
+        "user"
+      ],
+      "type": "string"
+    },
+    "AppsConfig": {
+      "type": "object"
+    },
     "AskForApproval": {
       "enum": [
         "untrusted",
@@ -48,6 +77,17 @@
               "type": "null"
             }
           ]
+        },
+        "apps": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AppsConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "compact_prompt": {
           "type": [

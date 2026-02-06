@@ -86,6 +86,68 @@ async fn responses_websocket_streams_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_preconnect_reuses_connection() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![vec![
+        ev_response_created("resp-1"),
+        ev_completed("resp-1"),
+    ]]])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    assert!(harness.client.preconnect(&harness.otel_manager, None).await);
+
+    let mut client_session = harness.client.new_session();
+    let prompt = prompt_with_input(vec![message_item("hello")]);
+    stream_until_complete(&mut client_session, &harness, &prompt).await;
+
+    assert_eq!(server.handshakes().len(), 1);
+    assert_eq!(server.single_connection().len(), 1);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_preconnect_is_reused_even_with_header_changes() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![vec![
+        ev_response_created("resp-1"),
+        ev_completed("resp-1"),
+    ]]])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    assert!(harness.client.preconnect(&harness.otel_manager, None).await);
+
+    let mut client_session = harness.client.new_session();
+    let prompt = prompt_with_input(vec![message_item("hello")]);
+    let mut stream = client_session
+        .stream(
+            &prompt,
+            &harness.model_info,
+            &harness.otel_manager,
+            harness.effort,
+            harness.summary,
+            None,
+        )
+        .await
+        .expect("websocket stream failed");
+
+    while let Some(event) = stream.next().await {
+        if matches!(event, Ok(ResponseEvent::Completed { .. })) {
+            break;
+        }
+    }
+
+    assert_eq!(server.handshakes().len(), 1);
+    assert_eq!(server.single_connection().len(), 1);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[traced_test]
 async fn responses_websocket_emits_websocket_telemetry_events() {
     skip_if_no_network!();
@@ -127,7 +189,11 @@ async fn responses_websocket_includes_timing_metrics_header_when_runtime_metrics
             "type": "responsesapi.websocket_timing",
             "timing_metrics": {
                 "responses_duration_excl_engine_and_client_tool_time_ms": 120,
-                "engine_service_total_ms": 450
+                "engine_service_total_ms": 450,
+                "engine_iapi_ttft_total_ms": 310,
+                "engine_service_ttft_total_ms": 340,
+                "engine_iapi_tbt_across_engine_calls_ms": 220,
+                "engine_service_tbt_across_engine_calls_ms": 260
             }
         }),
         ev_completed("resp-1"),
@@ -154,6 +220,10 @@ async fn responses_websocket_includes_timing_metrics_header_when_runtime_metrics
         .expect("runtime metrics summary");
     assert_eq!(summary.responses_api_overhead_ms, 120);
     assert_eq!(summary.responses_api_inference_time_ms, 450);
+    assert_eq!(summary.responses_api_engine_iapi_ttft_ms, 310);
+    assert_eq!(summary.responses_api_engine_service_ttft_ms, 340);
+    assert_eq!(summary.responses_api_engine_iapi_tbt_ms, 220);
+    assert_eq!(summary.responses_api_engine_service_tbt_ms, 260);
 
     server.shutdown().await;
 }
@@ -190,6 +260,7 @@ async fn responses_websocket_emits_reasoning_included_event() {
     let server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
         requests: vec![vec![ev_response_created("resp-1"), ev_completed("resp-1")]],
         response_headers: vec![("X-Reasoning-Included".to_string(), "true".to_string())],
+        accept_delay: None,
     }])
     .await;
 
@@ -260,6 +331,7 @@ async fn responses_websocket_emits_rate_limit_events() {
             ("X-Models-Etag".to_string(), "etag-123".to_string()),
             ("X-Reasoning-Included".to_string(), "true".to_string()),
         ],
+        accept_delay: None,
     }])
     .await;
 

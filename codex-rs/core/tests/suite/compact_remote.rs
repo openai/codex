@@ -4,7 +4,6 @@ use std::fs;
 
 use anyhow::Result;
 use codex_core::CodexAuth;
-use codex_core::features::Feature;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ItemCompletedEvent;
 use codex_core::protocol::ItemStartedEvent;
@@ -45,11 +44,7 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = TestCodexHarness::with_builder(
-        test_codex()
-            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-            .with_config(|config| {
-                config.features.enable(Feature::RemoteCompaction);
-            }),
+        test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
     )
     .await?;
     let codex = harness.test().codex.clone();
@@ -166,11 +161,7 @@ async fn remote_compact_runs_automatically() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = TestCodexHarness::with_builder(
-        test_codex()
-            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-            .with_config(|config| {
-                config.features.enable(Feature::RemoteCompaction);
-            }),
+        test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
     )
     .await?;
     let codex = harness.test().codex.clone();
@@ -253,7 +244,6 @@ async fn remote_compact_trims_function_call_history_to_fit_context_window() -> R
         test_codex()
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
             .with_config(|config| {
-                config.features.enable(Feature::RemoteCompaction);
                 config.model_context_window = Some(2_000);
             }),
     )
@@ -384,7 +374,6 @@ async fn remote_compact_trim_estimate_uses_session_base_instructions() -> Result
         test_codex()
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
             .with_config(|config| {
-                config.features.enable(Feature::RemoteCompaction);
                 config.model_context_window = Some(200_000);
             }),
     )
@@ -482,7 +471,6 @@ async fn remote_compact_trim_estimate_uses_session_base_instructions() -> Result
             .with_config({
                 let override_base_instructions = override_base_instructions.clone();
                 move |config| {
-                    config.features.enable(Feature::RemoteCompaction);
                     config.model_context_window = Some(override_context_window);
                     config.base_instructions = Some(override_base_instructions);
                 }
@@ -575,11 +563,7 @@ async fn remote_manual_compact_emits_context_compaction_items() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = TestCodexHarness::with_builder(
-        test_codex()
-            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-            .with_config(|config| {
-                config.features.enable(Feature::RemoteCompaction);
-            }),
+        test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
     )
     .await?;
     let codex = harness.test().codex.clone();
@@ -671,11 +655,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
     skip_if_no_network!(Ok(()));
 
     let harness = TestCodexHarness::with_builder(
-        test_codex()
-            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-            .with_config(|config| {
-                config.features.enable(Feature::RemoteCompaction);
-            }),
+        test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
     )
     .await?;
     let codex = harness.test().codex.clone();
@@ -756,16 +736,326 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
         };
         if let RolloutItem::Compacted(compacted) = entry.item
             && compacted.message.is_empty()
-            && compacted.replacement_history.as_ref() == Some(&compacted_history)
+            && let Some(replacement_history) = compacted.replacement_history.as_ref()
         {
-            saw_compacted_history = true;
-            break;
+            let has_compacted_user_summary = replacement_history.iter().any(|item| {
+                matches!(
+                    item,
+                    ResponseItem::Message { role, content, .. }
+                        if role == "user"
+                            && content.iter().any(|part| matches!(
+                                part,
+                                ContentItem::InputText { text } if text == "COMPACTED_USER_SUMMARY"
+                            ))
+                )
+            });
+            let has_compaction_item = replacement_history.iter().any(|item| {
+                matches!(
+                    item,
+                    ResponseItem::Compaction { encrypted_content }
+                        if encrypted_content == "ENCRYPTED_COMPACTION_SUMMARY"
+                )
+            });
+            let has_compacted_assistant_note = replacement_history.iter().any(|item| {
+                matches!(
+                    item,
+                    ResponseItem::Message { role, content, .. }
+                        if role == "assistant"
+                            && content.iter().any(|part| matches!(
+                                part,
+                                ContentItem::OutputText { text } if text == "COMPACTED_ASSISTANT_NOTE"
+                            ))
+                )
+            });
+            let has_permissions_developer_message = replacement_history.iter().any(|item| {
+                matches!(
+                    item,
+                    ResponseItem::Message { role, content, .. }
+                        if role == "developer"
+                            && content.iter().any(|part| matches!(
+                                part,
+                                ContentItem::InputText { text }
+                                    if text.contains("<permissions instructions>")
+                            ))
+                )
+            });
+
+            if has_compacted_user_summary
+                && has_compaction_item
+                && has_compacted_assistant_note
+                && has_permissions_developer_message
+            {
+                saw_compacted_history = true;
+                break;
+            }
         }
     }
 
     assert!(
         saw_compacted_history,
         "expected rollout to persist remote compaction history"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_and_resume_refresh_stale_developer_instructions() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = wiremock::MockServer::start().await;
+    let stale_developer_message = "STALE_DEVELOPER_INSTRUCTIONS_SHOULD_BE_REMOVED";
+
+    let mut start_builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.features.enable(Feature::RemoteCompaction);
+        });
+    let initial = start_builder.build(&server).await?;
+    let home = initial.home.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+
+    let responses_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_assistant_message("m1", "BASELINE_REPLY"),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m2", "AFTER_COMPACT_REPLY"),
+                responses::ev_completed("resp-2"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m3", "AFTER_RESUME_REPLY"),
+                responses::ev_completed("resp-3"),
+            ]),
+        ],
+    )
+    .await;
+
+    let compacted_history = vec![
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "REMOTE_COMPACTED_SUMMARY".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: stale_developer_message.to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        },
+        ResponseItem::Compaction {
+            encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+        },
+    ];
+    let compact_mock = responses::mount_compact_json_once(
+        &server,
+        serde_json::json!({ "output": compacted_history }),
+    )
+    .await;
+
+    initial
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "start remote compact flow".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    initial.codex.submit(Op::Compact).await?;
+    wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    initial
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "after compact in same session".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    initial.codex.submit(Op::Shutdown).await?;
+    wait_for_event(&initial.codex, |ev| {
+        matches!(ev, EventMsg::ShutdownComplete)
+    })
+    .await;
+
+    let mut resume_builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.features.enable(Feature::RemoteCompaction);
+        });
+    let resumed = resume_builder.resume(&server, home, rollout_path).await?;
+
+    resumed
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "after resume".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&resumed.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(compact_mock.requests().len(), 1);
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 3, "expected three model requests");
+
+    let after_compact_request = &requests[1];
+    let after_resume_request = &requests[2];
+
+    let after_compact_body = after_compact_request.body_json().to_string();
+    assert!(
+        !after_compact_body.contains(stale_developer_message),
+        "stale developer instructions should be removed immediately after compaction"
+    );
+    assert!(
+        after_compact_body.contains("<permissions instructions>"),
+        "fresh developer instructions should be present after compaction"
+    );
+    assert!(
+        after_compact_body.contains("REMOTE_COMPACTED_SUMMARY"),
+        "compacted summary should be present after compaction"
+    );
+
+    let after_resume_body = after_resume_request.body_json().to_string();
+    assert!(
+        !after_resume_body.contains(stale_developer_message),
+        "stale developer instructions should be removed after resume"
+    );
+    assert!(
+        after_resume_body.contains("<permissions instructions>"),
+        "fresh developer instructions should be present after resume"
+    );
+    assert!(
+        after_resume_body.contains("REMOTE_COMPACTED_SUMMARY"),
+        "compacted summary should persist after resume"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_refreshes_stale_developer_instructions_without_resume() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = wiremock::MockServer::start().await;
+    let stale_developer_message = "STALE_DEVELOPER_INSTRUCTIONS_SHOULD_BE_REMOVED";
+
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.features.enable(Feature::RemoteCompaction);
+        });
+    let test = builder.build(&server).await?;
+
+    let responses_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_assistant_message("m1", "BASELINE_REPLY"),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m2", "AFTER_COMPACT_REPLY"),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let compacted_history = vec![
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "REMOTE_COMPACTED_SUMMARY".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: stale_developer_message.to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        },
+        ResponseItem::Compaction {
+            encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+        },
+    ];
+    let compact_mock = responses::mount_compact_json_once(
+        &server,
+        serde_json::json!({ "output": compacted_history }),
+    )
+    .await;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "start remote compact flow".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    test.codex.submit(Op::Compact).await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "after compact in same session".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(compact_mock.requests().len(), 1);
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 2, "expected two model requests");
+
+    let after_compact_body = requests[1].body_json().to_string();
+    assert!(
+        !after_compact_body.contains(stale_developer_message),
+        "stale developer instructions should be removed immediately after compaction"
+    );
+    assert!(
+        after_compact_body.contains("<permissions instructions>"),
+        "fresh developer instructions should be present after compaction"
+    );
+    assert!(
+        after_compact_body.contains("REMOTE_COMPACTED_SUMMARY"),
+        "compacted summary should be present after compaction"
     );
 
     Ok(())

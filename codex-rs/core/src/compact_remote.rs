@@ -90,6 +90,9 @@ async fn run_remote_compact_task_inner_impl(
             &turn_context.otel_manager,
         )
         .await?;
+    new_history = sess
+        .process_compacted_history(turn_context, new_history)
+        .await;
 
     if !ghost_snapshots.is_empty() {
         new_history.extend(ghost_snapshots);

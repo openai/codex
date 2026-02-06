@@ -869,6 +869,30 @@
             },
             "method": {
               "enum": [
+                "turn/steer"
+              ],
+              "title": "Turn/steerRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/TurnSteerParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Turn/steerRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "turn/interrupt"
               ],
               "title": "Turn/interruptRequestMethod",
@@ -9801,6 +9825,32 @@
         },
         "type": "object"
       },
+      "AppConfig": {
+        "properties": {
+          "disabled_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AppDisabledReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enabled": {
+            "default": true,
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "AppDisabledReason": {
+        "enum": [
+          "unknown",
+          "user"
+        ],
+        "type": "string"
+      },
       "AppInfo": {
         "properties": {
           "description": {
@@ -9848,6 +9898,9 @@
           "id",
           "name"
         ],
+        "type": "object"
+      },
+      "AppsConfig": {
         "type": "object"
       },
       "AppsListParams": {
@@ -10464,6 +10517,17 @@
                 "type": "null"
               }
             ]
+          },
+          "apps": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AppsConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "compact_prompt": {
             "type": [
@@ -14166,13 +14230,6 @@
               "null"
             ]
           },
-          "path": {
-            "description": "[UNSTABLE] Specify the rollout path to fork from. If specified, the thread_id param will be ignored.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "sandbox": {
             "anyOf": [
               {
@@ -14931,16 +14988,6 @@
               "null"
             ]
           },
-          "history": {
-            "description": "[UNSTABLE] FOR CODEX CLOUD - DO NOT USE. If specified, the thread will be resumed with the provided history instead of loaded from disk.",
-            "items": {
-              "$ref": "#/definitions/v2/ResponseItem"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
           "model": {
             "description": "Configuration overrides for the resumed thread, if any.",
             "type": [
@@ -14949,13 +14996,6 @@
             ]
           },
           "modelProvider": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "path": {
-            "description": "[UNSTABLE] Specify the rollout path to resume from. If specified, the thread_id param will be ignored.",
             "type": [
               "string",
               "null"
@@ -15159,11 +15199,6 @@
               "boolean",
               "null"
             ]
-          },
-          "experimentalRawEvents": {
-            "default": false,
-            "description": "If true, opt into emitting raw response items on the event stream.\n\nThis is for internal use only (e.g. Codex Cloud). (TODO): Figure out a better way to categorize internal / experimental events & protocols.",
-            "type": "boolean"
           },
           "model": {
             "type": [
@@ -15601,17 +15636,6 @@
             ],
             "description": "Override the approval policy for this turn and subsequent turns."
           },
-          "collaborationMode": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/CollaborationMode"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "EXPERIMENTAL - set a pre-set collaboration mode. Takes precedence over model, reasoning_effort, and developer instructions if set."
-          },
           "cwd": {
             "description": "Override the working directory for this turn and subsequent turns.",
             "type": [
@@ -15728,6 +15752,44 @@
           "inProgress"
         ],
         "type": "string"
+      },
+      "TurnSteerParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "expectedTurnId": {
+            "description": "Required active turn id precondition. The request fails when it does not match the currently active turn.",
+            "type": "string"
+          },
+          "input": {
+            "items": {
+              "$ref": "#/definitions/v2/UserInput"
+            },
+            "type": "array"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "expectedTurnId",
+          "input",
+          "threadId"
+        ],
+        "title": "TurnSteerParams",
+        "type": "object"
+      },
+      "TurnSteerResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "turnId"
+        ],
+        "title": "TurnSteerResponse",
+        "type": "object"
       },
       "UserInput": {
         "oneOf": [

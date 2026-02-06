@@ -38,7 +38,7 @@ use std::time::Duration;
 use tracing::warn;
 
 pub const STATE_DB_FILENAME: &str = "state";
-pub const STATE_DB_VERSION: u32 = 3;
+pub const STATE_DB_VERSION: u32 = 4;
 
 const METRIC_DB_INIT: &str = "codex.db.init";
 

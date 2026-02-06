@@ -139,6 +139,8 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::TurnSteerParams;
+use codex_app_server_protocol::TurnSteerResponse;
 use codex_app_server_protocol::UserInfoResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_app_server_protocol::UserSavedConfig;
@@ -154,6 +156,7 @@ use codex_core::InitialHistory;
 use codex_core::NewThread;
 use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
+use codex_core::SteerInputError;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::ThreadManager;
 use codex_core::ThreadSortKey as CoreThreadSortKey;
@@ -530,6 +533,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::TurnStart { request_id, params } => {
                 self.turn_start(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::TurnSteer { request_id, params } => {
+                self.turn_steer(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::TurnInterrupt { request_id, params } => {
@@ -4613,6 +4620,63 @@ impl CodexMessageProcessor {
                 let error = JSONRPCErrorError {
                     code: INTERNAL_ERROR_CODE,
                     message: format!("failed to start turn: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn turn_steer(&self, request_id: ConnectionRequestId, params: TurnSteerParams) {
+        let (_, thread) = match self.load_thread(&params.thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        if params.expected_turn_id.is_empty() {
+            self.send_invalid_request_error(
+                request_id,
+                "expectedTurnId must not be empty".to_string(),
+            )
+            .await;
+            return;
+        }
+
+        let mapped_items: Vec<CoreInputItem> = params
+            .input
+            .into_iter()
+            .map(V2UserInput::into_core)
+            .collect();
+
+        match thread
+            .steer_input(mapped_items, Some(&params.expected_turn_id))
+            .await
+        {
+            Ok(turn_id) => {
+                let response = TurnSteerResponse { turn_id };
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(err) => {
+                let (code, message) = match err {
+                    SteerInputError::NoActiveTurn(_) => (
+                        INVALID_REQUEST_ERROR_CODE,
+                        "no active turn to steer".to_string(),
+                    ),
+                    SteerInputError::ExpectedTurnMismatch { expected, actual } => (
+                        INVALID_REQUEST_ERROR_CODE,
+                        format!("expected active turn id `{expected}` but found `{actual}`"),
+                    ),
+                    SteerInputError::EmptyInput => (
+                        INVALID_REQUEST_ERROR_CODE,
+                        "input must not be empty".to_string(),
+                    ),
+                };
+                let error = JSONRPCErrorError {
+                    code,
+                    message,
                     data: None,
                 };
                 self.outgoing.send_error(request_id, error).await;

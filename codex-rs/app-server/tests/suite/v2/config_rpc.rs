@@ -3,6 +3,9 @@ use app_test_support::McpProcess;
 use app_test_support::test_path_buf_with_windows;
 use app_test_support::test_tmp_path_buf;
 use app_test_support::to_response;
+use codex_app_server_protocol::AppConfig;
+use codex_app_server_protocol::AppDisabledReason;
+use codex_app_server_protocol::AppsConfig;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigEdit;
@@ -135,6 +138,74 @@ view_image = false
     );
     assert_eq!(
         origins.get("tools.view_image").expect("origin").name,
+        ConfigLayerSource::User {
+            file: user_file.clone(),
+        }
+    );
+
+    let layers = layers.expect("layers present");
+    assert_layers_user_then_optional_system(&layers, user_file)?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_includes_apps() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_config(
+        &codex_home,
+        r#"
+[apps.app1]
+enabled = false
+disabled_reason = "user"
+"#,
+    )?;
+    let codex_home_path = codex_home.path().canonicalize()?;
+    let user_file = AbsolutePathBuf::try_from(codex_home_path.join("config.toml"))?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: true,
+            cwd: None,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ConfigReadResponse {
+        config,
+        origins,
+        layers,
+    } = to_response(resp)?;
+
+    assert_eq!(
+        config.apps,
+        Some(AppsConfig {
+            apps: std::collections::HashMap::from([(
+                "app1".to_string(),
+                AppConfig {
+                    enabled: false,
+                    disabled_reason: Some(AppDisabledReason::User),
+                },
+            )]),
+        })
+    );
+    assert_eq!(
+        origins.get("apps.app1.enabled").expect("origin").name,
+        ConfigLayerSource::User {
+            file: user_file.clone(),
+        }
+    );
+    assert_eq!(
+        origins
+            .get("apps.app1.disabled_reason")
+            .expect("origin")
+            .name,
         ConfigLayerSource::User {
             file: user_file.clone(),
         }
