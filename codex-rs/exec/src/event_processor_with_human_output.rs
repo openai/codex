@@ -931,9 +931,11 @@ impl EventProcessorWithHumanOutput {
 
     fn finish_progress_line(&mut self) {
         if self.progress_active {
-            eprintln!();
             self.progress_active = false;
             self.progress_last_len = 0;
+            if !self.use_ansi_cursor {
+                eprintln!();
+            }
         }
     }
 
@@ -970,18 +972,16 @@ impl EventProcessorWithHumanOutput {
             }
             return;
         }
-        let mut output = String::new();
-        output.push('\r');
-        output.push_str("\u{1b}[2K");
-        output.push_str(&line);
+        if self.progress_active {
+            eprint!("\u{1b}[1A\u{1b}[2K");
+        }
+        eprintln!("{line}");
+        let _ = std::io::stderr().flush();
         if done {
-            eprintln!("{output}");
             self.progress_active = false;
             self.progress_last_len = 0;
             return;
         }
-        eprint!("{output}");
-        let _ = std::io::stderr().flush();
         self.progress_active = true;
         self.progress_last_len = line.len();
     }
