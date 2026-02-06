@@ -27,7 +27,7 @@ pub(crate) struct MentionItem {
     pub(crate) category_tag: Option<String>,
 }
 
-const MENTION_NAME_TRUNCATE_LEN: usize = 30;
+const MENTION_NAME_TRUNCATE_LEN: usize = 24;
 
 pub(crate) struct SkillPopup {
     query: String,

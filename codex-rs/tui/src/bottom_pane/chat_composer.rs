@@ -3039,7 +3039,7 @@ impl ChatComposer {
                     search_terms,
                     path: Some(skill.path.to_string_lossy().into_owned()),
                     category_tag: (skill.scope == codex_core::protocol::SkillScope::Repo)
-                        .then(|| "(repo)".to_string()),
+                        .then(|| "[Repo]".to_string()),
                 });
             }
         }
@@ -3062,7 +3062,7 @@ impl ChatComposer {
                     insert_text: format!("${slug}"),
                     search_terms,
                     path: Some(format!("app://{connector_id}")),
-                    category_tag: Some("app".to_string()),
+                    category_tag: Some("[App]".to_string()),
                 });
             }
         }
@@ -3081,15 +3081,7 @@ impl ChatComposer {
     }
 
     fn connector_brief_description(connector: &AppInfo) -> String {
-        let status_label = if connector.is_accessible {
-            "Connected"
-        } else {
-            "Can be installed"
-        };
-        match Self::connector_description(connector) {
-            Some(description) => format!("{status_label} - {description}"),
-            None => status_label.to_string(),
-        }
+        Self::connector_description(connector).unwrap_or_default()
     }
 
     fn connector_description(connector: &AppInfo) -> Option<String> {
