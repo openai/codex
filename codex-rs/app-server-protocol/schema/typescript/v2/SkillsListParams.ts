@@ -15,4 +15,4 @@ forceReload?: boolean,
 /**
  * Optional per-cwd extra roots to scan as user-scoped skills.
  */
-perCwdExtraUserRoots?: Array<SkillsListExtraRootsForCwd>, };
+perCwdExtraUserRoots?: Array<SkillsListExtraRootsForCwd> | null, };

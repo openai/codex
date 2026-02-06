@@ -13782,7 +13782,8 @@
           }
         },
         "required": [
-          "cwd"
+          "cwd",
+          "extraUserRoots"
         ],
         "type": "object"
       },
@@ -13801,11 +13802,15 @@
             "type": "boolean"
           },
           "perCwdExtraUserRoots": {
+            "default": null,
             "description": "Optional per-cwd extra roots to scan as user-scoped skills.",
             "items": {
               "$ref": "#/definitions/v2/SkillsListExtraRootsForCwd"
             },
-            "type": "array"
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "title": "SkillsListParams",

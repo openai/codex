@@ -4399,7 +4399,7 @@ impl CodexMessageProcessor {
         let cwd_set: HashSet<PathBuf> = cwds.iter().cloned().collect();
 
         let mut extra_roots_by_cwd: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
-        for entry in per_cwd_extra_user_roots {
+        for entry in per_cwd_extra_user_roots.unwrap_or_default() {
             if !cwd_set.contains(&entry.cwd) {
                 warn!(
                     cwd = %entry.cwd.display(),
