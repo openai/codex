@@ -88,6 +88,7 @@ pub(crate) use skills_toggle_view::SkillsToggleView;
 pub(crate) use status_line_setup::StatusLineItem;
 pub(crate) use status_line_setup::StatusLineSetupView;
 mod paste_burst;
+mod pending_remote_images;
 pub mod popup_consts;
 mod queued_user_messages;
 mod scroll_state;
@@ -517,6 +518,11 @@ impl BottomPane {
 
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
         self.composer.set_footer_hint_override(items);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_pending_non_editable_image_urls(&mut self, urls: Vec<String>) {
+        self.composer.set_pending_non_editable_image_urls(urls);
         self.request_redraw();
     }
 
@@ -1313,6 +1319,31 @@ mod tests {
             "status_and_queued_messages_snapshot",
             render_snapshot(&pane, area)
         );
+    }
+
+    #[test]
+    fn pending_remote_images_render_above_composer() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_pending_non_editable_image_urls(vec![
+            "https://example.com/one.png".to_string(),
+            "data:image/png;base64,aGVsbG8=".to_string(),
+        ]);
+
+        let rendered = render_snapshot(&pane, Rect::new(0, 0, 96, pane.desired_height(96)));
+        assert!(rendered.contains("[external image 1] https://example.com/one.png"));
+        assert!(rendered.contains("[external image 2] image/png data URL (5 bytes)"));
     }
 
     #[test]
