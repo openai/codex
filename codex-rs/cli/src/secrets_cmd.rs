@@ -302,8 +302,8 @@ mod tests {
         let config = test_config(codex_home.path(), cwd.path()).await?;
         let keyring = Arc::new(MockKeyringStore::default());
         let manager = SecretsManager::new_with_keyring_store(
-            config.codex_home.clone(),
-            config.secrets_backend,
+            config.codex_home,
+            SecretsBackendKind::Local,
             keyring,
         );
 
@@ -334,8 +334,8 @@ mod tests {
         let config = test_config(codex_home.path(), cwd.path()).await?;
         let keyring = Arc::new(MockKeyringStore::default());
         let manager = SecretsManager::new_with_keyring_store(
-            config.codex_home.clone(),
-            config.secrets_backend,
+            config.codex_home,
+            SecretsBackendKind::Local,
             keyring,
         );
 
