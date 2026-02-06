@@ -1643,16 +1643,7 @@ impl ChatWidget {
         }
 
         if let Some(combined) = self.drain_queued_messages_for_restore() {
-            let combined_local_image_paths = combined
-                .local_images
-                .iter()
-                .map(|img| img.path.clone())
-                .collect();
-            self.bottom_pane.set_composer_text(
-                combined.text,
-                combined.text_elements,
-                combined_local_image_paths,
-            );
+            self.restore_user_message_to_composer(combined);
             self.refresh_queued_user_messages();
         }
 
@@ -1713,6 +1704,18 @@ impl ChatWidget {
         }
 
         Some(combined)
+    }
+
+    fn restore_user_message_to_composer(&mut self, user_message: UserMessage) {
+        let UserMessage {
+            text,
+            local_images,
+            text_elements,
+            mention_paths: _,
+        } = user_message;
+        let local_image_paths = local_images.into_iter().map(|img| img.path).collect();
+        self.bottom_pane
+            .set_composer_text(text, text_elements, local_image_paths);
     }
 
     fn on_plan_update(&mut self, update: UpdatePlanArgs) {
@@ -3003,16 +3006,7 @@ impl ChatWidget {
             } if !self.queued_user_messages.is_empty() => {
                 // Prefer the most recently queued item.
                 if let Some(user_message) = self.queued_user_messages.pop_back() {
-                    let local_image_paths = user_message
-                        .local_images
-                        .iter()
-                        .map(|img| img.path.clone())
-                        .collect();
-                    self.bottom_pane.set_composer_text(
-                        user_message.text,
-                        user_message.text_elements,
-                        local_image_paths,
-                    );
+                    self.restore_user_message_to_composer(user_message);
                     self.refresh_queued_user_messages();
                     self.request_redraw();
                 }
@@ -3030,8 +3024,8 @@ impl ChatWidget {
                         text_elements,
                         mention_paths: self.bottom_pane.take_mention_paths(),
                     };
-                    if self.is_session_configured() {
-                        // Submitted is only emitted when steer is enabled (Enter sends immediately).
+                    if self.is_session_configured() && !self.is_plan_streaming_in_tui() {
+                        // Submitted is only emitted when steer is enabled.
                         // Reset any reasoning header only when we are actually submitting a turn.
                         self.reasoning_buffer.clear();
                         self.full_reasoning_buffer.clear();
@@ -6415,6 +6409,10 @@ impl ChatWidget {
         self.bottom_pane.is_task_running() || self.is_review_mode
     }
 
+    fn is_plan_streaming_in_tui(&self) -> bool {
+        self.plan_stream_controller.is_some()
+    }
+
     pub(crate) fn composer_is_empty(&self) -> bool {
         self.bottom_pane.composer_is_empty()
     }
@@ -6424,8 +6422,27 @@ impl ChatWidget {
         text: String,
         collaboration_mode: CollaborationModeMask,
     ) {
+        if self.agent_turn_running
+            && self.active_collaboration_mask.as_ref() != Some(&collaboration_mode)
+        {
+            self.add_error_message(
+                "Cannot switch collaboration mode while a turn is running.".to_string(),
+            );
+            return;
+        }
         self.set_collaboration_mask(collaboration_mode);
-        self.submit_user_message(text.into());
+        let should_queue = self.is_plan_streaming_in_tui();
+        let user_message = UserMessage {
+            text,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+            mention_paths: HashMap::new(),
+        };
+        if should_queue {
+            self.queue_user_message(user_message);
+        } else {
+            self.submit_user_message(user_message);
+        }
     }
 
     /// True when the UI is in the regular composer state with no running task,

@@ -1,6 +1,7 @@
 use crate::auth::AuthCredentialsStoreMode;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
+use crate::config::types::AppsConfigToml;
 use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
 use crate::config::types::History;
 use crate::config::types::McpServerConfig;
@@ -1023,6 +1024,10 @@ pub struct ConfigToml {
     /// When `false`, disables feedback collection across Codex product surfaces.
     /// Defaults to `true`.
     pub feedback: Option<crate::config::types::FeedbackConfigToml>,
+
+    /// Settings for app-specific controls.
+    #[serde(default)]
+    pub apps: Option<AppsConfigToml>,
 
     /// OTEL configuration.
     pub otel: Option<crate::config::types::OtelConfigToml>,

@@ -340,6 +340,44 @@ pub struct FeedbackConfigToml {
     pub enabled: Option<bool>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AppDisabledReason {
+    Unknown,
+    User,
+}
+
+impl fmt::Display for AppDisabledReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AppDisabledReason::Unknown => write!(f, "unknown"),
+            AppDisabledReason::User => write!(f, "user"),
+        }
+    }
+}
+
+/// Config values for a single app/connector.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AppConfig {
+    /// When `false`, Codex does not surface this app.
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+
+    /// Reason this app was disabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disabled_reason: Option<AppDisabledReason>,
+}
+
+/// App/connector settings loaded from `config.toml`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AppsConfigToml {
+    /// Per-app settings keyed by app ID (for example `[apps.google_drive]`).
+    #[serde(default, flatten)]
+    pub apps: HashMap<String, AppConfig>,
+}
+
 // ===== OTEL configuration =====
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]

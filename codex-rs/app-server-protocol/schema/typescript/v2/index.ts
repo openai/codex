@@ -6,7 +6,9 @@ export type { AccountRateLimitsUpdatedNotification } from "./AccountRateLimitsUp
 export type { AccountUpdatedNotification } from "./AccountUpdatedNotification";
 export type { AgentMessageDeltaNotification } from "./AgentMessageDeltaNotification";
 export type { AnalyticsConfig } from "./AnalyticsConfig";
+export type { AppDisabledReason } from "./AppDisabledReason";
 export type { AppInfo } from "./AppInfo";
+export type { AppsConfig } from "./AppsConfig";
 export type { AppsListParams } from "./AppsListParams";
 export type { AppsListResponse } from "./AppsListResponse";
 export type { AskForApproval } from "./AskForApproval";

@@ -9825,6 +9825,32 @@
         },
         "type": "object"
       },
+      "AppConfig": {
+        "properties": {
+          "disabled_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AppDisabledReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enabled": {
+            "default": true,
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "AppDisabledReason": {
+        "enum": [
+          "unknown",
+          "user"
+        ],
+        "type": "string"
+      },
       "AppInfo": {
         "properties": {
           "description": {
@@ -9872,6 +9898,9 @@
           "id",
           "name"
         ],
+        "type": "object"
+      },
+      "AppsConfig": {
         "type": "object"
       },
       "AppsListParams": {
@@ -10488,6 +10517,17 @@
                 "type": "null"
               }
             ]
+          },
+          "apps": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AppsConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "compact_prompt": {
             "type": [

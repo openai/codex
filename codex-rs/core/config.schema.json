@@ -55,6 +55,40 @@
       },
       "type": "object"
     },
+    "AppConfig": {
+      "additionalProperties": false,
+      "description": "Config values for a single app/connector.",
+      "properties": {
+        "disabled_reason": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AppDisabledReason"
+            }
+          ],
+          "description": "Reason this app was disabled."
+        },
+        "enabled": {
+          "default": true,
+          "description": "When `false`, Codex does not surface this app.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "AppDisabledReason": {
+      "enum": [
+        "unknown",
+        "user"
+      ],
+      "type": "string"
+    },
+    "AppsConfigToml": {
+      "additionalProperties": {
+        "$ref": "#/definitions/AppConfig"
+      },
+      "description": "App/connector settings loaded from `config.toml`.",
+      "type": "object"
+    },
     "AskForApproval": {
       "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Codex.",
       "oneOf": [
@@ -1134,6 +1168,15 @@
         }
       ],
       "description": "Default approval policy for executing commands."
+    },
+    "apps": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AppsConfigToml"
+        }
+      ],
+      "default": null,
+      "description": "Settings for app-specific controls."
     },
     "chatgpt_base_url": {
       "description": "Base URL for requests to ChatGPT (as opposed to the OpenAI API).",
