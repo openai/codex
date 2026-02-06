@@ -29,4 +29,13 @@ The public interface of this crate is intentionally small and uniform:
   - Output: `Vec<ResponseItem>`.
   - `CompactClient::compact_input(&CompactionInput, extra_headers)` wraps the JSON encoding and retry/telemetry wiring.
 
+- **Memory trace summarize endpoint**
+  - Input: `MemoryTraceSummarizeInput` (re-exported as `codex_api::MemoryTraceSummarizeInput`):
+    - `model: String`.
+    - `traces: Vec<MemoryTrace>`.
+      - `MemoryTrace` includes `id`, `metadata.source_path`, and normalized `items`.
+    - `reasoning: Option<Reasoning>`.
+  - Output: `Vec<MemoryTraceSummaryOutput>`.
+  - `MemoriesClient::trace_summarize_input(&MemoryTraceSummarizeInput, extra_headers)` wraps JSON encoding and retry/telemetry wiring.
+
 All HTTP details (URLs, headers, retry/backoff policies, SSE framing) are encapsulated in `codex-api` and `codex-client`. Callers construct prompts/inputs using protocol types and work with typed streams of `ResponseEvent` or compacted `ResponseItem` values.

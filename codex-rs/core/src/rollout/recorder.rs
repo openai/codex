@@ -6,6 +6,7 @@ use std::io::Error as IoError;
 use std::path::Path;
 use std::path::PathBuf;
 
+use chrono::SecondsFormat;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::BaseInstructions;
@@ -18,11 +19,13 @@ use tokio::sync::mpsc::Sender;
 use tokio::sync::mpsc::{self};
 use tokio::sync::oneshot;
 use tracing::info;
+use tracing::trace;
 use tracing::warn;
 
 use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
 use super::list::Cursor;
+use super::list::ThreadItem;
 use super::list::ThreadListConfig;
 use super::list::ThreadListLayout;
 use super::list::ThreadSortKey;
@@ -120,8 +123,7 @@ impl RolloutRecorder {
         model_providers: Option<&[String]>,
         default_provider: &str,
     ) -> std::io::Result<ThreadsPage> {
-        let stage = "list_threads";
-        let page = get_threads(
+        Self::list_threads_with_db_fallback(
             codex_home,
             page_size,
             cursor,
@@ -129,35 +131,9 @@ impl RolloutRecorder {
             allowed_sources,
             model_providers,
             default_provider,
-        )
-        .await?;
-
-        // TODO(jif): drop after sqlite migration phase 1
-        let state_db_ctx = state_db::open_if_present(codex_home, default_provider).await;
-        if let Some(db_ids) = state_db::list_thread_ids_db(
-            state_db_ctx.as_deref(),
-            codex_home,
-            page_size,
-            cursor,
-            sort_key,
-            allowed_sources,
-            model_providers,
             false,
-            stage,
         )
         .await
-        {
-            if page.items.len() != db_ids.len() {
-                state_db::record_discrepancy(stage, "bad_len");
-                return Ok(page);
-            }
-            for (id, item) in db_ids.iter().zip(page.items.iter()) {
-                if !item.path.display().to_string().contains(&id.to_string()) {
-                    state_db::record_discrepancy(stage, "bad_id");
-                }
-            }
-        }
-        Ok(page)
     }
 
     /// List archived threads (rollout files) under the archived sessions directory.
@@ -170,25 +146,32 @@ impl RolloutRecorder {
         model_providers: Option<&[String]>,
         default_provider: &str,
     ) -> std::io::Result<ThreadsPage> {
-        let stage = "list_archived_threads";
-        let root = codex_home.join(ARCHIVED_SESSIONS_SUBDIR);
-        let page = get_threads_in_root(
-            root,
+        Self::list_threads_with_db_fallback(
+            codex_home,
             page_size,
             cursor,
             sort_key,
-            ThreadListConfig {
-                allowed_sources,
-                model_providers,
-                default_provider,
-                layout: ThreadListLayout::Flat,
-            },
+            allowed_sources,
+            model_providers,
+            default_provider,
+            true,
         )
-        .await?;
+        .await
+    }
 
-        // TODO(jif): drop after sqlite migration phase 1
+    #[allow(clippy::too_many_arguments)]
+    async fn list_threads_with_db_fallback(
+        codex_home: &Path,
+        page_size: usize,
+        cursor: Option<&Cursor>,
+        sort_key: ThreadSortKey,
+        allowed_sources: &[SessionSource],
+        model_providers: Option<&[String]>,
+        default_provider: &str,
+        archived: bool,
+    ) -> std::io::Result<ThreadsPage> {
         let state_db_ctx = state_db::open_if_present(codex_home, default_provider).await;
-        if let Some(db_ids) = state_db::list_thread_ids_db(
+        if let Some(db_page) = state_db::list_threads_db(
             state_db_ctx.as_deref(),
             codex_home,
             page_size,
@@ -196,22 +179,42 @@ impl RolloutRecorder {
             sort_key,
             allowed_sources,
             model_providers,
-            true,
-            stage,
+            archived,
         )
         .await
         {
-            if page.items.len() != db_ids.len() {
-                state_db::record_discrepancy(stage, "bad_len");
-                return Ok(page);
-            }
-            for (id, item) in db_ids.iter().zip(page.items.iter()) {
-                if !item.path.display().to_string().contains(&id.to_string()) {
-                    state_db::record_discrepancy(stage, "bad_id");
-                }
-            }
+            return Ok(db_page.into());
         }
-        Ok(page)
+        tracing::error!("Falling back on rollout system");
+        state_db::record_discrepancy("list_threads_with_db_fallback", "falling_back");
+
+        if archived {
+            let root = codex_home.join(ARCHIVED_SESSIONS_SUBDIR);
+            return get_threads_in_root(
+                root,
+                page_size,
+                cursor,
+                sort_key,
+                ThreadListConfig {
+                    allowed_sources,
+                    model_providers,
+                    default_provider,
+                    layout: ThreadListLayout::Flat,
+                },
+            )
+            .await;
+        }
+
+        get_threads(
+            codex_home,
+            page_size,
+            cursor,
+            sort_key,
+            allowed_sources,
+            model_providers,
+            default_provider,
+        )
+        .await
     }
 
     /// Find the newest recorded thread path, optionally filtering to a matching cwd.
@@ -226,9 +229,37 @@ impl RolloutRecorder {
         default_provider: &str,
         filter_cwd: Option<&Path>,
     ) -> std::io::Result<Option<PathBuf>> {
+        let state_db_ctx = state_db::open_if_present(codex_home, default_provider).await;
+        if state_db_ctx.is_some() {
+            let mut db_cursor = cursor.cloned();
+            loop {
+                let Some(db_page) = state_db::list_threads_db(
+                    state_db_ctx.as_deref(),
+                    codex_home,
+                    page_size,
+                    db_cursor.as_ref(),
+                    sort_key,
+                    allowed_sources,
+                    model_providers,
+                    false,
+                )
+                .await
+                else {
+                    break;
+                };
+                if let Some(path) = select_resume_path_from_db_page(&db_page, filter_cwd) {
+                    return Ok(Some(path));
+                }
+                db_cursor = db_page.next_anchor.map(Into::into);
+                if db_cursor.is_none() {
+                    break;
+                }
+            }
+        }
+
         let mut cursor = cursor.cloned();
         loop {
-            let page = Self::list_threads(
+            let page = get_threads(
                 codex_home,
                 page_size,
                 cursor.as_ref(),
@@ -381,7 +412,7 @@ impl RolloutRecorder {
     pub(crate) async fn load_rollout_items(
         path: &Path,
     ) -> std::io::Result<(Vec<RolloutItem>, Option<ThreadId>, usize)> {
-        info!("Resuming rollout from {path:?}");
+        trace!("Resuming rollout from {path:?}");
         let text = tokio::fs::read_to_string(path).await?;
         if text.trim().is_empty() {
             return Err(IoError::other("empty session file"));
@@ -428,7 +459,7 @@ impl RolloutRecorder {
                     }
                 },
                 Err(e) => {
-                    warn!("failed to parse rollout line: {e}");
+                    trace!("failed to parse rollout line: {e}");
                     parse_errors = parse_errors.saturating_add(1);
                 }
             }
@@ -562,6 +593,7 @@ async fn rollout_writer(
             default_provider.as_str(),
             state_builder.as_ref(),
             std::slice::from_ref(&rollout_item),
+            None,
         )
         .await;
     }
@@ -645,10 +677,46 @@ impl JsonlWriter {
     }
 }
 
+impl From<codex_state::ThreadsPage> for ThreadsPage {
+    fn from(db_page: codex_state::ThreadsPage) -> Self {
+        let items = db_page
+            .items
+            .into_iter()
+            .map(|item| ThreadItem {
+                path: item.rollout_path,
+                thread_id: Some(item.id),
+                first_user_message: item.first_user_message,
+                cwd: Some(item.cwd),
+                git_branch: item.git_branch,
+                git_sha: item.git_sha,
+                git_origin_url: item.git_origin_url,
+                source: Some(
+                    serde_json::from_value(Value::String(item.source))
+                        .unwrap_or(SessionSource::Unknown),
+                ),
+                model_provider: Some(item.model_provider),
+                cli_version: Some(item.cli_version),
+                created_at: Some(item.created_at.to_rfc3339_opts(SecondsFormat::Secs, true)),
+                updated_at: Some(item.updated_at.to_rfc3339_opts(SecondsFormat::Secs, true)),
+            })
+            .collect();
+        Self {
+            items,
+            next_cursor: db_page.next_anchor.map(Into::into),
+            num_scanned_files: db_page.num_scanned_rows,
+            reached_scan_cap: false,
+        }
+    }
+}
+
 fn select_resume_path(page: &ThreadsPage, filter_cwd: Option<&Path>) -> Option<PathBuf> {
     match filter_cwd {
         Some(cwd) => page.items.iter().find_map(|item| {
-            if session_cwd_matches(&item.head, cwd) {
+            if item
+                .cwd
+                .as_ref()
+                .is_some_and(|session_cwd| cwd_matches(session_cwd, cwd))
+            {
                 Some(item.path.clone())
             } else {
                 None
@@ -658,22 +726,28 @@ fn select_resume_path(page: &ThreadsPage, filter_cwd: Option<&Path>) -> Option<P
     }
 }
 
-fn session_cwd_matches(head: &[serde_json::Value], cwd: &Path) -> bool {
-    let Some(session_cwd) = extract_session_cwd(head) else {
-        return false;
-    };
+fn select_resume_path_from_db_page(
+    page: &codex_state::ThreadsPage,
+    filter_cwd: Option<&Path>,
+) -> Option<PathBuf> {
+    match filter_cwd {
+        Some(cwd) => page.items.iter().find_map(|item| {
+            if cwd_matches(item.cwd.as_path(), cwd) {
+                Some(item.rollout_path.clone())
+            } else {
+                None
+            }
+        }),
+        None => page.items.first().map(|item| item.rollout_path.clone()),
+    }
+}
+
+fn cwd_matches(session_cwd: &Path, cwd: &Path) -> bool {
     if let (Ok(ca), Ok(cb)) = (
-        path_utils::normalize_for_path_comparison(&session_cwd),
+        path_utils::normalize_for_path_comparison(session_cwd),
         path_utils::normalize_for_path_comparison(cwd),
     ) {
         return ca == cb;
     }
     session_cwd == cwd
-}
-
-fn extract_session_cwd(head: &[serde_json::Value]) -> Option<PathBuf> {
-    head.iter().find_map(|value| {
-        let meta_line = serde_json::from_value::<SessionMetaLine>(value.clone()).ok()?;
-        Some(meta_line.meta.cwd)
-    })
 }

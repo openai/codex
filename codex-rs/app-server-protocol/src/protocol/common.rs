@@ -208,6 +208,10 @@ client_request_definitions! {
         params: v2::ThreadUnarchiveParams,
         response: v2::ThreadUnarchiveResponse,
     },
+    ThreadCompactStart => "thread/compact/start" {
+        params: v2::ThreadCompactStartParams,
+        response: v2::ThreadCompactStartResponse,
+    },
     ThreadRollback => "thread/rollback" {
         params: v2::ThreadRollbackParams,
         response: v2::ThreadRollbackResponse,
@@ -228,6 +232,14 @@ client_request_definitions! {
         params: v2::SkillsListParams,
         response: v2::SkillsListResponse,
     },
+    SkillsRemoteRead => "skills/remote/read" {
+        params: v2::SkillsRemoteReadParams,
+        response: v2::SkillsRemoteReadResponse,
+    },
+    SkillsRemoteWrite => "skills/remote/write" {
+        params: v2::SkillsRemoteWriteParams,
+        response: v2::SkillsRemoteWriteResponse,
+    },
     AppsList => "app/list" {
         params: v2::AppsListParams,
         response: v2::AppsListResponse,
@@ -239,6 +251,10 @@ client_request_definitions! {
     TurnStart => "turn/start" {
         params: v2::TurnStartParams,
         response: v2::TurnStartResponse,
+    },
+    TurnSteer => "turn/steer" {
+        params: v2::TurnSteerParams,
+        response: v2::TurnSteerResponse,
     },
     TurnInterrupt => "turn/interrupt" {
         params: v2::TurnInterruptParams,
@@ -252,6 +268,10 @@ client_request_definitions! {
     ModelList => "model/list" {
         params: v2::ModelListParams,
         response: v2::ModelListResponse,
+    },
+    ExperimentalFeatureList => "experimentalFeature/list" {
+        params: v2::ExperimentalFeatureListParams,
+        response: v2::ExperimentalFeatureListResponse,
     },
     #[experimental("collaborationMode/list")]
     /// Lists collaboration mode presets.
@@ -1069,6 +1089,26 @@ mod tests {
                 "method": "collaborationMode/list",
                 "id": 7,
                 "params": {}
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_list_experimental_features() -> Result<()> {
+        let request = ClientRequest::ExperimentalFeatureList {
+            request_id: RequestId::Integer(8),
+            params: v2::ExperimentalFeatureListParams::default(),
+        };
+        assert_eq!(
+            json!({
+                "method": "experimentalFeature/list",
+                "id": 8,
+                "params": {
+                    "cursor": null,
+                    "limit": null
+                }
             }),
             serde_json::to_value(&request)?,
         );

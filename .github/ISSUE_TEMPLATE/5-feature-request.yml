@@ -16,7 +16,7 @@ body:
     id: variant
     attributes:
       label: What variant of Codex are you using?
-      description: (e.g., CLI, App, IDE Extension, Web)
+      description: (e.g., App, IDE Extension, CLI, Web)
     validations:
       required: true
   - type: textarea

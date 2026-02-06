@@ -59,6 +59,7 @@ async fn upsert_thread_metadata(codex_home: &Path, thread_id: ThreadId, rollout_
     let runtime = StateRuntime::init(codex_home.to_path_buf(), "test-provider".to_string(), None)
         .await
         .unwrap();
+    runtime.mark_backfill_complete(None).await.unwrap();
     let mut builder = ThreadMetadataBuilder::new(
         thread_id,
         rollout_path,
@@ -104,9 +105,11 @@ async fn find_prefers_sqlite_path_by_id() {
     let home = TempDir::new().unwrap();
     let id = Uuid::new_v4();
     let thread_id = ThreadId::from_string(&id.to_string()).unwrap();
-    let db_path = home
-        .path()
-        .join("sessions/2030/12/30/rollout-2030-12-30T00-00-00-db.jsonl");
+    let db_path = home.path().join(format!(
+        "sessions/2030/12/30/rollout-2030-12-30T00-00-00-{id}.jsonl"
+    ));
+    std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
+    std::fs::write(&db_path, "").unwrap();
     write_minimal_rollout_with_id(home.path(), id);
     upsert_thread_metadata(home.path(), thread_id, db_path.clone()).await;
 

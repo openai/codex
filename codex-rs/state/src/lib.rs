@@ -22,19 +22,25 @@ pub use runtime::StateRuntime;
 /// Most consumers should prefer [`StateRuntime`].
 pub use extract::apply_rollout_item;
 pub use model::Anchor;
+pub use model::BackfillState;
 pub use model::BackfillStats;
+pub use model::BackfillStatus;
 pub use model::ExtractionOutcome;
 pub use model::SortKey;
+pub use model::ThreadMemory;
 pub use model::ThreadMetadata;
 pub use model::ThreadMetadataBuilder;
 pub use model::ThreadsPage;
 pub use runtime::STATE_DB_FILENAME;
+pub use runtime::STATE_DB_VERSION;
+pub use runtime::state_db_filename;
+pub use runtime::state_db_path;
 
 /// Errors encountered during DB operations. Tags: [stage]
 pub const DB_ERROR_METRIC: &str = "codex.db.error";
-/// Metrics on backfill process during first init of the db. Tags: [status]
+/// Metrics on backfill process. Tags: [status]
 pub const DB_METRIC_BACKFILL: &str = "codex.db.backfill";
-/// Metrics on backfill duration during first init of the db. Tags: [status]
+/// Metrics on backfill duration. Tags: [status]
 pub const DB_METRIC_BACKFILL_DURATION_MS: &str = "codex.db.backfill.duration_ms";
 /// Metrics on errors during comparison between DB and rollout file. Tags: [stage]
 pub const DB_METRIC_COMPARE_ERROR: &str = "codex.db.compare_error";

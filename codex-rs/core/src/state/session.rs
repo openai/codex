@@ -24,6 +24,8 @@ pub(crate) struct SessionState {
     /// TODO(owen): This is a temporary solution to avoid updating a thread's updated_at
     /// timestamp when resuming a session. Remove this once SQLite is in place.
     pub(crate) initial_context_seeded: bool,
+    /// Previous rollout model for one-shot model-switch handling on first turn after resume.
+    pub(crate) pending_resume_previous_model: Option<String>,
 }
 
 impl SessionState {
@@ -38,6 +40,7 @@ impl SessionState {
             dependency_env: HashMap::new(),
             mcp_dependency_prompted: HashSet::new(),
             initial_context_seeded: false,
+            pending_resume_previous_model: None,
         }
     }
 

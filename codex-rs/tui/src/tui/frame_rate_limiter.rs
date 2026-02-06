@@ -1,7 +1,7 @@
 //! Limits how frequently frame draw notifications may be emitted.
 //!
 //! Widgets sometimes call `FrameRequester::schedule_frame()` more frequently than a user can
-//! perceive. This limiter clamps draw notifications to a maximum of 60 FPS to avoid wasted work.
+//! perceive. This limiter clamps draw notifications to a maximum of 120 FPS to avoid wasted work.
 //!
 //! This is intentionally a small, pure helper so it can be unit-tested in isolation and used by
 //! the async frame scheduler without adding complexity to the app/event loop.
@@ -9,8 +9,8 @@
 use std::time::Duration;
 use std::time::Instant;
 
-/// A 60 FPS minimum frame interval (≈16.67ms).
-pub(super) const MIN_FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
+/// A 120 FPS minimum frame interval (≈8.33ms).
+pub(super) const MIN_FRAME_INTERVAL: Duration = Duration::from_nanos(8_333_334);
 
 /// Remembers the most recent emitted draw, allowing deadlines to be clamped forward.
 #[derive(Debug, Default)]
