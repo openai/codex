@@ -2227,6 +2227,75 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_failure_stops_follow_up_sampling_loop() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let context_window = 100;
+    let limit = context_window * 90 / 100;
+    let over_limit_tokens = context_window * 95 / 100 + 1;
+
+    let first_turn = sse(vec![
+        ev_function_call(DUMMY_CALL_ID, DUMMY_FUNCTION_NAME, "{}"),
+        ev_completed_with_tokens("r1", over_limit_tokens),
+    ]);
+    let follow_up_turn = sse(vec![
+        ev_assistant_message("m2", "SHOULD_NOT_BE_REQUESTED"),
+        ev_completed_with_tokens("r2", 1),
+    ]);
+
+    mount_sse_once(&server, first_turn).await;
+    let follow_up_mock = mount_sse_once(&server, follow_up_turn).await;
+    let compact_mock =
+        mount_compact_json_once(&server, serde_json::json!({ "bad": "shape" })).await;
+
+    let codex = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            set_test_compact_prompt(config);
+            config.model_context_window = Some(context_window);
+            config.model_auto_compact_token_limit = Some(limit);
+        })
+        .build(&server)
+        .await
+        .expect("build codex")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: FUNCTION_CALL_LIMIT_MSG.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+
+    let error_message = wait_for_event_match(&codex, |msg| match msg {
+        EventMsg::Error(err) => Some(err.message.clone()),
+        _ => None,
+    })
+    .await;
+    assert!(
+        error_message.contains("Error running remote compact task"),
+        "expected remote auto compact failure message, got: {error_message}"
+    );
+    wait_for_event(&codex, |msg| matches!(msg, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(
+        compact_mock.requests().len(),
+        1,
+        "auto compact should run once before failing"
+    );
+    assert!(
+        follow_up_mock.requests().is_empty(),
+        "turn should stop after auto compact failure and avoid follow-up sampling"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
     skip_if_no_network!();
 

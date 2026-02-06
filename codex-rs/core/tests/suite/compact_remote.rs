@@ -245,6 +245,7 @@ async fn remote_compact_trims_function_call_history_to_fit_context_window() -> R
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
             .with_config(|config| {
                 config.model_context_window = Some(2_000);
+                config.model_auto_compact_token_limit = Some(i64::MAX);
             }),
     )
     .await?;
