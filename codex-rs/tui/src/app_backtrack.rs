@@ -84,6 +84,8 @@ pub(crate) struct BacktrackSelection {
     pub(crate) text_elements: Vec<TextElement>,
     /// Local image paths associated with the selected user message.
     pub(crate) local_image_paths: Vec<PathBuf>,
+    /// Remote image URLs associated with the selected user message.
+    pub(crate) remote_image_urls: Vec<String>,
 }
 
 /// An in-flight rollback requested from core.
@@ -206,12 +208,20 @@ impl App {
         let prefill = selection.prefill.clone();
         let text_elements = selection.text_elements.clone();
         let local_image_paths = selection.local_image_paths.clone();
+        let remote_image_urls = selection.remote_image_urls.clone();
+        let has_remote_image_urls = !remote_image_urls.is_empty();
         self.backtrack.pending_rollback = Some(PendingBacktrackRollback {
             selection,
             thread_id: self.chat_widget.thread_id(),
         });
         self.chat_widget.submit_op(Op::ThreadRollback { num_turns });
-        if !prefill.is_empty() || !text_elements.is_empty() || !local_image_paths.is_empty() {
+        self.chat_widget
+            .set_pending_non_editable_image_urls(remote_image_urls);
+        if !prefill.is_empty()
+            || !text_elements.is_empty()
+            || !local_image_paths.is_empty()
+            || has_remote_image_urls
+        {
             self.chat_widget
                 .set_composer_text(prefill, text_elements, local_image_paths);
         }
@@ -453,7 +463,18 @@ impl App {
 
     pub(crate) fn handle_backtrack_event(&mut self, event: &EventMsg) {
         match event {
-            EventMsg::ThreadRolledBack(_) => self.finish_pending_backtrack(),
+            EventMsg::ThreadRolledBack(rollback) => {
+                if self.backtrack.pending_rollback.is_some() {
+                    self.finish_pending_backtrack();
+                } else if trim_transcript_cells_drop_last_n_user_turns(
+                    &mut self.transcript_cells,
+                    rollback.num_turns,
+                ) {
+                    // Keep inline-mode scrollback synced when rollback came from replay
+                    // or another client rather than this UI's pending backtrack flow.
+                    self.backtrack_render_pending = true;
+                }
+            }
             EventMsg::Error(ErrorEvent {
                 codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
                 ..
@@ -487,7 +508,7 @@ impl App {
             return None;
         }
 
-        let (prefill, text_elements, local_image_paths) =
+        let (prefill, text_elements, local_image_paths, remote_image_urls) =
             nth_user_position(&self.transcript_cells, nth_user_message)
                 .and_then(|idx| self.transcript_cells.get(idx))
                 .and_then(|cell| cell.as_any().downcast_ref::<UserHistoryCell>())
@@ -496,15 +517,17 @@ impl App {
                         cell.message.clone(),
                         cell.text_elements.clone(),
                         cell.local_image_paths.clone(),
+                        cell.remote_image_urls.clone(),
                     )
                 })
-                .unwrap_or_else(|| (String::new(), Vec::new(), Vec::new()));
+                .unwrap_or_else(|| (String::new(), Vec::new(), Vec::new(), Vec::new()));
 
         Some(BacktrackSelection {
             nth_user_message,
             prefill,
             text_elements,
             local_image_paths,
+            remote_image_urls,
         })
     }
 
@@ -525,6 +548,30 @@ fn trim_transcript_cells_to_nth_user(
     if let Some(cut_idx) = nth_user_position(transcript_cells, nth_user_message) {
         transcript_cells.truncate(cut_idx);
     }
+}
+
+fn trim_transcript_cells_drop_last_n_user_turns(
+    transcript_cells: &mut Vec<Arc<dyn crate::history_cell::HistoryCell>>,
+    num_turns: u32,
+) -> bool {
+    if num_turns == 0 {
+        return false;
+    }
+
+    let user_positions: Vec<usize> = user_positions_iter(transcript_cells).collect();
+    let Some(&first_user_idx) = user_positions.first() else {
+        return false;
+    };
+
+    let turns_from_end = usize::try_from(num_turns).unwrap_or(usize::MAX);
+    let cut_idx = if turns_from_end >= user_positions.len() {
+        first_user_idx
+    } else {
+        user_positions[user_positions.len() - turns_from_end]
+    };
+    let original_len = transcript_cells.len();
+    transcript_cells.truncate(cut_idx);
+    transcript_cells.len() != original_len
 }
 
 pub(crate) fn user_count(cells: &[Arc<dyn crate::history_cell::HistoryCell>]) -> usize {
@@ -574,6 +621,7 @@ mod tests {
                 message: "first user".to_string(),
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
+                remote_image_urls: Vec::new(),
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("assistant")], true))
                 as Arc<dyn HistoryCell>,
@@ -592,6 +640,7 @@ mod tests {
                 message: "first".to_string(),
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
+                remote_image_urls: Vec::new(),
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("after")], false))
                 as Arc<dyn HistoryCell>,
@@ -622,6 +671,7 @@ mod tests {
                 message: "first".to_string(),
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
+                remote_image_urls: Vec::new(),
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("between")], false))
                 as Arc<dyn HistoryCell>,
@@ -629,6 +679,7 @@ mod tests {
                 message: "second".to_string(),
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
+                remote_image_urls: Vec::new(),
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("tail")], false))
                 as Arc<dyn HistoryCell>,
@@ -665,5 +716,41 @@ mod tests {
             .map(|span| span.content.as_ref())
             .collect();
         assert_eq!(between_text, "  between");
+    }
+
+    #[test]
+    fn trim_drop_last_n_user_turns_applies_rollback_semantics() {
+        let mut cells: Vec<Arc<dyn HistoryCell>> = vec![
+            Arc::new(UserHistoryCell {
+                message: "first".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+                remote_image_urls: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("after first")],
+                false,
+            )) as Arc<dyn HistoryCell>,
+            Arc::new(UserHistoryCell {
+                message: "second".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+                remote_image_urls: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("after second")],
+                false,
+            )) as Arc<dyn HistoryCell>,
+        ];
+
+        let changed = trim_transcript_cells_drop_last_n_user_turns(&mut cells, 1);
+
+        assert!(changed);
+        assert_eq!(cells.len(), 2);
+        let first_user = cells[0]
+            .as_any()
+            .downcast_ref::<UserHistoryCell>()
+            .expect("first user");
+        assert_eq!(first_user.message, "first");
     }
 }
