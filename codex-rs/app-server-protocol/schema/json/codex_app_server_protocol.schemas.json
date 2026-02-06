@@ -9801,6 +9801,32 @@
         },
         "type": "object"
       },
+      "AppConfig": {
+        "properties": {
+          "disabled_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AppDisabledReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enabled": {
+            "default": true,
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "AppDisabledReason": {
+        "enum": [
+          "unknown",
+          "user"
+        ],
+        "type": "string"
+      },
       "AppInfo": {
         "properties": {
           "description": {
@@ -9851,15 +9877,6 @@
         "type": "object"
       },
       "AppsConfig": {
-        "properties": {
-          "disabled_app_ids": {
-            "default": [],
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          }
-        },
         "type": "object"
       },
       "AppsListParams": {

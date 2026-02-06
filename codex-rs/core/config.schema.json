@@ -55,18 +55,38 @@
       },
       "type": "object"
     },
-    "AppsConfigToml": {
+    "AppConfig": {
       "additionalProperties": false,
+      "description": "Config values for a single app/connector.",
       "properties": {
-        "disabled_app_ids": {
-          "default": [],
-          "description": "App IDs that should be hidden/disabled in Codex surfaces.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
+        "disabled_reason": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AppDisabledReason"
+            }
+          ],
+          "description": "Reason this app was disabled."
+        },
+        "enabled": {
+          "default": true,
+          "description": "When `false`, Codex does not surface this app.",
+          "type": "boolean"
         }
       },
+      "type": "object"
+    },
+    "AppDisabledReason": {
+      "enum": [
+        "unknown",
+        "user"
+      ],
+      "type": "string"
+    },
+    "AppsConfigToml": {
+      "additionalProperties": {
+        "$ref": "#/definitions/AppConfig"
+      },
+      "description": "App/connector settings loaded from `config.toml`.",
       "type": "object"
     },
     "AskForApproval": {

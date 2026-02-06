@@ -700,6 +700,8 @@ fn find_effective_layer(
 mod tests {
     use super::*;
     use anyhow::Result;
+    use codex_app_server_protocol::AppConfig;
+    use codex_app_server_protocol::AppDisabledReason;
     use codex_app_server_protocol::AppsConfig;
     use codex_app_server_protocol::AskForApproval;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -802,7 +804,7 @@ remote_compaction = true
     }
 
     #[tokio::test]
-    async fn write_value_supports_apps_and_disabled_app_ids_paths() -> Result<()> {
+    async fn write_value_supports_nested_app_paths() -> Result<()> {
         let tmp = tempdir().expect("tempdir");
         std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "")?;
 
@@ -812,7 +814,9 @@ remote_compaction = true
                 file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
                 key_path: "apps".to_string(),
                 value: serde_json::json!({
-                    "disabled_app_ids": ["app1"],
+                    "app1": {
+                        "enabled": false,
+                    },
                 }),
                 merge_strategy: MergeStrategy::Replace,
                 expected_version: None,
@@ -823,13 +827,13 @@ remote_compaction = true
         service
             .write_value(ConfigValueWriteParams {
                 file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
-                key_path: "apps.disabled_app_ids".to_string(),
-                value: serde_json::json!(["app1", "app2"]),
+                key_path: "apps.app1.disabled_reason".to_string(),
+                value: serde_json::json!("user"),
                 merge_strategy: MergeStrategy::Replace,
                 expected_version: None,
             })
             .await
-            .expect("write apps.disabled_app_ids succeeds");
+            .expect("write apps.app1.disabled_reason succeeds");
 
         let read = service
             .read(ConfigReadParams {
@@ -842,7 +846,13 @@ remote_compaction = true
         assert_eq!(
             read.config.apps,
             Some(AppsConfig {
-                disabled_app_ids: vec!["app1".to_string(), "app2".to_string()],
+                apps: std::collections::HashMap::from([(
+                    "app1".to_string(),
+                    AppConfig {
+                        enabled: false,
+                        disabled_reason: Some(AppDisabledReason::User),
+                    },
+                )]),
             })
         );
 

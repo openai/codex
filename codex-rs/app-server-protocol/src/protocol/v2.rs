@@ -377,9 +377,31 @@ pub struct AnalyticsConfig {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
+pub enum AppDisabledReason {
+    Unknown,
+    User,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub struct AppConfig {
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+    pub disabled_reason: Option<AppDisabledReason>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
 pub struct AppsConfig {
-    #[serde(default)]
-    pub disabled_app_ids: Vec<String>,
+    #[serde(default, flatten)]
+    #[schemars(with = "HashMap<String, AppConfig>")]
+    pub apps: HashMap<String, AppConfig>,
+}
+
+const fn default_enabled() -> bool {
+    true
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

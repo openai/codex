@@ -3,6 +3,8 @@ use app_test_support::McpProcess;
 use app_test_support::test_path_buf_with_windows;
 use app_test_support::test_tmp_path_buf;
 use app_test_support::to_response;
+use codex_app_server_protocol::AppConfig;
+use codex_app_server_protocol::AppDisabledReason;
 use codex_app_server_protocol::AppsConfig;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ConfigBatchWriteParams;
@@ -153,8 +155,9 @@ async fn config_read_includes_apps() -> Result<()> {
     write_config(
         &codex_home,
         r#"
-[apps]
-disabled_app_ids = ["app1", "app2"]
+[apps.app1]
+enabled = false
+disabled_reason = "user"
 "#,
     )?;
     let codex_home_path = codex_home.path().canonicalize()?;
@@ -183,17 +186,26 @@ disabled_app_ids = ["app1", "app2"]
     assert_eq!(
         config.apps,
         Some(AppsConfig {
-            disabled_app_ids: vec!["app1".to_string(), "app2".to_string()],
+            apps: std::collections::HashMap::from([(
+                "app1".to_string(),
+                AppConfig {
+                    enabled: false,
+                    disabled_reason: Some(AppDisabledReason::User),
+                },
+            )]),
         })
     );
     assert_eq!(
-        origins.get("apps.disabled_app_ids.0").expect("origin").name,
+        origins.get("apps.app1.enabled").expect("origin").name,
         ConfigLayerSource::User {
             file: user_file.clone(),
         }
     );
     assert_eq!(
-        origins.get("apps.disabled_app_ids.1").expect("origin").name,
+        origins
+            .get("apps.app1.disabled_reason")
+            .expect("origin")
+            .name,
         ConfigLayerSource::User {
             file: user_file.clone(),
         }

@@ -17,16 +17,33 @@
       },
       "type": "object"
     },
-    "AppsConfig": {
+    "AppConfig": {
       "properties": {
-        "disabled_app_ids": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
+        "disabled_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AppDisabledReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "enabled": {
+          "default": true,
+          "type": "boolean"
         }
       },
+      "type": "object"
+    },
+    "AppDisabledReason": {
+      "enum": [
+        "unknown",
+        "user"
+      ],
+      "type": "string"
+    },
+    "AppsConfig": {
       "type": "object"
     },
     "AskForApproval": {
