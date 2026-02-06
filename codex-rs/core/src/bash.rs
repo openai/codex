@@ -218,12 +218,24 @@ fn parse_heredoc_command_words(cmd: Node<'_>, src: &str) -> Option<Vec<String>> 
             // Allow shell constructs that attach IO to a single command without
             // changing argv matching semantics for the executable prefix.
             "variable_assignment" | "comment" => {}
-            kind if kind.contains("redirect") || kind.contains("heredoc") => {}
+            kind if is_allowed_heredoc_attachment_kind(kind) => {}
             _ => return None,
         }
     }
 
     if words.is_empty() { None } else { Some(words) }
+}
+
+fn is_allowed_heredoc_attachment_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "heredoc_body"
+            | "simple_heredoc_body"
+            | "heredoc_redirect"
+            | "herestring_redirect"
+            | "file_redirect"
+            | "redirected_statement"
+    )
 }
 
 fn find_single_command_node(root: Node<'_>) -> Option<Node<'_>> {
@@ -481,5 +493,18 @@ mod tests {
             "echo hello > /tmp/out.txt".to_string(),
         ];
         assert_eq!(parse_shell_lc_single_command_prefix(&command), None);
+    }
+
+    #[test]
+    fn parse_shell_lc_single_command_prefix_accepts_heredoc_with_extra_redirect() {
+        let command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "python3 <<'PY' > /tmp/out.txt\nprint('hello')\nPY".to_string(),
+        ];
+        assert_eq!(
+            parse_shell_lc_single_command_prefix(&command),
+            Some(vec!["python3".to_string()])
+        );
     }
 }
