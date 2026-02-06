@@ -170,6 +170,10 @@ pub struct MessageCreateParams {
     /// Service tier for priority routing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<ServiceTier>,
+
+    /// Extra parameters passed through to the API request body.
+    #[serde(flatten, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub extra: std::collections::HashMap<String, serde_json::Value>,
 }
 
 impl MessageCreateParams {
@@ -189,6 +193,7 @@ impl MessageCreateParams {
             metadata: None,
             thinking: None,
             service_tier: None,
+            extra: std::collections::HashMap::new(),
         }
     }
 

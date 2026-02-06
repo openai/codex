@@ -138,7 +138,7 @@ pub const DEFAULT_EXCLUDED_PATTERNS: &[&str] = &[
 /// - `DISABLE_COMPACT`: Completely disable compaction feature
 /// - `DISABLE_AUTO_COMPACT`: Disable automatic compaction (manual still works)
 /// - `DISABLE_MICRO_COMPACT`: Disable micro-compaction (frequent small compactions)
-/// - `COCODE_AUTOCOMPACT_PCT_OVERRIDE`: Override auto-compact percentage threshold (0-100)
+/// - `COCODE_AUTOCOMPACT_PCT_OVERRIDE`: Override effective context window percentage (0-100)
 /// - `COCODE_BLOCKING_LIMIT_OVERRIDE`: Override blocking limit for compaction
 /// - `COCODE_SESSION_MEMORY_MIN_TOKENS`: Minimum tokens for session memory
 /// - `COCODE_SESSION_MEMORY_MAX_TOKENS`: Maximum tokens for session memory
@@ -193,8 +193,10 @@ pub struct CompactConfig {
     // Override Values
     // ========================================================================
     /// Override auto-compact percentage threshold (0-100).
-    #[serde(default)]
-    pub autocompact_pct_override: Option<i32>,
+    ///
+    /// Can also be set per-model via `ModelInfo.effective_context_window_percent`.
+    #[serde(default, alias = "autocompact_pct_override")]
+    pub effective_context_window_percent: Option<i32>,
 
     /// Override blocking limit for compaction.
     #[serde(default)]
@@ -718,7 +720,7 @@ impl Default for CompactConfig {
             disable_auto_compact: false,
             disable_micro_compact: false,
             // Overrides
-            autocompact_pct_override: None,
+            effective_context_window_percent: None,
             blocking_limit_override: None,
             // Session memory
             session_memory_min_tokens: DEFAULT_SESSION_MEMORY_MIN_TOKENS,
@@ -770,10 +772,10 @@ impl CompactConfig {
 
     /// Calculate auto-compact target based on available tokens.
     ///
-    /// If `autocompact_pct_override` is set, uses that percentage of available tokens,
+    /// If `effective_context_window_percent` is set, uses that percentage of available tokens,
     /// capped at `available_tokens - min_tokens_to_preserve`.
     pub fn auto_compact_target(&self, available_tokens: i32) -> i32 {
-        if let Some(pct) = self.autocompact_pct_override {
+        if let Some(pct) = self.effective_context_window_percent {
             let calculated = (available_tokens as f64 * (pct as f64 / 100.0)).floor() as i32;
             calculated.min(available_tokens - self.min_tokens_to_preserve)
         } else {
@@ -808,10 +810,12 @@ impl CompactConfig {
     ///
     /// Returns an error message if any values are invalid.
     pub fn validate(&self) -> Result<(), String> {
-        // Validate autocompact_pct_override
-        if let Some(pct) = self.autocompact_pct_override {
+        // Validate effective_context_window_percent
+        if let Some(pct) = self.effective_context_window_percent {
             if !(0..=100).contains(&pct) {
-                return Err(format!("autocompact_pct_override must be 0-100, got {pct}"));
+                return Err(format!(
+                    "effective_context_window_percent must be 0-100, got {pct}"
+                ));
             }
         }
 
@@ -899,6 +903,18 @@ impl CompactConfig {
     pub fn is_session_memory_extraction_enabled(&self) -> bool {
         !self.disable_compact && self.session_memory_extraction.enabled
     }
+
+    /// Apply model-level overrides to compact config.
+    ///
+    /// If the model specifies `effective_context_window_percent` and this config
+    /// doesn't already have one set (by env or JSON), use the model's value.
+    pub fn apply_model_overrides(&mut self, model_info: &crate::ModelInfo) {
+        if let Some(pct) = model_info.effective_context_window_percent {
+            if self.effective_context_window_percent.is_none() {
+                self.effective_context_window_percent = Some(pct);
+            }
+        }
+    }
 }
 
 // ============================================================================
@@ -985,7 +1001,7 @@ mod tests {
         assert!(!config.disable_auto_compact);
         assert!(!config.disable_micro_compact);
         // Overrides
-        assert!(config.autocompact_pct_override.is_none());
+        assert!(config.effective_context_window_percent.is_none());
         assert!(config.blocking_limit_override.is_none());
         // Session memory
         assert_eq!(
@@ -1052,7 +1068,7 @@ mod tests {
         let json = r#"{
             "disable_compact": true,
             "disable_auto_compact": true,
-            "autocompact_pct_override": 80,
+            "effective_context_window_percent": 80,
             "session_memory_min_tokens": 15000,
             "session_memory_max_tokens": 50000,
             "min_tokens_to_preserve": 15000,
@@ -1061,7 +1077,7 @@ mod tests {
         let config: CompactConfig = serde_json::from_str(json).unwrap();
         assert!(config.disable_compact);
         assert!(config.disable_auto_compact);
-        assert_eq!(config.autocompact_pct_override, Some(80));
+        assert_eq!(config.effective_context_window_percent, Some(80));
         assert_eq!(config.session_memory_min_tokens, 15000);
         assert_eq!(config.session_memory_max_tokens, 50000);
         assert_eq!(config.min_tokens_to_preserve, 15000);
@@ -1114,14 +1130,14 @@ mod tests {
 
         // With override
         let mut config_with_override = CompactConfig::default();
-        config_with_override.autocompact_pct_override = Some(80);
+        config_with_override.effective_context_window_percent = Some(80);
         let target = config_with_override.auto_compact_target(available);
         // 80% of 200000 = 160000, capped at 200000 - 13000 = 187000
         assert_eq!(target, 160000);
 
         // High percentage should be capped
         let mut config_high_pct = CompactConfig::default();
-        config_high_pct.autocompact_pct_override = Some(99);
+        config_high_pct.effective_context_window_percent = Some(99);
         let target = config_high_pct.auto_compact_target(available);
         // 99% = 198000, but capped at 187000
         assert_eq!(target, 187000);
@@ -1174,7 +1190,7 @@ mod tests {
     #[test]
     fn test_validate_invalid_pct() {
         let config = CompactConfig {
-            autocompact_pct_override: Some(150),
+            effective_context_window_percent: Some(150),
             ..Default::default()
         };
         assert!(config.validate().is_err());

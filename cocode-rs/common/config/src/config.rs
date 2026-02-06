@@ -20,23 +20,23 @@
 //!
 //! // Access main model
 //! if let Some(main) = config.main_model_info() {
-//!     println!("Main model: {} ({})", main.display_name, main.context_window);
+//!     println!("Main model: {} ({:?})", main.display_name_or_slug(), main.context_window);
 //! }
 //!
 //! // Access role-specific model
 //! use cocode_protocol::model::ModelRole;
 //! if let Some(fast) = config.model_for_role(ModelRole::Fast) {
-//!     println!("Fast model: {}", fast.display_name);
+//!     println!("Fast model: {}", fast.display_name_or_slug());
 //! }
 //! # Ok(())
 //! # }
 //! ```
 
 use crate::json_config::LoggingConfig;
-use crate::types::ResolvedModelInfo;
 use cocode_protocol::AttachmentConfig;
 use cocode_protocol::CompactConfig;
 use cocode_protocol::Features;
+use cocode_protocol::ModelInfo;
 use cocode_protocol::PathConfig;
 use cocode_protocol::PlanModeConfig;
 use cocode_protocol::ProviderInfo;
@@ -79,7 +79,7 @@ pub struct Config {
     pub providers: HashMap<String, ProviderInfo>,
 
     /// Cached resolved model info for each configured role.
-    pub(crate) resolved_models: HashMap<ModelRole, ResolvedModelInfo>,
+    pub(crate) resolved_models: HashMap<ModelRole, ModelInfo>,
 
     // ============================================================
     // 2. Paths
@@ -171,12 +171,12 @@ impl Config {
     ///
     /// // Get fast model (falls back to main if not configured)
     /// if let Some(fast) = config.model_for_role(ModelRole::Fast) {
-    ///     println!("Using model: {}", fast.display_name);
+    ///     println!("Using model: {}", fast.display_name_or_slug());
     /// }
     /// # Ok(())
     /// # }
     /// ```
-    pub fn model_for_role(&self, role: ModelRole) -> Option<&ResolvedModelInfo> {
+    pub fn model_for_role(&self, role: ModelRole) -> Option<&ModelInfo> {
         self.resolved_models
             .get(&role)
             .or_else(|| self.resolved_models.get(&ModelRole::Main))
@@ -196,7 +196,7 @@ impl Config {
     }
 
     /// Get resolved info for main model.
-    pub fn main_model_info(&self) -> Option<&ResolvedModelInfo> {
+    pub fn main_model_info(&self) -> Option<&ModelInfo> {
         self.model_for_role(ModelRole::Main)
     }
 
@@ -211,7 +211,7 @@ impl Config {
     }
 
     /// Get all configured role-model pairs.
-    pub fn configured_roles(&self) -> Vec<(ModelRole, &ResolvedModelInfo)> {
+    pub fn configured_roles(&self) -> Vec<(ModelRole, &ModelInfo)> {
         self.resolved_models
             .iter()
             .map(|(role, info)| (*role, info))
@@ -647,25 +647,12 @@ mod tests {
 
     #[test]
     fn test_model_for_role_fallback() {
-        let main_info = ResolvedModelInfo {
-            id: "main-model".to_string(),
-            display_name: "Main Model".to_string(),
-            description: None,
-            provider: "test".to_string(),
-            context_window: 128000,
-            max_output_tokens: 16384,
-            timeout_secs: 600,
-            capabilities: vec![],
-            temperature: None,
-            top_p: None,
-            auto_compact_token_limit: None,
-            effective_context_window_percent: None,
-            default_thinking_level: None,
-            supported_thinking_levels: None,
-            include_thoughts: None,
-            reasoning_summary: None,
-            base_instructions: None,
-            extra: None,
+        let main_info = ModelInfo {
+            slug: "main-model".to_string(),
+            display_name: Some("Main Model".to_string()),
+            context_window: Some(128000),
+            max_output_tokens: Some(16384),
+            ..Default::default()
         };
 
         let mut resolved_models = HashMap::new();
@@ -678,49 +665,36 @@ mod tests {
 
         // Main role returns main model
         assert_eq!(
-            config.model_for_role(ModelRole::Main).unwrap().id,
+            config.model_for_role(ModelRole::Main).unwrap().slug,
             "main-model"
         );
 
         // Fast role falls back to main
         assert_eq!(
-            config.model_for_role(ModelRole::Fast).unwrap().id,
+            config.model_for_role(ModelRole::Fast).unwrap().slug,
             "main-model"
         );
 
         // Vision role falls back to main
         assert_eq!(
-            config.model_for_role(ModelRole::Vision).unwrap().id,
+            config.model_for_role(ModelRole::Vision).unwrap().slug,
             "main-model"
         );
     }
 
     #[test]
     fn test_model_for_role_specific() {
-        let main_info = ResolvedModelInfo {
-            id: "main-model".to_string(),
-            display_name: "Main Model".to_string(),
-            description: None,
-            provider: "test".to_string(),
-            context_window: 128000,
-            max_output_tokens: 16384,
-            timeout_secs: 600,
-            capabilities: vec![],
-            temperature: None,
-            top_p: None,
-            auto_compact_token_limit: None,
-            effective_context_window_percent: None,
-            default_thinking_level: None,
-            supported_thinking_levels: None,
-            include_thoughts: None,
-            reasoning_summary: None,
-            base_instructions: None,
-            extra: None,
+        let main_info = ModelInfo {
+            slug: "main-model".to_string(),
+            display_name: Some("Main Model".to_string()),
+            context_window: Some(128000),
+            max_output_tokens: Some(16384),
+            ..Default::default()
         };
 
-        let fast_info = ResolvedModelInfo {
-            id: "fast-model".to_string(),
-            display_name: "Fast Model".to_string(),
+        let fast_info = ModelInfo {
+            slug: "fast-model".to_string(),
+            display_name: Some("Fast Model".to_string()),
             ..main_info.clone()
         };
 
@@ -735,46 +709,33 @@ mod tests {
 
         // Fast role returns specific model
         assert_eq!(
-            config.model_for_role(ModelRole::Fast).unwrap().id,
+            config.model_for_role(ModelRole::Fast).unwrap().slug,
             "fast-model"
         );
 
         // Vision still falls back to main
         assert_eq!(
-            config.model_for_role(ModelRole::Vision).unwrap().id,
+            config.model_for_role(ModelRole::Vision).unwrap().slug,
             "main-model"
         );
     }
 
     #[test]
     fn test_configured_roles() {
-        let main_info = ResolvedModelInfo {
-            id: "main-model".to_string(),
-            display_name: "Main Model".to_string(),
-            description: None,
-            provider: "test".to_string(),
-            context_window: 128000,
-            max_output_tokens: 16384,
-            timeout_secs: 600,
-            capabilities: vec![],
-            temperature: None,
-            top_p: None,
-            auto_compact_token_limit: None,
-            effective_context_window_percent: None,
-            default_thinking_level: None,
-            supported_thinking_levels: None,
-            include_thoughts: None,
-            reasoning_summary: None,
-            base_instructions: None,
-            extra: None,
+        let main_info = ModelInfo {
+            slug: "main-model".to_string(),
+            display_name: Some("Main Model".to_string()),
+            context_window: Some(128000),
+            max_output_tokens: Some(16384),
+            ..Default::default()
         };
 
         let mut resolved_models = HashMap::new();
         resolved_models.insert(ModelRole::Main, main_info.clone());
         resolved_models.insert(
             ModelRole::Fast,
-            ResolvedModelInfo {
-                id: "fast-model".to_string(),
+            ModelInfo {
+                slug: "fast-model".to_string(),
                 ..main_info
             },
         );

@@ -273,6 +273,29 @@ impl ChunkRef {
         })
     }
 
+    /// Convert to CodeChunk with the given content string.
+    ///
+    /// Use this when content has already been read from the file system
+    /// (e.g., during BM25 index loading).
+    pub fn to_code_chunk_with_content(&self, content: &str) -> CodeChunk {
+        CodeChunk {
+            id: self.id.clone(),
+            source_id: self.source_id.clone(),
+            filepath: self.filepath.clone(),
+            language: self.language.clone(),
+            content: content.to_string(),
+            start_line: self.start_line,
+            end_line: self.end_line,
+            embedding: self.embedding.clone(),
+            modified_time: None,
+            workspace: self.workspace.clone(),
+            content_hash: self.content_hash.clone(),
+            indexed_at: self.indexed_at,
+            parent_symbol: self.parent_symbol.clone(),
+            is_overview: self.is_overview,
+        }
+    }
+
     /// Convert to CodeChunk by reading content from file.
     ///
     /// Use this for backward compatibility with code that expects CodeChunk.

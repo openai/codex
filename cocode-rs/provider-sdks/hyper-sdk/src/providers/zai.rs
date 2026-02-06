@@ -318,6 +318,12 @@ impl Model for ZaiModel {
                 if let Some(ref user_id) = zai_opts.user_id {
                     params = params.user_id(user_id);
                 }
+                // Apply catchall extra params
+                if !zai_opts.extra.is_empty() {
+                    params
+                        .extra
+                        .extend(zai_opts.extra.iter().map(|(k, v)| (k.clone(), v.clone())));
+                }
             }
         }
 

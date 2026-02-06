@@ -186,9 +186,9 @@ impl SearchService {
 
         // Create searcher with or without embeddings
         let mut searcher = if let Some(provider) = embedding_provider {
-            HybridSearcher::with_embeddings(ctx.lancedb(), provider)
+            HybridSearcher::with_embeddings(ctx.vector_store(), provider)
         } else {
-            HybridSearcher::new(ctx.lancedb())
+            HybridSearcher::new(ctx.vector_store())
         };
 
         searcher = searcher
@@ -433,6 +433,8 @@ impl SearchService {
     /// Pre-warm the BM25 index for faster first search.
     pub async fn warmup(&self) -> Result<()> {
         if let Some(bm25) = self.searcher.bm25_searcher() {
+            // Ensure workspace root is set so BM25 can read content from files
+            bm25.set_workspace_root(self.ctx.workspace_root().to_path_buf());
             bm25.warmup().await?;
             tracing::info!("BM25 index pre-warmed");
         }

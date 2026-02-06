@@ -301,6 +301,15 @@ impl Model for OpenAIModel {
                     params =
                         params.include(vec![oai::ResponseIncludable::ReasoningEncryptedContent]);
                 }
+                // Apply catchall extra params
+                if !openai_opts.extra.is_empty() {
+                    params.extra.extend(
+                        openai_opts
+                            .extra
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone())),
+                    );
+                }
             }
         }
 
@@ -410,6 +419,15 @@ impl Model for OpenAIModel {
                 if openai_opts.include_encrypted_content == Some(true) {
                     params =
                         params.include(vec![oai::ResponseIncludable::ReasoningEncryptedContent]);
+                }
+                // Apply catchall extra params
+                if !openai_opts.extra.is_empty() {
+                    params.extra.extend(
+                        openai_opts
+                            .extra
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone())),
+                    );
                 }
             }
         }

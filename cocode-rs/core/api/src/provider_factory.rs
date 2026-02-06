@@ -46,9 +46,9 @@ pub fn create_provider(info: &ProviderInfo) -> Result<Arc<dyn Provider>> {
                 .base_url(&info.base_url)
                 .timeout_secs(info.timeout_secs);
 
-            // Handle organization ID from extra config
-            if let Some(extra) = &info.extra {
-                if let Some(org_id) = extra.get("organization_id").and_then(|v| v.as_str()) {
+            // Handle organization ID from provider options
+            if let Some(options) = &info.options {
+                if let Some(org_id) = options.get("organization_id").and_then(|v| v.as_str()) {
                     builder = builder.organization_id(org_id);
                 }
             }
@@ -105,9 +105,9 @@ pub fn create_provider(info: &ProviderInfo) -> Result<Arc<dyn Provider>> {
                 .base_url(&info.base_url)
                 .timeout_secs(info.timeout_secs);
 
-            // Handle use_zhipuai from extra config
-            if let Some(extra) = &info.extra {
-                if let Some(use_zhipuai) = extra.get("use_zhipuai").and_then(|v| v.as_bool()) {
+            // Handle use_zhipuai from provider options
+            if let Some(options) = &info.options {
+                if let Some(use_zhipuai) = options.get("use_zhipuai").and_then(|v| v.as_bool()) {
                     builder = builder.use_zhipuai(use_zhipuai);
                 }
             }

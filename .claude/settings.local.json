@@ -106,7 +106,14 @@
       "Bash(sysctl:*)",
       "Bash(sccache --zero-stats:*)",
       "Bash(sccache --show-stats:*)",
-      "Bash(brew uninstall:*)"
+      "Bash(brew uninstall:*)",
+      "Bash(du:*)",
+      "WebFetch(domain:alexgarcia.xyz)",
+      "Bash(for dep in \"arrow2\" \"datafusion\" \"parquet\" \"serde_arrow\" \"protobuf\")",
+      "Bash(do echo -n \"$dep: \")",
+      "Bash(if grep -q \"$dep\" /Users/linyuzhi/codespace/myagent/worktrees/codex-feat-sqllite/cocode-rs/retrieval/Cargo.toml)",
+      "Bash(then echo \"FOUND IN CARGO.TOML\")",
+      "Bash(else echo \"not in Cargo.toml\")"
     ],
     "deny": [],
     "ask": []

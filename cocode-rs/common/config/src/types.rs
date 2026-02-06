@@ -11,7 +11,6 @@
 use crate::error::config_error::ConfigValidationSnafu;
 use cocode_protocol::Capability;
 use cocode_protocol::ModelInfo;
-use cocode_protocol::ThinkingLevel;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -165,17 +164,13 @@ pub struct ProviderConfig {
     #[serde(default)]
     pub wire_api: WireApi,
 
-    /// Provider-level overrides (apply to all models in this provider).
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub overrides: HashMap<String, serde_json::Value>,
-
     /// Models this provider serves.
     #[serde(default)]
     pub models: Vec<ProviderModelEntry>,
 
-    /// Extra provider-specific configuration.
+    /// Provider-specific SDK client options (e.g., organization_id, use_zhipuai).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub extra: Option<serde_json::Value>,
+    pub options: Option<serde_json::Value>,
 
     /// HTTP interceptors to apply to requests.
     ///
@@ -246,9 +241,9 @@ pub struct ProviderModelEntry {
     #[serde(default, skip_serializing_if = "Option::is_none", alias = "model_id")]
     pub model_alias: Option<String>,
 
-    /// Model-specific overrides (for future extensibility).
+    /// Model-specific options (temperature, seed, etc.).
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub overrides: HashMap<String, serde_json::Value>,
+    pub model_options: HashMap<String, serde_json::Value>,
 }
 
 impl ProviderModelEntry {
@@ -260,7 +255,7 @@ impl ProviderModelEntry {
                 ..Default::default()
             },
             model_alias: None,
-            overrides: HashMap::new(),
+            model_options: HashMap::new(),
         }
     }
 
@@ -272,7 +267,7 @@ impl ProviderModelEntry {
                 ..Default::default()
             },
             model_alias: Some(alias.into()),
-            overrides: HashMap::new(),
+            model_options: HashMap::new(),
         }
     }
 
@@ -289,67 +284,6 @@ impl ProviderModelEntry {
             .unwrap_or(&self.model_info.slug)
     }
 }
-
-/// Resolved model info with all layers merged.
-#[derive(Debug, Clone)]
-pub struct ResolvedModelInfo {
-    /// The model identifier (slug).
-    pub id: String,
-    /// Human-readable name.
-    pub display_name: String,
-    /// Model description.
-    pub description: Option<String>,
-    /// Provider name.
-    pub provider: String,
-    /// Maximum context window in tokens.
-    pub context_window: i64,
-    /// Maximum output tokens.
-    pub max_output_tokens: i64,
-    /// Request timeout in seconds.
-    pub timeout_secs: i64,
-    /// Capabilities this model supports.
-    pub capabilities: Vec<Capability>,
-    /// Sampling temperature.
-    pub temperature: Option<f32>,
-    /// Top-p nucleus sampling.
-    pub top_p: Option<f32>,
-    /// Token limit before auto-compaction triggers.
-    pub auto_compact_token_limit: Option<i64>,
-    /// Effective context window as percentage.
-    pub effective_context_window_percent: Option<i32>,
-    /// Default thinking level for this model.
-    pub default_thinking_level: Option<ThinkingLevel>,
-    /// Supported thinking levels (ordered from low to high).
-    pub supported_thinking_levels: Option<Vec<ThinkingLevel>>,
-    /// Whether to include thoughts in response.
-    pub include_thoughts: Option<bool>,
-    /// Reasoning summary level for OpenAI o1/o3 models.
-    pub reasoning_summary: Option<cocode_protocol::model::ReasoningSummary>,
-    /// Base system instructions for this model.
-    pub base_instructions: Option<String>,
-    /// Extra provider-specific parameters (pass-through to SDKs).
-    pub extra: Option<HashMap<String, serde_json::Value>>,
-}
-
-impl ResolvedModelInfo {
-    /// Check if model has a specific capability.
-    pub fn has_capability(&self, cap: Capability) -> bool {
-        self.capabilities.contains(&cap)
-    }
-
-    /// Check if model supports reasoning summaries.
-    pub fn supports_reasoning_summaries(&self) -> bool {
-        self.capabilities.contains(&Capability::ReasoningSummaries)
-    }
-
-    /// Check if model supports parallel tool calls.
-    pub fn supports_parallel_tool_calls(&self) -> bool {
-        self.capabilities.contains(&Capability::ParallelToolCalls)
-    }
-}
-
-// Note: `ResolvedProviderConfig` is replaced by `ProviderInfo` from cocode_protocol.
-// Use `ConfigResolver::resolve_provider()` to get a fully resolved `ProviderInfo`.
 
 /// Summary of a provider for listing.
 #[derive(Debug, Clone, Serialize)]
@@ -504,7 +438,7 @@ mod tests {
                 ..Default::default()
             },
             model_alias: Some("".to_string()),
-            overrides: HashMap::new(),
+            model_options: HashMap::new(),
         };
         // Empty alias should fall back to slug
         assert_eq!(entry.api_model_name(), "test-model");
@@ -522,7 +456,7 @@ mod tests {
     }
 
     #[test]
-    fn test_provider_config_with_overrides() {
+    fn test_provider_config_with_models() {
         let json = r#"{
             "name": "Custom OpenAI",
             "type": "openai",
@@ -530,10 +464,6 @@ mod tests {
             "env_key": "OPENAI_API_KEY",
             "streaming": true,
             "wire_api": "chat",
-            "overrides": {
-                "temperature": 0.7,
-                "max_output_tokens": 8192
-            },
             "models": [
                 {"slug": "gpt-5"},
                 {"slug": "gpt-4o", "timeout_secs": 120}
@@ -544,7 +474,6 @@ mod tests {
         assert_eq!(config.name, "Custom OpenAI");
         assert!(config.streaming);
         assert_eq!(config.wire_api, WireApi::Chat);
-        assert_eq!(config.overrides.len(), 2);
         assert_eq!(config.models.len(), 2);
 
         // Check model lookup
@@ -553,38 +482,5 @@ mod tests {
 
         let gpt4o = config.find_model("gpt-4o").expect("gpt-4o exists");
         assert_eq!(gpt4o.model_info.timeout_secs, Some(120));
-    }
-
-    #[test]
-    fn test_resolved_model_info_capability_methods() {
-        let info = ResolvedModelInfo {
-            id: "test".to_string(),
-            display_name: "Test".to_string(),
-            description: None,
-            provider: "test".to_string(),
-            context_window: 4096,
-            max_output_tokens: 1024,
-            timeout_secs: 600,
-            capabilities: vec![
-                Capability::TextGeneration,
-                Capability::ReasoningSummaries,
-                Capability::ParallelToolCalls,
-            ],
-            temperature: None,
-            top_p: None,
-            auto_compact_token_limit: None,
-            effective_context_window_percent: None,
-            default_thinking_level: None,
-            supported_thinking_levels: None,
-            include_thoughts: None,
-            reasoning_summary: None,
-            base_instructions: None,
-            extra: None,
-        };
-
-        assert!(info.supports_reasoning_summaries());
-        assert!(info.supports_parallel_tool_calls());
-        assert!(info.has_capability(Capability::TextGeneration));
-        assert!(!info.has_capability(Capability::Vision));
     }
 }

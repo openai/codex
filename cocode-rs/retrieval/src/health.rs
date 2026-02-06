@@ -1,14 +1,13 @@
 //! Index health check, self-repair, and metrics collection.
 //!
 //! Provides tools for monitoring and maintaining index health.
-//! Reference: Tabby `crates/tabby-index/src/indexer.rs`
 
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
 use crate::error::Result;
-use crate::storage::lancedb::LanceDbStore;
+use crate::storage::VectorStore;
 use crate::storage::sqlite::SqliteStore;
 
 // ==== Health Check ====
@@ -24,8 +23,8 @@ pub struct HealthStatus {
     pub file_count: i32,
     /// Number of failed chunks
     pub failed_chunk_count: i32,
-    /// LanceDB connection status
-    pub lancedb_ok: bool,
+    /// Vector store connection status
+    pub vector_store_ok: bool,
     /// SQLite connection status
     pub sqlite_ok: bool,
     /// FTS index status
@@ -92,7 +91,7 @@ pub enum IssueCategory {
 
 /// Index health checker.
 pub struct HealthChecker {
-    lancedb_store: Option<Arc<LanceDbStore>>,
+    vector_store: Option<Arc<dyn VectorStore>>,
     sqlite_store: Option<Arc<SqliteStore>>,
 }
 
@@ -100,14 +99,14 @@ impl HealthChecker {
     /// Create a new health checker.
     pub fn new() -> Self {
         Self {
-            lancedb_store: None,
+            vector_store: None,
             sqlite_store: None,
         }
     }
 
-    /// Set LanceDB store for checking.
-    pub fn with_lancedb(mut self, store: Arc<LanceDbStore>) -> Self {
-        self.lancedb_store = Some(store);
+    /// Set vector store for checking.
+    pub fn with_vector_store(mut self, store: Arc<dyn VectorStore>) -> Self {
+        self.vector_store = Some(store);
         self
     }
 
@@ -121,7 +120,7 @@ impl HealthChecker {
     pub async fn check(&self) -> Result<HealthStatus> {
         let start = Instant::now();
         let mut issues = Vec::new();
-        let mut lancedb_ok = false;
+        let mut vector_store_ok = false;
         let mut sqlite_ok = false;
         let mut fts_index_ok = false;
         let mut vector_index_ok = false;
@@ -129,18 +128,18 @@ impl HealthChecker {
         let mut file_count = 0i32;
         let mut failed_chunk_count = 0i32;
 
-        // Check LanceDB
-        if let Some(ref store) = self.lancedb_store {
+        // Check vector store
+        if let Some(ref store) = self.vector_store {
             match store.count().await {
                 Ok(count) => {
-                    lancedb_ok = true;
+                    vector_store_ok = true;
                     chunk_count = count;
                 }
                 Err(e) => {
                     issues.push(HealthIssue {
                         severity: IssueSeverity::Critical,
                         category: IssueCategory::Database,
-                        message: format!("LanceDB count failed: {e}"),
+                        message: format!("Vector store count failed: {e}"),
                         repairable: false,
                     });
                 }
@@ -156,7 +155,7 @@ impl HealthChecker {
                     issues.push(HealthIssue {
                         severity: IssueSeverity::Error,
                         category: IssueCategory::Index,
-                        message: "LanceDB table does not exist".to_string(),
+                        message: "Vector store table does not exist".to_string(),
                         repairable: true,
                     });
                 }
@@ -164,7 +163,7 @@ impl HealthChecker {
                     issues.push(HealthIssue {
                         severity: IssueSeverity::Error,
                         category: IssueCategory::Index,
-                        message: format!("LanceDB table check failed: {e}"),
+                        message: format!("Vector store table check failed: {e}"),
                         repairable: false,
                     });
                 }
@@ -173,7 +172,7 @@ impl HealthChecker {
             issues.push(HealthIssue {
                 severity: IssueSeverity::Warning,
                 category: IssueCategory::Storage,
-                message: "LanceDB store not configured".to_string(),
+                message: "Vector store not configured".to_string(),
                 repairable: false,
             });
         }
@@ -241,7 +240,7 @@ impl HealthChecker {
             chunk_count,
             file_count,
             failed_chunk_count,
-            lancedb_ok,
+            vector_store_ok,
             sqlite_ok,
             fts_index_ok,
             vector_index_ok,
@@ -272,7 +271,7 @@ pub struct RepairResult {
 
 /// Index self-repair utilities.
 pub struct IndexRepairer {
-    lancedb_store: Option<Arc<LanceDbStore>>,
+    vector_store: Option<Arc<dyn VectorStore>>,
     sqlite_store: Option<Arc<SqliteStore>>,
 }
 
@@ -280,14 +279,14 @@ impl IndexRepairer {
     /// Create a new index repairer.
     pub fn new() -> Self {
         Self {
-            lancedb_store: None,
+            vector_store: None,
             sqlite_store: None,
         }
     }
 
-    /// Set LanceDB store for repair.
-    pub fn with_lancedb(mut self, store: Arc<LanceDbStore>) -> Self {
-        self.lancedb_store = Some(store);
+    /// Set vector store for repair.
+    pub fn with_vector_store(mut self, store: Arc<dyn VectorStore>) -> Self {
+        self.vector_store = Some(store);
         self
     }
 
@@ -320,8 +319,7 @@ impl IndexRepairer {
 
     /// Repair index issues (recreate missing indices).
     async fn repair_index(&self) -> Result<RepairResult> {
-        if let Some(ref store) = self.lancedb_store {
-            // Try to create FTS index
+        if let Some(ref store) = self.vector_store {
             if let Err(e) = store.create_fts_index().await {
                 return Ok(RepairResult {
                     success: false,
@@ -330,7 +328,6 @@ impl IndexRepairer {
                 });
             }
 
-            // Try to create vector index
             if let Err(e) = store.create_vector_index().await {
                 return Ok(RepairResult {
                     success: false,
@@ -348,7 +345,7 @@ impl IndexRepairer {
             Ok(RepairResult {
                 success: false,
                 repaired_count: 0,
-                message: "LanceDB store not configured".to_string(),
+                message: "Vector store not configured".to_string(),
             })
         }
     }
@@ -358,7 +355,6 @@ impl IndexRepairer {
         if let Some(ref store) = self.sqlite_store {
             let repaired = store
                 .query(|conn| {
-                    // Reset failed chunk counts to trigger reprocessing
                     let count = conn.execute(
                         "UPDATE catalog SET chunks_failed = 0 WHERE chunks_failed > 0",
                         [],
@@ -412,7 +408,7 @@ pub struct IndexMetrics {
     pub total_chunks: i64,
     /// Failed chunk count
     pub failed_chunks: i32,
-    /// Storage size in bytes (LanceDB directory)
+    /// Storage size in bytes
     pub storage_bytes: i64,
     /// Last index time (Unix timestamp)
     pub last_indexed_at: i64,
@@ -450,7 +446,7 @@ impl IndexMetrics {
 /// Metrics collector for index operations.
 pub struct MetricsCollector {
     sqlite_store: Option<Arc<SqliteStore>>,
-    lancedb_path: Option<std::path::PathBuf>,
+    data_dir: Option<std::path::PathBuf>,
 }
 
 impl MetricsCollector {
@@ -458,7 +454,7 @@ impl MetricsCollector {
     pub fn new() -> Self {
         Self {
             sqlite_store: None,
-            lancedb_path: None,
+            data_dir: None,
         }
     }
 
@@ -468,9 +464,9 @@ impl MetricsCollector {
         self
     }
 
-    /// Set LanceDB path for storage size calculation.
-    pub fn with_lancedb_path(mut self, path: &Path) -> Self {
-        self.lancedb_path = Some(path.to_path_buf());
+    /// Set data directory for storage size calculation.
+    pub fn with_data_dir(mut self, path: &Path) -> Self {
+        self.data_dir = Some(path.to_path_buf());
         self
     }
 
@@ -515,7 +511,7 @@ impl MetricsCollector {
         }
 
         // Calculate storage size
-        if let Some(ref path) = self.lancedb_path {
+        if let Some(ref path) = self.data_dir {
             metrics.storage_bytes = calculate_dir_size(path);
         }
 
@@ -585,7 +581,6 @@ mod tests {
     fn test_calculate_dir_size() {
         let dir = TempDir::new().unwrap();
 
-        // Create a test file
         let file_path = dir.path().join("test.txt");
         std::fs::write(&file_path, "hello world").unwrap();
 
@@ -598,9 +593,8 @@ mod tests {
         let checker = HealthChecker::new();
         let status = checker.check().await.unwrap();
 
-        // Should have warnings about missing stores
         assert!(!status.issues.is_empty());
-        assert!(!status.lancedb_ok);
+        assert!(!status.vector_store_ok);
         assert!(!status.sqlite_ok);
     }
 
@@ -640,7 +634,7 @@ mod tests {
 
         let collector = MetricsCollector::new()
             .with_sqlite(store)
-            .with_lancedb_path(dir.path());
+            .with_data_dir(dir.path());
 
         let metrics = collector.collect().await.unwrap();
 

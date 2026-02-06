@@ -4,6 +4,7 @@ use super::ProviderMarker;
 use super::ProviderOptionsData;
 use super::TypedProviderOptions;
 use std::any::Any;
+use std::collections::HashMap;
 
 /// Z.AI / ZhipuAI-specific options.
 #[derive(Debug, Clone, Default)]
@@ -16,6 +17,9 @@ pub struct ZaiOptions {
     pub request_id: Option<String>,
     /// User ID for tracking.
     pub user_id: Option<String>,
+    /// Arbitrary extra parameters passed through to the API request body.
+    #[doc(hidden)]
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
 impl ZaiOptions {

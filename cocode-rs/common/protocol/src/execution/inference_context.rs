@@ -77,11 +77,12 @@ pub struct InferenceContext {
     pub original_identity: ExecutionIdentity,
 
     // === Extended Parameters ===
-    /// Merged extra parameters from ModelInfo.extra and ProviderInfo.extra.
+    /// Request options from ModelInfo, passed through to provider SDKs.
     ///
-    /// These are provider-specific parameters that get passed through to the SDK.
+    /// Contains unknown config keys (e.g., seed, response_format) that are
+    /// merged into ProviderOptions at request build time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub extra: Option<HashMap<String, serde_json::Value>>,
+    pub request_options: Option<HashMap<String, serde_json::Value>>,
 }
 
 impl InferenceContext {
@@ -105,7 +106,7 @@ impl InferenceContext {
             thinking_level: None,
             agent_kind,
             original_identity,
-            extra: None,
+            request_options: None,
         }
     }
 
@@ -115,9 +116,9 @@ impl InferenceContext {
         self
     }
 
-    /// Set extra parameters.
-    pub fn with_extra(mut self, extra: HashMap<String, serde_json::Value>) -> Self {
-        self.extra = Some(extra);
+    /// Set request options for provider SDK passthrough.
+    pub fn with_request_options(mut self, opts: HashMap<String, serde_json::Value>) -> Self {
+        self.request_options = Some(opts);
         self
     }
 
@@ -171,9 +172,9 @@ impl InferenceContext {
             .or(self.model_info.default_thinking_level.as_ref())
     }
 
-    /// Get an extra parameter value.
-    pub fn get_extra(&self, key: &str) -> Option<&serde_json::Value> {
-        self.extra.as_ref().and_then(|e| e.get(key))
+    /// Get a request option value by key.
+    pub fn get_request_option(&self, key: &str) -> Option<&serde_json::Value> {
+        self.request_options.as_ref().and_then(|e| e.get(key))
     }
 
     /// Check if this is a main agent context.
@@ -210,7 +211,7 @@ impl InferenceContext {
             thinking_level: self.thinking_level.clone(),
             agent_kind: AgentKind::subagent(&self.session_id, agent_type),
             original_identity: identity,
-            extra: self.extra.clone(),
+            request_options: self.request_options.clone(),
         }
     }
 }
@@ -316,14 +317,14 @@ mod tests {
     }
 
     #[test]
-    fn test_extra_parameters() {
-        let mut extra = HashMap::new();
-        extra.insert("seed".to_string(), serde_json::json!(42));
+    fn test_request_options() {
+        let mut opts = HashMap::new();
+        opts.insert("seed".to_string(), serde_json::json!(42));
 
-        let ctx = sample_context().with_extra(extra);
+        let ctx = sample_context().with_request_options(opts);
 
-        assert_eq!(ctx.get_extra("seed"), Some(&serde_json::json!(42)));
-        assert_eq!(ctx.get_extra("nonexistent"), None);
+        assert_eq!(ctx.get_request_option("seed"), Some(&serde_json::json!(42)));
+        assert_eq!(ctx.get_request_option("nonexistent"), None);
     }
 
     #[test]

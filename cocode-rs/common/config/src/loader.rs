@@ -31,10 +31,6 @@ pub const DEFAULT_CONFIG_DIR: &str = ".cocode";
 /// Application configuration file name (JSON).
 pub const CONFIG_FILE: &str = "config.json";
 
-/// Legacy constant for backwards compatibility.
-#[deprecated(since = "0.1.0", note = "Use CONFIG_FILE instead")]
-pub const CONFIG_TOML_FILE: &str = "config.json";
-
 /// Instruction file names.
 pub const AGENTS_MD_FILE: &str = "AGENTS.md";
 

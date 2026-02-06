@@ -278,6 +278,12 @@ impl Model for AnthropicModel {
                         });
                     }
                 }
+                // Apply catchall extra params
+                if !ant_opts.extra.is_empty() {
+                    params
+                        .extra
+                        .extend(ant_opts.extra.iter().map(|(k, v)| (k.clone(), v.clone())));
+                }
             }
         }
 
@@ -371,6 +377,12 @@ impl Model for AnthropicModel {
             if let Some(ant_opts) = downcast_options::<AnthropicOptions>(options) {
                 if let Some(budget) = ant_opts.thinking_budget_tokens {
                     params = params.thinking(ant::ThinkingConfig::enabled(budget));
+                }
+                // Apply catchall extra params
+                if !ant_opts.extra.is_empty() {
+                    params
+                        .extra
+                        .extend(ant_opts.extra.iter().map(|(k, v)| (k.clone(), v.clone())));
                 }
             }
         }

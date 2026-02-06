@@ -6,6 +6,7 @@ use super::TypedProviderOptions;
 use serde::Deserialize;
 use serde::Serialize;
 use std::any::Any;
+use std::collections::HashMap;
 
 /// Thinking level for Gemini models.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,6 +74,9 @@ pub struct GeminiOptions {
     pub safety_settings: Option<Vec<SafetySetting>>,
     /// Stop sequences.
     pub stop_sequences: Option<Vec<String>>,
+    /// Arbitrary extra parameters passed through to the API request body.
+    #[doc(hidden)]
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
 impl GeminiOptions {

@@ -63,6 +63,10 @@ pub struct ChatCompletionsCreateParams {
     /// Additional metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub meta: Option<std::collections::HashMap<String, String>>,
+
+    /// Extra parameters passed through to the API request body.
+    #[serde(flatten, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub extra: std::collections::HashMap<String, serde_json::Value>,
 }
 
 impl ChatCompletionsCreateParams {
@@ -85,6 +89,7 @@ impl ChatCompletionsCreateParams {
             request_id: None,
             user_id: None,
             meta: None,
+            extra: std::collections::HashMap::new(),
         }
     }
 

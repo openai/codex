@@ -6,6 +6,7 @@ use super::TypedProviderOptions;
 use serde::Deserialize;
 use serde::Serialize;
 use std::any::Any;
+use std::collections::HashMap;
 
 /// Reasoning effort level for OpenAI o1/o3 models.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,6 +53,9 @@ pub struct OpenAIOptions {
     pub response_format: Option<String>,
     /// Seed for deterministic sampling.
     pub seed: Option<i64>,
+    /// Arbitrary extra parameters passed through to the API request body.
+    #[doc(hidden)]
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
 impl OpenAIOptions {

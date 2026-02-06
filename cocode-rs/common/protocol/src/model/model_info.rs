@@ -60,14 +60,6 @@ pub struct ModelInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top_p: Option<f32>,
 
-    /// Frequency penalty (-2.0 - 2.0).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub frequency_penalty: Option<f32>,
-
-    /// Presence penalty (-2.0 - 2.0).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub presence_penalty: Option<f32>,
-
     // === Thinking/Reasoning (Unified) ===
     /// Default thinking level for this model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -86,10 +78,6 @@ pub struct ModelInfo {
     pub reasoning_summary: Option<ReasoningSummary>,
 
     // === Context Management ===
-    /// Token limit before auto-compaction triggers.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub auto_compact_token_limit: Option<i64>,
-
     /// Effective context window as percentage (0-100).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effective_context_window_percent: Option<i32>,
@@ -125,29 +113,11 @@ pub struct ModelInfo {
     pub base_instructions_file: Option<String>,
 
     // === Provider-Specific Extensions ===
-    /// Extra provider-specific parameters (pass-through).
+    /// Options for provider SDK passthrough.
     ///
     /// These are merged across configuration layers and passed to provider SDKs.
-    /// Unknown keys from `apply_overrides()` are stored here for forward compatibility.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub extra: Option<HashMap<String, serde_json::Value>>,
-}
-
-/// Well-known override keys for `apply_overrides()`.
-pub mod override_keys {
-    pub const TIMEOUT_SECS: &str = "timeout_secs";
-    pub const CONTEXT_WINDOW: &str = "context_window";
-    pub const MAX_OUTPUT_TOKENS: &str = "max_output_tokens";
-    pub const TEMPERATURE: &str = "temperature";
-    pub const TOP_P: &str = "top_p";
-    pub const FREQUENCY_PENALTY: &str = "frequency_penalty";
-    pub const PRESENCE_PENALTY: &str = "presence_penalty";
-    pub const THINKING_LEVEL: &str = "thinking_level";
-    pub const INCLUDE_THOUGHTS: &str = "include_thoughts";
-    pub const REASONING_SUMMARY: &str = "reasoning_summary";
-    pub const BASE_INSTRUCTIONS: &str = "base_instructions";
-    pub const BASE_INSTRUCTIONS_FILE: &str = "base_instructions_file";
-    pub const APPLY_PATCH_TOOL_TYPE: &str = "apply_patch_tool_type";
+    pub options: Option<HashMap<String, serde_json::Value>>,
 }
 
 impl ModelInfo {
@@ -179,15 +149,12 @@ impl ModelInfo {
         // Sampling
         merge_field!(temperature);
         merge_field!(top_p);
-        merge_field!(frequency_penalty);
-        merge_field!(presence_penalty);
         // Thinking/Reasoning (unified)
         merge_field!(default_thinking_level);
         merge_field!(supported_thinking_levels);
         merge_field!(include_thoughts);
         merge_field!(reasoning_summary);
         // Context management
-        merge_field!(auto_compact_token_limit);
         merge_field!(effective_context_window_percent);
         // Tool related
         merge_field!(shell_type);
@@ -197,100 +164,23 @@ impl ModelInfo {
         // Instructions
         merge_field!(base_instructions);
         merge_field!(base_instructions_file);
-        // Extra: merge maps, other takes precedence for overlapping keys
-        if let Some(other_extra) = &other.extra {
-            let self_extra = self.extra.get_or_insert_with(HashMap::new);
-            for (key, value) in other_extra {
-                self_extra.insert(key.clone(), value.clone());
+        // Request options: merge maps, other takes precedence for overlapping keys
+        if let Some(other_opts) = &other.options {
+            let self_opts = self.options.get_or_insert_with(HashMap::new);
+            for (key, value) in other_opts {
+                self_opts.insert(key.clone(), value.clone());
             }
         }
     }
 
-    /// Apply overrides from a HashMap.
-    ///
-    /// This allows applying key-value overrides from config files where
-    /// the keys are strings. Unknown keys are stored in the `extra` field
-    /// for pass-through to provider SDKs.
-    pub fn apply_overrides(&mut self, overrides: &HashMap<String, serde_json::Value>) {
-        use override_keys::*;
+    /// Get display name or fall back to slug.
+    pub fn display_name_or_slug(&self) -> &str {
+        self.display_name.as_deref().unwrap_or(&self.slug)
+    }
 
-        for (key, value) in overrides {
-            match key.as_str() {
-                TIMEOUT_SECS => {
-                    if let Some(v) = value.as_i64() {
-                        self.timeout_secs = Some(v);
-                    }
-                }
-                CONTEXT_WINDOW => {
-                    if let Some(v) = value.as_i64() {
-                        self.context_window = Some(v);
-                    }
-                }
-                MAX_OUTPUT_TOKENS => {
-                    if let Some(v) = value.as_i64() {
-                        self.max_output_tokens = Some(v);
-                    }
-                }
-                TEMPERATURE => {
-                    if let Some(v) = value.as_f64() {
-                        self.temperature = Some(v as f32);
-                    }
-                }
-                TOP_P => {
-                    if let Some(v) = value.as_f64() {
-                        self.top_p = Some(v as f32);
-                    }
-                }
-                FREQUENCY_PENALTY => {
-                    if let Some(v) = value.as_f64() {
-                        self.frequency_penalty = Some(v as f32);
-                    }
-                }
-                PRESENCE_PENALTY => {
-                    if let Some(v) = value.as_f64() {
-                        self.presence_penalty = Some(v as f32);
-                    }
-                }
-                THINKING_LEVEL => {
-                    // ThinkingLevel supports both string and object formats
-                    if let Ok(level) = serde_json::from_value(value.clone()) {
-                        self.default_thinking_level = Some(level);
-                    }
-                }
-                INCLUDE_THOUGHTS => {
-                    if let Some(v) = value.as_bool() {
-                        self.include_thoughts = Some(v);
-                    }
-                }
-                REASONING_SUMMARY => {
-                    // ReasoningSummary supports string format (e.g., "auto", "detailed")
-                    if let Ok(summary) = serde_json::from_value(value.clone()) {
-                        self.reasoning_summary = Some(summary);
-                    }
-                }
-                BASE_INSTRUCTIONS => {
-                    if let Some(s) = value.as_str() {
-                        self.base_instructions = Some(s.to_string());
-                    }
-                }
-                BASE_INSTRUCTIONS_FILE => {
-                    if let Some(s) = value.as_str() {
-                        self.base_instructions_file = Some(s.to_string());
-                    }
-                }
-                APPLY_PATCH_TOOL_TYPE => {
-                    // ApplyPatchToolType supports string format (e.g., "function", "freeform")
-                    if let Ok(tool_type) = serde_json::from_value(value.clone()) {
-                        self.apply_patch_tool_type = Some(tool_type);
-                    }
-                }
-                _ => {
-                    // Unknown keys go to extra for pass-through to provider SDKs
-                    let extra = self.extra.get_or_insert_with(HashMap::new);
-                    extra.insert(key.clone(), value.clone());
-                }
-            }
-        }
+    /// Get timeout in seconds or default (600).
+    pub fn timeout_secs_or_default(&self) -> i64 {
+        self.timeout_secs.unwrap_or(600)
     }
 
     /// Check if model has a specific capability.
@@ -356,9 +246,9 @@ impl ModelInfo {
         self
     }
 
-    /// Set extra provider-specific parameters.
-    pub fn with_extra(mut self, extra: HashMap<String, serde_json::Value>) -> Self {
-        self.extra = Some(extra);
+    /// Set request options for provider SDK passthrough.
+    pub fn with_request_options(mut self, opts: HashMap<String, serde_json::Value>) -> Self {
+        self.options = Some(opts);
         self
     }
 
@@ -368,9 +258,9 @@ impl ModelInfo {
         self
     }
 
-    /// Get an extra parameter value by key.
-    pub fn get_extra(&self, key: &str) -> Option<&serde_json::Value> {
-        self.extra.as_ref().and_then(|e| e.get(key))
+    /// Get a request option value by key.
+    pub fn get_request_option(&self, key: &str) -> Option<&serde_json::Value> {
+        self.options.as_ref().and_then(|e| e.get(key))
     }
 
     /// Find nearest supported thinking level to target.
@@ -483,56 +373,6 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_overrides() {
-        let mut config = ModelInfo {
-            display_name: Some("Test Model".to_string()),
-            context_window: Some(4096),
-            ..Default::default()
-        };
-
-        let mut overrides = HashMap::new();
-        overrides.insert("timeout_secs".to_string(), serde_json::json!(300));
-        overrides.insert("temperature".to_string(), serde_json::json!(0.8));
-        overrides.insert("max_output_tokens".to_string(), serde_json::json!(8192));
-        overrides.insert("include_thoughts".to_string(), serde_json::json!(true));
-        overrides.insert("thinking_level".to_string(), serde_json::json!("high"));
-        overrides.insert("unknown_key".to_string(), serde_json::json!("ignored"));
-
-        config.apply_overrides(&overrides);
-
-        assert_eq!(config.timeout_secs, Some(300));
-        assert_eq!(config.temperature, Some(0.8));
-        assert_eq!(config.max_output_tokens, Some(8192));
-        assert_eq!(config.include_thoughts, Some(true));
-        assert_eq!(config.default_thinking_level, Some(ThinkingLevel::high()));
-        // Original values preserved
-        assert_eq!(config.display_name, Some("Test Model".to_string()));
-        assert_eq!(config.context_window, Some(4096));
-    }
-
-    #[test]
-    fn test_apply_overrides_thinking_level_object() {
-        let mut config = ModelInfo::default();
-
-        let mut overrides = HashMap::new();
-        overrides.insert(
-            "thinking_level".to_string(),
-            serde_json::json!({
-                "effort": "high",
-                "budget_tokens": 32000,
-                "interleaved": true
-            }),
-        );
-
-        config.apply_overrides(&overrides);
-
-        let level = config.default_thinking_level.unwrap();
-        assert_eq!(level.effort, ReasoningEffort::High);
-        assert_eq!(level.budget_tokens, Some(32000));
-        assert!(level.interleaved);
-    }
-
-    #[test]
     fn test_nearest_supported_level() {
         let config = ModelInfo {
             supported_thinking_levels: Some(vec![
@@ -593,23 +433,6 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_overrides_reasoning_summary() {
-        use super::ReasoningSummary;
-
-        let mut config = ModelInfo::default();
-
-        let mut overrides = HashMap::new();
-        overrides.insert(
-            "reasoning_summary".to_string(),
-            serde_json::json!("detailed"),
-        );
-
-        config.apply_overrides(&overrides);
-
-        assert_eq!(config.reasoning_summary, Some(ReasoningSummary::Detailed));
-    }
-
-    #[test]
     fn test_merge_reasoning_summary() {
         use super::ReasoningSummary;
 
@@ -629,144 +452,113 @@ mod tests {
     }
 
     #[test]
-    fn test_extra_field_serde() {
-        let mut extra = HashMap::new();
-        extra.insert(
+    fn test_request_options_field_serde() {
+        let mut opts = HashMap::new();
+        opts.insert(
             "response_format".to_string(),
             serde_json::json!({"type": "json_object"}),
         );
-        extra.insert("seed".to_string(), serde_json::json!(42));
+        opts.insert("seed".to_string(), serde_json::json!(42));
 
         let config = ModelInfo {
             slug: "test-model".to_string(),
-            extra: Some(extra),
+            options: Some(opts),
             ..Default::default()
         };
 
         let json = serde_json::to_string(&config).expect("serialize");
         let parsed: ModelInfo = serde_json::from_str(&json).expect("deserialize");
 
-        assert!(parsed.extra.is_some());
-        let parsed_extra = parsed.extra.unwrap();
-        assert_eq!(parsed_extra.get("seed"), Some(&serde_json::json!(42)));
+        assert!(parsed.options.is_some());
+        let parsed_opts = parsed.options.unwrap();
+        assert_eq!(parsed_opts.get("seed"), Some(&serde_json::json!(42)));
         assert_eq!(
-            parsed_extra.get("response_format"),
+            parsed_opts.get("response_format"),
             Some(&serde_json::json!({"type": "json_object"}))
         );
     }
 
     #[test]
-    fn test_merge_from_extra_maps() {
-        let mut base_extra = HashMap::new();
-        base_extra.insert("key1".to_string(), serde_json::json!("value1"));
-        base_extra.insert("key2".to_string(), serde_json::json!("base_value"));
+    fn test_merge_from_request_options_maps() {
+        let mut base_opts = HashMap::new();
+        base_opts.insert("key1".to_string(), serde_json::json!("value1"));
+        base_opts.insert("key2".to_string(), serde_json::json!("base_value"));
 
-        let mut other_extra = HashMap::new();
-        other_extra.insert("key2".to_string(), serde_json::json!("other_value")); // Override
-        other_extra.insert("key3".to_string(), serde_json::json!("value3")); // New key
+        let mut other_opts = HashMap::new();
+        other_opts.insert("key2".to_string(), serde_json::json!("other_value")); // Override
+        other_opts.insert("key3".to_string(), serde_json::json!("value3")); // New key
 
         let mut base = ModelInfo {
-            extra: Some(base_extra),
+            options: Some(base_opts),
             ..Default::default()
         };
 
         let other = ModelInfo {
-            extra: Some(other_extra),
+            options: Some(other_opts),
             ..Default::default()
         };
 
         base.merge_from(&other);
 
-        let merged = base.extra.unwrap();
+        let merged = base.options.unwrap();
         assert_eq!(merged.get("key1"), Some(&serde_json::json!("value1"))); // Preserved
         assert_eq!(merged.get("key2"), Some(&serde_json::json!("other_value"))); // Overridden
         assert_eq!(merged.get("key3"), Some(&serde_json::json!("value3"))); // Added
     }
 
     #[test]
-    fn test_merge_from_extra_none_to_some() {
+    fn test_merge_from_request_options_none_to_some() {
         let mut base = ModelInfo::default();
-        assert!(base.extra.is_none());
+        assert!(base.options.is_none());
 
-        let mut other_extra = HashMap::new();
-        other_extra.insert("new_key".to_string(), serde_json::json!("new_value"));
+        let mut other_opts = HashMap::new();
+        other_opts.insert("new_key".to_string(), serde_json::json!("new_value"));
 
         let other = ModelInfo {
-            extra: Some(other_extra),
+            options: Some(other_opts),
             ..Default::default()
         };
 
         base.merge_from(&other);
 
-        assert!(base.extra.is_some());
-        let merged = base.extra.unwrap();
+        assert!(base.options.is_some());
+        let merged = base.options.unwrap();
         assert_eq!(merged.get("new_key"), Some(&serde_json::json!("new_value")));
     }
 
     #[test]
-    fn test_apply_overrides_unknown_keys_to_extra() {
-        let mut config = ModelInfo {
-            display_name: Some("Test Model".to_string()),
-            ..Default::default()
-        };
-
-        let mut overrides = HashMap::new();
-        // Known keys
-        overrides.insert("temperature".to_string(), serde_json::json!(0.8));
-        // Unknown keys should go to extra
-        overrides.insert(
-            "response_format".to_string(),
-            serde_json::json!({"type": "json_object"}),
-        );
-        overrides.insert("seed".to_string(), serde_json::json!(42));
-        overrides.insert("store".to_string(), serde_json::json!(true));
-
-        config.apply_overrides(&overrides);
-
-        // Known key applied to field
-        assert_eq!(config.temperature, Some(0.8));
-
-        // Unknown keys stored in extra
-        assert!(config.extra.is_some());
-        let extra = config.extra.unwrap();
-        assert_eq!(
-            extra.get("response_format"),
-            Some(&serde_json::json!({"type": "json_object"}))
-        );
-        assert_eq!(extra.get("seed"), Some(&serde_json::json!(42)));
-        assert_eq!(extra.get("store"), Some(&serde_json::json!(true)));
-    }
-
-    #[test]
-    fn test_get_extra_helper() {
-        let mut extra = HashMap::new();
-        extra.insert("key".to_string(), serde_json::json!("value"));
+    fn test_get_request_option_helper() {
+        let mut opts = HashMap::new();
+        opts.insert("key".to_string(), serde_json::json!("value"));
 
         let config = ModelInfo {
-            extra: Some(extra),
+            options: Some(opts),
             ..Default::default()
         };
 
-        assert_eq!(config.get_extra("key"), Some(&serde_json::json!("value")));
-        assert_eq!(config.get_extra("nonexistent"), None);
+        assert_eq!(
+            config.get_request_option("key"),
+            Some(&serde_json::json!("value"))
+        );
+        assert_eq!(config.get_request_option("nonexistent"), None);
 
-        // None extra
+        // None request_options
         let empty_config = ModelInfo::default();
-        assert_eq!(empty_config.get_extra("key"), None);
+        assert_eq!(empty_config.get_request_option("key"), None);
     }
 
     #[test]
-    fn test_with_extra_builder() {
-        let mut extra = HashMap::new();
-        extra.insert(
+    fn test_with_request_options_builder() {
+        let mut opts = HashMap::new();
+        opts.insert(
             "response_format".to_string(),
             serde_json::json!({"type": "json_object"}),
         );
 
         let config = ModelInfo::new()
             .with_display_name("Test")
-            .with_extra(extra.clone());
+            .with_request_options(opts.clone());
 
-        assert_eq!(config.extra, Some(extra));
+        assert_eq!(config.options, Some(opts));
     }
 }

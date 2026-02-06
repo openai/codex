@@ -6,6 +6,7 @@ use super::TypedProviderOptions;
 use serde::Deserialize;
 use serde::Serialize;
 use std::any::Any;
+use std::collections::HashMap;
 
 /// Reasoning effort level for Volcengine Ark models.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,6 +34,9 @@ pub struct VolcengineOptions {
     pub caching_enabled: Option<bool>,
     /// Reasoning effort level.
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// Arbitrary extra parameters passed through to the API request body.
+    #[doc(hidden)]
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
 impl VolcengineOptions {

@@ -44,7 +44,7 @@ use crate::indexing::walker::FileWalker;
 use crate::search::Bm25Searcher;
 use crate::storage::SnippetStorage;
 use crate::storage::SqliteStore;
-use crate::storage::lancedb::LanceDbStore;
+use crate::storage::VectorStore;
 use crate::tags::SupportedLanguage;
 use crate::tags::TagExtractor;
 use crate::tags::get_parent_context;
@@ -66,7 +66,7 @@ struct IndexContext<'a> {
     lock: &'a IndexLockGuard,
     tx: mpsc::Sender<IndexProgress>,
     // Optional embedding components
-    lancedb: Option<&'a Arc<LanceDbStore>>,
+    vector_store: Option<&'a Arc<dyn VectorStore>>,
     provider: Option<&'a Arc<dyn EmbeddingProvider>>,
     cache_info: Option<(&'a Path, &'a str)>, // (cache_path, artifact_id)
     // Optional BM25 searcher for custom BM25 indexing
@@ -78,7 +78,7 @@ struct IndexContext<'a> {
 ///
 /// Supports two modes:
 /// - Basic: Only indexes metadata (catalog, snippets) - use `new()`
-/// - With Embeddings: Also computes embeddings and stores to LanceDB - use `with_embeddings()`
+/// - With Embeddings: Also computes embeddings and stores to vector store - use `with_embeddings()`
 #[allow(dead_code)]
 pub struct IndexManager {
     config: RetrievalConfig,
@@ -87,7 +87,7 @@ pub struct IndexManager {
     snippet_storage: SnippetStorage,
     chunker: CodeChunkerService,
     // Optional embedding components (None for basic mode)
-    lancedb: Option<Arc<LanceDbStore>>,
+    vector_store: Option<Arc<dyn VectorStore>>,
     cache: Option<EmbeddingCache>,
     provider: Option<Arc<dyn EmbeddingProvider>>,
     /// Custom BM25 searcher with tunable k1/b parameters.
@@ -108,7 +108,7 @@ impl IndexManager {
             change_detector,
             snippet_storage,
             chunker,
-            lancedb: None,
+            vector_store: None,
             cache: None,
             provider: None,
             bm25_searcher: None,
@@ -120,20 +120,20 @@ impl IndexManager {
     /// This mode will:
     /// - Compute embeddings for code chunks using the provider
     /// - Cache embeddings to avoid recomputing unchanged chunks
-    /// - Store chunks with embeddings to LanceDB for vector search
+    /// - Store chunks with embeddings to vector store for vector search
     /// - Index chunks for BM25 search with tunable k1/b parameters
     ///
     /// # Arguments
     /// * `config` - Retrieval configuration
     /// * `db` - SQLite store for metadata
-    /// * `lancedb` - LanceDB store for vector storage
+    /// * `vector_store` - Vector store for vector storage
     /// * `provider` - Embedding provider (e.g., OpenAI)
     /// * `cache_path` - Path to embedding cache SQLite file
     /// * `artifact_id` - Embedding model identifier for cache isolation
     pub fn with_embeddings(
         config: RetrievalConfig,
         db: Arc<SqliteStore>,
-        lancedb: Arc<LanceDbStore>,
+        vector_store: Arc<dyn VectorStore>,
         provider: Arc<dyn EmbeddingProvider>,
         cache_path: &Path,
         artifact_id: &str,
@@ -143,7 +143,10 @@ impl IndexManager {
         let snippet_storage = SnippetStorage::new(db.clone());
         let chunker = Self::create_chunker(&config);
         // Create BM25 searcher with config-tuned k1/b parameters
-        let bm25_searcher = Arc::new(Bm25Searcher::with_config(lancedb.clone(), &config.search));
+        let bm25_searcher = Arc::new(Bm25Searcher::with_config(
+            vector_store.clone(),
+            &config.search,
+        ));
 
         Ok(Self {
             config,
@@ -151,7 +154,7 @@ impl IndexManager {
             change_detector,
             snippet_storage,
             chunker,
-            lancedb: Some(lancedb),
+            vector_store: Some(vector_store),
             cache: Some(cache),
             provider: Some(provider),
             bm25_searcher: Some(bm25_searcher),
@@ -160,7 +163,7 @@ impl IndexManager {
 
     /// Check if embedding mode is enabled.
     pub fn has_embeddings(&self) -> bool {
-        self.lancedb.is_some() && self.cache.is_some() && self.provider.is_some()
+        self.vector_store.is_some() && self.cache.is_some() && self.provider.is_some()
     }
 
     /// Get the BM25 searcher if available.
@@ -205,7 +208,7 @@ impl IndexManager {
         let chunker = Self::create_chunker(&config);
 
         // Clone optional embedding components
-        let lancedb = self.lancedb.clone();
+        let vector_store = self.vector_store.clone();
         let provider = self.provider.clone();
         let bm25_searcher = self.bm25_searcher.clone();
         // Note: cache is behind Mutex, need to clone the path and artifact_id for re-creation
@@ -227,7 +230,7 @@ impl IndexManager {
                 chunker: &chunker,
                 lock: &lock,
                 tx: tx.clone(),
-                lancedb: lancedb.as_ref(),
+                vector_store: vector_store.as_ref(),
                 provider: provider.as_ref(),
                 cache_info: if has_embeddings {
                     Some((&cache_path, artifact_id.as_str()))
@@ -267,7 +270,7 @@ impl IndexManager {
             chunker,
             lock,
             tx,
-            lancedb,
+            vector_store,
             provider,
             cache_info,
             bm25_searcher,
@@ -495,15 +498,15 @@ impl IndexManager {
                 }
 
                 // Process embeddings if enabled
-                if let (Some(lancedb), Some(provider), Some(cache)) =
-                    (lancedb, provider, cache.as_ref())
+                if let (Some(vector_store), Some(provider), Some(cache)) =
+                    (vector_store, provider, cache.as_ref())
                 {
-                    // 1. Delete old chunks from LanceDB
-                    if let Err(e) = lancedb.delete_by_path(&change.filepath).await {
+                    // 1. Delete old chunks from vector store
+                    if let Err(e) = vector_store.delete_by_path(&change.filepath).await {
                         tracing::warn!(
                             filepath = %change.filepath,
                             error = %e,
-                            "Failed to delete old chunks from LanceDB"
+                            "Failed to delete old chunks from vector store"
                         );
                     }
 
@@ -596,13 +599,13 @@ impl IndexManager {
                         }
                     }
 
-                    // 4. Store to LanceDB
+                    // 4. Store to vector store
                     if !chunks_with_emb.is_empty() {
-                        if let Err(e) = lancedb.store_chunks(&chunks_with_emb).await {
+                        if let Err(e) = vector_store.store_chunks(&chunks_with_emb).await {
                             tracing::error!(
                                 filepath = %change.filepath,
                                 error = %e,
-                                "Failed to store chunks to LanceDB"
+                                "Failed to store chunks to vector store"
                             );
                         }
 
@@ -651,13 +654,13 @@ impl IndexManager {
 
         // Phase 5: Handle deletions
         for change in changes.iter().filter(|c| c.status == ChangeStatus::Deleted) {
-            // Delete from LanceDB (if enabled)
-            if let Some(lancedb) = lancedb {
-                if let Err(e) = lancedb.delete_by_path(&change.filepath).await {
+            // Delete from vector store (if enabled)
+            if let Some(vector_store) = vector_store {
+                if let Err(e) = vector_store.delete_by_path(&change.filepath).await {
                     tracing::warn!(
                         filepath = %change.filepath,
                         error = %e,
-                        "Failed to delete chunks from LanceDB during file deletion"
+                        "Failed to delete chunks from vector store during file deletion"
                     );
                 }
             }
@@ -758,17 +761,17 @@ impl IndexManager {
 
     /// Clean all index data for a workspace.
     ///
-    /// Deletes all catalog entries, snippet data, and LanceDB chunks for the workspace.
+    /// Deletes all catalog entries, snippet data, and vector store chunks for the workspace.
     pub async fn clean(&mut self, workspace: &str) -> Result<()> {
         let ws = workspace.to_string();
 
-        // Delete from LanceDB (if enabled)
-        if let Some(lancedb) = &self.lancedb {
-            if let Err(e) = lancedb.delete_workspace(workspace).await {
+        // Delete from vector store (if enabled)
+        if let Some(vector_store) = &self.vector_store {
+            if let Err(e) = vector_store.delete_workspace(workspace).await {
                 tracing::warn!(
                     workspace = workspace,
                     error = %e,
-                    "Failed to delete workspace from LanceDB"
+                    "Failed to delete workspace from vector store"
                 );
             }
         }
@@ -913,11 +916,12 @@ mod tests {
     async fn test_index_manager_with_embeddings() {
         let dir = TempDir::new().unwrap();
         let db_path = dir.path().join("test.db");
-        let lancedb_path = dir.path().join("lancedb");
+        let vec_store_path = dir.path().join("vec_store");
         let cache_path = dir.path().join("cache.db");
 
         let store = Arc::new(SqliteStore::open(&db_path).unwrap());
-        let lancedb = Arc::new(LanceDbStore::open(&lancedb_path).await.unwrap());
+        let vector_store: Arc<dyn VectorStore> =
+            Arc::new(crate::storage::SqliteVecStore::open(&vec_store_path).unwrap());
         let provider = Arc::new(MockEmbeddingProvider::new(4));
 
         let mut config = RetrievalConfig::default();
@@ -926,7 +930,7 @@ mod tests {
         let manager = IndexManager::with_embeddings(
             config,
             store,
-            lancedb,
+            vector_store,
             provider,
             &cache_path,
             "test-model-v1",
@@ -937,7 +941,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_index_stores_chunks_to_lancedb() {
+    async fn test_index_stores_chunks_to_vector_store() {
         let dir = TempDir::new().unwrap();
         let workspace_dir = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace_dir).unwrap();
@@ -947,11 +951,12 @@ mod tests {
         std::fs::write(&test_file, "fn main() {\n    println!(\"hello\");\n}").unwrap();
 
         let db_path = dir.path().join("test.db");
-        let lancedb_path = dir.path().join("lancedb");
+        let vec_store_path = dir.path().join("vec_store");
         let cache_path = dir.path().join("cache.db");
 
         let store = Arc::new(SqliteStore::open(&db_path).unwrap());
-        let lancedb = Arc::new(LanceDbStore::open(&lancedb_path).await.unwrap());
+        let vector_store: Arc<dyn VectorStore> =
+            Arc::new(crate::storage::SqliteVecStore::open(&vec_store_path).unwrap());
         let provider = Arc::new(MockEmbeddingProvider::new(1536));
 
         let mut config = RetrievalConfig::default();
@@ -960,7 +965,7 @@ mod tests {
         let mut manager = IndexManager::with_embeddings(
             config,
             store,
-            lancedb.clone(),
+            vector_store.clone(),
             provider.clone(),
             &cache_path,
             "test-model-v1",
@@ -984,9 +989,9 @@ mod tests {
             }
         }
 
-        // Verify chunks were stored in LanceDB
-        let count = lancedb.count().await.unwrap();
-        assert!(count > 0, "Expected chunks in LanceDB, got {count}");
+        // Verify chunks were stored in vector store
+        let count = vector_store.count().await.unwrap();
+        assert!(count > 0, "Expected chunks in vector store, got {count}");
 
         // Verify provider was called
         assert!(
@@ -1006,11 +1011,12 @@ mod tests {
         std::fs::write(&test_file, "fn foo() {}").unwrap();
 
         let db_path = dir.path().join("test.db");
-        let lancedb_path = dir.path().join("lancedb");
+        let vec_store_path = dir.path().join("vec_store");
         let cache_path = dir.path().join("cache.db");
 
         let store = Arc::new(SqliteStore::open(&db_path).unwrap());
-        let lancedb = Arc::new(LanceDbStore::open(&lancedb_path).await.unwrap());
+        let vector_store: Arc<dyn VectorStore> =
+            Arc::new(crate::storage::SqliteVecStore::open(&vec_store_path).unwrap());
         let provider = Arc::new(MockEmbeddingProvider::new(1536));
 
         let mut config = RetrievalConfig::default();
@@ -1020,7 +1026,7 @@ mod tests {
         let mut manager = IndexManager::with_embeddings(
             config.clone(),
             store.clone(),
-            lancedb.clone(),
+            vector_store.clone(),
             provider.clone(),
             &cache_path,
             "test-model-v1",
@@ -1058,7 +1064,7 @@ mod tests {
         let mut manager2 = IndexManager::with_embeddings(
             config,
             store2,
-            lancedb.clone(),
+            vector_store.clone(),
             provider.clone(),
             &cache_path,
             "test-model-v1",
@@ -1092,7 +1098,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_file_deletion_clears_lancedb_and_cache() {
+    async fn test_file_deletion_clears_vector_store_and_cache() {
         let dir = TempDir::new().unwrap();
         let workspace_dir = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace_dir).unwrap();
@@ -1102,11 +1108,12 @@ mod tests {
         std::fs::write(&test_file, "fn main() {}").unwrap();
 
         let db_path = dir.path().join("test.db");
-        let lancedb_path = dir.path().join("lancedb");
+        let vec_store_path = dir.path().join("vec_store");
         let cache_path = dir.path().join("cache.db");
 
         let store = Arc::new(SqliteStore::open(&db_path).unwrap());
-        let lancedb = Arc::new(LanceDbStore::open(&lancedb_path).await.unwrap());
+        let vector_store: Arc<dyn VectorStore> =
+            Arc::new(crate::storage::SqliteVecStore::open(&vec_store_path).unwrap());
         let provider = Arc::new(MockEmbeddingProvider::new(1536));
 
         let mut config = RetrievalConfig::default();
@@ -1115,7 +1122,7 @@ mod tests {
         let mut manager = IndexManager::with_embeddings(
             config.clone(),
             store.clone(),
-            lancedb.clone(),
+            vector_store.clone(),
             provider.clone(),
             &cache_path,
             "test-model-v1",
@@ -1138,7 +1145,7 @@ mod tests {
         }
 
         // Verify data exists
-        let count_before = lancedb.count().await.unwrap();
+        let count_before = vector_store.count().await.unwrap();
         assert!(count_before > 0, "Expected chunks before deletion");
 
         // Delete the file
@@ -1149,7 +1156,7 @@ mod tests {
         let mut manager2 = IndexManager::with_embeddings(
             config,
             store2,
-            lancedb.clone(),
+            vector_store.clone(),
             provider.clone(),
             &cache_path,
             "test-model-v1",
@@ -1170,8 +1177,8 @@ mod tests {
             }
         }
 
-        // Verify LanceDB is empty
-        let count_after = lancedb.count().await.unwrap();
+        // Verify vector store is empty
+        let count_after = vector_store.count().await.unwrap();
         assert_eq!(count_after, 0, "Expected no chunks after file deletion");
     }
 }

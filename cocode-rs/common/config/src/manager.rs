@@ -20,7 +20,6 @@ use crate::types::ModelSummary;
 use crate::types::ProviderConfig;
 use crate::types::ProviderSummary;
 use crate::types::ProviderType;
-use crate::types::ResolvedModelInfo;
 use cocode_protocol::Features;
 use cocode_protocol::ModelInfo;
 use cocode_protocol::ProviderInfo;
@@ -87,7 +86,7 @@ impl RuntimeOverrides {
 ///
 /// // Get resolved model info
 /// let info = manager.resolve_model_info("anthropic", "claude-sonnet-4-20250514")?;
-/// println!("Context window: {}", info.context_window);
+/// println!("Context window: {:?}", info.context_window);
 /// # Ok(())
 /// # }
 /// ```
@@ -170,7 +169,7 @@ impl ConfigManager {
         &self,
         provider: &str,
         model: &str,
-    ) -> Result<ResolvedModelInfo, ConfigError> {
+    ) -> Result<ModelInfo, ConfigError> {
         let resolver = self.resolver.read().map_err(|e| {
             InternalSnafu {
                 message: format!("Failed to acquire read lock: {e}"),
@@ -617,9 +616,9 @@ impl ConfigManager {
             if let Ok(info) = resolver.resolve_model_info(provider, model_id) {
                 summaries.push(ModelSummary {
                     id: model_id.to_string(),
-                    display_name: info.display_name,
-                    context_window: Some(info.context_window),
-                    capabilities: info.capabilities,
+                    display_name: info.display_name_or_slug().to_string(),
+                    context_window: info.context_window,
+                    capabilities: info.capabilities.unwrap_or_default(),
                 });
             }
         }
@@ -692,12 +691,12 @@ impl ConfigManager {
     ///
     /// // Access main model
     /// if let Some(main) = config.main_model_info() {
-    ///     println!("Main: {} ({})", main.display_name, main.context_window);
+    ///     println!("Main: {} ({:?})", main.display_name_or_slug(), main.context_window);
     /// }
     ///
     /// // Access fast model (falls back to main if not configured)
     /// if let Some(fast) = config.model_for_role(ModelRole::Fast) {
-    ///     println!("Fast: {}", fast.display_name);
+    ///     println!("Fast: {}", fast.display_name_or_slug());
     /// }
     /// # Ok(())
     /// # }
@@ -713,7 +712,7 @@ impl ConfigManager {
             models.merge(override_models);
         }
 
-        // Resolve all configured roles -> ResolvedModelInfo
+        // Resolve all configured roles -> ModelInfo
         let mut resolved_models = HashMap::new();
         for role in ModelRole::all() {
             if let Some(spec) = models.get(*role) {
@@ -784,7 +783,7 @@ impl ConfigManager {
         });
 
         // Compact config: overrides > env > JSON > default
-        let compact_config = overrides.compact_config.unwrap_or_else(|| {
+        let mut compact_config = overrides.compact_config.unwrap_or_else(|| {
             let mut config = env_loader.load_compact_config();
             if let Some(json_config) = &resolved.compact {
                 // Merge ALL JSON values where env didn't set them
@@ -799,8 +798,9 @@ impl ConfigManager {
                     config.disable_micro_compact = true;
                 }
                 // Option fields: use JSON if env didn't set
-                if config.autocompact_pct_override.is_none() {
-                    config.autocompact_pct_override = json_config.autocompact_pct_override;
+                if config.effective_context_window_percent.is_none() {
+                    config.effective_context_window_percent =
+                        json_config.effective_context_window_percent;
                 }
                 if config.blocking_limit_override.is_none() {
                     config.blocking_limit_override = json_config.blocking_limit_override;
@@ -837,6 +837,11 @@ impl ConfigManager {
             }
             config
         });
+
+        // Apply model-level overrides from main model
+        if let Some(main_info) = resolved_models.get(&ModelRole::Main) {
+            compact_config.apply_model_overrides(main_info);
+        }
 
         // Plan config: overrides > env > JSON > default
         let plan_config = overrides.plan_config.unwrap_or_else(|| {
@@ -1020,9 +1025,9 @@ mod tests {
         let (_temp, manager) = create_test_manager();
 
         let info = manager.resolve_model_info("test-openai", "gpt-5").unwrap();
-        assert_eq!(info.id, "gpt-5");
-        assert_eq!(info.display_name, "GPT-5");
-        assert_eq!(info.context_window, 272000);
+        assert_eq!(info.slug, "gpt-5");
+        assert_eq!(info.display_name, Some("GPT-5".to_string()));
+        assert_eq!(info.context_window, Some(272000));
     }
 
     #[test]
@@ -1115,8 +1120,8 @@ mod tests {
         // Should have main model resolved
         assert!(config.main_model_info().is_some());
         let main = config.main_model_info().unwrap();
-        assert_eq!(main.id, "gpt-5");
-        assert_eq!(main.display_name, "GPT-5");
+        assert_eq!(main.slug, "gpt-5");
+        assert_eq!(main.display_name, Some("GPT-5".to_string()));
 
         // Should have providers resolved
         assert!(config.providers.contains_key("test-openai"));
@@ -1173,12 +1178,12 @@ mod tests {
         // Fast role should fall back to main
         let fast = config.model_for_role(ModelRole::Fast);
         assert!(fast.is_some());
-        assert_eq!(fast.unwrap().id, "gpt-5"); // Falls back to main
+        assert_eq!(fast.unwrap().slug, "gpt-5"); // Falls back to main
 
         // Vision role should also fall back to main
         let vision = config.model_for_role(ModelRole::Vision);
         assert!(vision.is_some());
-        assert_eq!(vision.unwrap().id, "gpt-5");
+        assert_eq!(vision.unwrap().slug, "gpt-5");
     }
 
     #[test]

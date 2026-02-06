@@ -371,7 +371,7 @@ fn init_builtin_models() -> HashMap<String, ModelInfo> {
                 Capability::StructuredOutput,
                 Capability::ParallelToolCalls,
             ]),
-            auto_compact_token_limit: Some(250000),
+
             effective_context_window_percent: Some(95),
             default_thinking_level: Some(ThinkingLevel::medium()),
             supported_thinking_levels: Some(vec![
@@ -400,7 +400,7 @@ fn init_builtin_models() -> HashMap<String, ModelInfo> {
                 Capability::ReasoningSummaries,
                 Capability::ParallelToolCalls,
             ]),
-            auto_compact_token_limit: Some(250000),
+
             effective_context_window_percent: Some(95),
             default_thinking_level: Some(ThinkingLevel::medium()),
             supported_thinking_levels: Some(vec![
@@ -432,7 +432,7 @@ fn init_builtin_models() -> HashMap<String, ModelInfo> {
                 Capability::ReasoningSummaries,
                 Capability::ParallelToolCalls,
             ]),
-            auto_compact_token_limit: Some(250000),
+
             effective_context_window_percent: Some(95),
             default_thinking_level: Some(ThinkingLevel::medium()),
             supported_thinking_levels: Some(vec![
@@ -461,7 +461,7 @@ fn init_builtin_models() -> HashMap<String, ModelInfo> {
                 Capability::ToolCalling,
                 Capability::ParallelToolCalls,
             ]),
-            auto_compact_token_limit: Some(280000),
+
             effective_context_window_percent: Some(95),
             ..Default::default()
         },
@@ -482,7 +482,7 @@ fn init_builtin_models() -> HashMap<String, ModelInfo> {
                 Capability::ToolCalling,
                 Capability::ParallelToolCalls,
             ]),
-            auto_compact_token_limit: Some(280000),
+
             effective_context_window_percent: Some(95),
             ..Default::default()
         },
@@ -507,9 +507,9 @@ fn init_builtin_providers() -> HashMap<String, ProviderConfig> {
             api_key: None,
             streaming: true,
             wire_api: WireApi::Responses,
-            overrides: HashMap::new(),
+
             models: Vec::new(),
-            extra: None,
+            options: None,
             interceptors: Vec::new(),
         },
     );
@@ -525,9 +525,9 @@ fn init_builtin_providers() -> HashMap<String, ProviderConfig> {
             api_key: None,
             streaming: true,
             wire_api: WireApi::Chat,
-            overrides: HashMap::new(),
+
             models: Vec::new(),
-            extra: None,
+            options: None,
             interceptors: Vec::new(),
         },
     );

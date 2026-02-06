@@ -11,8 +11,10 @@ use tempfile::TempDir;
 
 use cocode_retrieval::Result;
 use cocode_retrieval::error::RetrievalErr;
+use cocode_retrieval::search::Bm25Searcher;
 use cocode_retrieval::search::HybridSearcher;
-use cocode_retrieval::storage::LanceDbStore;
+use cocode_retrieval::storage::SqliteVecStore;
+use cocode_retrieval::storage::VectorStore;
 use cocode_retrieval::traits::EmbeddingProvider;
 use cocode_retrieval::types::CodeChunk;
 use cocode_retrieval::types::ScoreType;
@@ -88,10 +90,10 @@ impl EmbeddingProvider for MockEmbeddingProvider {
 
 // ==== Test Fixtures ====
 
-async fn setup_store() -> (TempDir, Arc<LanceDbStore>) {
+async fn setup_store() -> (TempDir, Arc<dyn VectorStore>) {
     let dir = TempDir::new().unwrap();
-    let store = LanceDbStore::open(dir.path()).await.unwrap();
-    (dir, Arc::new(store))
+    let store = SqliteVecStore::open(dir.path()).unwrap();
+    (dir, Arc::new(store) as Arc<dyn VectorStore>)
 }
 
 fn make_chunk(id: &str, content: &str, filepath: &str) -> CodeChunk {
@@ -113,19 +115,26 @@ fn make_chunk(id: &str, content: &str, filepath: &str) -> CodeChunk {
     }
 }
 
-async fn setup_with_chunks(chunks: Vec<CodeChunk>) -> (TempDir, Arc<LanceDbStore>) {
+async fn setup_with_chunks(chunks: Vec<CodeChunk>) -> (TempDir, Arc<dyn VectorStore>) {
     let (dir, store) = setup_store().await;
 
     // Store all chunks at once
     store.store_chunks(&chunks).await.unwrap();
 
-    // Create FTS index for BM25 search
-    store.create_fts_index().await.ok();
-
-    // Wait for index to be ready
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
     (dir, store)
+}
+
+// ==== Helper: create HybridSearcher with BM25 index ====
+
+async fn setup_searcher_with_bm25(chunks: Vec<CodeChunk>) -> (TempDir, HybridSearcher) {
+    let (dir, store) = setup_with_chunks(chunks.clone()).await;
+
+    // Create BM25 searcher and index chunks into it
+    let bm25 = Arc::new(Bm25Searcher::new(store.clone()));
+    bm25.index_chunks(&chunks).await;
+
+    let searcher = HybridSearcher::new(store).with_bm25_searcher(bm25);
+    (dir, searcher)
 }
 
 // ==== BM25-Only Search Tests ====
@@ -150,8 +159,7 @@ async fn test_bm25_only_search() {
         ),
     ];
 
-    let (_dir, store) = setup_with_chunks(chunks).await;
-    let searcher = HybridSearcher::new(store);
+    let (_dir, searcher) = setup_searcher_with_bm25(chunks).await;
 
     let results = searcher.search("authenticate", 10).await.unwrap();
 
@@ -164,8 +172,7 @@ async fn test_bm25_only_search() {
 async fn test_bm25_no_results() {
     let chunks = vec![make_chunk("1", "fn hello_world() -> String", "main.rs")];
 
-    let (_dir, store) = setup_with_chunks(chunks).await;
-    let searcher = HybridSearcher::new(store);
+    let (_dir, searcher) = setup_searcher_with_bm25(chunks).await;
 
     let results = searcher.search("authenticate", 10).await.unwrap();
 
@@ -185,8 +192,7 @@ async fn test_bm25_limit() {
         })
         .collect();
 
-    let (_dir, store) = setup_with_chunks(chunks).await;
-    let searcher = HybridSearcher::new(store);
+    let (_dir, searcher) = setup_searcher_with_bm25(chunks).await;
 
     let results = searcher.search("function", 5).await.unwrap();
 
@@ -198,7 +204,10 @@ async fn test_bm25_limit() {
 
 #[tokio::test]
 async fn test_hybrid_search_with_embeddings() {
-    let chunks = vec![
+    let provider = Arc::new(MockEmbeddingProvider::new(1536));
+
+    // Create chunks with embeddings so vector search can find them
+    let mut chunks = vec![
         make_chunk(
             "1",
             "fn authenticate_user(username: &str) -> bool",
@@ -216,16 +225,21 @@ async fn test_hybrid_search_with_embeddings() {
         ),
     ];
 
+    // Compute embeddings for each chunk so they're stored in vec0
+    for chunk in &mut chunks {
+        let emb = provider.embed(&chunk.content).await.unwrap();
+        chunk.embedding = Some(emb);
+    }
+
     let (_dir, store) = setup_with_chunks(chunks).await;
-    let provider = Arc::new(MockEmbeddingProvider::new(1536));
     let searcher = HybridSearcher::with_embeddings(store, provider.clone());
 
     let results = searcher.search("user authentication", 10).await.unwrap();
 
-    // Should have called embedding provider
+    // Should have called embedding provider (for query embedding)
     assert!(provider.get_call_count() > 0);
 
-    // Should find auth-related chunks
+    // Should find auth-related chunks via vector search
     assert!(!results.is_empty());
 }
 
@@ -244,9 +258,14 @@ async fn test_hybrid_search_fallback_on_embedding_failure() {
         ),
     ];
 
-    let (_dir, store) = setup_with_chunks(chunks).await;
+    let (_dir, store) = setup_with_chunks(chunks.clone()).await;
+
+    // Set up BM25 searcher so text search works
+    let bm25 = Arc::new(Bm25Searcher::new(store.clone()));
+    bm25.index_chunks(&chunks).await;
+
     let provider = Arc::new(MockEmbeddingProvider::failing());
-    let searcher = HybridSearcher::with_embeddings(store, provider);
+    let searcher = HybridSearcher::with_embeddings(store, provider).with_bm25_searcher(bm25);
 
     // Should still return results via BM25 fallback
     let results = searcher.search("authenticate", 10).await.unwrap();
@@ -274,8 +293,7 @@ async fn test_identifier_query_boosting() {
         ),
     ];
 
-    let (_dir, store) = setup_with_chunks(chunks).await;
-    let searcher = HybridSearcher::new(store);
+    let (_dir, searcher) = setup_searcher_with_bm25(chunks).await;
 
     // Search for identifier-like query
     let results = searcher.search("getUserName", 10).await.unwrap();
@@ -326,8 +344,7 @@ async fn test_overlapping_chunks_deduplication() {
         },
     ];
 
-    let (_dir, store) = setup_with_chunks(chunks).await;
-    let searcher = HybridSearcher::new(store);
+    let (_dir, searcher) = setup_searcher_with_bm25(chunks).await;
 
     let results = searcher.search("authenticate validate", 10).await.unwrap();
 
@@ -342,8 +359,7 @@ async fn test_overlapping_chunks_deduplication() {
 async fn test_score_type_bm25() {
     let chunks = vec![make_chunk("1", "fn test_function() { }", "test.rs")];
 
-    let (_dir, store) = setup_with_chunks(chunks).await;
-    let searcher = HybridSearcher::new(store);
+    let (_dir, searcher) = setup_searcher_with_bm25(chunks).await;
 
     let results = searcher.search_bm25("test", 10).await.unwrap();
 

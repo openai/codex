@@ -1,6 +1,9 @@
 [build]
 rustc-wrapper = "sccache"
 
+[profile.dev]
+incremental = false
+
 [target.'cfg(all(windows, target_env = "msvc"))']
 rustflags = ["-C", "link-arg=/STACK:8388608"]
 

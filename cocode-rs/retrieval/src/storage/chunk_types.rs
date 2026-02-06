@@ -1,4 +1,4 @@
-//! LanceDB auxiliary types.
+//! Chunk storage types.
 //!
 //! Contains types for file metadata, index policy, and status.
 

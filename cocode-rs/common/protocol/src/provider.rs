@@ -168,10 +168,10 @@ pub struct ProviderInfo {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub models: HashMap<String, ProviderModel>,
 
-    // === Extra ===
-    /// Extra provider-specific configuration.
+    // === Options ===
+    /// Provider-specific SDK client configuration (e.g., organization_id, use_zhipuai).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub extra: Option<serde_json::Value>,
+    pub options: Option<serde_json::Value>,
 }
 
 impl ProviderInfo {
@@ -190,7 +190,7 @@ impl ProviderInfo {
             streaming: true,
             wire_api: WireApi::default(),
             models: HashMap::new(),
-            extra: None,
+            options: None,
         }
     }
 
@@ -248,9 +248,9 @@ impl ProviderInfo {
         self
     }
 
-    /// Builder: set extra configuration.
-    pub fn with_extra(mut self, extra: serde_json::Value) -> Self {
-        self.extra = Some(extra);
+    /// Builder: set provider-specific options.
+    pub fn with_options(mut self, options: serde_json::Value) -> Self {
+        self.options = Some(options);
         self
     }
 
@@ -293,7 +293,7 @@ impl PartialEq for ProviderInfo {
             && self.streaming == other.streaming
             && self.wire_api == other.wire_api
             && self.models == other.models
-        // Note: extra is not compared for equality
+        // Note: options is not compared for equality
     }
 }
 

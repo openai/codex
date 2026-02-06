@@ -747,64 +747,6 @@ pub enum TruncateStrategy {
     Smart,
 }
 
-// ============================================================================
-// Vector Quantization Configuration
-// ============================================================================
-
-/// Vector quantization method for index compression.
-///
-/// Quantization reduces embedding storage size at the cost of some precision.
-/// Use for large indexes (>100k chunks) to reduce memory and improve search speed.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum QuantizationMethod {
-    /// No quantization (full float32 precision)
-    #[default]
-    None,
-    /// Scalar Quantization (4x compression, <1% recall loss)
-    Scalar,
-    /// Product Quantization (4-8x compression, 1-3% recall loss)
-    Product,
-}
-
-/// Vector quantization configuration.
-///
-/// Applied when creating vector indexes in LanceDB.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct QuantizationConfig {
-    /// Quantization method
-    #[serde(default)]
-    pub method: QuantizationMethod,
-
-    /// Number of subquantizers for Product Quantization (typically 8-96)
-    ///
-    /// Higher values = more precision but larger index.
-    /// Must divide embedding dimension evenly.
-    #[serde(default = "default_pq_num_sub_vectors")]
-    pub num_sub_vectors: i32,
-
-    /// Bits per code for Product Quantization (typically 8)
-    #[serde(default = "default_pq_num_bits")]
-    pub num_bits: i32,
-}
-
-impl Default for QuantizationConfig {
-    fn default() -> Self {
-        Self {
-            method: QuantizationMethod::None,
-            num_sub_vectors: default_pq_num_sub_vectors(),
-            num_bits: default_pq_num_bits(),
-        }
-    }
-}
-
-fn default_pq_num_sub_vectors() -> i32 {
-    16 // Good balance for 1536-dim embeddings (1536 / 16 = 96 dims per subvector)
-}
-fn default_pq_num_bits() -> i32 {
-    8 // Standard PQ bits
-}
-
 /// Embedding provider configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EmbeddingConfig {
@@ -825,13 +767,6 @@ pub struct EmbeddingConfig {
     /// Batch size for embedding requests
     #[serde(default = "default_embedding_batch_size")]
     pub batch_size: i32,
-
-    /// Vector quantization settings (optional)
-    ///
-    /// When set, applies quantization during vector index creation.
-    /// Recommended for large indexes (>100k chunks) to reduce storage.
-    #[serde(default)]
-    pub quantization: Option<QuantizationConfig>,
 }
 
 /// Default embedding dimension (OpenAI text-embedding-3-small).

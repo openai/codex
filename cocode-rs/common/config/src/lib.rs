@@ -82,8 +82,6 @@ pub use types::ProviderConfig;
 pub use types::ProviderModelEntry;
 pub use types::ProviderSummary;
 pub use types::ProvidersFile;
-pub use types::ResolvedModelInfo;
-
 // Re-export provider types from protocol (via types)
 pub use cocode_protocol::ProviderModel;
 pub use types::ProviderInfo;

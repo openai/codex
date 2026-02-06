@@ -6,6 +6,7 @@ use super::TypedProviderOptions;
 use serde::Deserialize;
 use serde::Serialize;
 use std::any::Any;
+use std::collections::HashMap;
 
 /// Cache control type for Anthropic.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,6 +26,9 @@ pub struct AnthropicOptions {
     pub cache_control: Option<CacheControl>,
     /// Metadata to include with the request.
     pub metadata: Option<AnthropicMetadata>,
+    /// Arbitrary extra parameters passed through to the API request body.
+    #[doc(hidden)]
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
 /// Metadata for Anthropic requests.

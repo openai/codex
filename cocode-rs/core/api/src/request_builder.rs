@@ -32,6 +32,7 @@ use hyper_sdk::Message;
 use hyper_sdk::ToolChoice;
 use hyper_sdk::ToolDefinition;
 
+use crate::request_options_merge;
 use crate::thinking_convert;
 
 /// Builder for constructing `GenerateRequest` from `InferenceContext`.
@@ -124,23 +125,34 @@ impl RequestBuilder {
             .top_p_override
             .or_else(|| self.context.top_p().map(|p| p as f64));
 
-        // Apply frequency_penalty and presence_penalty from model_info
-        request.frequency_penalty = self.context.model_info.frequency_penalty.map(|p| p as f64);
-        request.presence_penalty = self.context.model_info.presence_penalty.map(|p| p as f64);
-
         // Apply tools and tool choice
         request.tools = self.tools;
         request.tool_choice = self.tool_choice;
 
-        // Apply thinking/reasoning options if thinking is enabled
-        if let Some(thinking_level) = self.context.effective_thinking_level() {
-            let provider_options = thinking_convert::to_provider_options(
-                thinking_level,
-                &self.context.model_info,
-                self.context.model_spec.provider_type,
-            );
-            request.provider_options = provider_options;
+        // Step 1: Build provider options from thinking config
+        let mut provider_options =
+            if let Some(thinking_level) = self.context.effective_thinking_level() {
+                thinking_convert::to_provider_options(
+                    thinking_level,
+                    &self.context.model_info,
+                    self.context.model_spec.provider_type,
+                )
+            } else {
+                None
+            };
+
+        // Step 2: Merge request_options into provider_options
+        if let Some(req_opts) = &self.context.request_options {
+            if !req_opts.is_empty() {
+                provider_options = Some(request_options_merge::merge_into_provider_options(
+                    provider_options,
+                    req_opts,
+                    self.context.model_spec.provider_type,
+                ));
+            }
         }
+
+        request.provider_options = provider_options;
 
         request
     }

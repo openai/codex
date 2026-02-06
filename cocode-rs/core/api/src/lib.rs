@@ -62,6 +62,7 @@ pub mod error;
 pub mod model_hub;
 pub mod provider_factory;
 pub mod request_builder;
+pub mod request_options_merge;
 pub mod retry;
 pub mod thinking_convert;
 pub mod unified_stream;

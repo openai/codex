@@ -11,7 +11,8 @@ use crate::error::Result;
 use crate::indexing::FilterSummary;
 use crate::repomap::TokenBudgeter;
 use crate::storage::SqliteStore;
-use crate::storage::lancedb::LanceDbStore;
+use crate::storage::SqliteVecStore;
+use crate::storage::VectorStore;
 
 /// Feature flags for retrieval system.
 #[derive(Debug, Clone, Copy, Default)]
@@ -95,14 +96,14 @@ pub struct RetrievalContext {
     db: Arc<SqliteStore>,
     /// Token budgeter for repomap (singleton).
     budgeter: Arc<TokenBudgeter>,
-    /// LanceDB store for vector storage.
-    lancedb: Arc<LanceDbStore>,
+    /// Vector store (sqlite-vec backed).
+    vector_store: Arc<dyn VectorStore>,
 }
 
 impl RetrievalContext {
     /// Create a new retrieval context.
     ///
-    /// Initializes shared resources (db, budgeter, lancedb) eagerly.
+    /// Initializes shared resources (db, budgeter, vector_store) eagerly.
     pub async fn new(
         config: RetrievalConfig,
         features: RetrievalFeatures,
@@ -115,8 +116,8 @@ impl RetrievalContext {
         // Get shared token budgeter (global singleton)
         let budgeter = TokenBudgeter::shared();
 
-        // Initialize LanceDB store
-        let lancedb = Arc::new(LanceDbStore::open(&config.data_dir).await?);
+        // Initialize vector store (sqlite-vec)
+        let vector_store: Arc<dyn VectorStore> = Arc::new(SqliteVecStore::open(&config.data_dir)?);
 
         Ok(Self {
             config: Arc::new(config),
@@ -124,7 +125,7 @@ impl RetrievalContext {
             workspace_root,
             db,
             budgeter,
-            lancedb,
+            vector_store,
         })
     }
 
@@ -166,9 +167,9 @@ impl RetrievalContext {
         Arc::clone(&self.budgeter)
     }
 
-    /// Get shared LanceDB store.
-    pub fn lancedb(&self) -> Arc<LanceDbStore> {
-        Arc::clone(&self.lancedb)
+    /// Get shared vector store.
+    pub fn vector_store(&self) -> Arc<dyn VectorStore> {
+        Arc::clone(&self.vector_store)
     }
 
     /// Get the file filter summary for event emission.

@@ -14,12 +14,6 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 pub enum RetrievalErr {
     // Storage errors
-    #[error("LanceDB connection failed: uri={uri}, cause={cause}")]
-    LanceDbConnectionFailed { uri: String, cause: String },
-
-    #[error("LanceDB query failed: table={table}, cause={cause}")]
-    LanceDbQueryFailed { table: String, cause: String },
-
     #[error("SQLite lock timeout: path={path:?}, waited={waited_ms}ms")]
     SqliteLockedTimeout { path: PathBuf, waited_ms: u64 },
 

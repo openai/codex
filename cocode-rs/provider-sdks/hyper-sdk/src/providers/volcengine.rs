@@ -272,6 +272,15 @@ impl Model for VolcengineModel {
                 if let Some(effort) = &volcengine_opts.reasoning_effort {
                     params = params.reasoning_effort(convert_reasoning_effort_to_ark(effort));
                 }
+                // Apply catchall extra params
+                if !volcengine_opts.extra.is_empty() {
+                    params.extra.extend(
+                        volcengine_opts
+                            .extra
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone())),
+                    );
+                }
             }
         }
 

@@ -236,6 +236,17 @@ impl Model for GeminiModel {
         // Apply thinking config from unified request config and/or provider-specific options
         config.thinking_config = build_gemini_thinking_config(&request);
 
+        // Apply catchall extra params from provider options
+        if let Some(ref options) = request.provider_options {
+            if let Some(gem_opts) = downcast_options::<GeminiOptions>(options) {
+                if !gem_opts.extra.is_empty() {
+                    config
+                        .extra
+                        .extend(gem_opts.extra.iter().map(|(k, v)| (k.clone(), v.clone())));
+                }
+            }
+        }
+
         // Make request
         let response = self
             .sdk_client
@@ -284,6 +295,17 @@ impl Model for GeminiModel {
 
         // Apply thinking config from unified request config and/or provider-specific options
         config.thinking_config = build_gemini_thinking_config(&request);
+
+        // Apply catchall extra params from provider options
+        if let Some(ref options) = request.provider_options {
+            if let Some(gem_opts) = downcast_options::<GeminiOptions>(options) {
+                if !gem_opts.extra.is_empty() {
+                    config
+                        .extra
+                        .extend(gem_opts.extra.iter().map(|(k, v)| (k.clone(), v.clone())));
+                }
+            }
+        }
 
         // Get streaming response
         let stream = self

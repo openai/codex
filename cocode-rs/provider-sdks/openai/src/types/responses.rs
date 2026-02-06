@@ -965,6 +965,10 @@ pub struct ResponseCreateParams {
     /// Stable cache identifier.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_cache_key: Option<String>,
+
+    /// Extra parameters passed through to the API request body.
+    #[serde(flatten, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub extra: std::collections::HashMap<String, serde_json::Value>,
 }
 
 /// Conversation parameter for multi-turn state.
@@ -1024,6 +1028,7 @@ impl ResponseCreateParams {
             safety_identifier: None,
             prompt: None,
             prompt_cache_key: None,
+            extra: std::collections::HashMap::new(),
         }
     }
 
@@ -1058,6 +1063,7 @@ impl ResponseCreateParams {
             safety_identifier: None,
             prompt: None,
             prompt_cache_key: None,
+            extra: std::collections::HashMap::new(),
         }
     }
 

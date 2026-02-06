@@ -1266,6 +1266,10 @@ pub struct GenerateContentConfig {
     /// Request extensions (headers, params, body) - not serialized.
     #[serde(skip)]
     pub extensions: Option<RequestExtensions>,
+
+    /// Extra parameters passed through to the API request body.
+    #[serde(flatten, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub extra: std::collections::HashMap<String, serde_json::Value>,
 }
 
 impl GenerateContentConfig {

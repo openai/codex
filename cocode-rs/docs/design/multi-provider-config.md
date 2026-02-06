@@ -1,3 +1,7 @@
+> **Note**: This design document predates recent refactoring (deletion of `ResolvedModelInfo`,
+> `auto_compact_token_limit`, `ProviderConfig.model_options`, `apply_overrides()`).
+> Refer to the source code as the authoritative reference.
+
 # Multi-LLM Provider Configuration Architecture
 
 ## 1. Overview

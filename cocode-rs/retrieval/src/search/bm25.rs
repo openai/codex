@@ -1,9 +1,10 @@
 //! BM25 full-text search with tunable k1/b parameters.
 //!
 //! Uses a custom BM25 implementation via the `bm25` crate for code-optimized search.
-//! Falls back to LanceDB FTS if the custom index is not available.
+//! Falls back to FTS5 if the custom index is not available.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU32;
@@ -21,7 +22,7 @@ use super::bm25_index::SparseEmbedding;
 use crate::config::SearchConfig;
 use crate::error::Result;
 use crate::error::RetrievalErr;
-use crate::storage::LanceDbStore;
+use crate::storage::VectorStore;
 use crate::types::CodeChunk;
 use crate::types::ScoreType;
 use crate::types::SearchQuery;
@@ -36,14 +37,17 @@ use crate::types::SearchResult;
 ///
 /// Supports lazy loading from storage on first search with exponential backoff retry.
 pub struct Bm25Searcher {
-    /// LanceDB store for chunk retrieval
-    store: Arc<LanceDbStore>,
+    /// Vector store for chunk retrieval
+    store: Arc<dyn VectorStore>,
     /// Custom BM25 index
     index: Arc<RwLock<Bm25Index>>,
     /// Chunk cache for fast retrieval
     chunk_cache: Arc<RwLock<HashMap<String, CodeChunk>>>,
     /// BM25 configuration for lazy loading
     config: Bm25Config,
+    /// Workspace root for reading content from files during index loading.
+    /// Uses std Mutex for interior mutability (set after Arc construction).
+    workspace_root: std::sync::Mutex<Option<PathBuf>>,
     /// Whether the index has been loaded from storage
     loaded: AtomicBool,
     /// Whether loading is currently in progress (prevents double-load race)
@@ -56,12 +60,13 @@ pub struct Bm25Searcher {
 
 impl Bm25Searcher {
     /// Create a new BM25 searcher with default configuration.
-    pub fn new(store: Arc<LanceDbStore>) -> Self {
+    pub fn new(store: Arc<dyn VectorStore>) -> Self {
         Self {
             store,
             index: Arc::new(RwLock::new(Bm25Index::new())),
             chunk_cache: Arc::new(RwLock::new(HashMap::new())),
             config: Bm25Config::default(),
+            workspace_root: std::sync::Mutex::new(None),
             loaded: AtomicBool::new(false),
             loading: AtomicBool::new(false),
             load_attempts: AtomicU32::new(0),
@@ -70,12 +75,13 @@ impl Bm25Searcher {
     }
 
     /// Create a new BM25 searcher with custom configuration.
-    pub fn with_config(store: Arc<LanceDbStore>, config: &SearchConfig) -> Self {
+    pub fn with_config(store: Arc<dyn VectorStore>, config: &SearchConfig) -> Self {
         Self {
             store,
             index: Arc::new(RwLock::new(Bm25Index::from_search_config(config))),
             chunk_cache: Arc::new(RwLock::new(HashMap::new())),
             config: Bm25Config::from_search_config(config),
+            workspace_root: std::sync::Mutex::new(None),
             loaded: AtomicBool::new(false),
             loading: AtomicBool::new(false),
             load_attempts: AtomicU32::new(0),
@@ -85,7 +91,7 @@ impl Bm25Searcher {
 
     /// Create a BM25 searcher with a pre-loaded index.
     pub fn with_index(
-        store: Arc<LanceDbStore>,
+        store: Arc<dyn VectorStore>,
         index: Arc<RwLock<Bm25Index>>,
         chunk_cache: Arc<RwLock<HashMap<String, CodeChunk>>>,
     ) -> Self {
@@ -94,6 +100,7 @@ impl Bm25Searcher {
             index,
             chunk_cache,
             config: Bm25Config::default(),
+            workspace_root: std::sync::Mutex::new(None),
             loaded: AtomicBool::new(true), // Already loaded
             loading: AtomicBool::new(false),
             load_attempts: AtomicU32::new(0),
@@ -101,27 +108,62 @@ impl Bm25Searcher {
         }
     }
 
+    /// Set the workspace root for reading content from files during index loading.
+    ///
+    /// Can be called after Arc construction (uses interior mutability).
+    pub fn set_workspace_root(&self, root: impl Into<PathBuf>) {
+        if let Ok(mut guard) = self.workspace_root.lock() {
+            *guard = Some(root.into());
+        }
+    }
+
     /// Load the BM25 index from storage.
     ///
-    /// Loads metadata, embeddings, contents, and populates the chunk cache from LanceDB.
-    /// Contents are re-embedded to restore the scorer for search.
+    /// Loads metadata and BM25 embeddings from the database, then reads fresh
+    /// content from the file system to restore the scorer and populate the cache.
     ///
-    /// **Note:** This can be memory-intensive for large indices since all chunks
-    /// are loaded to rebuild the scorer and populate the cache.
+    /// Requires `workspace_root` to be set for reading file content.
+    /// Chunks whose files are unreadable are silently skipped.
     pub async fn load_from_storage(&self, config: &Bm25Config) -> Result<()> {
         let metadata = self.store.load_bm25_metadata().await?;
         let embeddings = self.store.load_all_bm25_embeddings().await?;
-        let contents = self.store.load_all_chunk_contents().await?;
+        let chunk_refs = self.store.load_all_chunk_refs().await?;
+
+        // Read content from files for each chunk
+        let mut contents = HashMap::new();
+        let workspace_root = self.workspace_root.lock().ok().and_then(|g| g.clone());
+        if let Some(ref workspace_root) = workspace_root {
+            for (id, chunk_ref) in &chunk_refs {
+                match chunk_ref.read_content(workspace_root) {
+                    Ok(hydrated) => {
+                        contents.insert(id.clone(), hydrated.content);
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            id = %id,
+                            filepath = %chunk_ref.filepath,
+                            error = %e,
+                            "Skipping chunk during BM25 load: file unreadable"
+                        );
+                    }
+                }
+            }
+        } else {
+            tracing::warn!(
+                "BM25 load_from_storage called without workspace_root; \
+                 index will be empty (no content to re-embed)"
+            );
+        }
 
         let new_index =
             Bm25Index::load_with_contents(embeddings, contents.clone(), metadata, config.clone());
 
-        // Populate chunk cache for search result hydration
-        // This prevents search results from being skipped due to missing cache entries
-        let chunks = self.store.list_all_chunks().await?;
+        // Populate chunk cache with content read from files
         let mut cache = self.chunk_cache.write().await;
-        for chunk in &chunks {
-            cache.insert(chunk.id.clone(), chunk.clone());
+        for (id, chunk_ref) in &chunk_refs {
+            if let Some(content) = contents.get(id) {
+                cache.insert(id.clone(), chunk_ref.to_code_chunk_with_content(content));
+            }
         }
 
         let mut index = self.index.write().await;
@@ -129,9 +171,9 @@ impl Bm25Searcher {
 
         self.loaded.store(true, Ordering::SeqCst);
         tracing::debug!(
-            chunks = chunks.len(),
+            chunk_refs = chunk_refs.len(),
             cache_size = cache.len(),
-            "BM25 index loaded from storage with chunk cache populated"
+            "BM25 index loaded from storage with content from files"
         );
         Ok(())
     }
@@ -220,7 +262,7 @@ impl Bm25Searcher {
             tracing::warn!(
                 attempts = attempts,
                 "Max BM25 load retries reached, using empty index. \
-                Search will use LanceDB FTS fallback which may have lower quality."
+                Text search will be unavailable."
             );
             self.loaded.store(true, Ordering::Release);
             return Ok(());
@@ -375,10 +417,10 @@ impl Bm25Searcher {
         tracing::trace!(raw_results = results.len(), "BM25 index search completed");
 
         if results.is_empty() {
-            // Fall back to LanceDB FTS if no results from custom index
+            // Fall back to FTS5 if no results from custom index
             tracing::debug!(
                 query = %query.text,
-                "BM25 index returned no results, falling back to LanceDB FTS"
+                "BM25 index returned no results, falling back to FTS5"
             );
             return self.search_fallback(query).await;
         }
@@ -407,7 +449,7 @@ impl Bm25Searcher {
         Ok(search_results)
     }
 
-    /// Fallback search using LanceDB FTS.
+    /// Fallback search using FTS5.
     async fn search_fallback(&self, query: &SearchQuery) -> Result<Vec<SearchResult>> {
         let chunks = self.store.search_fts(&query.text, query.limit).await?;
 
@@ -464,7 +506,7 @@ mod tests {
         use tempfile::TempDir;
 
         let dir = TempDir::new().unwrap();
-        let store = Arc::new(LanceDbStore::open(dir.path()).await.unwrap());
+        let store = Arc::new(crate::storage::SqliteVecStore::open(dir.path()).unwrap());
         let searcher = Bm25Searcher::new(store);
 
         // Index some chunks
@@ -496,7 +538,7 @@ mod tests {
         use tempfile::TempDir;
 
         let dir = TempDir::new().unwrap();
-        let store = Arc::new(LanceDbStore::open(dir.path()).await.unwrap());
+        let store = Arc::new(crate::storage::SqliteVecStore::open(dir.path()).unwrap());
         let searcher = Bm25Searcher::new(store);
 
         assert_eq!(searcher.doc_count().await, 0);

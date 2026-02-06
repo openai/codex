@@ -21,7 +21,7 @@
 //!          │     ├─ Parse with tree-sitter
 //!          │     ├─ Split into chunks
 //!          │     ├─ Generate embeddings
-//!          │     └─ Store in SQLite/LanceDB
+//!          │     └─ Store in SQLite (metadata + vectors)
 //!          │
 //!          ├─► BatchTracker (SessionStart completion)
 //!          └─► LagTracker (watermark-based lag)
@@ -123,7 +123,7 @@ impl EventProcessor for IndexEventProcessor {
             // 2. Parse with tree-sitter
             // 3. Split into chunks
             // 4. Generate embeddings (if vector search enabled)
-            // 5. Store in SQLite (metadata, BM25) and LanceDB (vectors)
+            // 5. Store in SQLite (metadata, BM25, vectors)
             tracing::debug!(
                 trace_id = %trace_id,
                 path = %path.display(),
@@ -132,7 +132,7 @@ impl EventProcessor for IndexEventProcessor {
         } else {
             // File doesn't exist - remove from index
             // TODO: Implement removal logic
-            // 1. Delete from LanceDB
+            // 1. Delete from vector store
             // 2. Delete from BM25 index
             // 3. Remove from catalog
             tracing::debug!(

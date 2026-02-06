@@ -23,10 +23,9 @@ tracing-appender = { workspace = true }
 notify = "7"
 notify-debouncer-mini = "0.5"
 # Storage
-lancedb = "0.22"
-arrow = "56"
-lance-index = "0.39"
 rusqlite = { version = "0.32", features = ["bundled"] }
+sqlite-vec = "0.1"
+zerocopy = { version = "0.7", features = ["derive"] }
 
 # Code chunking - CodeSplitter (tree-sitter based) with TextSplitter fallback
 # tree-sitter 0.25 in text-splitter is compatible with workspace 0.25.10
@@ -62,7 +61,7 @@ tokio = { workspace = true, features = ["full"] }
 tokio-util = "0.7"
 async-trait = { workspace = true }
 async-stream = { workspace = true }
-futures = { workspace = true }
+futures = { workspace = true, features = ["executor"] }
 
 # HTTP client for embeddings
 reqwest = { workspace = true, features = ["json"] }

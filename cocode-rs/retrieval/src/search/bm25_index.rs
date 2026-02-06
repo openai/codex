@@ -21,7 +21,7 @@ use crate::types::CodeChunk;
 /// Sparse embedding representation for BM25.
 ///
 /// Stores non-zero token indices and their TF weights.
-/// Can be serialized to JSON for LanceDB storage.
+/// Can be serialized to JSON for persistent storage.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SparseEmbedding {
     /// Token indices (hash of token string)

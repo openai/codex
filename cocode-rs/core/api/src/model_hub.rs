@@ -56,7 +56,6 @@ use std::sync::Arc;
 use std::sync::RwLock;
 
 use cocode_config::ConfigManager;
-use cocode_config::ResolvedModelInfo;
 use cocode_protocol::ProviderType;
 use cocode_protocol::execution::AgentKind;
 use cocode_protocol::execution::ExecutionIdentity;
@@ -72,36 +71,6 @@ use hyper_sdk::Provider;
 use tracing::debug;
 use tracing::info;
 use uuid::Uuid;
-
-/// Convert ResolvedModelInfo (from config) to ModelInfo (protocol type).
-fn to_model_info(resolved: ResolvedModelInfo) -> ModelInfo {
-    ModelInfo {
-        slug: resolved.id,
-        display_name: Some(resolved.display_name),
-        description: resolved.description,
-        context_window: Some(resolved.context_window),
-        max_output_tokens: Some(resolved.max_output_tokens),
-        timeout_secs: Some(resolved.timeout_secs),
-        capabilities: Some(resolved.capabilities),
-        temperature: resolved.temperature,
-        top_p: resolved.top_p,
-        frequency_penalty: None,
-        presence_penalty: None,
-        default_thinking_level: resolved.default_thinking_level,
-        supported_thinking_levels: resolved.supported_thinking_levels,
-        include_thoughts: resolved.include_thoughts,
-        reasoning_summary: resolved.reasoning_summary,
-        auto_compact_token_limit: resolved.auto_compact_token_limit,
-        effective_context_window_percent: resolved.effective_context_window_percent,
-        shell_type: None,
-        truncation_policy: None,
-        experimental_supported_tools: None,
-        apply_patch_tool_type: None,
-        base_instructions: resolved.base_instructions,
-        base_instructions_file: None,
-        extra: resolved.extra,
-    }
-}
 
 use crate::provider_factory;
 
@@ -331,10 +300,17 @@ impl ModelHub {
             session_id,
             turn_number,
             spec.clone(),
-            model_info,
+            model_info.clone(),
             agent_kind,
             original_identity,
         );
+
+        // Carry model's request_options into the inference context
+        if let Some(opts) = model_info.options {
+            if !opts.is_empty() {
+                ctx = ctx.with_request_options(opts);
+            }
+        }
 
         // Apply thinking level if provided
         if let Some(level) = thinking_level {
@@ -570,15 +546,14 @@ impl ModelHub {
             }
         })?;
 
-        // Get model info from config and convert to protocol type
-        let resolved_info = self
+        // Get model info from config
+        let model_info = self
             .config
             .resolve_model_info(&spec.provider, &spec.model)
             .map_err(|e| HubError::ModelInfoResolution {
                 model: spec.to_string(),
                 source: e.into(),
             })?;
-        let model_info = to_model_info(resolved_info);
 
         // Get the actual API model name (handles aliases)
         let api_model_name = provider_info

@@ -7,7 +7,7 @@
 //!
 //! BM25 search can use either:
 //! - Custom BM25 index with tunable k1/b parameters (recommended for code)
-//! - LanceDB built-in FTS (fallback)
+//! - FTS5 full-text search (fallback)
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -32,7 +32,7 @@ use crate::search::fusion::has_symbol_syntax;
 use crate::search::fusion::is_identifier_query;
 use crate::search::snippet_searcher::SnippetSearcher;
 use crate::storage::SqliteStore;
-use crate::storage::lancedb::LanceDbStore;
+use crate::storage::VectorStore;
 use crate::traits::EmbeddingProvider;
 use crate::types::ChunkRef;
 use crate::types::CodeChunk;
@@ -42,7 +42,7 @@ use crate::types::SearchResult;
 
 /// Hybrid searcher combining BM25 and vector search.
 pub struct HybridSearcher {
-    store: Arc<LanceDbStore>,
+    store: Arc<dyn VectorStore>,
     embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
     config: RrfConfig,
     /// Maximum chunks per file (0 = unlimited)
@@ -54,13 +54,13 @@ pub struct HybridSearcher {
     /// Workspace root for hydrating content from files
     workspace_root: Option<PathBuf>,
     /// Custom BM25 searcher with tunable k1/b parameters.
-    /// If set, uses this instead of LanceDB FTS for better code search.
+    /// If set, uses this instead of FTS5 for better code search.
     bm25_searcher: Option<Arc<Bm25Searcher>>,
 }
 
 impl HybridSearcher {
     /// Create a new hybrid searcher with BM25 only.
-    pub fn new(store: Arc<LanceDbStore>) -> Self {
+    pub fn new(store: Arc<dyn VectorStore>) -> Self {
         Self {
             store,
             embedding_provider: None,
@@ -74,7 +74,10 @@ impl HybridSearcher {
     }
 
     /// Create a hybrid searcher with vector search enabled.
-    pub fn with_embeddings(store: Arc<LanceDbStore>, provider: Arc<dyn EmbeddingProvider>) -> Self {
+    pub fn with_embeddings(
+        store: Arc<dyn VectorStore>,
+        provider: Arc<dyn EmbeddingProvider>,
+    ) -> Self {
         Self {
             store,
             embedding_provider: Some(provider),
@@ -89,11 +92,15 @@ impl HybridSearcher {
 
     /// Set custom BM25 searcher with tunable k1/b parameters.
     ///
-    /// When set, uses the custom BM25 index instead of LanceDB FTS.
+    /// When set, uses the custom BM25 index instead of FTS5.
     /// This provides better code search quality with optimized parameters:
     /// - k1 = 0.8 (reduced keyword repetition weight)
     /// - b = 0.5 (reduced length normalization)
     pub fn with_bm25_searcher(mut self, searcher: Arc<Bm25Searcher>) -> Self {
+        // Propagate workspace root to BM25 searcher for file content loading
+        if let Some(ref root) = self.workspace_root {
+            searcher.set_workspace_root(root.clone());
+        }
         self.bm25_searcher = Some(searcher);
         self
     }
@@ -111,9 +118,15 @@ impl HybridSearcher {
     /// Set workspace root for hydrating content from files.
     ///
     /// When set, `search_hydrated` will read fresh content from files
-    /// instead of returning the indexed content.
+    /// instead of returning the indexed content. Also propagates to the
+    /// BM25 searcher for loading content during index restoration.
     pub fn with_workspace_root(mut self, root: impl Into<PathBuf>) -> Self {
-        self.workspace_root = Some(root.into());
+        let root = root.into();
+        // Propagate to BM25 searcher for file content loading
+        if let Some(ref bm25) = self.bm25_searcher {
+            bm25.set_workspace_root(root.clone());
+        }
+        self.workspace_root = Some(root);
         self
     }
 
@@ -517,7 +530,7 @@ impl HybridSearcher {
     /// Search using BM25 full-text search only.
     ///
     /// Uses custom BM25 searcher if available (with tunable k1/b parameters),
-    /// otherwise falls back to LanceDB FTS.
+    /// otherwise falls back to FTS5.
     pub async fn search_bm25(&self, query: &str, limit: i32) -> Result<Vec<SearchResult>> {
         // Use custom BM25 searcher if available
         if let Some(ref bm25) = self.bm25_searcher {
@@ -529,7 +542,7 @@ impl HybridSearcher {
             return bm25.search(&search_query).await;
         }
 
-        // Fall back to LanceDB FTS
+        // Fall back to FTS5
         let chunks = self.store.search_fts(query, limit).await?;
 
         // Convert to SearchResult with rank-based scores
@@ -547,7 +560,7 @@ impl HybridSearcher {
 
     /// Search using vector similarity only.
     ///
-    /// Uses actual distance scores from LanceDB instead of rank-based scoring.
+    /// Uses actual distance scores from vector store instead of rank-based scoring.
     /// Distance is converted to similarity: `1.0 / (1.0 + distance)`
     /// This preserves semantic similarity information for better fusion with other search methods.
     async fn search_vector(
@@ -837,7 +850,7 @@ mod tests {
     #[tokio::test]
     async fn test_hybrid_searcher_creation() {
         let dir = TempDir::new().unwrap();
-        let store = Arc::new(LanceDbStore::open(dir.path()).await.unwrap());
+        let store = Arc::new(crate::storage::SqliteVecStore::open(dir.path()).unwrap());
 
         let searcher = HybridSearcher::new(store.clone());
         assert!(!searcher.has_vector_search());
@@ -850,7 +863,7 @@ mod tests {
     #[tokio::test]
     async fn test_search_empty_store() {
         let dir = TempDir::new().unwrap();
-        let store = Arc::new(LanceDbStore::open(dir.path()).await.unwrap());
+        let store = Arc::new(crate::storage::SqliteVecStore::open(dir.path()).unwrap());
 
         let searcher = HybridSearcher::new(store);
         let results = searcher.search("test", 10).await.unwrap();
@@ -860,7 +873,7 @@ mod tests {
     #[tokio::test]
     async fn test_reranker_enabled_by_config() {
         let dir = TempDir::new().unwrap();
-        let store = Arc::new(LanceDbStore::open(dir.path()).await.unwrap());
+        let store = Arc::new(crate::storage::SqliteVecStore::open(dir.path()).unwrap());
 
         // Default: no reranker
         let searcher = HybridSearcher::new(store.clone());
@@ -882,7 +895,7 @@ mod tests {
     #[tokio::test]
     async fn test_reranker_with_default() {
         let dir = TempDir::new().unwrap();
-        let store = Arc::new(LanceDbStore::open(dir.path()).await.unwrap());
+        let store = Arc::new(crate::storage::SqliteVecStore::open(dir.path()).unwrap());
 
         let searcher = HybridSearcher::new(store).with_reranker();
         assert!(searcher.has_reranker());
@@ -891,7 +904,7 @@ mod tests {
     #[tokio::test]
     async fn test_reranker_without() {
         let dir = TempDir::new().unwrap();
-        let store = Arc::new(LanceDbStore::open(dir.path()).await.unwrap());
+        let store = Arc::new(crate::storage::SqliteVecStore::open(dir.path()).unwrap());
 
         let searcher = HybridSearcher::new(store)
             .with_reranker()
@@ -902,7 +915,7 @@ mod tests {
     #[tokio::test]
     async fn test_with_workspace_root() {
         let dir = TempDir::new().unwrap();
-        let store = Arc::new(LanceDbStore::open(dir.path()).await.unwrap());
+        let store = Arc::new(crate::storage::SqliteVecStore::open(dir.path()).unwrap());
 
         let searcher = HybridSearcher::new(store.clone());
         assert!(searcher.workspace_root.is_none());
@@ -915,7 +928,7 @@ mod tests {
     #[tokio::test]
     async fn test_search_hydrated_without_workspace_root() {
         let dir = TempDir::new().unwrap();
-        let store = Arc::new(LanceDbStore::open(dir.path()).await.unwrap());
+        let store = Arc::new(crate::storage::SqliteVecStore::open(dir.path()).unwrap());
 
         // Without workspace_root, search_hydrated should work but not hydrate
         let searcher = HybridSearcher::new(store);
@@ -935,7 +948,7 @@ mod tests {
         writeln!(file, "}}").unwrap();
 
         let store_dir = TempDir::new().unwrap();
-        let store = Arc::new(LanceDbStore::open(store_dir.path()).await.unwrap());
+        let store = Arc::new(crate::storage::SqliteVecStore::open(store_dir.path()).unwrap());
 
         let searcher = HybridSearcher::new(store).with_workspace_root(dir.path());
 
@@ -969,7 +982,7 @@ mod tests {
     async fn test_hydrate_chunk_file_not_found() {
         let dir = TempDir::new().unwrap();
         let store_dir = TempDir::new().unwrap();
-        let store = Arc::new(LanceDbStore::open(store_dir.path()).await.unwrap());
+        let store = Arc::new(crate::storage::SqliteVecStore::open(store_dir.path()).unwrap());
 
         let searcher = HybridSearcher::new(store).with_workspace_root(dir.path());
 

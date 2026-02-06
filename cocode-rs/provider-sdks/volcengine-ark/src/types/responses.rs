@@ -301,6 +301,10 @@ pub struct ResponseCreateParams {
     /// Prompt caching configuration.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub caching: Option<CachingConfig>,
+
+    /// Extra parameters passed through to the API request body.
+    #[serde(flatten, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub extra: std::collections::HashMap<String, serde_json::Value>,
 }
 
 impl ResponseCreateParams {
@@ -321,6 +325,7 @@ impl ResponseCreateParams {
             stop_sequences: None,
             store: None,
             caching: None,
+            extra: std::collections::HashMap::new(),
         }
     }
 
