@@ -909,7 +909,7 @@ impl EventProcessorWithHumanOutput {
         let total = update.total_items.max(1);
         let processed = update.completed_items + update.failed_items;
         let percent = (processed as f64 / total as f64 * 100.0).round() as i64;
-        let bar_width = 28;
+        let bar_width = 20;
         let filled = ((processed as f64 / total as f64) * bar_width as f64)
             .round()
             .clamp(0.0, bar_width as f64) as usize;
@@ -921,7 +921,7 @@ impl EventProcessorWithHumanOutput {
             .map(|secs| format_duration(Duration::from_secs(secs)))
             .unwrap_or_else(|| "--".to_string());
         let line = format!(
-            "agent job {job_label} [{bar}] {processed}/{total} ({percent}%) failed {} running {} pending {} eta {eta}",
+            "job {job_label} [{bar}] {processed}/{total} {percent}% f{} r{} p{} eta {eta}",
             update.failed_items, update.running_items, update.pending_items
         );
         let done = processed >= update.total_items;
