@@ -31,24 +31,14 @@ impl SessionTask for CompactTask {
                 1,
                 &[("type", "remote")],
             );
-            if crate::compact_remote::run_remote_compact_task(session, ctx)
-                .await
-                .is_err()
-            {
-                return None;
-            }
+            let _ = crate::compact_remote::run_remote_compact_task(session, ctx).await;
         } else {
             let _ = session.services.otel_manager.counter(
                 "codex.task.compact",
                 1,
                 &[("type", "local")],
             );
-            if crate::compact::run_compact_task(session, ctx, input)
-                .await
-                .is_err()
-            {
-                return None;
-            }
+            let _ = crate::compact::run_compact_task(session, ctx, input).await;
         }
 
         None
