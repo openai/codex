@@ -3,7 +3,7 @@
 This document describes the generic batch job engine used for large agentic workloads.
 Agent jobs are designed to be:
 
-1. Resumable and durable via SQLite.
+1. Durable via SQLite for progress tracking and export.
 2. Bounded by configured concurrency and thread limits.
 3. Observable via explicit status/progress tools.
 4. Exportable to CSV at stage boundaries.
@@ -29,11 +29,6 @@ Optional args:
 - `output_schema`: JSON schema for result payloads (best-effort guidance).
 - `max_concurrency`: cap on parallel workers (defaults to 64, then capped by config).
 - `auto_export`: auto-export CSV on successful completion (default true).
-
-### `run_agent_job`
-
-Resume an existing job by id. Jobs auto-start when created. When resuming, any items
-left in `running` state are reset to `pending` unless they already reported a result.
 
 ### `get_agent_job_status`
 

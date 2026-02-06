@@ -556,44 +556,6 @@ fn create_spawn_agents_on_csv_tool() -> ToolSpec {
     })
 }
 
-fn create_run_agent_job_tool() -> ToolSpec {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "job_id".to_string(),
-        JsonSchema::String {
-            description: Some("Identifier of the job to resume.".to_string()),
-        },
-    );
-    properties.insert(
-        "max_concurrency".to_string(),
-        JsonSchema::Number {
-            description: Some(
-                "Maximum concurrent workers for this job. Defaults to 64 and is capped by config."
-                    .to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "auto_export".to_string(),
-        JsonSchema::Boolean {
-            description: Some(
-                "Whether to auto-export CSV output on successful completion (default true)."
-                    .to_string(),
-            ),
-        },
-    );
-    ToolSpec::Function(ResponsesApiTool {
-        name: "run_agent_job".to_string(),
-        description: "Resume execution of an existing agent job.".to_string(),
-        strict: false,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["job_id".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-    })
-}
-
 fn create_get_agent_job_status_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -1614,13 +1576,11 @@ pub(crate) fn build_specs(
     if config.collab_tools {
         let agent_jobs_handler = Arc::new(AgentJobsHandler);
         builder.push_spec(create_spawn_agents_on_csv_tool());
-        builder.push_spec(create_run_agent_job_tool());
         builder.push_spec(create_get_agent_job_status_tool());
         builder.push_spec(create_wait_agent_job_tool());
         builder.push_spec(create_export_agent_job_csv_tool());
         builder.push_spec(create_report_agent_job_result_tool());
         builder.register_handler("spawn_agents_on_csv", agent_jobs_handler.clone());
-        builder.register_handler("run_agent_job", agent_jobs_handler.clone());
         builder.register_handler("get_agent_job_status", agent_jobs_handler.clone());
         builder.register_handler("wait_agent_job", agent_jobs_handler.clone());
         builder.register_handler("export_agent_job_csv", agent_jobs_handler.clone());
@@ -1885,7 +1845,6 @@ mod tests {
                 "wait",
                 "close_agent",
                 "spawn_agents_on_csv",
-                "run_agent_job",
                 "get_agent_job_status",
                 "wait_agent_job",
                 "export_agent_job_csv",

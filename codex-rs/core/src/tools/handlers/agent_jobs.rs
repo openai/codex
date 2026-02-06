@@ -22,7 +22,6 @@ use once_cell::sync::Lazy;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
-use serde_json::json;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
@@ -59,13 +58,6 @@ struct SpawnAgentsOnCsvArgs {
 #[derive(Debug, Deserialize)]
 struct JobIdArgs {
     job_id: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct RunAgentJobArgs {
-    job_id: String,
-    max_concurrency: Option<usize>,
-    auto_export: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -165,7 +157,6 @@ impl ToolHandler for AgentJobsHandler {
 
         match tool_name.as_str() {
             "spawn_agents_on_csv" => spawn_agents_on_csv::handle(session, turn, arguments).await,
-            "run_agent_job" => run_agent_job::handle(session, turn, arguments).await,
             "get_agent_job_status" => get_agent_job_status::handle(session, arguments).await,
             "wait_agent_job" => wait_agent_job::handle(session, arguments).await,
             "export_agent_job_csv" => export_agent_job_csv::handle(session, turn, arguments).await,
@@ -303,60 +294,6 @@ mod spawn_agents_on_csv {
             FunctionCallError::Fatal(format!(
                 "failed to serialize spawn_agents_on_csv result: {err}"
             ))
-        })?;
-        Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(content),
-            success: Some(true),
-        })
-    }
-}
-
-mod run_agent_job {
-    use super::*;
-
-    pub async fn handle(
-        session: Arc<Session>,
-        turn: Arc<TurnContext>,
-        arguments: String,
-    ) -> Result<ToolOutput, FunctionCallError> {
-        let args: RunAgentJobArgs = parse_arguments(arguments.as_str())?;
-        let job_id = args.job_id;
-        let db = required_state_db(&session)?;
-        let job = db
-            .get_agent_job(job_id.as_str())
-            .await
-            .map_err(|err| {
-                FunctionCallError::RespondToModel(format!(
-                    "failed to load agent job {job_id}: {err}"
-                ))
-            })?
-            .ok_or_else(|| {
-                FunctionCallError::RespondToModel(format!("agent job {job_id} not found"))
-            })?;
-        if !job_runner_active(job_id.as_str()).await {
-            db.reset_agent_job_running_items(job_id.as_str())
-                .await
-                .map_err(|err| {
-                    FunctionCallError::RespondToModel(format!(
-                        "failed to reset running items for agent job {job_id}: {err}"
-                    ))
-                })?;
-        }
-        let options = build_runner_options(
-            &session,
-            &turn,
-            args.max_concurrency,
-            args.auto_export.or(Some(job.auto_export)),
-        )
-        .await?;
-        let started = start_job_runner(session, job_id.clone(), options).await?;
-        let status = render_job_status(db, job_id.as_str()).await?;
-        let content = serde_json::to_string(&json!({
-            "started": started,
-            "status": status,
-        }))
-        .map_err(|err| {
-            FunctionCallError::Fatal(format!("failed to serialize run_agent_job result: {err}"))
         })?;
         Ok(ToolOutput::Function {
             body: FunctionCallOutputBody::Text(content),
@@ -1194,6 +1131,7 @@ fn csv_escape(value: &str) -> String {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
 
     #[test]
     fn parse_csv_supports_quotes_and_commas() {
