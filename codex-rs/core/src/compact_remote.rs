@@ -19,27 +19,36 @@ use tracing::info;
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-) {
-    run_remote_compact_task_inner(&sess, &turn_context).await;
+) -> CodexResult<()> {
+    run_remote_compact_task_inner(&sess, &turn_context).await?;
+    Ok(())
 }
 
-pub(crate) async fn run_remote_compact_task(sess: Arc<Session>, turn_context: Arc<TurnContext>) {
+pub(crate) async fn run_remote_compact_task(
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+) -> CodexResult<()> {
     let start_event = EventMsg::TurnStarted(TurnStartedEvent {
         model_context_window: turn_context.model_context_window(),
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, start_event).await;
 
-    run_remote_compact_task_inner(&sess, &turn_context).await;
+    run_remote_compact_task_inner(&sess, &turn_context).await
 }
 
-async fn run_remote_compact_task_inner(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) {
+async fn run_remote_compact_task_inner(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+) -> CodexResult<()> {
     if let Err(err) = run_remote_compact_task_inner_impl(sess, turn_context).await {
         let event = EventMsg::Error(
             err.to_error_event(Some("Error running remote compact task".to_string())),
         );
         sess.send_event(turn_context, event).await;
+        return Err(err);
     }
+    Ok(())
 }
 
 async fn run_remote_compact_task_inner_impl(
