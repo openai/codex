@@ -492,6 +492,77 @@ async fn responses_websocket_v2_creates_with_previous_response_id_on_prefix() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_v2_after_error_uses_full_create_without_previous_response_id() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![
+        vec![vec![json!({
+            "type": "response.failed",
+            "response": {
+                "error": {
+                    "code": "invalid_prompt",
+                    "message": "synthetic websocket failure"
+                }
+            }
+        })]],
+        vec![vec![ev_response_created("resp-2"), ev_completed("resp-2")]],
+    ])
+    .await;
+
+    let harness = websocket_harness_with_v2(&server, true).await;
+    let mut session = harness.client.new_session();
+    let prompt_one = prompt_with_input(vec![message_item("hello")]);
+    let prompt_two = prompt_with_input(vec![message_item("hello"), message_item("second")]);
+
+    let mut first_stream = session
+        .stream(
+            &prompt_one,
+            &harness.model_info,
+            &harness.otel_manager,
+            harness.effort,
+            harness.summary,
+            None,
+        )
+        .await
+        .expect("websocket stream failed");
+    let mut saw_error = false;
+    while let Some(event) = first_stream.next().await {
+        if event.is_err() {
+            saw_error = true;
+            break;
+        }
+    }
+    assert!(saw_error, "expected first websocket stream to error");
+
+    stream_until_complete(&mut session, &harness, &prompt_two).await;
+
+    assert_eq!(server.handshakes().len(), 2);
+
+    let connections = server.connections();
+    assert_eq!(connections.len(), 2);
+    let first = connections
+        .first()
+        .and_then(|connection| connection.first())
+        .expect("missing first request")
+        .body_json();
+    let second = connections
+        .get(1)
+        .and_then(|connection| connection.first())
+        .expect("missing second request")
+        .body_json();
+
+    assert_eq!(first["type"].as_str(), Some("response.create"));
+    assert_eq!(second["type"].as_str(), Some("response.create"));
+    assert_eq!(second.get("previous_response_id"), None);
+    assert_eq!(
+        second["input"],
+        serde_json::to_value(&prompt_two.input).unwrap()
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_websocket_v2_sets_openai_beta_header() {
     skip_if_no_network!();
 
