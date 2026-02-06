@@ -431,6 +431,8 @@ mod tests {
             sandbox_permissions: Some(sandbox_permissions),
             prefix_rule: None,
             justification: justification.clone(),
+            description: None,
+            display_name: None,
         };
 
         let exec_params = ShellCommandHandler::to_exec_params(&params, &session, &turn_context);

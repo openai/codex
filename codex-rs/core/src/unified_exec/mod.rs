@@ -211,6 +211,8 @@ mod tests {
                     sandbox_permissions: SandboxPermissions::UseDefault,
                     justification: None,
                     prefix_rule: None,
+                    description: None,
+                    display_name: None,
                 },
                 &context,
             )

@@ -1996,6 +1996,8 @@ async fn exec_end_without_begin_uses_event_command() {
             exit_code: 0,
             duration: std::time::Duration::from_millis(5),
             formatted_output: "done".to_string(),
+            description: None,
+            display_name: None,
         }),
     });
 
