@@ -145,5 +145,5 @@ tree *args:
 # Run all CI checks (format, clippy, test, deny)
 ci: fmt clippy test deny
 
-# Quick pre-commit check (format + build)
-pre-commit: fmt build
+# Quick pre-commit check (format + type check, faster than full build)
+pre-commit: fmt check

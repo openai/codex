@@ -199,11 +199,11 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content.contains("Background Tasks"));
-        assert!(reminder.content.contains("Running"));
-        assert!(reminder.content.contains("npm test"));
-        assert!(reminder.content.contains("(new output)"));
-        assert!(reminder.content.contains("TaskOutput"));
+        assert!(reminder.content().unwrap().contains("Background Tasks"));
+        assert!(reminder.content().unwrap().contains("Running"));
+        assert!(reminder.content().unwrap().contains("npm test"));
+        assert!(reminder.content().unwrap().contains("(new output)"));
+        assert!(reminder.content().unwrap().contains("TaskOutput"));
     }
 
     #[tokio::test]
@@ -229,9 +229,9 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content.contains("Completed"));
-        assert!(reminder.content.contains("[exit: 0]"));
-        assert!(reminder.content.contains("[agent]"));
+        assert!(reminder.content().unwrap().contains("Completed"));
+        assert!(reminder.content().unwrap().contains("[exit: 0]"));
+        assert!(reminder.content().unwrap().contains("[agent]"));
     }
 
     #[tokio::test]
@@ -257,8 +257,8 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content.contains("Failed"));
-        assert!(reminder.content.contains("[exit: 1]"));
+        assert!(reminder.content().unwrap().contains("Failed"));
+        assert!(reminder.content().unwrap().contains("[exit: 1]"));
     }
 
     #[tokio::test]
@@ -304,10 +304,11 @@ mod tests {
         let reminder = result.expect("reminder");
         assert!(
             reminder
-                .content
+                .content()
+                .unwrap()
                 .contains("1 running, 1 completed, 1 failed")
         );
-        assert!(reminder.content.contains("[remote]"));
+        assert!(reminder.content().unwrap().contains("[remote]"));
     }
 
     #[test]

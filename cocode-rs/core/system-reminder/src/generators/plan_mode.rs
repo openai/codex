@@ -260,11 +260,16 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content.contains("Phase 1: Understand"));
-        assert!(reminder.content.contains("Phase 5: Review"));
-        assert!(reminder.content.contains("Write tool"));
-        assert!(reminder.content.contains("Edit tool"));
-        assert!(reminder.content.contains(".cocode/plans/test-plan.md"));
+        assert!(reminder.content().unwrap().contains("Phase 1: Understand"));
+        assert!(reminder.content().unwrap().contains("Phase 5: Review"));
+        assert!(reminder.content().unwrap().contains("Write tool"));
+        assert!(reminder.content().unwrap().contains("Edit tool"));
+        assert!(
+            reminder
+                .content()
+                .unwrap()
+                .contains(".cocode/plans/test-plan.md")
+        );
     }
 
     #[tokio::test]
@@ -283,8 +288,8 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(!reminder.content.contains("Phase 1")); // Sparse doesn't have phases
-        assert!(reminder.content.contains("ExitPlanMode"));
+        assert!(!reminder.content().unwrap().contains("Phase 1")); // Sparse doesn't have phases
+        assert!(reminder.content().unwrap().contains("ExitPlanMode"));
     }
 
     #[tokio::test]
@@ -304,8 +309,8 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(!reminder.content.contains("Phase 1")); // Sparse doesn't have phases
-        assert!(reminder.content.contains("ExitPlanMode"));
+        assert!(!reminder.content().unwrap().contains("Phase 1")); // Sparse doesn't have phases
+        assert!(reminder.content().unwrap().contains("ExitPlanMode"));
     }
 
     #[tokio::test]
@@ -326,8 +331,8 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content.contains("Phase 1")); // Full has phases
-        assert!(reminder.content.contains("Phase 5"));
+        assert!(reminder.content().unwrap().contains("Phase 1")); // Full has phases
+        assert!(reminder.content().unwrap().contains("Phase 5"));
     }
 
     #[tokio::test]
@@ -348,8 +353,8 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content.contains("Approved Plan"));
-        assert!(reminder.content.contains("Step 1: Do something"));
+        assert!(reminder.content().unwrap().contains("Approved Plan"));
+        assert!(reminder.content().unwrap().contains("Step 1: Do something"));
     }
 
     #[tokio::test]
@@ -368,9 +373,14 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content.contains("Write tool"));
-        assert!(reminder.content.contains("Edit tool"));
-        assert!(reminder.content.contains(".cocode/plans/plan.md"));
+        assert!(reminder.content().unwrap().contains("Write tool"));
+        assert!(reminder.content().unwrap().contains("Edit tool"));
+        assert!(
+            reminder
+                .content()
+                .unwrap()
+                .contains(".cocode/plans/plan.md")
+        );
     }
 
     #[tokio::test]

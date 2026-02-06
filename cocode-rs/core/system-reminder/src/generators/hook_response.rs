@@ -305,8 +305,8 @@ mod tests {
         assert!(result.is_some());
         let reminder = result.unwrap();
         assert_eq!(reminder.attachment_type, AttachmentType::AsyncHookResponse);
-        assert!(reminder.content.contains("test-hook"));
-        assert!(reminder.content.contains("Test context"));
+        assert!(reminder.content().unwrap().contains("test-hook"));
+        assert!(reminder.content().unwrap().contains("Test context"));
     }
 
     #[tokio::test]
@@ -325,8 +325,8 @@ mod tests {
         assert!(result.is_some());
         let reminder = result.unwrap();
         assert_eq!(reminder.attachment_type, AttachmentType::HookBlockingError);
-        assert!(reminder.content.contains("security-check"));
-        assert!(reminder.content.contains("Command not allowed"));
+        assert!(reminder.content().unwrap().contains("security-check"));
+        assert!(reminder.content().unwrap().contains("Command not allowed"));
     }
 
     #[tokio::test]
@@ -348,8 +348,8 @@ mod tests {
             reminder.attachment_type,
             AttachmentType::HookAdditionalContext
         );
-        assert!(reminder.content.contains("context-hook"));
-        assert!(reminder.content.contains("Session initialized"));
+        assert!(reminder.content().unwrap().contains("context-hook"));
+        assert!(reminder.content().unwrap().contains("Session initialized"));
     }
 
     #[test]

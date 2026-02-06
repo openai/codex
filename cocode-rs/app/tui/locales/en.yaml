@@ -75,6 +75,9 @@ command.delete_session: "Delete Session %{id}"
 # Thinking toggle
 command.toggle_thinking: "Toggle Thinking"
 
+# Clipboard paste
+command.paste_from_clipboard: "Paste from Clipboard"
+
 # Queue
 command.queue_input: "Queue Input"
 
@@ -163,6 +166,7 @@ help.tab: "Toggle plan mode"
 help.ctrl_t: "Cycle thinking level"
 help.ctrl_shift_t: "Toggle thinking display"
 help.ctrl_m: "Switch model"
+help.ctrl_v: "Paste (image or text)"
 help.ctrl_e: "Open external editor"
 help.ctrl_l: "Clear screen"
 help.ctrl_c: "Interrupt"
@@ -219,6 +223,9 @@ chat.thinking_active_collapsed: "Thinking (%{tokens} tokens, %{duration})... [Ct
 
 input.title: "Message"
 input.placeholder: "Type a message... (Enter to send, Shift+Enter for newline)"
+
+# Image paste
+toast.image_pasted: "Image pasted from clipboard"
 
 # Toast messages for queue
 toast.command_queued: "Queued (%{count} waiting)"

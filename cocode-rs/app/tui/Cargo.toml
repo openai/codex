@@ -33,6 +33,16 @@ cocode-loop = { workspace = true }
 # Text processing
 unicode-width = { workspace = true }
 textwrap = { workspace = true }
+regex = { workspace = true }
+
+# Paste support
+sha1 = { workspace = true }
+dirs = { workspace = true }
+hex = "0.4"
+base64 = { workspace = true }
+hyper-sdk = { workspace = true }
+arboard = { workspace = true }
+image = { workspace = true, features = ["png"] }
 
 # Utilities
 tracing = { workspace = true }
@@ -43,6 +53,7 @@ rust-i18n = { workspace = true }
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 insta = { workspace = true }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

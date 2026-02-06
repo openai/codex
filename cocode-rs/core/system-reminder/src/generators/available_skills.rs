@@ -133,9 +133,14 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content.contains("commit"));
-        assert!(reminder.content.contains("review-pr"));
-        assert!(reminder.content.contains("Generate a commit message"));
+        assert!(reminder.content().unwrap().contains("commit"));
+        assert!(reminder.content().unwrap().contains("review-pr"));
+        assert!(
+            reminder
+                .content()
+                .unwrap()
+                .contains("Generate a commit message")
+        );
     }
 
     #[test]

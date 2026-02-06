@@ -160,6 +160,7 @@ See [common/error/README.md](cocode-rs/common/error/README.md) for patterns and 
 | Decision | Rationale |
 |----------|-----------|
 | **No Prompt Caching** | Prompt caching (Anthropic's cache breakpoints feature) is not required for this project. Do not implement or plan for it. |
+| **No Deprecated Code** | When refactoring or implementing features, remove obsolete code completely. Do not mark as deprecated or maintain backward compatibility - delete it outright to keep the codebase clean and avoid technical debt. |
 
 ## References
 

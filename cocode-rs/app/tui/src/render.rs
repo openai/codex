@@ -413,6 +413,10 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
             Span::raw(format!("      {}", t!("help.ctrl_m"))),
         ]),
         Line::from(vec![
+            "Ctrl+V".bold().into(),
+            Span::raw(format!("      {}", t!("help.ctrl_v"))),
+        ]),
+        Line::from(vec![
             "Ctrl+E".bold().into(),
             Span::raw(format!("      {}", t!("help.ctrl_e"))),
         ]),

@@ -157,10 +157,10 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content.contains("Agent Notifications"));
-        assert!(reminder.content.contains("Errors"));
-        assert!(reminder.content.contains("explore-agent"));
-        assert!(reminder.content.contains("permission denied"));
+        assert!(reminder.content().unwrap().contains("Agent Notifications"));
+        assert!(reminder.content().unwrap().contains("Errors"));
+        assert!(reminder.content().unwrap().contains("explore-agent"));
+        assert!(reminder.content().unwrap().contains("permission denied"));
     }
 
     #[tokio::test]
@@ -191,10 +191,10 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content.contains("Awaiting Input"));
-        assert!(reminder.content.contains("Completed"));
-        assert!(reminder.content.contains("search-agent"));
-        assert!(reminder.content.contains("plan-agent"));
+        assert!(reminder.content().unwrap().contains("Awaiting Input"));
+        assert!(reminder.content().unwrap().contains("Completed"));
+        assert!(reminder.content().unwrap().contains("search-agent"));
+        assert!(reminder.content().unwrap().contains("plan-agent"));
     }
 
     #[test]

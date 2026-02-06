@@ -206,6 +206,7 @@ tiny_http = "0.12"
 urlencoding = "2"
 webbrowser = "1"
 which = "7"
+arboard = "3"
 
 # External - retrieval related
 async-stream = "0.3"
@@ -267,14 +268,25 @@ unwrap_used = "deny"
 [workspace.metadata.cargo-shear]
 ignored = ["cocode-utils-readiness"]
 
+[profile.dev]
+split-debuginfo = "unpacked"  # Skip dsymutil on macOS, faster incremental linking
+
+[profile.dev.package."*"]
+opt-level = 1  # Optimize third-party deps (compiled once, faster runtime)
+
 [profile.release]
-lto = "fat"
+lto = "thin"
 # Because we bundle some of these executables with the TypeScript CLI, we
 # remove everything to make the binary as small as possible.
 strip = "symbols"
 
 # See https://github.com/openai/codex/issues/1411 for details.
 codegen-units = 1
+
+[profile.ci]
+inherits = "dev"
+strip = true         # CI doesn't need debug symbols
+debug = false        # Disable debug info entirely, reduces artifact size 40-60%
 
 [profile.ci-test]
 debug = 1         # Reduce debug symbol size

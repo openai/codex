@@ -110,7 +110,10 @@ mod tests {
 
         let reminder = result.expect("reminder");
         assert_eq!(reminder.attachment_type, AttachmentType::QueuedCommands);
-        assert_eq!(reminder.content, "User sent: use TypeScript instead");
+        assert_eq!(
+            reminder.content().unwrap(),
+            "User sent: use TypeScript instead"
+        );
         assert!(reminder.is_meta);
     }
 
@@ -140,9 +143,19 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content.contains("User sent: use TypeScript"));
-        assert!(reminder.content.contains("User sent: add error handling"));
-        assert!(reminder.content.contains('\n'));
+        assert!(
+            reminder
+                .content()
+                .unwrap()
+                .contains("User sent: use TypeScript")
+        );
+        assert!(
+            reminder
+                .content()
+                .unwrap()
+                .contains("User sent: add error handling")
+        );
+        assert!(reminder.content().unwrap().contains('\n'));
     }
 
     #[test]

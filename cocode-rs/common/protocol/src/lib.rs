@@ -122,7 +122,6 @@ pub use loop_event::ToolResultContent;
 // Tool types
 pub use tool_types::ConcurrencySafety;
 pub use tool_types::ContextModifier;
-pub use tool_types::QueuedCommand;
 pub use tool_types::ToolOutput;
 pub use tool_types::ValidationError;
 pub use tool_types::ValidationResult;

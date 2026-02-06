@@ -30,10 +30,12 @@ use cocode_protocol::ToolResultContent;
 use cocode_skill::SkillManager;
 use cocode_system_reminder::FileTracker;
 use cocode_system_reminder::GeneratorContext;
+use cocode_system_reminder::InjectedBlock;
+use cocode_system_reminder::InjectedMessage;
 use cocode_system_reminder::QueuedCommandInfo;
 use cocode_system_reminder::SystemReminderConfig;
 use cocode_system_reminder::SystemReminderOrchestrator;
-use cocode_system_reminder::combine_reminders;
+use cocode_system_reminder::create_injected_messages;
 use cocode_system_reminder::generators::ASYNC_HOOK_RESPONSES_KEY;
 use cocode_system_reminder::generators::AVAILABLE_SKILLS_KEY;
 use cocode_system_reminder::generators::AsyncHookResponseInfo;
@@ -827,7 +829,7 @@ impl AgentLoop {
         let gen_ctx = gen_ctx_builder.build();
 
         let reminders = self.reminder_orchestrator.generate_all(&gen_ctx).await;
-        let reminder_content = combine_reminders(reminders);
+        let injected_messages = create_injected_messages(reminders);
 
         // ── STEP 7: Resolve model (permissions checked externally) ──
         // In this implementation, model selection is handled by ApiClient.
@@ -903,12 +905,7 @@ impl AgentLoop {
             }
 
             match self
-                .stream_with_tools(
-                    &turn_id,
-                    &executor,
-                    reminder_content.as_deref(),
-                    query_tracking,
-                )
+                .stream_with_tools(&turn_id, &executor, &injected_messages, query_tracking)
                 .await
             {
                 Ok(collected) => break collected,
@@ -1202,13 +1199,13 @@ impl AgentLoop {
     ///
     /// * `turn_id` - Unique identifier for this turn
     /// * `executor` - Tool executor for handling tool calls
-    /// * `reminder_content` - Optional system reminder content to inject
+    /// * `injected_messages` - Injected messages from system reminders
     /// * `query_tracking` - Query tracking info containing the real session_id (chain_id)
     async fn stream_with_tools(
         &mut self,
         turn_id: &str,
         executor: &StreamingToolExecutor,
-        reminder_content: Option<&str>,
+        injected_messages: &[InjectedMessage],
         query_tracking: &QueryTracking,
     ) -> anyhow::Result<CollectedResponse> {
         debug!(turn_id, "Sending API request");
@@ -1222,7 +1219,7 @@ impl AgentLoop {
             .map_err(|e| anyhow::anyhow!("Failed to prepare main model: {e}"))?;
 
         // Build messages and tools using existing logic
-        let (messages, tools) = self.build_messages_and_tools(reminder_content);
+        let (messages, tools) = self.build_messages_and_tools(injected_messages);
 
         // Use RequestBuilder to assemble the final request with context parameters
         let mut builder = RequestBuilder::new(ctx).messages(messages);
@@ -1423,10 +1420,10 @@ impl AgentLoop {
     ///
     /// # Arguments
     ///
-    /// * `reminder_content` - Optional system reminder content to inject
+    /// * `injected_messages` - Injected messages from system reminders
     fn build_messages_and_tools(
         &self,
-        reminder_content: Option<&str>,
+        injected_messages: &[InjectedMessage],
     ) -> (Vec<Message>, Vec<ToolDefinition>) {
         // Build system prompt
         let system_prompt = SystemPromptBuilder::build(&self.context);
@@ -1437,9 +1434,10 @@ impl AgentLoop {
         // Build messages with system, reminders, and conversation
         let mut all_messages = vec![Message::system(&system_prompt)];
 
-        // Inject system reminders as a user message before the conversation
-        if let Some(content) = reminder_content {
-            all_messages.push(Message::user(content));
+        // Inject system reminders as individual messages before the conversation
+        // This supports both text reminders and multi-message tool_use/tool_result pairs
+        for msg in injected_messages {
+            all_messages.push(self.convert_injected_message(msg));
         }
 
         all_messages.extend(messages);
@@ -1448,6 +1446,46 @@ impl AgentLoop {
         let tools: Vec<ToolDefinition> = self.tool_registry.all_definitions();
 
         (all_messages, tools)
+    }
+
+    /// Convert an injected message to an API Message.
+    fn convert_injected_message(&self, msg: &InjectedMessage) -> Message {
+        match msg {
+            InjectedMessage::UserText { content, .. } => {
+                // Text reminders become simple user messages
+                Message::user(content.as_str())
+            }
+            InjectedMessage::AssistantBlocks { blocks, .. } => {
+                // Assistant blocks (typically tool_use) become assistant messages
+                let content_blocks: Vec<ContentBlock> =
+                    blocks.iter().map(Self::convert_injected_block).collect();
+                Message::new(hyper_sdk::Role::Assistant, content_blocks)
+            }
+            InjectedMessage::UserBlocks { blocks, .. } => {
+                // User blocks (typically tool_result) become user messages
+                let content_blocks: Vec<ContentBlock> =
+                    blocks.iter().map(Self::convert_injected_block).collect();
+                Message::new(hyper_sdk::Role::User, content_blocks)
+            }
+        }
+    }
+
+    /// Convert an injected block to a hyper_sdk ContentBlock.
+    fn convert_injected_block(block: &InjectedBlock) -> ContentBlock {
+        match block {
+            InjectedBlock::Text(text) => ContentBlock::text(text.as_str()),
+            InjectedBlock::ToolUse { id, name, input } => {
+                ContentBlock::tool_use(id.as_str(), name.as_str(), input.clone())
+            }
+            InjectedBlock::ToolResult {
+                tool_use_id,
+                content,
+            } => ContentBlock::tool_result(
+                tool_use_id.as_str(),
+                hyper_sdk::ToolResultContent::text(content.as_str()),
+                false,
+            ),
+        }
     }
 
     /// Micro-compaction: remove old tool results to save tokens (no LLM call).
@@ -2144,7 +2182,6 @@ impl AgentLoop {
     /// appropriate stores:
     /// - `FileRead`: Updates the FileTracker with file content and timestamps
     /// - `PermissionGranted`: Updates the ApprovalStore with granted permissions
-    /// - `QueueCommand`: Logs queued commands (execution not yet implemented)
     async fn apply_modifiers(&mut self, modifiers: &[ContextModifier]) {
         for modifier in modifiers {
             match modifier {
@@ -2172,17 +2209,6 @@ impl AgentLoop {
                         tool = %tool,
                         pattern = %pattern,
                         "Applied PermissionGranted modifier"
-                    );
-                }
-                ContextModifier::QueueCommand { command } => {
-                    // Log the queued command - actual execution not yet implemented
-                    // This could be used for deferred operations like running tests
-                    // after code changes are complete
-                    debug!(
-                        command = %command.command,
-                        args = ?command.args,
-                        priority = command.priority,
-                        "QueueCommand modifier recorded (execution not implemented)"
                     );
                 }
             }

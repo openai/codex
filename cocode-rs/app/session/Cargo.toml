@@ -21,6 +21,7 @@ cocode-executor.workspace = true
 # Internal - features
 cocode-hooks.workspace = true
 cocode-skill.workspace = true
+cocode-system-reminder.workspace = true
 
 # Internal - provider SDK
 hyper-sdk.workspace = true

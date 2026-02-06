@@ -307,8 +307,8 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content.contains("Read tool"));
-        assert!(reminder.content.contains("line 1"));
+        assert!(reminder.content().unwrap().contains("Read tool"));
+        assert!(reminder.content().unwrap().contains("line 1"));
     }
 
     #[tokio::test]
@@ -337,10 +337,10 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content.contains("line 3"));
-        assert!(reminder.content.contains("line 4"));
-        assert!(reminder.content.contains("line 5"));
-        assert!(!reminder.content.contains("line 6"));
+        assert!(reminder.content().unwrap().contains("line 3"));
+        assert!(reminder.content().unwrap().contains("line 4"));
+        assert!(reminder.content().unwrap().contains("line 5"));
+        assert!(!reminder.content().unwrap().contains("line 6"));
     }
 
     #[test]

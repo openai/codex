@@ -221,9 +221,22 @@ async fn run_agent_driver(
         };
 
         match command {
-            UserCommand::SubmitInput { message } => {
+            UserCommand::SubmitInput {
+                content,
+                display_text,
+            } => {
+                // Extract text content for the agent (for now, we concatenate text blocks)
+                // TODO: Support multimodal content in the agent
+                let message: String = content
+                    .iter()
+                    .filter_map(|block| block.as_text())
+                    .collect::<Vec<_>>()
+                    .join("");
+
                 info!(
                     input_len = message.len(),
+                    display_len = display_text.len(),
+                    content_blocks = content.len(),
                     correlation_id = ?correlation_id.as_ref().map(|id| id.as_str()),
                     "Processing user input"
                 );
@@ -422,14 +435,16 @@ async fn run_agent_driver(
                 }
             }
             UserCommand::QueueCommand { prompt } => {
-                // Queue command for later processing
-                // In the current simplified runner, we just process it immediately
-                // In the full AgentLoop, this would be queued and processed after current turn
+                // Queue command for real-time steering and post-idle processing.
+                // The command is:
+                // 1. Injected as `<system-reminder>User sent: {message}</system-reminder>` for steering
+                // 2. Executed as a new user turn after the current turn completes
+                let id = state.queue_command(&prompt);
                 info!(
                     prompt_len = prompt.len(),
-                    "Command queued (processing immediately in simplified runner)"
+                    queued_count = state.queued_count(),
+                    "Command queued for steering and post-idle execution"
                 );
-                let id = uuid::Uuid::new_v4().to_string();
                 let preview = if prompt.len() > 30 {
                     format!("{}...", &prompt[..30])
                 } else {
@@ -440,7 +455,8 @@ async fn run_agent_driver(
                     .await;
             }
             UserCommand::ClearQueues => {
-                info!("Clear queues requested");
+                state.clear_queued_commands();
+                info!("Cleared all queued commands");
                 let _ = event_tx
                     .send(LoopEvent::QueueStateChanged { queued: 0 })
                     .await;

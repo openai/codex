@@ -224,6 +224,12 @@ fn handle_global_key(key: KeyEvent) -> Option<TuiCommand> {
         // Quit (Ctrl+Q)
         (KeyModifiers::CONTROL, KeyCode::Char('q')) => Some(TuiCommand::Quit),
 
+        // Smart paste from clipboard: image first, text fallback (Ctrl+V)
+        (KeyModifiers::CONTROL, KeyCode::Char('v')) => Some(TuiCommand::PasteFromClipboard),
+
+        // Alt+V: Windows fallback where Ctrl+V may be intercepted by terminal
+        (KeyModifiers::ALT, KeyCode::Char('v')) => Some(TuiCommand::PasteFromClipboard),
+
         // Cancel (Escape)
         (_, KeyCode::Esc) => Some(TuiCommand::Cancel),
 

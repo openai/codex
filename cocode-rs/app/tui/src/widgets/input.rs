@@ -1,7 +1,7 @@
 //! Input widget.
 //!
 //! Multi-line input field with cursor support and syntax highlighting
-//! for @mentions (cyan) and /commands (magenta).
+//! for @mentions (cyan), /commands (magenta), and paste pills (green).
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -15,6 +15,7 @@ use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 
 use crate::i18n::t;
+use crate::paste::is_paste_pill;
 use crate::state::InputState;
 
 /// Token type for syntax highlighting.
@@ -26,6 +27,8 @@ enum TokenType {
     AtMention,
     /// /command (skill).
     SlashCommand,
+    /// Paste pill ([Pasted text #1], [Image #1]).
+    PastePill,
 }
 
 /// A token in the input text.
@@ -53,9 +56,43 @@ fn tokenize(text: &str) -> Vec<Token> {
     let mut chars = text.chars().peekable();
     let mut in_mention = false;
     let mut in_command = false;
+    let mut in_pill = false;
+    let mut pill_buffer = String::new();
 
     while let Some(c) = chars.next() {
         match c {
+            '[' if !in_mention && !in_command && !in_pill => {
+                // Potential start of a paste pill
+                // Flush current text
+                if !current_text.is_empty() {
+                    tokens.push(Token::new(&current_text, TokenType::Text));
+                    current_text.clear();
+                }
+                pill_buffer.push(c);
+                in_pill = true;
+            }
+            ']' if in_pill => {
+                // End of potential pill
+                pill_buffer.push(c);
+                if is_paste_pill(&pill_buffer) {
+                    tokens.push(Token::new(&pill_buffer, TokenType::PastePill));
+                } else {
+                    // Not a valid pill, treat as regular text
+                    tokens.push(Token::new(&pill_buffer, TokenType::Text));
+                }
+                pill_buffer.clear();
+                in_pill = false;
+            }
+            _ if in_pill => {
+                pill_buffer.push(c);
+                // Safety limit: pills shouldn't be too long
+                if pill_buffer.len() > 50 {
+                    // Not a pill, flush as text
+                    current_text.push_str(&pill_buffer);
+                    pill_buffer.clear();
+                    in_pill = false;
+                }
+            }
             '@' if !in_mention && !in_command => {
                 // Check if this is a valid @mention start (at start or after whitespace)
                 let is_valid_start =
@@ -107,6 +144,11 @@ fn tokenize(text: &str) -> Vec<Token> {
                 current_text.push(c);
             }
         }
+    }
+
+    // Flush any remaining pill buffer as text
+    if !pill_buffer.is_empty() {
+        current_text.push_str(&pill_buffer);
     }
 
     // Flush remaining text
@@ -267,6 +309,7 @@ impl<'a> InputWidget<'a> {
             TokenType::Text => Span::raw(text.to_string()),
             TokenType::AtMention => Span::raw(text.to_string()).cyan(),
             TokenType::SlashCommand => Span::raw(text.to_string()).magenta(),
+            TokenType::PastePill => Span::raw(text.to_string()).green().italic(),
         }
     }
 }
@@ -428,6 +471,48 @@ mod tests {
     fn test_tokenize_slash_not_at_start() {
         // / in middle of word should not be a command
         let tokens = tokenize("path/to/file");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].token_type, TokenType::Text);
+    }
+
+    #[test]
+    fn test_tokenize_paste_pill() {
+        let tokens = tokenize("[Pasted text #1]");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].token_type, TokenType::PastePill);
+        assert_eq!(tokens[0].text, "[Pasted text #1]");
+    }
+
+    #[test]
+    fn test_tokenize_paste_pill_with_lines() {
+        let tokens = tokenize("[Pasted text #1 +420 lines]");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].token_type, TokenType::PastePill);
+    }
+
+    #[test]
+    fn test_tokenize_image_pill() {
+        let tokens = tokenize("[Image #1]");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].token_type, TokenType::PastePill);
+    }
+
+    #[test]
+    fn test_tokenize_mixed_with_pill() {
+        let tokens = tokenize("Please analyze [Pasted text #1] and tell me");
+        assert_eq!(tokens.len(), 3);
+        assert_eq!(tokens[0].token_type, TokenType::Text);
+        assert_eq!(tokens[0].text, "Please analyze ");
+        assert_eq!(tokens[1].token_type, TokenType::PastePill);
+        assert_eq!(tokens[1].text, "[Pasted text #1]");
+        assert_eq!(tokens[2].token_type, TokenType::Text);
+        assert_eq!(tokens[2].text, " and tell me");
+    }
+
+    #[test]
+    fn test_tokenize_non_pill_brackets() {
+        // Regular brackets that aren't paste pills
+        let tokens = tokenize("[some other thing]");
         assert_eq!(tokens.len(), 1);
         assert_eq!(tokens[0].token_type, TokenType::Text);
     }

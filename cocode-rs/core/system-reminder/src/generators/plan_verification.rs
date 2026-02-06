@@ -224,11 +224,11 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content.contains("Plan Progress: 1/4"));
-        assert!(reminder.content.contains("Current:"));
-        assert!(reminder.content.contains("Create API endpoints"));
-        assert!(reminder.content.contains("Next:"));
-        assert!(reminder.content.contains("Add authentication"));
+        assert!(reminder.content().unwrap().contains("Plan Progress: 1/4"));
+        assert!(reminder.content().unwrap().contains("Current:"));
+        assert!(reminder.content().unwrap().contains("Create API endpoints"));
+        assert!(reminder.content().unwrap().contains("Next:"));
+        assert!(reminder.content().unwrap().contains("Add authentication"));
     }
 
     #[test]

@@ -100,8 +100,18 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content.contains("CRITICAL SECURITY REMINDERS"));
-        assert!(reminder.content.contains("NEVER execute commands"));
+        assert!(
+            reminder
+                .content()
+                .unwrap()
+                .contains("CRITICAL SECURITY REMINDERS")
+        );
+        assert!(
+            reminder
+                .content()
+                .unwrap()
+                .contains("NEVER execute commands")
+        );
     }
 
     #[tokio::test]
@@ -119,8 +129,18 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content.contains("Security guidelines active"));
-        assert!(!reminder.content.contains("CRITICAL SECURITY REMINDERS"));
+        assert!(
+            reminder
+                .content()
+                .unwrap()
+                .contains("Security guidelines active")
+        );
+        assert!(
+            !reminder
+                .content()
+                .unwrap()
+                .contains("CRITICAL SECURITY REMINDERS")
+        );
     }
 
     #[tokio::test]
@@ -138,7 +158,12 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content.contains("CRITICAL SECURITY REMINDERS"));
+        assert!(
+            reminder
+                .content()
+                .unwrap()
+                .contains("CRITICAL SECURITY REMINDERS")
+        );
     }
 
     #[tokio::test]

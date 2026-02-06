@@ -138,7 +138,7 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content.contains("Delegate Mode Active"));
+        assert!(reminder.content().unwrap().contains("Delegate Mode Active"));
     }
 
     #[tokio::test]
@@ -170,10 +170,15 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content.contains("Active Agents"));
-        assert!(reminder.content.contains("agent-1"));
-        assert!(reminder.content.contains("Explore"));
-        assert!(reminder.content.contains("Searching for API endpoints"));
+        assert!(reminder.content().unwrap().contains("Active Agents"));
+        assert!(reminder.content().unwrap().contains("agent-1"));
+        assert!(reminder.content().unwrap().contains("Explore"));
+        assert!(
+            reminder
+                .content()
+                .unwrap()
+                .contains("Searching for API endpoints")
+        );
     }
 
     #[tokio::test]
@@ -192,8 +197,18 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content.contains("Exiting Delegate Mode"));
-        assert!(reminder.content.contains("Synthesize the results"));
+        assert!(
+            reminder
+                .content()
+                .unwrap()
+                .contains("Exiting Delegate Mode")
+        );
+        assert!(
+            reminder
+                .content()
+                .unwrap()
+                .contains("Synthesize the results")
+        );
     }
 
     #[test]

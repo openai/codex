@@ -140,9 +140,14 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content.contains("Plan Approved"));
-        assert!(reminder.content.contains("Begin Implementation"));
-        assert!(reminder.content.contains("Step 1: Implement feature X"));
+        assert!(reminder.content().unwrap().contains("Plan Approved"));
+        assert!(reminder.content().unwrap().contains("Begin Implementation"));
+        assert!(
+            reminder
+                .content()
+                .unwrap()
+                .contains("Step 1: Implement feature X")
+        );
     }
 
     #[test]

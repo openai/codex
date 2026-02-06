@@ -5,6 +5,7 @@
 
 use cocode_protocol::SubmissionId;
 use cocode_protocol::ThinkingLevel;
+use hyper_sdk::ContentBlock;
 
 /// Commands sent from the TUI to the core agent.
 ///
@@ -14,8 +15,10 @@ use cocode_protocol::ThinkingLevel;
 pub enum UserCommand {
     /// Submit user input to the agent.
     SubmitInput {
-        /// The message to send to the agent.
-        message: String,
+        /// Content blocks (text, images) to send to the agent.
+        content: Vec<ContentBlock>,
+        /// Original display text (with pills) for chat history.
+        display_text: String,
     },
 
     /// Interrupt the current operation.
@@ -87,8 +90,12 @@ impl UserCommand {
     ///
     /// ```
     /// use cocode_tui::UserCommand;
+    /// use hyper_sdk::ContentBlock;
     ///
-    /// let cmd = UserCommand::SubmitInput { message: "Hello".to_string() };
+    /// let cmd = UserCommand::SubmitInput {
+    ///     content: vec![ContentBlock::text("Hello")],
+    ///     display_text: "Hello".to_string(),
+    /// };
     /// let (id, cmd) = cmd.with_correlation_id();
     /// // `id` can now be used to track events related to this command
     /// ```
@@ -112,11 +119,11 @@ impl UserCommand {
 impl std::fmt::Display for UserCommand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            UserCommand::SubmitInput { message } => {
-                let preview = if message.len() > 20 {
-                    format!("{}...", &message[..20])
+            UserCommand::SubmitInput { display_text, .. } => {
+                let preview = if display_text.len() > 20 {
+                    format!("{}...", &display_text[..20])
                 } else {
-                    message.clone()
+                    display_text.clone()
                 };
                 write!(f, "SubmitInput({preview:?})")
             }
@@ -165,7 +172,8 @@ mod tests {
     #[test]
     fn test_user_command_display() {
         let cmd = UserCommand::SubmitInput {
-            message: "Hello, world!".to_string(),
+            content: vec![ContentBlock::text("Hello, world!")],
+            display_text: "Hello, world!".to_string(),
         };
         assert!(cmd.to_string().contains("SubmitInput"));
 
@@ -200,7 +208,8 @@ mod tests {
     fn test_long_message_truncation() {
         let long_message = "This is a very long message that should be truncated in display";
         let cmd = UserCommand::SubmitInput {
-            message: long_message.to_string(),
+            content: vec![ContentBlock::text(long_message)],
+            display_text: long_message.to_string(),
         };
         let display = cmd.to_string();
         assert!(display.contains("..."));
@@ -210,7 +219,8 @@ mod tests {
     #[test]
     fn test_with_correlation_id() {
         let cmd = UserCommand::SubmitInput {
-            message: "Hello".to_string(),
+            content: vec![ContentBlock::text("Hello")],
+            display_text: "Hello".to_string(),
         };
         let (id1, cmd1) = cmd.with_correlation_id();
 
@@ -218,8 +228,8 @@ mod tests {
         assert_eq!(id1.as_str().len(), 36);
 
         // Command should be preserved
-        if let UserCommand::SubmitInput { message } = cmd1 {
-            assert_eq!(message, "Hello");
+        if let UserCommand::SubmitInput { display_text, .. } = cmd1 {
+            assert_eq!(display_text, "Hello");
         } else {
             panic!("Expected SubmitInput command");
         }
@@ -235,7 +245,8 @@ mod tests {
         // Commands that trigger turns
         assert!(
             UserCommand::SubmitInput {
-                message: "test".to_string()
+                content: vec![ContentBlock::text("test")],
+                display_text: "test".to_string()
             }
             .triggers_turn()
         );

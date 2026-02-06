@@ -149,8 +149,13 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content.contains("@agent-search"));
-        assert!(reminder.content.contains("search and exploration"));
+        assert!(reminder.content().unwrap().contains("@agent-search"));
+        assert!(
+            reminder
+                .content()
+                .unwrap()
+                .contains("search and exploration")
+        );
     }
 
     #[tokio::test]
@@ -170,8 +175,8 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content.contains("@agent-plan"));
-        assert!(reminder.content.contains("@agent-edit"));
+        assert!(reminder.content().unwrap().contains("@agent-plan"));
+        assert!(reminder.content().unwrap().contains("@agent-edit"));
     }
 
     #[test]

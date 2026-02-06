@@ -151,11 +151,11 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content.contains("In Progress"));
-        assert!(reminder.content.contains("Implement feature X"));
-        assert!(reminder.content.contains("Pending"));
-        assert!(reminder.content.contains("Write tests"));
-        assert!(reminder.content.contains("1/3 tasks completed"));
+        assert!(reminder.content().unwrap().contains("In Progress"));
+        assert!(reminder.content().unwrap().contains("Implement feature X"));
+        assert!(reminder.content().unwrap().contains("Pending"));
+        assert!(reminder.content().unwrap().contains("Write tests"));
+        assert!(reminder.content().unwrap().contains("1/3 tasks completed"));
     }
 
     #[tokio::test]
@@ -179,7 +179,7 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content.contains("(blocked)"));
+        assert!(reminder.content().unwrap().contains("(blocked)"));
     }
 
     #[test]

@@ -39,11 +39,13 @@
 rust_i18n::i18n!("locales", fallback = "en");
 
 pub mod app;
+pub mod clipboard_paste;
 pub mod command;
 pub mod editor;
 pub mod event;
 pub mod file_search;
 pub mod i18n;
+pub mod paste;
 pub mod render;
 pub mod skill_search;
 pub mod state;
@@ -82,6 +84,11 @@ pub use editor::edit_in_external_editor;
 // Theme system
 pub use theme::Theme;
 pub use theme::ThemeName;
+
+// Paste management
+pub use paste::PasteEntry;
+pub use paste::PasteKind;
+pub use paste::PasteManager;
 
 // Re-export correlation types from protocol for convenience
 pub use cocode_protocol::AgentStatus;

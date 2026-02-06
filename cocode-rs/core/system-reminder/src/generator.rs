@@ -227,6 +227,24 @@ pub struct BudgetInfo {
     pub is_low: bool,
 }
 
+/// Key for compacted large files in extension_data.
+pub const COMPACTED_LARGE_FILES_KEY: &str = "compacted_large_files";
+
+/// Information about a large file that was compacted.
+///
+/// Used to track files that were read before compaction but are too large
+/// to include in the restored context. The CompactFileReferenceGenerator
+/// uses this to inform the model about these files.
+#[derive(Debug, Clone)]
+pub struct CompactedLargeFile {
+    /// Path to the file.
+    pub path: PathBuf,
+    /// Number of lines in the file.
+    pub line_count: usize,
+    /// File size in bytes.
+    pub byte_size: usize,
+}
+
 /// Collaboration notification from another agent.
 #[derive(Debug, Clone)]
 pub struct CollabNotification {
@@ -413,6 +431,13 @@ impl<'a> GeneratorContext<'a> {
     /// Check if budget is low (< 10% remaining).
     pub fn is_budget_low(&self) -> bool {
         self.budget.as_ref().map(|b| b.is_low).unwrap_or(false)
+    }
+
+    /// Get extension data by key, downcast to the expected type.
+    pub fn get_extension<T: 'static + Send + Sync>(&self, key: &str) -> Option<&T> {
+        self.extension_data
+            .get(key)
+            .and_then(|v| v.downcast_ref::<T>())
     }
 
     /// Check if full reminders should be used this turn.

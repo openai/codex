@@ -14,9 +14,12 @@ use tracing::warn;
 use crate::config::SystemReminderConfig;
 use crate::generator::AttachmentGenerator;
 use crate::generator::GeneratorContext;
+use crate::generators::AlreadyReadFilesGenerator;
 use crate::generators::AvailableSkillsGenerator;
+use crate::generators::BudgetUsdGenerator;
 use crate::generators::ChangedFilesGenerator;
 use crate::generators::CollabNotificationsGenerator;
+use crate::generators::CompactFileReferenceGenerator;
 use crate::generators::DelegateModeGenerator;
 use crate::generators::LspDiagnosticsGenerator;
 use crate::generators::NestedMemoryGenerator;
@@ -103,6 +106,10 @@ impl SystemReminderOrchestrator {
             Arc::new(PlanVerificationGenerator),
             Arc::new(TokenUsageGenerator),
             Arc::new(QueuedCommandsGenerator),
+            // New generators for enhanced features
+            Arc::new(AlreadyReadFilesGenerator),
+            Arc::new(BudgetUsdGenerator),
+            Arc::new(CompactFileReferenceGenerator),
         ]
     }
 

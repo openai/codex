@@ -88,6 +88,12 @@ pub struct AttachmentSettings {
     pub token_usage: bool,
     /// Enable security guidelines (dual-placed for compaction survival).
     pub security_guidelines: bool,
+    /// Enable already read files tracking (generates tool_use/tool_result pairs).
+    pub already_read_files: bool,
+    /// Enable budget warnings.
+    pub budget_usd: bool,
+    /// Enable compact file references (for large files after compaction).
+    pub compact_file_reference: bool,
 
     /// Minimum severity for LSP diagnostics (error, warning, info, hint).
     pub lsp_diagnostics_min_severity: DiagnosticSeverity,
@@ -115,6 +121,9 @@ impl Default for AttachmentSettings {
             plan_verification: true,
             token_usage: true,
             security_guidelines: true,
+            already_read_files: true,
+            budget_usd: true,
+            compact_file_reference: true,
             lsp_diagnostics_min_severity: DiagnosticSeverity::Warning,
         }
     }

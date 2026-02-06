@@ -25,6 +25,7 @@ use cocode_protocol::ThinkingLevel;
 use cocode_protocol::TokenUsage;
 use cocode_protocol::model::ModelRole;
 use cocode_skill::SkillInterface;
+use cocode_system_reminder::QueuedCommandInfo;
 use cocode_tools::ToolRegistry;
 
 use serde::Deserialize;
@@ -153,6 +154,12 @@ pub struct SessionState {
 
     /// Provider type for the current session.
     provider_type: ProviderType,
+
+    /// Queued commands for real-time steering (Enter during streaming).
+    /// These commands are:
+    /// 1. Injected as `<system-reminder>User sent: {message}</system-reminder>` for steering
+    /// 2. Executed as new user turns after the current turn completes
+    queued_commands: Vec<QueuedCommandInfo>,
 }
 
 impl SessionState {
@@ -240,6 +247,7 @@ impl SessionState {
             total_output_tokens: 0,
             context_window,
             provider_type,
+            queued_commands: Vec::new(),
         })
     }
 
@@ -586,6 +594,50 @@ impl SessionState {
     }
 
     // ==========================================================
+    // Queued Commands API
+    // ==========================================================
+
+    /// Queue a command for real-time steering.
+    ///
+    /// Queued commands serve dual purpose:
+    /// 1. Injected as `<system-reminder>User sent: {message}</system-reminder>` immediately
+    /// 2. Executed as new user turns after the current turn completes
+    ///
+    /// This matches Claude Code's behavior where Enter during streaming both
+    /// steers the current turn and queues for later execution.
+    ///
+    /// Returns the command ID.
+    pub fn queue_command(&mut self, prompt: impl Into<String>) -> String {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let id = uuid::Uuid::new_v4().to_string();
+        let cmd = QueuedCommandInfo {
+            id: id.clone(),
+            prompt: prompt.into(),
+            queued_at: now,
+        };
+        self.queued_commands.push(cmd);
+        id
+    }
+
+    /// Get the number of queued commands.
+    pub fn queued_count(&self) -> usize {
+        self.queued_commands.len()
+    }
+
+    /// Take all queued commands (for passing to AgentLoop).
+    pub fn take_queued_commands(&mut self) -> Vec<QueuedCommandInfo> {
+        std::mem::take(&mut self.queued_commands)
+    }
+
+    /// Clear all queued commands.
+    pub fn clear_queued_commands(&mut self) {
+        self.queued_commands.clear();
+    }
+
+    // ==========================================================
     // Streaming Turn API
     // ==========================================================
 
@@ -648,6 +700,7 @@ impl SessionState {
 
         // Build and run the agent loop with the provided event channel
         // Clone selections so the loop has its own copy (isolation)
+        // Pass queued commands for real-time steering and post-idle processing
         let mut loop_instance = AgentLoop::builder()
             .api_client(self.api_client.clone())
             .model_hub(self.model_hub.clone())
@@ -660,9 +713,17 @@ impl SessionState {
             .hooks(self.hook_registry.clone())
             .event_tx(event_tx)
             .cancel_token(self.cancel_token.clone())
+            .queued_commands(std::mem::take(&mut self.queued_commands))
             .build();
 
-        let result = loop_instance.run(user_input).await?;
+        // Use run_and_process_queue to:
+        // 1. Inject queued commands as steering reminders during current turn
+        // 2. Execute remaining queued commands as new turns after idle
+        let result = loop_instance.run_and_process_queue(user_input).await?;
+
+        // Capture any new queued commands that were added during the loop
+        // (e.g., if user queues more commands during streaming)
+        self.queued_commands = loop_instance.take_queued_commands();
 
         // Update totals
         self.total_turns += result.turns_completed;

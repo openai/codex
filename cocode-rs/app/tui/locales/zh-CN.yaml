@@ -75,6 +75,9 @@ command.delete_session: "删除会话 %{id}"
 # 思考切换
 command.toggle_thinking: "切换思考显示"
 
+# 剪贴板粘贴
+command.paste_from_clipboard: "从剪贴板粘贴"
+
 # 队列
 command.queue_input: "排队输入"
 
@@ -163,6 +166,7 @@ help.tab: "切换计划模式"
 help.ctrl_t: "切换思考级别"
 help.ctrl_shift_t: "切换思考显示"
 help.ctrl_m: "切换模型"
+help.ctrl_v: "粘贴（图片或文本）"
 help.ctrl_e: "打开外部编辑器"
 help.ctrl_l: "清屏"
 help.ctrl_c: "中断"
@@ -219,6 +223,9 @@ chat.thinking_active_collapsed: "思考中 (%{tokens} tokens, %{duration})... [C
 
 input.title: "消息"
 input.placeholder: "输入消息... (Enter 发送, Shift+Enter 换行)"
+
+# 图片粘贴
+toast.image_pasted: "已从剪贴板粘贴图片"
 
 # 队列提示消息
 toast.command_queued: "已排队 (%{count} 等待中)"

@@ -19,8 +19,6 @@ futures = { workspace = true, features = ["alloc"] }
 regex-lite.workspace = true
 chrono.workspace = true
 uuid = { workspace = true, features = ["v4"] }
-notify = "8"
-notify-debouncer-mini = "0.6"
 similar.workspace = true
 
 [dev-dependencies]

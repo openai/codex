@@ -219,6 +219,10 @@ pub enum TuiCommand {
     /// Toggle display of thinking content in chat.
     ToggleThinking,
 
+    // ========== Clipboard Paste ==========
+    /// Smart paste from clipboard: try image first, fall back to text.
+    PasteFromClipboard,
+
     // ========== Queue ==========
     /// Queue input for later processing (Enter while streaming).
     ///
@@ -296,6 +300,9 @@ impl std::fmt::Display for TuiCommand {
             TuiCommand::LoadSession(id) => write!(f, "{}", t!("command.load_session", id = id)),
             TuiCommand::DeleteSession(id) => write!(f, "{}", t!("command.delete_session", id = id)),
             TuiCommand::ToggleThinking => write!(f, "{}", t!("command.toggle_thinking")),
+            TuiCommand::PasteFromClipboard => {
+                write!(f, "{}", t!("command.paste_from_clipboard"))
+            }
             TuiCommand::QueueInput => write!(f, "{}", t!("command.queue_input")),
             TuiCommand::Quit => write!(f, "{}", t!("command.quit")),
         }

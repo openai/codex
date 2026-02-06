@@ -4,10 +4,13 @@
 //! for different types of system reminders.
 
 pub mod agent_mentions;
+pub mod already_read_files;
 pub mod at_mentioned_files;
 pub mod available_skills;
+pub mod budget_usd;
 pub mod changed_files;
 pub mod collab_notifications;
+pub mod compact_file_reference;
 pub mod delegate_mode;
 pub mod hook_response;
 pub mod invoked_skills;
@@ -25,12 +28,15 @@ pub mod unified_tasks;
 
 // Re-export generators
 pub use agent_mentions::AgentMentionsGenerator;
+pub use already_read_files::AlreadyReadFilesGenerator;
 pub use at_mentioned_files::AtMentionedFilesGenerator;
 pub use available_skills::AVAILABLE_SKILLS_KEY;
 pub use available_skills::AvailableSkillsGenerator;
 pub use available_skills::SkillInfo;
+pub use budget_usd::BudgetUsdGenerator;
 pub use changed_files::ChangedFilesGenerator;
 pub use collab_notifications::CollabNotificationsGenerator;
+pub use compact_file_reference::CompactFileReferenceGenerator;
 pub use delegate_mode::DelegateModeGenerator;
 pub use hook_response::ASYNC_HOOK_RESPONSES_KEY;
 pub use hook_response::AsyncHookResponseGenerator;

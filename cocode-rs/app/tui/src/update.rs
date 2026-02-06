@@ -12,6 +12,7 @@ use crate::command::UserCommand;
 use crate::event::TuiCommand;
 use crate::file_search::FileSearchEvent;
 use crate::i18n::t;
+use crate::paste::PasteManager;
 use crate::state::AppState;
 use crate::state::ChatMessage;
 use crate::state::FileSuggestionItem;
@@ -30,6 +31,7 @@ pub async fn handle_command(
     cmd: TuiCommand,
     command_tx: &mpsc::Sender<UserCommand>,
     available_models: &[String],
+    paste_manager: &PasteManager,
 ) {
     match cmd {
         // ========== Mode Toggles ==========
@@ -71,20 +73,31 @@ pub async fn handle_command(
 
         // ========== Input Actions ==========
         TuiCommand::SubmitInput => {
-            let message = state.ui.input.take();
-            if !message.trim().is_empty() {
-                // Add user message to chat
+            let raw_message = state.ui.input.take();
+            if !raw_message.trim().is_empty() {
+                // Resolve paste pills to content blocks for API
+                let content = paste_manager.resolve_to_blocks(&raw_message);
+
+                // Keep original text (with pills) for display in chat history
+                let display_text = raw_message.clone();
+
+                // Add user message to chat (display version)
                 let msg_id = format!("user-{}", state.session.messages.len());
                 state
                     .session
-                    .add_message(ChatMessage::user(&msg_id, &message));
+                    .add_message(ChatMessage::user(&msg_id, &display_text));
 
                 // Save to history with frecency tracking
-                state.ui.input.add_to_history(message.clone());
+                state.ui.input.add_to_history(raw_message);
                 state.ui.input.history_index = None;
 
-                // Send to core
-                let _ = command_tx.send(UserCommand::SubmitInput { message }).await;
+                // Send to core with resolved content blocks
+                let _ = command_tx
+                    .send(UserCommand::SubmitInput {
+                        content,
+                        display_text,
+                    })
+                    .await;
 
                 // Auto-scroll to bottom and reset user scroll state
                 state.ui.scroll_offset = 0;
@@ -406,6 +419,11 @@ pub async fn handle_command(
         TuiCommand::OpenExternalEditor => {
             // TODO: Implement external editor support
             tracing::info!("External editor requested (not yet implemented)");
+        }
+
+        // ========== Clipboard Paste ==========
+        TuiCommand::PasteFromClipboard => {
+            // Handled in app.rs (needs &mut paste_manager)
         }
 
         // ========== Help ==========

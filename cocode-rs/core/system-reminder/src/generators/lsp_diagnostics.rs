@@ -180,10 +180,10 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content.contains("main.rs"));
-        assert!(reminder.content.contains("cannot find value"));
-        assert!(reminder.content.contains("[E0425]"));
-        assert!(reminder.content.contains("unused variable"));
+        assert!(reminder.content().unwrap().contains("main.rs"));
+        assert!(reminder.content().unwrap().contains("cannot find value"));
+        assert!(reminder.content().unwrap().contains("[E0425]"));
+        assert!(reminder.content().unwrap().contains("unused variable"));
     }
 
     #[tokio::test]

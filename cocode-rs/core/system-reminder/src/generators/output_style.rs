@@ -142,7 +142,12 @@ mod tests {
 
         let reminder = result.expect("reminder");
         assert_eq!(reminder.attachment_type, AttachmentType::OutputStyle);
-        assert!(reminder.content.contains("Explanatory Style Active"));
+        assert!(
+            reminder
+                .content()
+                .unwrap()
+                .contains("Explanatory Style Active")
+        );
     }
 
     #[tokio::test]
@@ -160,8 +165,13 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content.contains("Learning Style Active"));
-        assert!(reminder.content.contains("TODO(human)"));
+        assert!(
+            reminder
+                .content()
+                .unwrap()
+                .contains("Learning Style Active")
+        );
+        assert!(reminder.content().unwrap().contains("TODO(human)"));
     }
 
     #[tokio::test]
@@ -179,7 +189,7 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert_eq!(reminder.content, "Always be brief and direct.");
+        assert_eq!(reminder.content().unwrap(), "Always be brief and direct.");
     }
 
     #[tokio::test]
@@ -198,8 +208,13 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert_eq!(reminder.content, "My custom override");
-        assert!(!reminder.content.contains("Explanatory Style Active"));
+        assert_eq!(reminder.content().unwrap(), "My custom override");
+        assert!(
+            !reminder
+                .content()
+                .unwrap()
+                .contains("Explanatory Style Active")
+        );
     }
 
     #[test]

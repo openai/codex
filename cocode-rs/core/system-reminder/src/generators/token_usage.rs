@@ -187,9 +187,9 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content.contains("Token Usage"));
-        assert!(reminder.content.contains("25.0%"));
-        assert!(!reminder.content.contains("Warning"));
+        assert!(reminder.content().unwrap().contains("Token Usage"));
+        assert!(reminder.content().unwrap().contains("25.0%"));
+        assert!(!reminder.content().unwrap().contains("Warning"));
     }
 
     #[tokio::test]
@@ -215,8 +215,8 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content.contains("Warning"));
-        assert!(reminder.content.contains("85.0%"));
+        assert!(reminder.content().unwrap().contains("Warning"));
+        assert!(reminder.content().unwrap().contains("85.0%"));
     }
 
     #[tokio::test]
@@ -242,8 +242,8 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content.contains("CRITICAL"));
-        assert!(reminder.content.contains("summarizing"));
+        assert!(reminder.content().unwrap().contains("CRITICAL"));
+        assert!(reminder.content().unwrap().contains("summarizing"));
     }
 
     #[tokio::test]
@@ -271,8 +271,8 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(reminder.content.contains("Budget Warning"));
-        assert!(reminder.content.contains("$0.50"));
+        assert!(reminder.content().unwrap().contains("Budget Warning"));
+        assert!(reminder.content().unwrap().contains("$0.50"));
     }
 
     #[test]

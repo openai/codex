@@ -99,7 +99,14 @@
       "WebFetch(domain:www.humanlayer.dev)",
       "WebFetch(domain:www.builder.io)",
       "WebFetch(domain:dometrain.com)",
-      "WebFetch(domain:lib.rs)"
+      "WebFetch(domain:lib.rs)",
+      "WebFetch(domain:gist.github.com)",
+      "Bash(rustup component list:*)",
+      "Bash(brew info:*)",
+      "Bash(sysctl:*)",
+      "Bash(sccache --zero-stats:*)",
+      "Bash(sccache --show-stats:*)",
+      "Bash(brew uninstall:*)"
     ],
     "deny": [],
     "ask": []

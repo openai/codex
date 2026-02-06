@@ -304,8 +304,8 @@ mod tests {
             if let Some(reminder) = result {
                 // Should contain diff markers
                 assert!(
-                    reminder.content.contains("```diff")
-                        || reminder.content.contains("modified since")
+                    reminder.content().unwrap().contains("```diff")
+                        || reminder.content().unwrap().contains("modified since")
                 );
             }
         }

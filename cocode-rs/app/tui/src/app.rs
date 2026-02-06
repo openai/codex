@@ -10,6 +10,7 @@ use cocode_protocol::LoopEvent;
 use futures::StreamExt;
 use tokio::sync::mpsc;
 
+use crate::clipboard_paste;
 use crate::command::UserCommand;
 use crate::editor;
 use crate::event::TuiCommand;
@@ -18,6 +19,7 @@ use crate::event::handle_key_event_with_all_suggestions;
 use crate::file_search::FileSearchEvent;
 use crate::file_search::FileSearchManager;
 use crate::file_search::create_file_search_channel;
+use crate::paste::PasteManager;
 use crate::render::render;
 use crate::skill_search::SkillSearchManager;
 use crate::state::AppState;
@@ -76,6 +78,8 @@ pub struct App {
     file_search_rx: mpsc::Receiver<FileSearchEvent>,
     /// Skill search manager for /command autocomplete.
     skill_search: SkillSearchManager,
+    /// Paste manager for handling large pastes.
+    paste_manager: PasteManager,
 }
 
 impl App {
@@ -108,6 +112,9 @@ impl App {
         // Create skill search manager
         let skill_search = SkillSearchManager::new();
 
+        // Create paste manager
+        let paste_manager = PasteManager::new();
+
         Ok(Self {
             tui,
             state,
@@ -117,6 +124,7 @@ impl App {
             file_search,
             file_search_rx,
             skill_search,
+            paste_manager,
         })
     }
 
@@ -140,6 +148,7 @@ impl App {
             file_search,
             file_search_rx,
             skill_search,
+            paste_manager: PasteManager::new(),
         }
     }
 
@@ -269,8 +278,10 @@ impl App {
                 }
             }
             TuiEvent::Paste(text) => {
-                // Insert pasted text into input
-                for c in text.chars() {
+                // Terminal bracketed paste already gave us text — use it directly.
+                // No need to probe the clipboard for images here (that's Ctrl+V's job).
+                let processed = self.paste_manager.process_text(text);
+                for c in processed.chars() {
                     self.state.ui.input.insert_char(c);
                 }
                 // Check for @mention or /command after paste
@@ -336,11 +347,18 @@ impl App {
             return;
         }
 
+        // Handle clipboard paste specially - needs &mut paste_manager
+        if matches!(cmd, TuiCommand::PasteFromClipboard) {
+            self.handle_clipboard_paste();
+            return;
+        }
+
         handle_command(
             &mut self.state,
             cmd,
             &self.command_tx,
             &self.available_models,
+            &self.paste_manager,
         )
         .await;
     }
@@ -364,6 +382,46 @@ impl App {
                 self.state
                     .ui
                     .set_overlay(Overlay::Error(format!("External editor failed: {e}")));
+            }
+        }
+    }
+
+    /// Clipboard paste triggered by Ctrl+V / Alt+V.
+    ///
+    /// Opens the clipboard once, tries image first, falls back to text.
+    /// This is separate from `TuiEvent::Paste` which is terminal-provided text.
+    fn handle_clipboard_paste(&mut self) {
+        let cb = match clipboard_paste::open_clipboard() {
+            Ok(cb) => cb,
+            Err(_) => return,
+        };
+
+        // 1. Try clipboard image first (JPEG, PNG, GIF, WebP)
+        match clipboard_paste::paste_image(cb) {
+            Ok((data, media_type)) => {
+                let pill = self.paste_manager.process_image(data, media_type);
+                for c in pill.chars() {
+                    self.state.ui.input.insert_char(c);
+                }
+                self.state
+                    .ui
+                    .toast_success(crate::i18n::t!("toast.image_pasted").to_string());
+                return;
+            }
+            Err(_) => {
+                // No image — try text below
+            }
+        }
+
+        // 2. Fall back to text (need a fresh clipboard handle)
+        let cb = match clipboard_paste::open_clipboard() {
+            Ok(cb) => cb,
+            Err(_) => return,
+        };
+        if let Ok(text) = clipboard_paste::paste_text(cb) {
+            let processed = self.paste_manager.process_text(text);
+            for c in processed.chars() {
+                self.state.ui.input.insert_char(c);
             }
         }
     }
@@ -421,7 +479,8 @@ mod tests {
         assert!(
             command_tx
                 .try_send(UserCommand::SubmitInput {
-                    message: "test".to_string()
+                    content: vec![hyper_sdk::ContentBlock::text("test")],
+                    display_text: "test".to_string()
                 })
                 .is_ok()
         );

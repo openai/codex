@@ -126,27 +126,6 @@ pub enum ContextModifier {
         /// Pattern for allowed operations.
         pattern: String,
     },
-    /// A command was queued for later execution.
-    QueueCommand {
-        /// The queued command.
-        command: QueuedCommand,
-    },
-}
-
-/// A command queued for later execution.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QueuedCommand {
-    /// Command to execute.
-    pub command: String,
-    /// Arguments for the command.
-    #[serde(default)]
-    pub args: Vec<String>,
-    /// Working directory (if different from current).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub working_dir: Option<PathBuf>,
-    /// Priority (higher = execute sooner).
-    #[serde(default)]
-    pub priority: i32,
 }
 
 /// Result of validating tool input.
@@ -306,20 +285,5 @@ mod tests {
         let parsed: ToolOutput = serde_json::from_str(&json).unwrap();
         assert!(!parsed.is_error);
         assert_eq!(parsed.modifiers.len(), 1);
-    }
-
-    #[test]
-    fn test_queued_command() {
-        let cmd = QueuedCommand {
-            command: "echo".to_string(),
-            args: vec!["hello".to_string()],
-            working_dir: Some(PathBuf::from("/tmp")),
-            priority: 10,
-        };
-
-        let json = serde_json::to_string(&cmd).unwrap();
-        let parsed: QueuedCommand = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.command, "echo");
-        assert_eq!(parsed.priority, 10);
     }
 }
