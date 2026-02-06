@@ -97,6 +97,8 @@ pub enum Feature {
     WindowsSandboxElevated,
     /// Refresh remote models and emit AppReady once the list is available.
     RemoteModels,
+    /// Enable remote compaction via the Responses API.
+    RemoteCompaction,
     /// Experimental shell snapshotting.
     ShellSnapshot,
     /// Enable runtime metrics snapshots via a manual reader.
@@ -494,6 +496,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "remote_models",
         stage: Stage::UnderDevelopment,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::RemoteCompaction,
+        key: "remote_compaction",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::PowershellUtf8,
