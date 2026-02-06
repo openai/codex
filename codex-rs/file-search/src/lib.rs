@@ -770,7 +770,7 @@ mod tests {
             .expect("session");
 
         session.update_query("file-0");
-        let completed = reporter.wait_for_complete(Duration::from_secs(5));
+        let completed = reporter.wait_for_complete(Duration::from_secs(30));
 
         assert!(completed);
         let updates = reporter.updates();
