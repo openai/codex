@@ -257,7 +257,7 @@ mod tests {
     #[test]
     fn debug_config_output_lists_requirement_sources() {
         let requirements_file = if cfg!(windows) {
-            absolute_path("C:\\etc\\codex\\requirements.toml")
+            absolute_path("C:\\ProgramData\\OpenAI\\Codex\\requirements.toml")
         } else {
             absolute_path("/etc/codex/requirements.toml")
         };

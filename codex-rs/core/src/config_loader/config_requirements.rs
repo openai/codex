@@ -117,7 +117,7 @@ pub struct McpServerRequirement {
     pub identity: McpServerIdentity,
 }
 
-/// Base config deserialized from /etc/codex/requirements.toml or MDM.
+/// Base config deserialized from system `requirements.toml` or MDM.
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ConfigRequirementsToml {
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
@@ -393,6 +393,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config_loader::system_requirements_toml_file;
     use anyhow::Result;
     use codex_execpolicy::Decision;
     use codex_execpolicy::Evaluation;
@@ -544,12 +545,9 @@ mod tests {
             "#,
         )?;
 
-        let requirements_toml_file = if cfg!(windows) {
-            "C:\\etc\\codex\\requirements.toml"
-        } else {
-            "/etc/codex/requirements.toml"
-        };
-        let requirements_toml_file = AbsolutePathBuf::from_absolute_path(requirements_toml_file)?;
+        let requirements_toml_file =
+            system_requirements_toml_file().expect("system requirements path");
+        let requirements_toml_file = AbsolutePathBuf::try_from(requirements_toml_file)?;
         let source_location = RequirementSource::SystemRequirementsToml {
             file: requirements_toml_file,
         };
@@ -824,7 +822,8 @@ mod tests {
         "#;
         let config: ConfigRequirementsToml = from_str(toml_str)?;
         let requirements_toml_file =
-            AbsolutePathBuf::from_absolute_path("/etc/codex/requirements.toml")?;
+            system_requirements_toml_file().expect("system requirements path");
+        let requirements_toml_file = AbsolutePathBuf::try_from(requirements_toml_file)?;
         let source_location = RequirementSource::SystemRequirementsToml {
             file: requirements_toml_file,
         };
