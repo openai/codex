@@ -13,6 +13,7 @@
 //!     that order.
 //! 3.  We do **not** walk past the Git root.
 
+use crate::apps::render_apps_section;
 use crate::config::Config;
 use crate::features::Feature;
 use crate::skills::SkillMetadata;
@@ -67,6 +68,13 @@ pub(crate) async fn get_user_instructions(
             output.push_str("\n\n");
         }
         output.push_str(&skills_section);
+    }
+
+    if config.features.enabled(Feature::Apps) {
+        if !output.is_empty() {
+            output.push_str("\n\n");
+        }
+        output.push_str(render_apps_section());
     }
 
     if config.features.enabled(Feature::ChildAgentsMd) {
@@ -544,6 +552,34 @@ mod tests {
         let expected = format!(
             "## Skills\nA skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and file path so you can open the source for full instructions when using a specific skill.\n### Available skills\n- linting: run clippy (file: {expected_path_str})\n### How to use skills\n{usage_rules}"
         );
+        assert_eq!(res, expected);
+    }
+
+    #[tokio::test]
+    async fn apps_section_renders_without_project_doc() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut cfg = make_config(&tmp, 4096, None).await;
+        cfg.features.enable(Feature::Apps);
+
+        let res = get_user_instructions(&cfg, None)
+            .await
+            .expect("instructions expected");
+
+        assert_eq!(res, render_apps_section());
+    }
+
+    #[tokio::test]
+    async fn apps_section_is_appended_to_project_doc() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(tmp.path().join("AGENTS.md"), "base doc").unwrap();
+
+        let mut cfg = make_config(&tmp, 4096, None).await;
+        cfg.features.enable(Feature::Apps);
+
+        let res = get_user_instructions(&cfg, None)
+            .await
+            .expect("instructions expected");
+        let expected = format!("base doc\n\n{}", render_apps_section());
         assert_eq!(res, expected);
     }
 
