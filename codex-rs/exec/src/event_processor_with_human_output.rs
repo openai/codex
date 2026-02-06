@@ -953,18 +953,15 @@ impl EventProcessorWithHumanOutput {
             update.failed_items, update.running_items, update.pending_items
         );
         let done = processed >= update.total_items;
+        let mut output = String::new();
+        output.push_str("\u{1b}[2K");
+        output.push_str("\u{1b}[0G");
+        output.push_str(&line);
         if done {
-            if self.progress_active {
-                eprint!("\r");
-            }
-            eprintln!("{line}");
+            eprintln!("{output}");
             self.progress_active = false;
             self.progress_last_len = 0;
             return;
-        }
-        let mut output = format!("\r{line}");
-        if self.progress_last_len > line.len() {
-            output.push_str(&" ".repeat(self.progress_last_len - line.len()));
         }
         eprint!("{output}");
         let _ = std::io::stderr().flush();
