@@ -4780,6 +4780,8 @@ async fn try_run_sampling_request(
             turn_context.reasoning_effort,
             turn_context.reasoning_summary,
             turn_metadata_header,
+            &turn_context.sandbox_policy,
+            turn_context.windows_sandbox_level,
         )
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)
