@@ -10518,17 +10518,6 @@
               }
             ]
           },
-          "apps": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/AppsConfig"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
           "compact_prompt": {
             "type": [
               "string",

@@ -404,7 +404,7 @@ const fn default_enabled() -> bool {
     true
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
 pub struct Config {
@@ -430,6 +430,7 @@ pub struct Config {
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
     pub analytics: Option<AnalyticsConfig>,
+    #[experimental("config/read.apps")]
     #[serde(default)]
     pub apps: Option<AppsConfig>,
     #[serde(default, flatten)]
