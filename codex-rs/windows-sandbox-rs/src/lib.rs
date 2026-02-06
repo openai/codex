@@ -91,7 +91,7 @@ pub use setup::SETUP_VERSION;
 #[cfg(target_os = "windows")]
 pub use setup_error::extract_failure as extract_setup_failure;
 #[cfg(target_os = "windows")]
-pub use setup_error::sanitize_tag_value as sanitize_setup_metric_tag_value;
+pub use setup_error::sanitize_setup_metric_tag_value;
 #[cfg(target_os = "windows")]
 pub use setup_error::setup_error_path;
 #[cfg(target_os = "windows")]

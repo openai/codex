@@ -128,6 +128,17 @@ pub enum SandboxType {
     WindowsRestrictedToken,
 }
 
+impl SandboxType {
+    pub(crate) fn as_metric_tag(self) -> &'static str {
+        match self {
+            SandboxType::None => "none",
+            SandboxType::MacosSeatbelt => "seatbelt",
+            SandboxType::LinuxSeccomp => "seccomp",
+            SandboxType::WindowsRestrictedToken => "windows_sandbox",
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct StdoutStream {
     pub sub_id: String,

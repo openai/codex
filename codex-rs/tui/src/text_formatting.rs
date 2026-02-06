@@ -327,6 +327,33 @@ pub(crate) fn center_truncate_path(path: &str, max_width: usize) -> String {
     front_truncate(path, max_width)
 }
 
+/// Join a list of strings with proper English punctuation.
+/// Examples:
+/// - [] -> ""
+/// - ["apple"] -> "apple"
+/// - ["apple", "banana"] -> "apple and banana"
+/// - ["apple", "banana", "cherry"] -> "apple, banana and cherry"
+pub(crate) fn proper_join<T: AsRef<str>>(items: &[T]) -> String {
+    match items.len() {
+        0 => String::new(),
+        1 => items[0].as_ref().to_string(),
+        2 => format!("{} and {}", items[0].as_ref(), items[1].as_ref()),
+        _ => {
+            let last = items[items.len() - 1].as_ref();
+            let mut result = String::new();
+
+            for (i, item) in items.iter().take(items.len() - 1).enumerate() {
+                if i > 0 {
+                    result.push_str(", ");
+                }
+                result.push_str(item.as_ref());
+            }
+
+            format!("{result} and {last}")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -533,5 +560,21 @@ mod tests {
         assert_eq!(format_json_compact("false").unwrap(), "false");
         assert_eq!(format_json_compact("null").unwrap(), "null");
         assert_eq!(format_json_compact(r#""string""#).unwrap(), r#""string""#);
+    }
+
+    #[test]
+    fn test_proper_join() {
+        let empty: Vec<String> = vec![];
+        assert_eq!(proper_join(&empty), "");
+        assert_eq!(proper_join(&["apple"]), "apple");
+        assert_eq!(proper_join(&["apple", "banana"]), "apple and banana");
+        assert_eq!(
+            proper_join(&["apple", "banana", "cherry"]),
+            "apple, banana and cherry"
+        );
+        assert_eq!(
+            proper_join(&["apple", "banana", "cherry", "date"]),
+            "apple, banana, cherry and date"
+        );
     }
 }

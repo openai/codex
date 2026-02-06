@@ -705,6 +705,7 @@ async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
     .await;
 
     let test = test_codex().build(&server).await?;
+    let current_model = test.session_configured.model.clone();
 
     test.codex
         .submit(Op::OverrideTurnContext {
@@ -715,7 +716,14 @@ async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
             model: None,
             effort: None,
             summary: None,
-            collaboration_mode: Some(collab_mode_with_instructions(Some(""))),
+            collaboration_mode: Some(CollaborationMode {
+                mode: ModeKind::Default,
+                settings: Settings {
+                    model: current_model,
+                    reasoning_effort: None,
+                    developer_instructions: Some("".to_string()),
+                },
+            }),
             personality: None,
         })
         .await?;
