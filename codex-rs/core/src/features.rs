@@ -91,6 +91,8 @@ pub enum Feature {
     UseLinuxSandboxBwrap,
     /// Allow the model to request approval and propose exec rules.
     RequestRule,
+    /// Gate experimental network proxy behavior, including approval integration.
+    NetworkProxy,
     /// Enable Windows sandbox (restricted token) on Windows.
     WindowsSandbox,
     /// Use the elevated Windows sandbox pipeline (setup + runner).
@@ -476,6 +478,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "request_rule",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::NetworkProxy,
+        key: "network_proxy",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::WindowsSandbox,

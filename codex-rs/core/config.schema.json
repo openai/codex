@@ -221,6 +221,9 @@
             "include_apply_patch_tool": {
               "type": "boolean"
             },
+            "network_proxy": {
+              "type": "boolean"
+            },
             "memory_tool": {
               "type": "boolean"
             },
@@ -1259,6 +1262,9 @@
           "type": "boolean"
         },
         "include_apply_patch_tool": {
+          "type": "boolean"
+        },
+        "network_proxy": {
           "type": "boolean"
         },
         "memory_tool": {
