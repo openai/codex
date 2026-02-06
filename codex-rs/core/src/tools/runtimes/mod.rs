@@ -77,8 +77,12 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     let original_shell = shell_single_quote(&command[0]);
     let original_script = shell_single_quote(&command[2]);
     let snapshot_path = shell_single_quote(snapshot_path.as_ref());
+    let trailing_args = command[3..]
+        .iter()
+        .map(|arg| format!(" '{}'", shell_single_quote(arg)))
+        .collect::<String>();
     let rewritten_script = format!(
-        "if . '{snapshot_path}' >/dev/null 2>&1; then :; fi; exec '{original_shell}' -c '{original_script}'"
+        "if . '{snapshot_path}' >/dev/null 2>&1; then :; fi; exec '{original_shell}' -c '{original_script}'{trailing_args}"
     );
 
     vec![shell_path.to_string(), "-c".to_string(), rewritten_script]
@@ -189,5 +193,28 @@ mod tests {
         assert_eq!(rewritten[1], "-c");
         assert!(rewritten[2].contains("if . '"));
         assert!(rewritten[2].contains("exec '/bin/bash' -c 'echo hello'"));
+    }
+
+    #[test]
+    fn maybe_wrap_shell_lc_with_snapshot_preserves_trailing_args() {
+        let dir = tempdir().expect("create temp dir");
+        let snapshot_path = dir.path().join("snapshot.sh");
+        std::fs::write(&snapshot_path, "# Snapshot file\n").expect("write snapshot");
+        let session_shell = shell_with_snapshot(ShellType::Zsh, "/bin/zsh", snapshot_path);
+        let command = vec![
+            "/bin/bash".to_string(),
+            "-lc".to_string(),
+            "printf '%s %s' \"$0\" \"$1\"".to_string(),
+            "arg0".to_string(),
+            "arg1".to_string(),
+        ];
+
+        let rewritten = maybe_wrap_shell_lc_with_snapshot(&command, &session_shell);
+
+        assert!(
+            rewritten[2].contains(
+                r#"exec '/bin/bash' -c 'printf '"'"'%s %s'"'"' "$0" "$1"' 'arg0' 'arg1'"#
+            )
+        );
     }
 }
