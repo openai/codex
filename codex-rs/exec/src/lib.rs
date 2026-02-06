@@ -129,7 +129,16 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         match color {
             cli::Color::Never => false,
             cli::Color::Always => true,
-            cli::Color::Auto => stderr_with_ansi || std::io::stderr().is_terminal(),
+            cli::Color::Auto => {
+                if stderr_with_ansi || std::io::stderr().is_terminal() {
+                    true
+                } else {
+                    match std::env::var("TERM") {
+                        Ok(term) => !term.is_empty() && term != "dumb",
+                        Err(_) => false,
+                    }
+                }
+            }
         }
     };
 

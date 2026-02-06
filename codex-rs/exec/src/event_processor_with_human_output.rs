@@ -971,8 +971,8 @@ impl EventProcessorWithHumanOutput {
             return;
         }
         let mut output = String::new();
+        output.push('\r');
         output.push_str("\u{1b}[2K");
-        output.push_str("\u{1b}[0G");
         output.push_str(&line);
         if done {
             eprintln!("{output}");
