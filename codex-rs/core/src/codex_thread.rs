@@ -76,6 +76,12 @@ impl CodexThread {
         self.rollout_path.clone()
     }
 
+    /// Ensure this thread has a persisted rollout and return its path.
+    /// Returns `None` for ephemeral sessions.
+    pub(crate) async fn ensure_rollout_persisted(&self) -> CodexResult<Option<PathBuf>> {
+        self.codex.ensure_rollout_persisted().await
+    }
+
     pub fn state_db(&self) -> Option<StateDbHandle> {
         self.codex.state_db()
     }

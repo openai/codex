@@ -274,6 +274,7 @@ impl Codex {
         let (tx_event, rx_event) = async_channel::unbounded();
 
         let loaded_skills = skills_manager.skills_for_config(&config);
+        let defer_new_rollout_creation = matches!(&conversation_history, InitialHistory::New);
 
         for err in &loaded_skills.errors {
             error!(
@@ -399,6 +400,7 @@ impl Codex {
             tx_event.clone(),
             agent_status_tx.clone(),
             conversation_history,
+            defer_new_rollout_creation,
             session_source_clone,
             skills_manager,
             file_watcher,
@@ -483,6 +485,12 @@ impl Codex {
     pub(crate) fn state_db(&self) -> Option<state_db::StateDbHandle> {
         self.session.state_db()
     }
+
+    /// Ensure this thread's rollout is persisted and return its path.
+    /// Returns `None` for ephemeral sessions.
+    pub(crate) async fn ensure_rollout_persisted(&self) -> CodexResult<Option<PathBuf>> {
+        self.session.ensure_rollout_persisted().await
+    }
 }
 
 /// Context for an initialized model agent
@@ -499,6 +507,7 @@ pub(crate) struct Session {
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) services: SessionServices,
+    defer_new_rollout_creation: bool,
     next_internal_sub_id: AtomicU64,
 }
 
@@ -840,6 +849,7 @@ impl Session {
         tx_event: Sender<Event>,
         agent_status: watch::Sender<AgentStatus>,
         initial_history: InitialHistory,
+        defer_new_rollout_creation: bool,
         session_source: SessionSource,
         skills_manager: Arc<SkillsManager>,
         file_watcher: Arc<FileWatcher>,
@@ -859,26 +869,9 @@ impl Session {
 
         let forked_from_id = initial_history.forked_from_id();
 
-        let (conversation_id, rollout_params) = match &initial_history {
-            InitialHistory::New | InitialHistory::Forked(_) => {
-                let conversation_id = ThreadId::default();
-                (
-                    conversation_id,
-                    RolloutRecorderParams::new(
-                        conversation_id,
-                        forked_from_id,
-                        session_source,
-                        BaseInstructions {
-                            text: session_configuration.base_instructions.clone(),
-                        },
-                        session_configuration.dynamic_tools.clone(),
-                    ),
-                )
-            }
-            InitialHistory::Resumed(resumed_history) => (
-                resumed_history.conversation_id,
-                RolloutRecorderParams::resume(resumed_history.rollout_path.clone()),
-            ),
+        let conversation_id = match &initial_history {
+            InitialHistory::New | InitialHistory::Forked(_) => ThreadId::default(),
+            InitialHistory::Resumed(resumed_history) => resumed_history.conversation_id,
         };
         let state_builder = match &initial_history {
             InitialHistory::Resumed(resumed) => metadata::builder_from_items(
@@ -898,14 +891,60 @@ impl Session {
                 Ok::<_, anyhow::Error>((None, None))
             } else {
                 let state_db_ctx = state_db::init_if_enabled(&config, None).await;
-                let rollout_recorder = RolloutRecorder::new(
-                    &config,
-                    rollout_params,
-                    state_db_ctx.clone(),
-                    state_builder.clone(),
-                )
-                .await?;
-                Ok((Some(rollout_recorder), state_db_ctx))
+                match &initial_history {
+                    InitialHistory::New => {
+                        let rollout_params = RolloutRecorderParams::new(
+                            conversation_id,
+                            forked_from_id,
+                            session_source.clone(),
+                            BaseInstructions {
+                                text: session_configuration.base_instructions.clone(),
+                            },
+                            session_configuration.dynamic_tools.clone(),
+                        );
+                        let rollout_recorder = RolloutRecorder::new(
+                            &config,
+                            rollout_params,
+                            state_db_ctx.clone(),
+                            state_builder.clone(),
+                        )
+                        .await?;
+                        if !defer_new_rollout_creation {
+                            rollout_recorder.ensure_persisted().await?;
+                        }
+                        Ok((Some(rollout_recorder), state_db_ctx))
+                    }
+                    InitialHistory::Forked(_) => {
+                        let rollout_params = RolloutRecorderParams::new(
+                            conversation_id,
+                            forked_from_id,
+                            session_source.clone(),
+                            BaseInstructions {
+                                text: session_configuration.base_instructions.clone(),
+                            },
+                            session_configuration.dynamic_tools.clone(),
+                        );
+                        let rollout_recorder = RolloutRecorder::new(
+                            &config,
+                            rollout_params,
+                            state_db_ctx.clone(),
+                            state_builder.clone(),
+                        )
+                        .await?;
+                        rollout_recorder.ensure_persisted().await?;
+                        Ok((Some(rollout_recorder), state_db_ctx))
+                    }
+                    InitialHistory::Resumed(resumed_history) => {
+                        let rollout_recorder = RolloutRecorder::new(
+                            &config,
+                            RolloutRecorderParams::resume(resumed_history.rollout_path.clone()),
+                            state_db_ctx.clone(),
+                            state_builder.clone(),
+                        )
+                        .await?;
+                        Ok((Some(rollout_recorder), state_db_ctx))
+                    }
+                }
             }
         };
 
@@ -934,9 +973,7 @@ impl Session {
             error!("failed to initialize rollout recorder: {e:#}");
             e
         })?;
-        let rollout_path = rollout_recorder
-            .as_ref()
-            .map(|rec| rec.rollout_path.clone());
+        let rollout_path = rollout_recorder.as_ref().and_then(|rec| rec.rollout_path());
 
         let mut post_session_configured_events = Vec::<Event>::new();
 
@@ -1079,6 +1116,7 @@ impl Session {
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
             services,
+            defer_new_rollout_creation,
             next_internal_sub_id: AtomicU64::new(0),
         });
 
@@ -1195,6 +1233,56 @@ impl Session {
         }
     }
 
+    /// Ensure a deferred rollout recorder has created its on-disk file.
+    async fn ensure_rollout_initialized_for_turn(
+        &self,
+        turn_context: &TurnContext,
+    ) -> std::io::Result<()> {
+        if turn_context.config.ephemeral {
+            return Ok(());
+        }
+        let recorder = {
+            let rollout = self.services.rollout.lock().await;
+            rollout.clone()
+        };
+        if let Some(recorder) = recorder {
+            recorder.ensure_persisted().await?;
+        }
+        Ok(())
+    }
+
+    /// Ensure this thread has a persisted rollout on disk and return its path.
+    ///
+    /// For non-ephemeral threads this guarantees a concrete rollout path by:
+    /// initializing the recorder if needed, seeding initial context if needed,
+    /// and flushing buffered rollout writes.
+    async fn ensure_rollout_persisted(&self) -> CodexResult<Option<PathBuf>> {
+        let turn_context = self.new_default_turn().await;
+        if turn_context.config.ephemeral {
+            return Ok(None);
+        }
+
+        self.ensure_rollout_initialized_for_turn(&turn_context)
+            .await?;
+        self.seed_initial_context_if_needed(&turn_context).await;
+        self.flush_rollout().await;
+
+        let rollout_path = {
+            let rollout = self.services.rollout.lock().await;
+            rollout
+                .as_ref()
+                .and_then(|recorder| recorder.rollout_path())
+        };
+        let Some(rollout_path) = rollout_path else {
+            return Err(CodexErr::Fatal(format!(
+                "rollout recorder missing for thread {}",
+                self.conversation_id
+            )));
+        };
+
+        Ok(Some(rollout_path))
+    }
+
     fn next_internal_sub_id(&self) -> String {
         let id = self
             .next_internal_sub_id
@@ -1223,15 +1311,21 @@ impl Session {
         let turn_context = self.new_default_turn().await;
         match conversation_history {
             InitialHistory::New => {
-                // Build and record initial items (user instructions + environment context)
-                let items = self.build_initial_context(&turn_context).await;
-                self.record_conversation_items(&turn_context, &items).await;
-                {
-                    let mut state = self.state.lock().await;
-                    state.initial_context_seeded = true;
+                if self.defer_new_rollout_creation {
+                    // Defer initial context persistence until the first turn starts.
+                    // This lets turn/start overrides be reflected in the seeded context.
+                    self.flush_rollout().await;
+                } else {
+                    // Build and record initial items (user instructions + environment context)
+                    let items = self.build_initial_context(&turn_context).await;
+                    self.record_conversation_items(&turn_context, &items).await;
+                    {
+                        let mut state = self.state.lock().await;
+                        state.initial_context_seeded = true;
+                    }
+                    // Ensure initial items are visible to immediate readers (e.g., tests, forks).
+                    self.flush_rollout().await;
                 }
-                // Ensure initial items are visible to immediate readers (e.g., tests, forks).
-                self.flush_rollout().await;
             }
             InitialHistory::Resumed(resumed_history) => {
                 let rollout_items = resumed_history.history;
@@ -2657,8 +2751,15 @@ impl Session {
 }
 
 async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiver<Submission>) {
-    // Seed with context in case there is an OverrideTurnContext first.
-    let mut previous_context: Option<Arc<TurnContext>> = Some(sess.new_default_turn().await);
+    // Non-deferred sessions persist an initial baseline at thread start, so we
+    // keep the default turn context for first-turn diffing.
+    // Deferred sessions seed initial context on first turn with the current
+    // settings, so a baseline here would duplicate first-turn updates.
+    let mut previous_context: Option<Arc<TurnContext>> = if sess.defer_new_rollout_creation {
+        None
+    } else {
+        Some(sess.new_default_turn().await)
+    };
 
     // To break out of this loop, send Op::Shutdown.
     while let Ok(sub) = rx_sub.recv().await {
@@ -2938,6 +3039,20 @@ mod handlers {
 
         // Attempt to inject input into current task.
         if let Err(SteerInputError::NoActiveTurn(items)) = sess.steer_input(items, None).await {
+            if let Err(err) = sess
+                .ensure_rollout_initialized_for_turn(&current_context)
+                .await
+            {
+                sess.send_event_raw(Event {
+                    id: current_context.sub_id.clone(),
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: format!("failed to initialize rollout recorder: {err}"),
+                        codex_error_info: Some(CodexErrorInfo::Other),
+                    }),
+                })
+                .await;
+                return;
+            }
             sess.seed_initial_context_if_needed(&current_context).await;
             let resumed_model = sess.take_pending_resume_previous_model().await;
             let update_items = sess.build_settings_update_items(
@@ -5145,6 +5260,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn record_initial_history_new_defers_initial_context_until_first_turn() {
+        let (mut session, turn_context) = make_session_and_context().await;
+        session.defer_new_rollout_creation = true;
+        {
+            let mut state = session.state.lock().await;
+            state.initial_context_seeded = false;
+        }
+
+        session.record_initial_history(InitialHistory::New).await;
+
+        let history = session.state.lock().await.clone_history();
+        assert_eq!(history.raw_items(), Vec::<ResponseItem>::new());
+
+        session.seed_initial_context_if_needed(&turn_context).await;
+        let expected = session.build_initial_context(&turn_context).await;
+        let history = session.state.lock().await.clone_history();
+        assert_eq!(history.raw_items(), expected);
+    }
+
+    #[tokio::test]
     async fn resumed_history_seeds_initial_context_on_first_turn_only() {
         let (session, turn_context) = make_session_and_context().await;
         let (rollout_items, mut expected) = sample_rollout(&session, &turn_context).await;
@@ -5299,6 +5434,94 @@ mod tests {
         expected.extend(session.build_initial_context(&turn_context).await);
         let history = session.state.lock().await.clone_history();
         assert_eq!(expected, history.raw_items());
+    }
+
+    #[tokio::test]
+    async fn lazy_rollout_creation_writes_session_meta_then_initial_context_then_turn_context() {
+        let (session, turn_context) = make_session_and_context().await;
+        {
+            let mut state = session.state.lock().await;
+            state.initial_context_seeded = false;
+        }
+        let base_instructions = session.get_base_instructions().await;
+        let session_source = {
+            let state = session.state.lock().await;
+            state.session_configuration.session_source.clone()
+        };
+        let recorder = RolloutRecorder::new(
+            turn_context.config.as_ref(),
+            RolloutRecorderParams::new(
+                session.conversation_id,
+                None,
+                session_source,
+                base_instructions,
+                Vec::new(),
+            ),
+            session.services.state_db.clone(),
+            None,
+        )
+        .await
+        .expect("create deferred rollout recorder");
+        {
+            let mut rollout = session.services.rollout.lock().await;
+            *rollout = Some(recorder);
+        }
+
+        let conversation_id = session.conversation_id.to_string();
+        let rollout_path = crate::rollout::find_thread_path_by_id_str(
+            &turn_context.config.codex_home,
+            &conversation_id,
+        )
+        .await
+        .expect("lookup rollout path before first turn");
+        assert_eq!(rollout_path, None);
+
+        session
+            .ensure_rollout_initialized_for_turn(&turn_context)
+            .await
+            .expect("initialize rollout recorder lazily");
+        session.seed_initial_context_if_needed(&turn_context).await;
+        session
+            .persist_rollout_items(&[RolloutItem::TurnContext(TurnContextItem {
+                cwd: turn_context.cwd.clone(),
+                approval_policy: turn_context.approval_policy,
+                sandbox_policy: turn_context.sandbox_policy.clone(),
+                model: turn_context.model_info.slug.clone(),
+                personality: turn_context.personality,
+                collaboration_mode: Some(turn_context.collaboration_mode.clone()),
+                effort: turn_context.reasoning_effort,
+                summary: turn_context.reasoning_summary,
+                user_instructions: turn_context.user_instructions.clone(),
+                developer_instructions: turn_context.developer_instructions.clone(),
+                final_output_json_schema: turn_context.final_output_json_schema.clone(),
+                truncation_policy: Some(turn_context.truncation_policy.into()),
+            })])
+            .await;
+        session.flush_rollout().await;
+
+        let rollout_path = crate::rollout::find_thread_path_by_id_str(
+            &turn_context.config.codex_home,
+            &conversation_id,
+        )
+        .await
+        .expect("lookup rollout path after first turn")
+        .expect("rollout path should exist");
+        let (items, _, _) = RolloutRecorder::load_rollout_items(&rollout_path)
+            .await
+            .expect("load rollout items");
+
+        assert!(matches!(items.first(), Some(RolloutItem::SessionMeta(_))));
+        let initial_context_len = session.build_initial_context(&turn_context).await.len();
+        assert_eq!(
+            items
+                .iter()
+                .skip(1)
+                .take(initial_context_len)
+                .filter(|item| matches!(item, RolloutItem::ResponseItem(_)))
+                .count(),
+            initial_context_len
+        );
+        assert!(matches!(items.last(), Some(RolloutItem::TurnContext(_))));
     }
 
     #[tokio::test]
@@ -5903,6 +6126,7 @@ mod tests {
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
             services,
+            defer_new_rollout_creation: false,
             next_internal_sub_id: AtomicU64::new(0),
         };
 
@@ -6035,6 +6259,7 @@ mod tests {
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
             services,
+            defer_new_rollout_creation: false,
             next_internal_sub_id: AtomicU64::new(0),
         });
 

@@ -5196,7 +5196,36 @@ impl CodexMessageProcessor {
 
         let validated_rollout_path = if include_logs {
             match conversation_id {
-                Some(conv_id) => self.resolve_rollout_path(conv_id).await,
+                Some(conv_id) => match self.thread_manager.resolve_rollout_path(conv_id).await {
+                    Ok(path) => Some(path),
+                    Err(CodexErr::ThreadNotFound(_)) => {
+                        let error = JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: format!("no rollout found for thread id {conv_id}"),
+                            data: None,
+                        };
+                        self.outgoing.send_error(request_id, error).await;
+                        return;
+                    }
+                    Err(CodexErr::InvalidRequest(message)) => {
+                        let error = JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message,
+                            data: None,
+                        };
+                        self.outgoing.send_error(request_id, error).await;
+                        return;
+                    }
+                    Err(err) => {
+                        let error = JSONRPCErrorError {
+                            code: INTERNAL_ERROR_CODE,
+                            message: err.to_string(),
+                            data: None,
+                        };
+                        self.outgoing.send_error(request_id, error).await;
+                        return;
+                    }
+                },
                 None => None,
             }
         } else {
@@ -5242,13 +5271,6 @@ impl CodexMessageProcessor {
                 };
                 self.outgoing.send_error(request_id, error).await;
             }
-        }
-    }
-
-    async fn resolve_rollout_path(&self, conversation_id: ThreadId) -> Option<PathBuf> {
-        match self.thread_manager.get_thread(conversation_id).await {
-            Ok(conv) => conv.rollout_path(),
-            Err(_) => None,
         }
     }
 }

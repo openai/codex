@@ -6768,6 +6768,11 @@ impl ChatWidget {
     pub(crate) fn thread_name(&self) -> Option<String> {
         self.thread_name.clone()
     }
+
+    pub(crate) fn set_rollout_path(&mut self, rollout_path: Option<PathBuf>) {
+        self.current_rollout_path = rollout_path;
+    }
+
     pub(crate) fn rollout_path(&self) -> Option<PathBuf> {
         self.current_rollout_path.clone()
     }
