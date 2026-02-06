@@ -624,6 +624,10 @@ impl ModelClient {
     ///
     /// This lets the first turn treat startup preconnect as the first websocket connection
     /// attempt, avoiding a redundant second connect while the preconnect attempt is in flight.
+    ///
+    /// This await intentionally has no separate timeout wrapper. WebSocket connect handshakes
+    /// already run without an app-level timeout, so waiting on the in-flight preconnect task does
+    /// not add a new unbounded wait class; it reuses the same first connection attempt.
     async fn await_preconnect_task(&self) {
         let task = {
             let mut state = self
@@ -817,7 +821,8 @@ impl ModelClientSession {
     /// This method first tries to adopt the session-level preconnect slot, then falls back to a
     /// fresh websocket handshake only when the turn has no live connection. If startup preconnect
     /// is still running, it is awaited first so that task acts as the first connection attempt for
-    /// this turn instead of racing a second handshake.
+    /// this turn instead of racing a second handshake. If that attempt fails, the normal connect
+    /// and stream retry flow continues unchanged.
     async fn websocket_connection(
         &mut self,
         otel_manager: &OtelManager,

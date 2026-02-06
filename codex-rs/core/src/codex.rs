@@ -549,6 +549,10 @@ impl TurnContext {
             .clone()
     }
 
+    /// Resolves the per-turn metadata header under a shared timeout policy.
+    ///
+    /// This uses the same timeout helper as websocket startup preconnect so both turn execution
+    /// and background preconnect observe identical "timeout means best-effort fallback" behavior.
     pub async fn resolve_turn_metadata_header(&self) -> Option<String> {
         resolve_turn_metadata_header_with_timeout(
             self.build_turn_metadata_header(),
@@ -557,6 +561,10 @@ impl TurnContext {
         .await
     }
 
+    /// Starts best-effort background computation of turn metadata.
+    ///
+    /// This warms the cached value used by [`TurnContext::resolve_turn_metadata_header`] so turns
+    /// and websocket preconnect are less likely to pay metadata construction latency on demand.
     pub fn spawn_turn_metadata_header_task(self: &Arc<Self>) {
         let context = Arc::clone(self);
         tokio::spawn(async move {
