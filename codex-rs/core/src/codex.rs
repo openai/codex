@@ -3877,7 +3877,7 @@ pub(crate) async fn run_turn(
 }
 
 async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) {
-    if should_use_remote_compact_task(sess.as_ref(), &turn_context.provider) {
+    if should_use_remote_compact_task(&turn_context.provider) {
         run_inline_remote_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await;
     } else {
         run_inline_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await;
