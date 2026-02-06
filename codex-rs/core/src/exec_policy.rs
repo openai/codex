@@ -133,7 +133,8 @@ impl ExecPolicyManager {
             prefix_rule,
         } = req;
         let exec_policy = self.current();
-        let commands = commands_for_exec_policy(command);
+        let parsed_commands = commands_for_exec_policy(command);
+        let auto_amendment_allowed = !parsed_commands.used_heredoc_fallback;
         let exec_policy_fallback = |cmd: &[String]| {
             render_decision_for_unmatched_command(
                 approval_policy,
@@ -142,7 +143,8 @@ impl ExecPolicyManager {
                 sandbox_permissions,
             )
         };
-        let evaluation = exec_policy.check_multiple(commands.iter(), &exec_policy_fallback);
+        let evaluation =
+            exec_policy.check_multiple(parsed_commands.commands.iter(), &exec_policy_fallback);
 
         let requested_amendment = derive_requested_execpolicy_amendment(
             features,
@@ -164,9 +166,13 @@ impl ExecPolicyManager {
                         reason: derive_prompt_reason(command, &evaluation),
                         proposed_execpolicy_amendment: if features.enabled(Feature::ExecPolicy) {
                             requested_amendment.or_else(|| {
-                                try_derive_execpolicy_amendment_for_prompt_rules(
-                                    &evaluation.matched_rules,
-                                )
+                                if auto_amendment_allowed {
+                                    try_derive_execpolicy_amendment_for_prompt_rules(
+                                        &evaluation.matched_rules,
+                                    )
+                                } else {
+                                    None
+                                }
                             })
                         } else {
                             None
@@ -179,7 +185,9 @@ impl ExecPolicyManager {
                 bypass_sandbox: evaluation.matched_rules.iter().any(|rule_match| {
                     is_policy_match(rule_match) && rule_match.decision() == Decision::Allow
                 }),
-                proposed_execpolicy_amendment: if features.enabled(Feature::ExecPolicy) {
+                proposed_execpolicy_amendment: if features.enabled(Feature::ExecPolicy)
+                    && auto_amendment_allowed
+                {
                     try_derive_execpolicy_amendment_for_allow_rules(&evaluation.matched_rules)
                 } else {
                     None
@@ -360,16 +368,31 @@ fn default_policy_path(codex_home: &Path) -> PathBuf {
     codex_home.join(RULES_DIR_NAME).join(DEFAULT_POLICY_FILE)
 }
 
-fn commands_for_exec_policy(command: &[String]) -> Vec<Vec<String>> {
+#[derive(Default)]
+struct ExecPolicyCommands {
+    commands: Vec<Vec<String>>,
+    used_heredoc_fallback: bool,
+}
+
+fn commands_for_exec_policy(command: &[String]) -> ExecPolicyCommands {
     if let Some(commands) = parse_shell_lc_plain_commands(command) {
-        return commands;
+        return ExecPolicyCommands {
+            commands,
+            used_heredoc_fallback: false,
+        };
     }
 
     if let Some(single_command) = parse_shell_lc_single_command_prefix(command) {
-        return vec![single_command];
+        return ExecPolicyCommands {
+            commands: vec![single_command],
+            used_heredoc_fallback: true,
+        };
     }
 
-    vec![command.to_vec()]
+    ExecPolicyCommands {
+        commands: vec![command.to_vec()],
+        used_heredoc_fallback: false,
+    }
 }
 
 /// Derive a proposed execpolicy amendment when a command requires user approval
@@ -868,6 +891,63 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             ExecApprovalRequirement::Skip {
                 bypass_sandbox: true,
                 proposed_execpolicy_amendment: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn omits_auto_amendment_for_heredoc_fallback_prompts() {
+        let command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "python3 <<'PY'\nprint('hello')\nPY".to_string(),
+        ];
+
+        let requirement = ExecPolicyManager::default()
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                features: &Features::with_defaults(),
+                command: &command,
+                approval_policy: AskForApproval::UnlessTrusted,
+                sandbox_policy: &SandboxPolicy::ReadOnly,
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                prefix_rule: None,
+            })
+            .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn keeps_requested_amendment_for_heredoc_fallback_prompts() {
+        let command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "python3 <<'PY'\nprint('hello')\nPY".to_string(),
+        ];
+        let requested_prefix = vec!["python3".to_string(), "-m".to_string(), "pip".to_string()];
+
+        let requirement = ExecPolicyManager::default()
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                features: &Features::with_defaults(),
+                command: &command,
+                approval_policy: AskForApproval::UnlessTrusted,
+                sandbox_policy: &SandboxPolicy::ReadOnly,
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                prefix_rule: Some(requested_prefix.clone()),
+            })
+            .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(requested_prefix)),
             }
         );
     }
