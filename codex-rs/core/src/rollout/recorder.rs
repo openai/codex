@@ -5,6 +5,8 @@ use std::fs::{self};
 use std::io::Error as IoError;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 use chrono::SecondsFormat;
 use codex_protocol::ThreadId;
@@ -61,13 +63,20 @@ use codex_state::ThreadMetadataBuilder;
 #[derive(Clone)]
 pub struct RolloutRecorder {
     tx: Sender<RolloutCmd>,
-    pub(crate) rollout_path: PathBuf,
+    rollout_path: Arc<Mutex<Option<PathBuf>>>,
     state_db: Option<StateDbHandle>,
 }
 
 #[derive(Clone)]
 pub enum RolloutRecorderParams {
     Create {
+        conversation_id: ThreadId,
+        forked_from_id: Option<ThreadId>,
+        source: SessionSource,
+        base_instructions: BaseInstructions,
+        dynamic_tools: Vec<DynamicToolSpec>,
+    },
+    CreateDeferred {
         conversation_id: ThreadId,
         forked_from_id: Option<ThreadId>,
         source: SessionSource,
@@ -81,6 +90,9 @@ pub enum RolloutRecorderParams {
 
 enum RolloutCmd {
     AddItems(Vec<RolloutItem>),
+    EnsurePersisted {
+        ack: oneshot::Sender<std::io::Result<PathBuf>>,
+    },
     /// Ensure all prior writes are processed; respond when flushed.
     Flush {
         ack: oneshot::Sender<()>,
@@ -109,6 +121,22 @@ impl RolloutRecorderParams {
 
     pub fn resume(path: PathBuf) -> Self {
         Self::Resume { path }
+    }
+
+    pub fn new_deferred(
+        conversation_id: ThreadId,
+        forked_from_id: Option<ThreadId>,
+        source: SessionSource,
+        base_instructions: BaseInstructions,
+        dynamic_tools: Vec<DynamicToolSpec>,
+    ) -> Self {
+        Self::CreateDeferred {
+            conversation_id,
+            forked_from_id,
+            source,
+            base_instructions,
+            dynamic_tools,
+        }
     }
 }
 
@@ -288,7 +316,7 @@ impl RolloutRecorder {
         state_db_ctx: Option<StateDbHandle>,
         state_builder: Option<ThreadMetadataBuilder>,
     ) -> std::io::Result<Self> {
-        let (file, rollout_path, meta) = match params {
+        let state = match params {
             RolloutRecorderParams::Create {
                 conversation_id,
                 forked_from_id,
@@ -303,64 +331,79 @@ impl RolloutRecorder {
                     timestamp,
                 } = create_log_file(config, conversation_id)?;
 
-                let timestamp_format: &[FormatItem] = format_description!(
-                    "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"
-                );
-                let timestamp = timestamp
-                    .to_offset(time::UtcOffset::UTC)
-                    .format(timestamp_format)
-                    .map_err(|e| IoError::other(format!("failed to format timestamp: {e}")))?;
+                let meta = create_session_meta(
+                    session_id,
+                    forked_from_id,
+                    source,
+                    base_instructions,
+                    dynamic_tools,
+                    config.cwd.clone(),
+                    config.model_provider_id.clone(),
+                    timestamp,
+                )?;
 
-                (
-                    tokio::fs::File::from_std(file),
-                    path,
-                    Some(SessionMeta {
-                        id: session_id,
-                        forked_from_id,
-                        timestamp,
-                        cwd: config.cwd.clone(),
-                        originator: originator().value,
-                        cli_version: env!("CARGO_PKG_VERSION").to_string(),
-                        source,
-                        model_provider: Some(config.model_provider_id.clone()),
-                        base_instructions: Some(base_instructions),
-                        dynamic_tools: if dynamic_tools.is_empty() {
-                            None
-                        } else {
-                            Some(dynamic_tools)
-                        },
+                RolloutWriterState {
+                    writer: Some(JsonlWriter {
+                        file: tokio::fs::File::from_std(file),
                     }),
-                )
+                    rollout_path: Some(path),
+                    session_meta: Some(meta),
+                    cwd: config.cwd.clone(),
+                    state_builder,
+                    deferred_create: None,
+                    pending_items: Vec::new(),
+                }
             }
-            RolloutRecorderParams::Resume { path } => (
-                tokio::fs::OpenOptions::new()
-                    .append(true)
-                    .open(&path)
-                    .await?,
-                path,
-                None,
-            ),
+            RolloutRecorderParams::CreateDeferred {
+                conversation_id,
+                forked_from_id,
+                source,
+                base_instructions,
+                dynamic_tools,
+            } => RolloutWriterState {
+                writer: None,
+                rollout_path: None,
+                session_meta: None,
+                cwd: config.cwd.clone(),
+                state_builder,
+                deferred_create: Some(DeferredRolloutCreate {
+                    codex_home: config.codex_home.clone(),
+                    cwd: config.cwd.clone(),
+                    model_provider_id: config.model_provider_id.clone(),
+                    conversation_id,
+                    forked_from_id,
+                    source,
+                    base_instructions,
+                    dynamic_tools,
+                }),
+                pending_items: Vec::new(),
+            },
+            RolloutRecorderParams::Resume { path } => RolloutWriterState {
+                writer: Some(JsonlWriter {
+                    file: tokio::fs::OpenOptions::new()
+                        .append(true)
+                        .open(&path)
+                        .await?,
+                }),
+                rollout_path: Some(path),
+                session_meta: None,
+                cwd: config.cwd.clone(),
+                state_builder,
+                deferred_create: None,
+                pending_items: Vec::new(),
+            },
         };
 
-        // Clone the cwd for the spawned task to collect git info asynchronously
-        let cwd = config.cwd.clone();
-
-        // A reasonably-sized bounded channel. If the buffer fills up the send
-        // future will yield, which is fine – we only need to ensure we do not
-        // perform *blocking* I/O on the caller's thread.
-        let (tx, rx) = mpsc::channel::<RolloutCmd>(256);
+        let rollout_path = Arc::new(Mutex::new(state.rollout_path.clone()));
 
         // Spawn a Tokio task that owns the file handle and performs async
         // writes. Using `tokio::fs::File` keeps everything on the async I/O
         // driver instead of blocking the runtime.
+        let (tx, rx) = mpsc::channel::<RolloutCmd>(256);
         tokio::task::spawn(rollout_writer(
-            file,
+            state,
             rx,
-            meta,
-            cwd,
-            rollout_path.clone(),
             state_db_ctx.clone(),
-            state_builder,
             config.model_provider_id.clone(),
         ));
 
@@ -371,8 +414,32 @@ impl RolloutRecorder {
         })
     }
 
-    pub fn rollout_path(&self) -> &Path {
-        self.rollout_path.as_path()
+    pub fn rollout_path(&self) -> Option<PathBuf> {
+        self.rollout_path
+            .lock()
+            .expect("rollout path lock poisoned")
+            .clone()
+    }
+
+    pub async fn ensure_persisted(&self) -> std::io::Result<PathBuf> {
+        if let Some(path) = self.rollout_path() {
+            return Ok(path);
+        }
+
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(RolloutCmd::EnsurePersisted { ack: tx })
+            .await
+            .map_err(|e| IoError::other(format!("failed to queue ensure persisted: {e}")))?;
+        let path = rx
+            .await
+            .map_err(|e| IoError::other(format!("failed waiting for ensure persisted: {e}")))??;
+
+        *self
+            .rollout_path
+            .lock()
+            .expect("rollout path lock poisoned") = Some(path.clone());
+        Ok(path)
     }
 
     pub fn state_db(&self) -> Option<StateDbHandle> {
@@ -469,7 +536,7 @@ impl RolloutRecorder {
             "Resumed rollout with {} items, thread ID: {:?}, parse errors: {}",
             items.len(),
             thread_id,
-            parse_errors,
+            parse_errors
         );
         Ok((items, thread_id, parse_errors))
     }
@@ -507,6 +574,57 @@ impl RolloutRecorder {
     }
 }
 
+#[derive(Clone)]
+struct DeferredRolloutCreate {
+    codex_home: PathBuf,
+    cwd: PathBuf,
+    model_provider_id: String,
+    conversation_id: ThreadId,
+    forked_from_id: Option<ThreadId>,
+    source: SessionSource,
+    base_instructions: BaseInstructions,
+    dynamic_tools: Vec<DynamicToolSpec>,
+}
+
+struct RolloutWriterState {
+    writer: Option<JsonlWriter>,
+    rollout_path: Option<PathBuf>,
+    session_meta: Option<SessionMeta>,
+    cwd: PathBuf,
+    state_builder: Option<ThreadMetadataBuilder>,
+    deferred_create: Option<DeferredRolloutCreate>,
+    pending_items: Vec<RolloutItem>,
+}
+
+fn create_session_meta(
+    conversation_id: ThreadId,
+    forked_from_id: Option<ThreadId>,
+    source: SessionSource,
+    base_instructions: BaseInstructions,
+    dynamic_tools: Vec<DynamicToolSpec>,
+    cwd: PathBuf,
+    model_provider_id: String,
+    timestamp: OffsetDateTime,
+) -> std::io::Result<SessionMeta> {
+    let timestamp = format_timestamp_utc(timestamp)?;
+    Ok(SessionMeta {
+        id: conversation_id,
+        forked_from_id,
+        timestamp,
+        cwd,
+        originator: originator().value,
+        cli_version: env!("CARGO_PKG_VERSION").to_string(),
+        source,
+        model_provider: Some(model_provider_id),
+        base_instructions: Some(base_instructions),
+        dynamic_tools: if dynamic_tools.is_empty() {
+            None
+        } else {
+            Some(dynamic_tools)
+        },
+    })
+}
+
 struct LogFileInfo {
     /// Opened file handle to the rollout file.
     file: File,
@@ -521,11 +639,27 @@ struct LogFileInfo {
     timestamp: OffsetDateTime,
 }
 
+fn format_timestamp_utc(timestamp: OffsetDateTime) -> std::io::Result<String> {
+    let timestamp_format: &[FormatItem] =
+        format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z");
+    timestamp
+        .to_offset(time::UtcOffset::UTC)
+        .format(timestamp_format)
+        .map_err(|e| IoError::other(format!("failed to format timestamp: {e}")))
+}
+
 fn create_log_file(config: &Config, conversation_id: ThreadId) -> std::io::Result<LogFileInfo> {
+    create_log_file_in_home(config.codex_home.as_path(), conversation_id)
+}
+
+fn create_log_file_in_home(
+    codex_home: &Path,
+    conversation_id: ThreadId,
+) -> std::io::Result<LogFileInfo> {
     // Resolve ~/.codex/sessions/YYYY/MM/DD and create it if missing.
     let timestamp = OffsetDateTime::now_local()
         .map_err(|e| IoError::other(format!("failed to get local time: {e}")))?;
-    let mut dir = config.codex_home.clone();
+    let mut dir = codex_home.to_path_buf();
     dir.push(SESSIONS_SUBDIR);
     dir.push(timestamp.year().to_string());
     dir.push(format!("{:02}", u8::from(timestamp.month())));
@@ -556,80 +690,190 @@ fn create_log_file(config: &Config, conversation_id: ThreadId) -> std::io::Resul
     })
 }
 
-#[allow(clippy::too_many_arguments)]
+async fn write_rollout_items(
+    writer: &mut JsonlWriter,
+    rollout_path: &Path,
+    state_db_ctx: Option<&codex_state::StateRuntime>,
+    state_builder: &mut Option<ThreadMetadataBuilder>,
+    default_provider: &str,
+    items: &[RolloutItem],
+) -> std::io::Result<()> {
+    if let Some(builder) = state_builder.as_mut() {
+        builder.rollout_path = rollout_path.to_path_buf();
+    }
+
+    let mut persisted_items = Vec::new();
+    for item in items {
+        if is_persisted_response_item(item) {
+            writer.write_rollout_item(item).await?;
+            persisted_items.push(item.clone());
+        }
+    }
+    if persisted_items.is_empty() {
+        return Ok(());
+    }
+
+    state_db::apply_rollout_items(
+        state_db_ctx,
+        rollout_path,
+        default_provider,
+        state_builder.as_ref(),
+        persisted_items.as_slice(),
+        "rollout_writer",
+    )
+    .await;
+    Ok(())
+}
+
+async fn write_session_meta_if_needed(
+    state: &mut RolloutWriterState,
+    state_db_ctx: Option<&codex_state::StateRuntime>,
+    default_provider: &str,
+) -> std::io::Result<()> {
+    let Some(session_meta) = state.session_meta.take() else {
+        return Ok(());
+    };
+    let Some(writer) = state.writer.as_mut() else {
+        state.session_meta = Some(session_meta);
+        return Ok(());
+    };
+    let Some(rollout_path) = state.rollout_path.clone() else {
+        return Err(IoError::other("missing rollout path for session metadata"));
+    };
+
+    let git_info = collect_git_info(state.cwd.as_path()).await;
+    let session_meta_line = SessionMetaLine {
+        meta: session_meta,
+        git: git_info,
+    };
+    if state_db_ctx.is_some() {
+        state.state_builder =
+            metadata::builder_from_session_meta(&session_meta_line, rollout_path.as_path());
+    }
+
+    let rollout_item = RolloutItem::SessionMeta(session_meta_line);
+    writer.write_rollout_item(&rollout_item).await?;
+    state_db::reconcile_rollout(
+        state_db_ctx,
+        rollout_path.as_path(),
+        default_provider,
+        state.state_builder.as_ref(),
+        std::slice::from_ref(&rollout_item),
+        None,
+    )
+    .await;
+    Ok(())
+}
+
+async fn ensure_writer_persisted(
+    state: &mut RolloutWriterState,
+    state_db_ctx: Option<&codex_state::StateRuntime>,
+    default_provider: &str,
+) -> std::io::Result<PathBuf> {
+    if let Some(path) = state.rollout_path.clone() {
+        return Ok(path);
+    }
+
+    let Some(deferred) = state.deferred_create.clone() else {
+        return Err(IoError::other(
+            "missing deferred rollout params for unpersisted recorder",
+        ));
+    };
+    let LogFileInfo {
+        file,
+        path,
+        conversation_id: session_id,
+        timestamp,
+    } = create_log_file_in_home(deferred.codex_home.as_path(), deferred.conversation_id)?;
+    state.writer = Some(JsonlWriter {
+        file: tokio::fs::File::from_std(file),
+    });
+    state.rollout_path = Some(path.clone());
+    state.cwd = deferred.cwd.clone();
+    state.session_meta = Some(create_session_meta(
+        session_id,
+        deferred.forked_from_id,
+        deferred.source,
+        deferred.base_instructions,
+        deferred.dynamic_tools,
+        deferred.cwd,
+        deferred.model_provider_id,
+        timestamp,
+    )?);
+    write_session_meta_if_needed(state, state_db_ctx, default_provider).await?;
+
+    if !state.pending_items.is_empty() {
+        let pending_items = std::mem::take(&mut state.pending_items);
+        if let Some(writer) = state.writer.as_mut() {
+            write_rollout_items(
+                writer,
+                path.as_path(),
+                state_db_ctx,
+                &mut state.state_builder,
+                default_provider,
+                pending_items.as_slice(),
+            )
+            .await?;
+        }
+    }
+    state.deferred_create = None;
+
+    Ok(path)
+}
+
 async fn rollout_writer(
-    file: tokio::fs::File,
+    mut state: RolloutWriterState,
     mut rx: mpsc::Receiver<RolloutCmd>,
-    mut meta: Option<SessionMeta>,
-    cwd: std::path::PathBuf,
-    rollout_path: PathBuf,
     state_db_ctx: Option<StateDbHandle>,
-    mut state_builder: Option<ThreadMetadataBuilder>,
     default_provider: String,
 ) -> std::io::Result<()> {
-    let mut writer = JsonlWriter { file };
-    if let Some(builder) = state_builder.as_mut() {
-        builder.rollout_path = rollout_path.clone();
-    }
-
-    // If we have a meta, collect git info asynchronously and write meta first
-    if let Some(session_meta) = meta.take() {
-        let git_info = collect_git_info(&cwd).await;
-        let session_meta_line = SessionMetaLine {
-            meta: session_meta,
-            git: git_info,
-        };
-        if state_db_ctx.is_some() {
-            state_builder =
-                metadata::builder_from_session_meta(&session_meta_line, rollout_path.as_path());
-        }
-
-        // Write the SessionMeta as the first item in the file, wrapped in a rollout line
-        let rollout_item = RolloutItem::SessionMeta(session_meta_line);
-        writer.write_rollout_item(&rollout_item).await?;
-        state_db::reconcile_rollout(
-            state_db_ctx.as_deref(),
-            rollout_path.as_path(),
-            default_provider.as_str(),
-            state_builder.as_ref(),
-            std::slice::from_ref(&rollout_item),
-            None,
-        )
-        .await;
-    }
+    write_session_meta_if_needed(
+        &mut state,
+        state_db_ctx.as_deref(),
+        default_provider.as_str(),
+    )
+    .await?;
 
     // Process rollout commands
     while let Some(cmd) = rx.recv().await {
         match cmd {
             RolloutCmd::AddItems(items) => {
-                let mut persisted_items = Vec::new();
-                for item in items {
-                    if is_persisted_response_item(&item) {
-                        writer.write_rollout_item(&item).await?;
-                        persisted_items.push(item);
-                    }
+                if let Some(writer) = state.writer.as_mut() {
+                    let Some(rollout_path) = state.rollout_path.clone() else {
+                        return Err(IoError::other(
+                            "missing rollout path for persisted recorder",
+                        ));
+                    };
+                    write_rollout_items(
+                        writer,
+                        rollout_path.as_path(),
+                        state_db_ctx.as_deref(),
+                        &mut state.state_builder,
+                        default_provider.as_str(),
+                        items.as_slice(),
+                    )
+                    .await?;
+                } else {
+                    state.pending_items.extend(items);
                 }
-                if persisted_items.is_empty() {
-                    continue;
-                }
-                if let Some(builder) = state_builder.as_mut() {
-                    builder.rollout_path = rollout_path.clone();
-                }
-                state_db::apply_rollout_items(
-                    state_db_ctx.as_deref(),
-                    rollout_path.as_path(),
-                    default_provider.as_str(),
-                    state_builder.as_ref(),
-                    persisted_items.as_slice(),
-                    "rollout_writer",
-                )
-                .await;
+            }
+            RolloutCmd::EnsurePersisted { ack } => {
+                let _ = ack.send(
+                    ensure_writer_persisted(
+                        &mut state,
+                        state_db_ctx.as_deref(),
+                        default_provider.as_str(),
+                    )
+                    .await,
+                );
             }
             RolloutCmd::Flush { ack } => {
                 // Ensure underlying file is flushed and then ack.
-                if let Err(e) = writer.file.flush().await {
+                if let Some(writer) = state.writer.as_mut()
+                    && let Err(err) = writer.file.flush().await
+                {
                     let _ = ack.send(());
-                    return Err(e);
+                    return Err(err);
                 }
                 let _ = ack.send(());
             }

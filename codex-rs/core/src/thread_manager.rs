@@ -8,6 +8,7 @@ use crate::codex::Codex;
 use crate::codex::CodexSpawnOk;
 use crate::codex::INITIAL_SUBMIT_ID;
 use crate::codex_thread::CodexThread;
+use crate::codex_thread::RolloutPersistenceStatus;
 use crate::config::Config;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
@@ -18,6 +19,7 @@ use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::SessionConfiguredEvent;
 use crate::rollout::RolloutRecorder;
+use crate::rollout::find_thread_path_by_id_str;
 use crate::rollout::truncation;
 use crate::skills::SkillsManager;
 use codex_protocol::ThreadId;
@@ -107,6 +109,7 @@ pub(crate) struct ThreadManagerState {
     thread_created_tx: broadcast::Sender<ThreadId>,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
+    codex_home: PathBuf,
     skills_manager: Arc<SkillsManager>,
     file_watcher: Arc<FileWatcher>,
     session_source: SessionSource,
@@ -129,7 +132,11 @@ impl ThreadManager {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
-                models_manager: Arc::new(ModelsManager::new(codex_home, auth_manager.clone())),
+                models_manager: Arc::new(ModelsManager::new(
+                    codex_home.clone(),
+                    auth_manager.clone(),
+                )),
+                codex_home,
                 skills_manager,
                 file_watcher,
                 auth_manager,
@@ -170,10 +177,11 @@ impl ThreadManager {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
                 models_manager: Arc::new(ModelsManager::with_provider(
-                    codex_home,
+                    codex_home.clone(),
                     auth_manager.clone(),
                     provider,
                 )),
+                codex_home,
                 skills_manager,
                 file_watcher,
                 auth_manager,
@@ -336,6 +344,10 @@ impl ThreadManager {
             .await
     }
 
+    pub async fn resolve_rollout_path(&self, thread_id: ThreadId) -> CodexResult<PathBuf> {
+        self.state.resolve_rollout_path(thread_id).await
+    }
+
     pub(crate) fn agent_control(&self) -> AgentControl {
         AgentControl::new(Arc::downgrade(&self.state))
     }
@@ -425,7 +437,7 @@ impl ThreadManagerState {
         .await
     }
 
-    pub(crate) async fn spawn_thread_with_source(
+    async fn spawn_thread_with_source(
         &self,
         config: Config,
         initial_history: InitialHistory,
@@ -450,6 +462,36 @@ impl ThreadManagerState {
         )
         .await?;
         self.finalize_thread_spawn(codex, thread_id).await
+    }
+
+    pub(crate) async fn resolve_rollout_path(&self, thread_id: ThreadId) -> CodexResult<PathBuf> {
+        match self.get_thread(thread_id).await {
+            Ok(thread) => match thread.ensure_rollout_persisted().await {
+                Ok(RolloutPersistenceStatus::Persisted(path)) => return Ok(path),
+                Ok(RolloutPersistenceStatus::Ephemeral) => {
+                    return Err(CodexErr::InvalidRequest(format!(
+                        "thread `{thread_id}` is ephemeral and has no persisted rollout"
+                    )));
+                }
+                Err(err) => {
+                    return Err(CodexErr::Fatal(format!(
+                        "failed to persist rollout for thread id {thread_id}: {err}"
+                    )));
+                }
+            },
+            Err(CodexErr::ThreadNotFound(_)) => {}
+            Err(err) => return Err(err),
+        }
+
+        match find_thread_path_by_id_str(&self.codex_home, &thread_id.to_string()).await {
+            Ok(Some(path)) => Ok(path),
+            Ok(None) => Err(CodexErr::InvalidRequest(format!(
+                "no rollout found for thread id {thread_id}"
+            ))),
+            Err(err) => Err(CodexErr::InvalidRequest(format!(
+                "failed to locate thread id {thread_id}: {err}"
+            ))),
+        }
     }
 
     async fn finalize_thread_spawn(

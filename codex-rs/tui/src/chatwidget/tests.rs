@@ -3131,39 +3131,21 @@ async fn slash_fork_requests_current_fork() {
 }
 
 #[tokio::test]
-async fn slash_rollout_displays_current_path() {
+async fn slash_rollout_requests_path_display() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    let rollout_path = PathBuf::from("/tmp/codex-test-rollout.jsonl");
-    chat.current_rollout_path = Some(rollout_path.clone());
 
     chat.dispatch_command(SlashCommand::Rollout);
 
-    let cells = drain_insert_history(&mut rx);
-    assert_eq!(cells.len(), 1, "expected info message for rollout path");
-    let rendered = lines_to_single_string(&cells[0]);
-    assert!(
-        rendered.contains(&rollout_path.display().to_string()),
-        "expected rollout path to be shown: {rendered}"
-    );
+    assert_matches!(rx.try_recv(), Ok(AppEvent::ShowRolloutPath));
 }
 
 #[tokio::test]
-async fn slash_rollout_handles_missing_path() {
+async fn slash_rollout_requests_path_display_when_missing_path() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.dispatch_command(SlashCommand::Rollout);
 
-    let cells = drain_insert_history(&mut rx);
-    assert_eq!(
-        cells.len(),
-        1,
-        "expected info message explaining missing path"
-    );
-    let rendered = lines_to_single_string(&cells[0]);
-    assert!(
-        rendered.contains("not available"),
-        "expected missing rollout path message: {rendered}"
-    );
+    assert_matches!(rx.try_recv(), Ok(AppEvent::ShowRolloutPath));
 }
 
 #[tokio::test]

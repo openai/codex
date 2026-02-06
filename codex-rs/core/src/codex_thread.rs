@@ -28,6 +28,12 @@ pub struct ThreadConfigSnapshot {
     pub session_source: SessionSource,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RolloutPersistenceStatus {
+    Persisted(PathBuf),
+    Ephemeral,
+}
+
 pub struct CodexThread {
     codex: Codex,
     rollout_path: Option<PathBuf>,
@@ -74,6 +80,11 @@ impl CodexThread {
 
     pub fn rollout_path(&self) -> Option<PathBuf> {
         self.rollout_path.clone()
+    }
+
+    /// Ensure this thread has a persisted rollout and return its status.
+    pub async fn ensure_rollout_persisted(&self) -> CodexResult<RolloutPersistenceStatus> {
+        self.codex.ensure_rollout_persisted().await
     }
 
     pub fn state_db(&self) -> Option<StateDbHandle> {
