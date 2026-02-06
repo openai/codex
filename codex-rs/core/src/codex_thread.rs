@@ -82,8 +82,9 @@ impl CodexThread {
         self.rollout_path.clone()
     }
 
-    pub async fn ensure_rollout_persisted_for_api(&self) -> CodexResult<RolloutPersistenceStatus> {
-        self.codex.ensure_rollout_persisted_for_api().await
+    /// Ensure this thread has a persisted rollout and return its status.
+    pub async fn ensure_rollout_persisted(&self) -> CodexResult<RolloutPersistenceStatus> {
+        self.codex.ensure_rollout_persisted().await
     }
 
     pub fn state_db(&self) -> Option<StateDbHandle> {

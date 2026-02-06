@@ -5183,7 +5183,7 @@ impl CodexMessageProcessor {
         thread_id: ThreadId,
     ) -> Result<PathBuf, JSONRPCErrorError> {
         if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
-            match thread.ensure_rollout_persisted_for_api().await {
+            match thread.ensure_rollout_persisted().await {
                 Ok(RolloutPersistenceStatus::Persisted(path)) => return Ok(path),
                 Ok(RolloutPersistenceStatus::Ephemeral) => {
                     return Err(JSONRPCErrorError {

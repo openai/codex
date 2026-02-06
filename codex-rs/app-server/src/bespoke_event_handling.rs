@@ -1065,7 +1065,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             if let Some(request_id) = pending {
                 // Rollback responses are rebuilt from rollout-on-disk, and `thread/start`
                 // can defer rollout file creation, so force persistence before reading.
-                let rollout_path = match conversation.ensure_rollout_persisted_for_api().await {
+                let rollout_path = match conversation.ensure_rollout_persisted().await {
                     Ok(RolloutPersistenceStatus::Persisted(path)) => path,
                     Ok(RolloutPersistenceStatus::Ephemeral) => {
                         let error = JSONRPCErrorError {
