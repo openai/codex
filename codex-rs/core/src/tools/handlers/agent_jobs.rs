@@ -583,7 +583,7 @@ async fn build_runner_options(
 }
 
 fn normalize_concurrency(requested: Option<usize>, max_threads: Option<usize>) -> usize {
-    let requested = requested.unwrap_or(4).max(1);
+    let requested = requested.unwrap_or(64).max(1);
     let requested = requested.min(64);
     if let Some(max_threads) = max_threads {
         requested.min(max_threads.max(1))

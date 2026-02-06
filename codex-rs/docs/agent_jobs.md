@@ -25,7 +25,7 @@ Optional args:
 - `job_name`: human-friendly label.
 - `output_csv_path`: destination for CSV export (defaults to `<input>.agent-job-<id>.csv`).
 - `output_schema`: JSON schema for result payloads (best-effort guidance).
-- `max_concurrency`: cap on parallel workers.
+- `max_concurrency`: cap on parallel workers (defaults to 64, then capped by config).
 - `auto_export`: auto-export CSV on successful completion (default true).
 
 ### `run_agent_job`
