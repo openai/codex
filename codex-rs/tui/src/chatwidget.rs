@@ -640,7 +640,6 @@ pub(crate) struct UserMessage {
     local_images: Vec<LocalImageAttachment>,
     text_elements: Vec<TextElement>,
     mention_paths: HashMap<String, String>,
-    collaboration_mode_override: Option<CollaborationModeMask>,
 }
 
 impl From<String> for UserMessage {
@@ -651,7 +650,6 @@ impl From<String> for UserMessage {
             // Plain text conversion has no UI element ranges.
             text_elements: Vec::new(),
             mention_paths: HashMap::new(),
-            collaboration_mode_override: None,
         }
     }
 }
@@ -664,7 +662,6 @@ impl From<&str> for UserMessage {
             // Plain text conversion has no UI element ranges.
             text_elements: Vec::new(),
             mention_paths: HashMap::new(),
-            collaboration_mode_override: None,
         }
     }
 }
@@ -691,7 +688,6 @@ pub(crate) fn create_initial_user_message(
             local_images,
             text_elements,
             mention_paths: HashMap::new(),
-            collaboration_mode_override: None,
         })
     }
 }
@@ -706,7 +702,6 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
         text_elements,
         local_images,
         mention_paths,
-        collaboration_mode_override,
     } = message;
     if local_images.is_empty() {
         return UserMessage {
@@ -714,7 +709,6 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
             text_elements,
             local_images,
             mention_paths,
-            collaboration_mode_override,
         };
     }
 
@@ -770,7 +764,6 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
         local_images: remapped_images,
         text_elements: rebuilt_elements,
         mention_paths,
-        collaboration_mode_override,
     }
 }
 
@@ -1650,9 +1643,7 @@ impl ChatWidget {
         }
 
         if let Some(combined) = self.drain_queued_messages_for_restore() {
-            if let Err(message) = self.restore_user_message_to_composer(combined) {
-                self.queued_user_messages.push_front(message);
-            }
+            self.restore_user_message_to_composer(combined);
             self.refresh_queued_user_messages();
         }
 
@@ -1676,7 +1667,6 @@ impl ChatWidget {
             text_elements: self.bottom_pane.composer_text_elements(),
             local_images: self.bottom_pane.composer_local_images(),
             mention_paths: HashMap::new(),
-            collaboration_mode_override: None,
         };
 
         let mut to_merge: Vec<UserMessage> = self.queued_user_messages.drain(..).collect();
@@ -1689,14 +1679,9 @@ impl ChatWidget {
             text_elements: Vec::new(),
             local_images: Vec::new(),
             mention_paths: HashMap::new(),
-            collaboration_mode_override: None,
         };
         let mut combined_offset = 0usize;
         let mut next_image_label = 1usize;
-        let mut combined_collaboration_mode_override = None;
-        // The restored composer can carry only one override. If merged drafts disagree on mode,
-        // we drop the override instead of arbitrarily picking one.
-        let mut has_conflicting_mode_overrides = false;
 
         for (idx, message) in to_merge.into_iter().enumerate() {
             if idx > 0 {
@@ -1704,16 +1689,6 @@ impl ChatWidget {
                 combined_offset += 1;
             }
             let message = remap_placeholders_for_message(message, &mut next_image_label);
-            // Preserve an override only when every merged draft points to the same mode.
-            if let Some(mask) = &message.collaboration_mode_override {
-                if let Some(existing) = &combined_collaboration_mode_override
-                    && existing != mask
-                {
-                    has_conflicting_mode_overrides = true;
-                } else if combined_collaboration_mode_override.is_none() {
-                    combined_collaboration_mode_override = Some(mask.clone());
-                }
-            }
             let base = combined_offset;
             combined.text.push_str(&message.text);
             combined_offset += message.text.len();
@@ -1727,43 +1702,20 @@ impl ChatWidget {
             combined.local_images.extend(message.local_images);
             combined.mention_paths.extend(message.mention_paths);
         }
-        if !has_conflicting_mode_overrides {
-            combined.collaboration_mode_override = combined_collaboration_mode_override;
-        }
 
         Some(combined)
     }
 
-    fn restore_user_message_to_composer(
-        &mut self,
-        user_message: UserMessage,
-    ) -> Result<(), UserMessage> {
+    fn restore_user_message_to_composer(&mut self, user_message: UserMessage) {
         let UserMessage {
             text,
             local_images,
             text_elements,
-            mention_paths,
-            collaboration_mode_override,
+            mention_paths: _,
         } = user_message;
-        if let Some(mask) = collaboration_mode_override {
-            if self.agent_turn_running && self.active_collaboration_mask.as_ref() != Some(&mask) {
-                self.add_error_message(
-                    "Cannot switch collaboration mode while a turn is running.".to_string(),
-                );
-                return Err(UserMessage {
-                    text,
-                    local_images,
-                    text_elements,
-                    mention_paths,
-                    collaboration_mode_override: Some(mask),
-                });
-            }
-            self.set_collaboration_mask(mask);
-        }
         let local_image_paths = local_images.into_iter().map(|img| img.path).collect();
         self.bottom_pane
             .set_composer_text(text, text_elements, local_image_paths);
-        Ok(())
     }
 
     fn on_plan_update(&mut self, update: UpdatePlanArgs) {
@@ -3054,9 +3006,7 @@ impl ChatWidget {
             } if !self.queued_user_messages.is_empty() => {
                 // Prefer the most recently queued item.
                 if let Some(user_message) = self.queued_user_messages.pop_back() {
-                    if let Err(user_message) = self.restore_user_message_to_composer(user_message) {
-                        self.queued_user_messages.push_back(user_message);
-                    }
+                    self.restore_user_message_to_composer(user_message);
                     self.refresh_queued_user_messages();
                     self.request_redraw();
                 }
@@ -3073,7 +3023,6 @@ impl ChatWidget {
                             .take_recent_submission_images_with_placeholders(),
                         text_elements,
                         mention_paths: self.bottom_pane.take_mention_paths(),
-                        collaboration_mode_override: None,
                     };
                     if self.is_session_configured() && !self.is_plan_streaming_in_tui() {
                         // Submitted is only emitted when steer is enabled.
@@ -3097,7 +3046,6 @@ impl ChatWidget {
                             .take_recent_submission_images_with_placeholders(),
                         text_elements,
                         mention_paths: self.bottom_pane.take_mention_paths(),
-                        collaboration_mode_override: None,
                     };
                     self.queue_user_message(user_message);
                 }
@@ -3467,7 +3415,6 @@ impl ChatWidget {
                         .take_recent_submission_images_with_placeholders(),
                     text_elements: prepared_elements,
                     mention_paths: self.bottom_pane.take_mention_paths(),
-                    collaboration_mode_override: None,
                 };
                 if self.is_session_configured() {
                     self.reasoning_buffer.clear();
@@ -3605,7 +3552,6 @@ impl ChatWidget {
             local_images,
             text_elements,
             mention_paths,
-            collaboration_mode_override,
         } = user_message;
         if text.is_empty() && local_images.is_empty() {
             return;
@@ -3676,15 +3622,6 @@ impl ChatWidget {
             }
         }
 
-        if let Some(mask) = collaboration_mode_override {
-            if self.agent_turn_running && self.active_collaboration_mask.as_ref() != Some(&mask) {
-                self.add_error_message(
-                    "Cannot switch collaboration mode while a turn is running.".to_string(),
-                );
-                return;
-            }
-            self.set_collaboration_mask(mask);
-        }
         let effective_mode = self.effective_collaboration_mode();
         let collaboration_mode = if self.collaboration_modes_enabled() {
             self.active_collaboration_mask
@@ -6487,13 +6424,21 @@ impl ChatWidget {
         text: String,
         collaboration_mode: CollaborationModeMask,
     ) {
+        if self.agent_turn_running
+            && self.active_collaboration_mask.as_ref() != Some(&collaboration_mode)
+        {
+            self.add_error_message(
+                "Cannot switch collaboration mode while a turn is running.".to_string(),
+            );
+            return;
+        }
+        self.set_collaboration_mask(collaboration_mode);
         let should_queue = self.is_plan_streaming_in_tui();
         let user_message = UserMessage {
             text,
             local_images: Vec::new(),
             text_elements: Vec::new(),
             mention_paths: HashMap::new(),
-            collaboration_mode_override: Some(collaboration_mode),
         };
         if should_queue {
             self.queue_user_message(user_message);

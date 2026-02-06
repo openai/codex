@@ -469,7 +469,6 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
         }],
         text_elements: first_elements,
         mention_paths: HashMap::new(),
-        collaboration_mode_override: None,
     });
     chat.queued_user_messages.push_back(UserMessage {
         text: second_text,
@@ -479,7 +478,6 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
         }],
         text_elements: second_elements,
         mention_paths: HashMap::new(),
-        collaboration_mode_override: None,
     });
     chat.refresh_queued_user_messages();
 
@@ -530,18 +528,16 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
 }
 
 #[tokio::test]
-async fn interrupted_turn_restore_preserves_mode_override_for_resubmission() {
+async fn interrupted_turn_restore_keeps_active_mode_for_resubmission() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.set_feature_enabled(Feature::CollaborationModes, true);
 
     let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
         .expect("expected plan collaboration mode");
-    let code_mask = collaboration_modes::default_mask(chat.models_manager.as_ref())
-        .expect("expected default collaboration mode");
-    let expected_mode = code_mask
+    let expected_mode = plan_mask
         .mode
-        .expect("expected mode kind on code collaboration mode");
+        .expect("expected mode kind on plan collaboration mode");
 
     chat.set_collaboration_mask(plan_mask);
     chat.on_task_started();
@@ -550,7 +546,6 @@ async fn interrupted_turn_restore_preserves_mode_override_for_resubmission() {
         local_images: Vec::new(),
         text_elements: Vec::new(),
         mention_paths: HashMap::new(),
-        collaboration_mode_override: Some(code_mask),
     });
     chat.refresh_queued_user_messages();
 
@@ -574,7 +569,7 @@ async fn interrupted_turn_restore_preserves_mode_override_for_resubmission() {
             ..
         } => assert_eq!(mode, expected_mode),
         other => {
-            panic!("expected Op::UserTurn with restored mode override, got {other:?}")
+            panic!("expected Op::UserTurn with active mode, got {other:?}")
         }
     }
     assert_eq!(chat.active_collaboration_mode_kind(), expected_mode);
@@ -611,7 +606,6 @@ async fn remap_placeholders_uses_attachment_labels() {
         text_elements: elements,
         local_images: attachments,
         mention_paths: HashMap::new(),
-        collaboration_mode_override: None,
     };
     let mut next_label = 3usize;
     let remapped = remap_placeholders_for_message(message, &mut next_label);
@@ -673,7 +667,6 @@ async fn remap_placeholders_uses_byte_ranges_when_placeholder_missing() {
         text_elements: elements,
         local_images: attachments,
         mention_paths: HashMap::new(),
-        collaboration_mode_override: None,
     };
     let mut next_label = 3usize;
     let remapped = remap_placeholders_for_message(message, &mut next_label);
