@@ -6,6 +6,7 @@ use crate::CloudTaskError;
 use crate::DiffSummary;
 use crate::Result;
 use crate::TaskId;
+use crate::TaskListPage;
 use crate::TaskStatus;
 use crate::TaskSummary;
 use crate::TurnAttempt;
@@ -59,8 +60,13 @@ impl HttpClient {
 
 #[async_trait::async_trait]
 impl CloudBackend for HttpClient {
-    async fn list_tasks(&self, env: Option<&str>) -> Result<Vec<TaskSummary>> {
-        self.tasks_api().list(env).await
+    async fn list_tasks(
+        &self,
+        env: Option<&str>,
+        limit: Option<i64>,
+        cursor: Option<&str>,
+    ) -> Result<TaskListPage> {
+        self.tasks_api().list(env, limit, cursor).await
     }
 
     async fn get_task_summary(&self, id: TaskId) -> Result<TaskSummary> {
@@ -132,10 +138,16 @@ mod api {
             }
         }
 
-        pub(crate) async fn list(&self, env: Option<&str>) -> Result<Vec<TaskSummary>> {
+        pub(crate) async fn list(
+            &self,
+            env: Option<&str>,
+            limit: Option<i64>,
+            cursor: Option<&str>,
+        ) -> Result<TaskListPage> {
+            let limit_i32 = limit.and_then(|lim| i32::try_from(lim).ok());
             let resp = self
                 .backend
-                .list_tasks(Some(20), Some("current"), env)
+                .list_tasks(limit_i32, Some("current"), env, cursor)
                 .await
                 .map_err(|e| CloudTaskError::Http(format!("list_tasks failed: {e}")))?;
 
@@ -146,11 +158,19 @@ mod api {
                 .collect();
 
             append_error_log(&format!(
-                "http.list_tasks: env={} items={}",
+                "http.list_tasks: env={} limit={} cursor_in={} cursor_out={} items={}",
                 env.unwrap_or("<all>"),
+                limit_i32
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "<default>".to_string()),
+                cursor.unwrap_or("<none>"),
+                resp.cursor.as_deref().unwrap_or("<none>"),
                 tasks.len()
             ));
-            Ok(tasks)
+            Ok(TaskListPage {
+                tasks,
+                cursor: resp.cursor,
+            })
         }
 
         pub(crate) async fn summary(&self, id: TaskId) -> Result<TaskSummary> {

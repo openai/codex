@@ -33,7 +33,7 @@ fn map_rollout_io_error(io_err: &std::io::Error, codex_home: &Path) -> Option<Co
             sessions_dir.display()
         ),
         ErrorKind::InvalidData | ErrorKind::InvalidInput => format!(
-            "Session data under {} looks corrupt or unreadable. Clearing the sessions directory may help (this will remove saved conversations).",
+            "Session data under {} looks corrupt or unreadable. Clearing the sessions directory may help (this will remove saved threads).",
             sessions_dir.display()
         ),
         ErrorKind::IsADirectory | ErrorKind::NotADirectory => format!(

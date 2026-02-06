@@ -1,25 +1,36 @@
 use crate::codex_message_processor::ApiVersion;
 use crate::codex_message_processor::PendingInterrupts;
+use crate::codex_message_processor::PendingRollbacks;
 use crate::codex_message_processor::TurnSummary;
 use crate::codex_message_processor::TurnSummaryStore;
+use crate::codex_message_processor::read_event_msgs_from_rollout;
+use crate::codex_message_processor::read_summary_from_rollout;
+use crate::codex_message_processor::summary_to_thread;
+use crate::error_code::INTERNAL_ERROR_CODE;
+use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::OutgoingMessageSender;
 use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
 use codex_app_server_protocol::ApplyPatchApprovalResponse;
-use codex_app_server_protocol::ApprovalDecision;
 use codex_app_server_protocol::CodexErrorInfo as V2CodexErrorInfo;
+use codex_app_server_protocol::CollabAgentState as V2CollabAgentStatus;
+use codex_app_server_protocol::CollabAgentTool;
+use codex_app_server_protocol::CollabAgentToolCallStatus as V2CollabToolCallStatus;
 use codex_app_server_protocol::CommandAction as V2ParsedCommand;
+use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionOutputDeltaNotification;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ContextCompactedNotification;
 use codex_app_server_protocol::DeprecationNoticeNotification;
+use codex_app_server_protocol::DynamicToolCallParams;
 use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::ExecCommandApprovalResponse;
 use codex_app_server_protocol::ExecPolicyAmendment as V2ExecPolicyAmendment;
+use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeOutputDeltaNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
@@ -27,11 +38,13 @@ use codex_app_server_protocol::FileUpdateChange;
 use codex_app_server_protocol::InterruptConversationResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
+use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpToolCallError;
 use codex_app_server_protocol::McpToolCallResult;
 use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind as V2PatchChangeKind;
+use codex_app_server_protocol::PlanDeltaNotification;
 use codex_app_server_protocol::RawResponseItemCompletedNotification;
 use codex_app_server_protocol::ReasoningSummaryPartAddedNotification;
 use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
@@ -40,8 +53,14 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::TerminalInteractionNotification;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadNameUpdatedNotification;
+use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
+use codex_app_server_protocol::ToolRequestUserInputOption;
+use codex_app_server_protocol::ToolRequestUserInputParams;
+use codex_app_server_protocol::ToolRequestUserInputQuestion;
+use codex_app_server_protocol::ToolRequestUserInputResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnDiffUpdatedNotification;
@@ -50,9 +69,11 @@ use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStatus;
-use codex_core::CodexConversation;
+use codex_app_server_protocol::build_turns_from_event_msgs;
+use codex_core::CodexThread;
 use codex_core::parse_command::shlex_join;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
+use codex_core::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
@@ -66,9 +87,13 @@ use codex_core::protocol::TokenCountEvent;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::review_format::format_review_findings_block;
 use codex_core::review_prompts;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
+use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
+use codex_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::ReviewOutputEvent;
+use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUserInputAnswer;
+use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::path::PathBuf;
@@ -78,21 +103,25 @@ use tracing::error;
 
 type JsonValue = serde_json::Value;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn apply_bespoke_event_handling(
     event: Event,
-    conversation_id: ConversationId,
-    conversation: Arc<CodexConversation>,
+    conversation_id: ThreadId,
+    conversation: Arc<CodexThread>,
     outgoing: Arc<OutgoingMessageSender>,
     pending_interrupts: PendingInterrupts,
+    pending_rollbacks: PendingRollbacks,
     turn_summary_store: TurnSummaryStore,
     api_version: ApiVersion,
+    fallback_model_provider: String,
 ) {
     let Event {
         id: event_turn_id,
         msg,
     } = event;
     match msg {
-        EventMsg::TaskComplete(_ev) => {
+        EventMsg::TurnStarted(_) => {}
+        EventMsg::TurnComplete(_ev) => {
             handle_turn_complete(
                 conversation_id,
                 event_turn_id,
@@ -218,6 +247,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                     // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
                     item_id: item_id.clone(),
                     reason,
+                    command: Some(command_string.clone()),
+                    cwd: Some(cwd.clone()),
+                    command_actions: Some(command_actions.clone()),
                     proposed_execpolicy_amendment: proposed_execpolicy_amendment_v2,
                 };
                 let rx = outgoing
@@ -241,6 +273,94 @@ pub(crate) async fn apply_bespoke_event_handling(
                 });
             }
         },
+        EventMsg::RequestUserInput(request) => {
+            if matches!(api_version, ApiVersion::V2) {
+                let questions = request
+                    .questions
+                    .into_iter()
+                    .map(|question| ToolRequestUserInputQuestion {
+                        id: question.id,
+                        header: question.header,
+                        question: question.question,
+                        is_other: question.is_other,
+                        is_secret: question.is_secret,
+                        options: question.options.map(|options| {
+                            options
+                                .into_iter()
+                                .map(|option| ToolRequestUserInputOption {
+                                    label: option.label,
+                                    description: option.description,
+                                })
+                                .collect()
+                        }),
+                    })
+                    .collect();
+                let params = ToolRequestUserInputParams {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: request.turn_id,
+                    item_id: request.call_id,
+                    questions,
+                };
+                let rx = outgoing
+                    .send_request(ServerRequestPayload::ToolRequestUserInput(params))
+                    .await;
+                tokio::spawn(async move {
+                    on_request_user_input_response(event_turn_id, rx, conversation).await;
+                });
+            } else {
+                error!(
+                    "request_user_input is only supported on api v2 (call_id: {})",
+                    request.call_id
+                );
+                let empty = CoreRequestUserInputResponse {
+                    answers: HashMap::new(),
+                };
+                if let Err(err) = conversation
+                    .submit(Op::UserInputAnswer {
+                        id: event_turn_id,
+                        response: empty,
+                    })
+                    .await
+                {
+                    error!("failed to submit UserInputAnswer: {err}");
+                }
+            }
+        }
+        EventMsg::DynamicToolCallRequest(request) => {
+            if matches!(api_version, ApiVersion::V2) {
+                let call_id = request.call_id;
+                let params = DynamicToolCallParams {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: request.turn_id,
+                    call_id: call_id.clone(),
+                    tool: request.tool,
+                    arguments: request.arguments,
+                };
+                let rx = outgoing
+                    .send_request(ServerRequestPayload::DynamicToolCall(params))
+                    .await;
+                tokio::spawn(async move {
+                    crate::dynamic_tools::on_call_response(call_id, rx, conversation).await;
+                });
+            } else {
+                error!(
+                    "dynamic tool calls are only supported on api v2 (call_id: {})",
+                    request.call_id
+                );
+                let call_id = request.call_id;
+                let _ = conversation
+                    .submit(Op::DynamicToolResponse {
+                        id: call_id.clone(),
+                        response: CoreDynamicToolResponse {
+                            content_items: vec![CoreDynamicToolCallOutputContentItem::InputText {
+                                text: "dynamic tool calls require api v2".to_string(),
+                            }],
+                            success: false,
+                        },
+                    })
+                    .await;
+            }
+        }
         // TODO(celia): properly construct McpToolCall TurnItem in core.
         EventMsg::McpToolCallBegin(begin_event) => {
             let notification = construct_mcp_tool_call_notification(
@@ -264,15 +384,240 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .send_server_notification(ServerNotification::ItemCompleted(notification))
                 .await;
         }
+        EventMsg::CollabAgentSpawnBegin(begin_event) => {
+            let item = ThreadItem::CollabAgentToolCall {
+                id: begin_event.call_id,
+                tool: CollabAgentTool::SpawnAgent,
+                status: V2CollabToolCallStatus::InProgress,
+                sender_thread_id: begin_event.sender_thread_id.to_string(),
+                receiver_thread_ids: Vec::new(),
+                prompt: Some(begin_event.prompt),
+                agents_states: HashMap::new(),
+            };
+            let notification = ItemStartedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ItemStarted(notification))
+                .await;
+        }
+        EventMsg::CollabAgentSpawnEnd(end_event) => {
+            let has_receiver = end_event.new_thread_id.is_some();
+            let status = match &end_event.status {
+                codex_protocol::protocol::AgentStatus::Errored(_)
+                | codex_protocol::protocol::AgentStatus::NotFound => V2CollabToolCallStatus::Failed,
+                _ if has_receiver => V2CollabToolCallStatus::Completed,
+                _ => V2CollabToolCallStatus::Failed,
+            };
+            let (receiver_thread_ids, agents_states) = match end_event.new_thread_id {
+                Some(id) => {
+                    let receiver_id = id.to_string();
+                    let received_status = V2CollabAgentStatus::from(end_event.status.clone());
+                    (
+                        vec![receiver_id.clone()],
+                        [(receiver_id, received_status)].into_iter().collect(),
+                    )
+                }
+                None => (Vec::new(), HashMap::new()),
+            };
+            let item = ThreadItem::CollabAgentToolCall {
+                id: end_event.call_id,
+                tool: CollabAgentTool::SpawnAgent,
+                status,
+                sender_thread_id: end_event.sender_thread_id.to_string(),
+                receiver_thread_ids,
+                prompt: Some(end_event.prompt),
+                agents_states,
+            };
+            let notification = ItemCompletedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ItemCompleted(notification))
+                .await;
+        }
+        EventMsg::CollabAgentInteractionBegin(begin_event) => {
+            let receiver_thread_ids = vec![begin_event.receiver_thread_id.to_string()];
+            let item = ThreadItem::CollabAgentToolCall {
+                id: begin_event.call_id,
+                tool: CollabAgentTool::SendInput,
+                status: V2CollabToolCallStatus::InProgress,
+                sender_thread_id: begin_event.sender_thread_id.to_string(),
+                receiver_thread_ids,
+                prompt: Some(begin_event.prompt),
+                agents_states: HashMap::new(),
+            };
+            let notification = ItemStartedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ItemStarted(notification))
+                .await;
+        }
+        EventMsg::CollabAgentInteractionEnd(end_event) => {
+            let status = match &end_event.status {
+                codex_protocol::protocol::AgentStatus::Errored(_)
+                | codex_protocol::protocol::AgentStatus::NotFound => V2CollabToolCallStatus::Failed,
+                _ => V2CollabToolCallStatus::Completed,
+            };
+            let receiver_id = end_event.receiver_thread_id.to_string();
+            let received_status = V2CollabAgentStatus::from(end_event.status);
+            let item = ThreadItem::CollabAgentToolCall {
+                id: end_event.call_id,
+                tool: CollabAgentTool::SendInput,
+                status,
+                sender_thread_id: end_event.sender_thread_id.to_string(),
+                receiver_thread_ids: vec![receiver_id.clone()],
+                prompt: Some(end_event.prompt),
+                agents_states: [(receiver_id, received_status)].into_iter().collect(),
+            };
+            let notification = ItemCompletedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ItemCompleted(notification))
+                .await;
+        }
+        EventMsg::CollabWaitingBegin(begin_event) => {
+            let receiver_thread_ids = begin_event
+                .receiver_thread_ids
+                .iter()
+                .map(ToString::to_string)
+                .collect();
+            let item = ThreadItem::CollabAgentToolCall {
+                id: begin_event.call_id,
+                tool: CollabAgentTool::Wait,
+                status: V2CollabToolCallStatus::InProgress,
+                sender_thread_id: begin_event.sender_thread_id.to_string(),
+                receiver_thread_ids,
+                prompt: None,
+                agents_states: HashMap::new(),
+            };
+            let notification = ItemStartedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ItemStarted(notification))
+                .await;
+        }
+        EventMsg::CollabWaitingEnd(end_event) => {
+            let status = if end_event.statuses.values().any(|status| {
+                matches!(
+                    status,
+                    codex_protocol::protocol::AgentStatus::Errored(_)
+                        | codex_protocol::protocol::AgentStatus::NotFound
+                )
+            }) {
+                V2CollabToolCallStatus::Failed
+            } else {
+                V2CollabToolCallStatus::Completed
+            };
+            let receiver_thread_ids = end_event.statuses.keys().map(ToString::to_string).collect();
+            let agents_states = end_event
+                .statuses
+                .iter()
+                .map(|(id, status)| (id.to_string(), V2CollabAgentStatus::from(status.clone())))
+                .collect();
+            let item = ThreadItem::CollabAgentToolCall {
+                id: end_event.call_id,
+                tool: CollabAgentTool::Wait,
+                status,
+                sender_thread_id: end_event.sender_thread_id.to_string(),
+                receiver_thread_ids,
+                prompt: None,
+                agents_states,
+            };
+            let notification = ItemCompletedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ItemCompleted(notification))
+                .await;
+        }
+        EventMsg::CollabCloseBegin(begin_event) => {
+            let item = ThreadItem::CollabAgentToolCall {
+                id: begin_event.call_id,
+                tool: CollabAgentTool::CloseAgent,
+                status: V2CollabToolCallStatus::InProgress,
+                sender_thread_id: begin_event.sender_thread_id.to_string(),
+                receiver_thread_ids: vec![begin_event.receiver_thread_id.to_string()],
+                prompt: None,
+                agents_states: HashMap::new(),
+            };
+            let notification = ItemStartedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ItemStarted(notification))
+                .await;
+        }
+        EventMsg::CollabCloseEnd(end_event) => {
+            let status = match &end_event.status {
+                codex_protocol::protocol::AgentStatus::Errored(_)
+                | codex_protocol::protocol::AgentStatus::NotFound => V2CollabToolCallStatus::Failed,
+                _ => V2CollabToolCallStatus::Completed,
+            };
+            let receiver_id = end_event.receiver_thread_id.to_string();
+            let agents_states = [(
+                receiver_id.clone(),
+                V2CollabAgentStatus::from(end_event.status),
+            )]
+            .into_iter()
+            .collect();
+            let item = ThreadItem::CollabAgentToolCall {
+                id: end_event.call_id,
+                tool: CollabAgentTool::CloseAgent,
+                status,
+                sender_thread_id: end_event.sender_thread_id.to_string(),
+                receiver_thread_ids: vec![receiver_id],
+                prompt: None,
+                agents_states,
+            };
+            let notification = ItemCompletedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ItemCompleted(notification))
+                .await;
+        }
         EventMsg::AgentMessageContentDelta(event) => {
+            let codex_protocol::protocol::AgentMessageContentDeltaEvent { item_id, delta, .. } =
+                event;
             let notification = AgentMessageDeltaNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item_id,
+                delta,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::AgentMessageDelta(notification))
+                .await;
+        }
+        EventMsg::PlanDelta(event) => {
+            let notification = PlanDeltaNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
                 item_id: event.item_id,
                 delta: event.delta,
             };
             outgoing
-                .send_server_notification(ServerNotification::AgentMessageDelta(notification))
+                .send_server_notification(ServerNotification::PlanDelta(notification))
                 .await;
         }
         EventMsg::ContextCompacted(..) => {
@@ -337,6 +682,26 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::Error(ev) => {
+            let message = ev.message.clone();
+            let codex_error_info = ev.codex_error_info.clone();
+
+            // If this error belongs to an in-flight `thread/rollback` request, fail that request
+            // (and clear pending state) so subsequent rollbacks are unblocked.
+            //
+            // Don't send a notification for this error.
+            if matches!(
+                codex_error_info,
+                Some(CoreCodexErrorInfo::ThreadRollbackFailed)
+            ) {
+                return handle_thread_rollback_failed(
+                    conversation_id,
+                    message,
+                    &pending_rollbacks,
+                    &outgoing,
+                )
+                .await;
+            };
+
             let turn_error = TurnError {
                 message: ev.message,
                 codex_error_info: ev.codex_error_info.map(V2CodexErrorInfo::from),
@@ -345,7 +710,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             handle_error(conversation_id, turn_error.clone(), &turn_summary_store).await;
             outgoing
                 .send_server_notification(ServerNotification::Error(ErrorNotification {
-                    error: turn_error,
+                    error: turn_error.clone(),
                     will_retry: false,
                     thread_id: conversation_id.to_string(),
                     turn_id: event_turn_id.clone(),
@@ -690,6 +1055,77 @@ pub(crate) async fn apply_bespoke_event_handling(
             )
             .await;
         }
+        EventMsg::ThreadRolledBack(_rollback_event) => {
+            let pending = {
+                let mut map = pending_rollbacks.lock().await;
+                map.remove(&conversation_id)
+            };
+
+            if let Some(request_id) = pending {
+                let Some(rollout_path) = conversation.rollout_path() else {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: "thread has no persisted rollout".to_string(),
+                        data: None,
+                    };
+                    outgoing.send_error(request_id, error).await;
+                    return;
+                };
+                let response = match read_summary_from_rollout(
+                    rollout_path.as_path(),
+                    fallback_model_provider.as_str(),
+                )
+                .await
+                {
+                    Ok(summary) => {
+                        let mut thread = summary_to_thread(summary);
+                        match read_event_msgs_from_rollout(rollout_path.as_path()).await {
+                            Ok(events) => {
+                                thread.turns = build_turns_from_event_msgs(&events);
+                                ThreadRollbackResponse { thread }
+                            }
+                            Err(err) => {
+                                let error = JSONRPCErrorError {
+                                    code: INTERNAL_ERROR_CODE,
+                                    message: format!(
+                                        "failed to load rollout `{}`: {err}",
+                                        rollout_path.display()
+                                    ),
+                                    data: None,
+                                };
+                                outgoing.send_error(request_id.clone(), error).await;
+                                return;
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        let error = JSONRPCErrorError {
+                            code: INTERNAL_ERROR_CODE,
+                            message: format!(
+                                "failed to load rollout `{}`: {err}",
+                                rollout_path.display()
+                            ),
+                            data: None,
+                        };
+                        outgoing.send_error(request_id.clone(), error).await;
+                        return;
+                    }
+                };
+
+                outgoing.send_response(request_id, response).await;
+            }
+        }
+        EventMsg::ThreadNameUpdated(thread_name_event) => {
+            if let ApiVersion::V2 = api_version {
+                let notification = ThreadNameUpdatedNotification {
+                    thread_id: thread_name_event.thread_id.to_string(),
+                    thread_name: thread_name_event.thread_name,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::ThreadNameUpdated(notification))
+                    .await;
+            }
+        }
         EventMsg::TurnDiff(turn_diff_event) => {
             handle_turn_diff(
                 conversation_id,
@@ -716,7 +1152,7 @@ pub(crate) async fn apply_bespoke_event_handling(
 }
 
 async fn handle_turn_diff(
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     event_turn_id: &str,
     turn_diff_event: TurnDiffEvent,
     api_version: ApiVersion,
@@ -735,12 +1171,13 @@ async fn handle_turn_diff(
 }
 
 async fn handle_turn_plan_update(
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     event_turn_id: &str,
     plan_update_event: UpdatePlanArgs,
     api_version: ApiVersion,
     outgoing: &OutgoingMessageSender,
 ) {
+    // `update_plan` is a todo/checklist tool; it is not related to plan-mode updates
     if let ApiVersion::V2 = api_version {
         let notification = TurnPlanUpdatedNotification {
             thread_id: conversation_id.to_string(),
@@ -759,7 +1196,7 @@ async fn handle_turn_plan_update(
 }
 
 async fn emit_turn_completed_with_status(
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     event_turn_id: String,
     status: TurnStatus,
     error: Option<TurnError>,
@@ -780,7 +1217,7 @@ async fn emit_turn_completed_with_status(
 }
 
 async fn complete_file_change_item(
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     item_id: String,
     changes: Vec<FileUpdateChange>,
     status: PatchApplyStatus,
@@ -812,7 +1249,7 @@ async fn complete_file_change_item(
 
 #[allow(clippy::too_many_arguments)]
 async fn complete_command_execution_item(
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     turn_id: String,
     item_id: String,
     command: String,
@@ -845,7 +1282,7 @@ async fn complete_command_execution_item(
 
 async fn maybe_emit_raw_response_item_completed(
     api_version: ApiVersion,
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     turn_id: &str,
     item: codex_protocol::models::ResponseItem,
     outgoing: &OutgoingMessageSender,
@@ -865,7 +1302,7 @@ async fn maybe_emit_raw_response_item_completed(
 }
 
 async fn find_and_remove_turn_summary(
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     turn_summary_store: &TurnSummaryStore,
 ) -> TurnSummary {
     let mut map = turn_summary_store.lock().await;
@@ -873,7 +1310,7 @@ async fn find_and_remove_turn_summary(
 }
 
 async fn handle_turn_complete(
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     event_turn_id: String,
     outgoing: &OutgoingMessageSender,
     turn_summary_store: &TurnSummaryStore,
@@ -889,7 +1326,7 @@ async fn handle_turn_complete(
 }
 
 async fn handle_turn_interrupted(
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     event_turn_id: String,
     outgoing: &OutgoingMessageSender,
     turn_summary_store: &TurnSummaryStore,
@@ -906,8 +1343,33 @@ async fn handle_turn_interrupted(
     .await;
 }
 
+async fn handle_thread_rollback_failed(
+    conversation_id: ThreadId,
+    message: String,
+    pending_rollbacks: &PendingRollbacks,
+    outgoing: &OutgoingMessageSender,
+) {
+    let pending_rollback = {
+        let mut map = pending_rollbacks.lock().await;
+        map.remove(&conversation_id)
+    };
+
+    if let Some(request_id) = pending_rollback {
+        outgoing
+            .send_error(
+                request_id,
+                JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: message.clone(),
+                    data: None,
+                },
+            )
+            .await;
+    }
+}
+
 async fn handle_token_count_event(
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     turn_id: String,
     token_count_event: TokenCountEvent,
     outgoing: &OutgoingMessageSender,
@@ -935,7 +1397,7 @@ async fn handle_token_count_event(
 }
 
 async fn handle_error(
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     error: TurnError,
     turn_summary_store: &TurnSummaryStore,
 ) {
@@ -946,7 +1408,7 @@ async fn handle_error(
 async fn on_patch_approval_response(
     event_turn_id: String,
     receiver: oneshot::Receiver<JsonValue>,
-    codex: Arc<CodexConversation>,
+    codex: Arc<CodexThread>,
 ) {
     let response = receiver.await;
     let value = match response {
@@ -988,7 +1450,7 @@ async fn on_patch_approval_response(
 async fn on_exec_approval_response(
     event_turn_id: String,
     receiver: oneshot::Receiver<JsonValue>,
-    conversation: Arc<CodexConversation>,
+    conversation: Arc<CodexThread>,
 ) {
     let response = receiver.await;
     let value = match response {
@@ -1018,6 +1480,65 @@ async fn on_exec_approval_response(
         .await
     {
         error!("failed to submit ExecApproval: {err}");
+    }
+}
+
+async fn on_request_user_input_response(
+    event_turn_id: String,
+    receiver: oneshot::Receiver<JsonValue>,
+    conversation: Arc<CodexThread>,
+) {
+    let response = receiver.await;
+    let value = match response {
+        Ok(value) => value,
+        Err(err) => {
+            error!("request failed: {err:?}");
+            let empty = CoreRequestUserInputResponse {
+                answers: HashMap::new(),
+            };
+            if let Err(err) = conversation
+                .submit(Op::UserInputAnswer {
+                    id: event_turn_id,
+                    response: empty,
+                })
+                .await
+            {
+                error!("failed to submit UserInputAnswer: {err}");
+            }
+            return;
+        }
+    };
+
+    let response =
+        serde_json::from_value::<ToolRequestUserInputResponse>(value).unwrap_or_else(|err| {
+            error!("failed to deserialize ToolRequestUserInputResponse: {err}");
+            ToolRequestUserInputResponse {
+                answers: HashMap::new(),
+            }
+        });
+    let response = CoreRequestUserInputResponse {
+        answers: response
+            .answers
+            .into_iter()
+            .map(|(id, answer)| {
+                (
+                    id,
+                    CoreRequestUserInputAnswer {
+                        answers: answer.answers,
+                    },
+                )
+            })
+            .collect(),
+    };
+
+    if let Err(err) = conversation
+        .submit(Op::UserInputAnswer {
+            id: event_turn_id,
+            response,
+        })
+        .await
+    {
+        error!("failed to submit UserInputAnswer: {err}");
     }
 }
 
@@ -1083,14 +1604,29 @@ fn format_file_change_diff(change: &CoreFileChange) -> String {
     }
 }
 
+fn map_file_change_approval_decision(
+    decision: FileChangeApprovalDecision,
+) -> (ReviewDecision, Option<PatchApplyStatus>) {
+    match decision {
+        FileChangeApprovalDecision::Accept => (ReviewDecision::Approved, None),
+        FileChangeApprovalDecision::AcceptForSession => (ReviewDecision::ApprovedForSession, None),
+        FileChangeApprovalDecision::Decline => {
+            (ReviewDecision::Denied, Some(PatchApplyStatus::Declined))
+        }
+        FileChangeApprovalDecision::Cancel => {
+            (ReviewDecision::Abort, Some(PatchApplyStatus::Declined))
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn on_file_change_request_approval_response(
     event_turn_id: String,
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     item_id: String,
     changes: Vec<FileUpdateChange>,
     receiver: oneshot::Receiver<JsonValue>,
-    codex: Arc<CodexConversation>,
+    codex: Arc<CodexThread>,
     outgoing: Arc<OutgoingMessageSender>,
     turn_summary_store: TurnSummaryStore,
 ) {
@@ -1101,23 +1637,12 @@ async fn on_file_change_request_approval_response(
                 .unwrap_or_else(|err| {
                     error!("failed to deserialize FileChangeRequestApprovalResponse: {err}");
                     FileChangeRequestApprovalResponse {
-                        decision: ApprovalDecision::Decline,
+                        decision: FileChangeApprovalDecision::Decline,
                     }
                 });
 
-            let (decision, completion_status) = match response.decision {
-                ApprovalDecision::Accept
-                | ApprovalDecision::AcceptForSession
-                | ApprovalDecision::AcceptWithExecpolicyAmendment { .. } => {
-                    (ReviewDecision::Approved, None)
-                }
-                ApprovalDecision::Decline => {
-                    (ReviewDecision::Denied, Some(PatchApplyStatus::Declined))
-                }
-                ApprovalDecision::Cancel => {
-                    (ReviewDecision::Abort, Some(PatchApplyStatus::Declined))
-                }
-            };
+            let (decision, completion_status) =
+                map_file_change_approval_decision(response.decision);
             // Allow EventMsg::PatchApplyEnd to emit ItemCompleted for accepted patches.
             // Only short-circuit on declines/cancels/failures.
             (decision, completion_status)
@@ -1155,13 +1680,13 @@ async fn on_file_change_request_approval_response(
 #[allow(clippy::too_many_arguments)]
 async fn on_command_execution_request_approval_response(
     event_turn_id: String,
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
     item_id: String,
     command: String,
     cwd: PathBuf,
     command_actions: Vec<V2ParsedCommand>,
     receiver: oneshot::Receiver<JsonValue>,
-    conversation: Arc<CodexConversation>,
+    conversation: Arc<CodexThread>,
     outgoing: Arc<OutgoingMessageSender>,
 ) {
     let response = receiver.await;
@@ -1171,16 +1696,18 @@ async fn on_command_execution_request_approval_response(
                 .unwrap_or_else(|err| {
                     error!("failed to deserialize CommandExecutionRequestApprovalResponse: {err}");
                     CommandExecutionRequestApprovalResponse {
-                        decision: ApprovalDecision::Decline,
+                        decision: CommandExecutionApprovalDecision::Decline,
                     }
                 });
 
             let decision = response.decision;
 
             let (decision, completion_status) = match decision {
-                ApprovalDecision::Accept => (ReviewDecision::Approved, None),
-                ApprovalDecision::AcceptForSession => (ReviewDecision::ApprovedForSession, None),
-                ApprovalDecision::AcceptWithExecpolicyAmendment {
+                CommandExecutionApprovalDecision::Accept => (ReviewDecision::Approved, None),
+                CommandExecutionApprovalDecision::AcceptForSession => {
+                    (ReviewDecision::ApprovedForSession, None)
+                }
+                CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {
                     execpolicy_amendment,
                 } => (
                     ReviewDecision::ApprovedExecpolicyAmendment {
@@ -1188,11 +1715,11 @@ async fn on_command_execution_request_approval_response(
                     },
                     None,
                 ),
-                ApprovalDecision::Decline => (
+                CommandExecutionApprovalDecision::Decline => (
                     ReviewDecision::Denied,
                     Some(CommandExecutionStatus::Declined),
                 ),
-                ApprovalDecision::Cancel => (
+                CommandExecutionApprovalDecision::Cancel => (
                     ReviewDecision::Abort,
                     Some(CommandExecutionStatus::Declined),
                 ),
@@ -1304,6 +1831,7 @@ async fn construct_mcp_tool_call_end_notification(
 mod tests {
     use super::*;
     use crate::CHANNEL_CAPACITY;
+    use crate::outgoing_message::OutgoingEnvelope;
     use crate::outgoing_message::OutgoingMessage;
     use crate::outgoing_message::OutgoingMessageSender;
     use anyhow::Result;
@@ -1316,12 +1844,11 @@ mod tests {
     use codex_core::protocol::RateLimitWindow;
     use codex_core::protocol::TokenUsage;
     use codex_core::protocol::TokenUsageInfo;
+    use codex_protocol::mcp::CallToolResult;
     use codex_protocol::plan_tool::PlanItemArg;
     use codex_protocol::plan_tool::StepStatus;
-    use mcp_types::CallToolResult;
-    use mcp_types::ContentBlock;
-    use mcp_types::TextContent;
     use pretty_assertions::assert_eq;
+    use rmcp::model::Content;
     use serde_json::Value as JsonValue;
     use std::collections::HashMap;
     use std::time::Duration;
@@ -1332,9 +1859,32 @@ mod tests {
         Arc::new(Mutex::new(HashMap::new()))
     }
 
+    async fn recv_broadcast_message(
+        rx: &mut mpsc::Receiver<OutgoingEnvelope>,
+    ) -> Result<OutgoingMessage> {
+        let envelope = rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow!("should send one message"))?;
+        match envelope {
+            OutgoingEnvelope::Broadcast { message } => Ok(message),
+            OutgoingEnvelope::ToConnection { connection_id, .. } => {
+                bail!("unexpected targeted message for connection {connection_id:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn file_change_accept_for_session_maps_to_approved_for_session() {
+        let (decision, completion_status) =
+            map_file_change_approval_decision(FileChangeApprovalDecision::AcceptForSession);
+        assert_eq!(decision, ReviewDecision::ApprovedForSession);
+        assert_eq!(completion_status, None);
+    }
+
     #[tokio::test]
     async fn test_handle_error_records_message() -> Result<()> {
-        let conversation_id = ConversationId::new();
+        let conversation_id = ThreadId::new();
         let turn_summary_store = new_turn_summary_store();
 
         handle_error(
@@ -1362,7 +1912,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_turn_complete_emits_completed_without_error() -> Result<()> {
-        let conversation_id = ConversationId::new();
+        let conversation_id = ThreadId::new();
         let event_turn_id = "complete1".to_string();
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = Arc::new(OutgoingMessageSender::new(tx));
@@ -1376,10 +1926,7 @@ mod tests {
         )
         .await;
 
-        let msg = rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow!("should send one notification"))?;
+        let msg = recv_broadcast_message(&mut rx).await?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
                 assert_eq!(n.turn.id, event_turn_id);
@@ -1394,7 +1941,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_turn_interrupted_emits_interrupted_with_error() -> Result<()> {
-        let conversation_id = ConversationId::new();
+        let conversation_id = ThreadId::new();
         let event_turn_id = "interrupt1".to_string();
         let turn_summary_store = new_turn_summary_store();
         handle_error(
@@ -1418,10 +1965,7 @@ mod tests {
         )
         .await;
 
-        let msg = rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow!("should send one notification"))?;
+        let msg = recv_broadcast_message(&mut rx).await?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
                 assert_eq!(n.turn.id, event_turn_id);
@@ -1436,7 +1980,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_turn_complete_emits_failed_with_error() -> Result<()> {
-        let conversation_id = ConversationId::new();
+        let conversation_id = ThreadId::new();
         let event_turn_id = "complete_err1".to_string();
         let turn_summary_store = new_turn_summary_store();
         handle_error(
@@ -1460,10 +2004,7 @@ mod tests {
         )
         .await;
 
-        let msg = rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow!("should send one notification"))?;
+        let msg = recv_broadcast_message(&mut rx).await?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
                 assert_eq!(n.turn.id, event_turn_id);
@@ -1505,7 +2046,7 @@ mod tests {
             ],
         };
 
-        let conversation_id = ConversationId::new();
+        let conversation_id = ThreadId::new();
 
         handle_turn_plan_update(
             conversation_id,
@@ -1516,10 +2057,7 @@ mod tests {
         )
         .await;
 
-        let msg = rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow!("should send one notification"))?;
+        let msg = recv_broadcast_message(&mut rx).await?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnPlanUpdated(n)) => {
                 assert_eq!(n.thread_id, conversation_id.to_string());
@@ -1539,7 +2077,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_token_count_event_emits_usage_and_rate_limits() -> Result<()> {
-        let conversation_id = ConversationId::new();
+        let conversation_id = ThreadId::new();
         let turn_id = "turn-123".to_string();
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = Arc::new(OutgoingMessageSender::new(tx));
@@ -1587,10 +2125,7 @@ mod tests {
         )
         .await;
 
-        let first = rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow!("expected usage notification"))?;
+        let first = recv_broadcast_message(&mut rx).await?;
         match first {
             OutgoingMessage::AppServerNotification(
                 ServerNotification::ThreadTokenUsageUpdated(payload),
@@ -1606,10 +2141,7 @@ mod tests {
             other => bail!("unexpected notification: {other:?}"),
         }
 
-        let second = rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow!("expected rate limit notification"))?;
+        let second = recv_broadcast_message(&mut rx).await?;
         match second {
             OutgoingMessage::AppServerNotification(
                 ServerNotification::AccountRateLimitsUpdated(payload),
@@ -1624,7 +2156,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_token_count_event_without_usage_info() -> Result<()> {
-        let conversation_id = ConversationId::new();
+        let conversation_id = ThreadId::new();
         let turn_id = "turn-456".to_string();
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = Arc::new(OutgoingMessageSender::new(tx));
@@ -1658,7 +2190,7 @@ mod tests {
             },
         };
 
-        let thread_id = ConversationId::new().to_string();
+        let thread_id = ThreadId::new().to_string();
         let turn_id = "turn_1".to_string();
         let notification = construct_mcp_tool_call_notification(
             begin_event.clone(),
@@ -1688,8 +2220,8 @@ mod tests {
     #[tokio::test]
     async fn test_handle_turn_complete_emits_error_multiple_turns() -> Result<()> {
         // Conversation A will have two turns; Conversation B will have one turn.
-        let conversation_a = ConversationId::new();
-        let conversation_b = ConversationId::new();
+        let conversation_a = ThreadId::new();
+        let conversation_b = ThreadId::new();
         let turn_summary_store = new_turn_summary_store();
 
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
@@ -1746,10 +2278,7 @@ mod tests {
         .await;
 
         // Verify: A turn 1
-        let msg = rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow!("should send first notification"))?;
+        let msg = recv_broadcast_message(&mut rx).await?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
                 assert_eq!(n.turn.id, a_turn1);
@@ -1767,10 +2296,7 @@ mod tests {
         }
 
         // Verify: B turn 1
-        let msg = rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow!("should send second notification"))?;
+        let msg = recv_broadcast_message(&mut rx).await?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
                 assert_eq!(n.turn.id, b_turn1);
@@ -1788,10 +2314,7 @@ mod tests {
         }
 
         // Verify: A turn 2
-        let msg = rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow!("should send third notification"))?;
+        let msg = recv_broadcast_message(&mut rx).await?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
                 assert_eq!(n.turn.id, a_turn2);
@@ -1816,7 +2339,7 @@ mod tests {
             },
         };
 
-        let thread_id = ConversationId::new().to_string();
+        let thread_id = ThreadId::new().to_string();
         let turn_id = "turn_2".to_string();
         let notification = construct_mcp_tool_call_notification(
             begin_event.clone(),
@@ -1845,15 +2368,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_construct_mcp_tool_call_end_notification_success() {
-        let content = vec![ContentBlock::TextContent(TextContent {
-            annotations: None,
-            text: "{\"resources\":[]}".to_string(),
-            r#type: "text".to_string(),
-        })];
+        let content = vec![
+            serde_json::to_value(Content::text("{\"resources\":[]}"))
+                .expect("content should serialize"),
+        ];
         let result = CallToolResult {
             content: content.clone(),
             is_error: Some(false),
             structured_content: None,
+            meta: None,
         };
 
         let end_event = McpToolCallEndEvent {
@@ -1867,7 +2390,7 @@ mod tests {
             result: Ok(result),
         };
 
-        let thread_id = ConversationId::new().to_string();
+        let thread_id = ThreadId::new().to_string();
         let turn_id = "turn_3".to_string();
         let notification = construct_mcp_tool_call_end_notification(
             end_event.clone(),
@@ -1910,7 +2433,7 @@ mod tests {
             result: Err("boom".to_string()),
         };
 
-        let thread_id = ConversationId::new().to_string();
+        let thread_id = ThreadId::new().to_string();
         let turn_id = "turn_4".to_string();
         let notification = construct_mcp_tool_call_end_notification(
             end_event.clone(),
@@ -1944,7 +2467,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = OutgoingMessageSender::new(tx);
         let unified_diff = "--- a\n+++ b\n".to_string();
-        let conversation_id = ConversationId::new();
+        let conversation_id = ThreadId::new();
 
         handle_turn_diff(
             conversation_id,
@@ -1957,10 +2480,7 @@ mod tests {
         )
         .await;
 
-        let msg = rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow!("should send one notification"))?;
+        let msg = recv_broadcast_message(&mut rx).await?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnDiffUpdated(
                 notification,
@@ -1979,7 +2499,7 @@ mod tests {
     async fn test_handle_turn_diff_is_noop_for_v1() -> Result<()> {
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = OutgoingMessageSender::new(tx);
-        let conversation_id = ConversationId::new();
+        let conversation_id = ThreadId::new();
 
         handle_turn_diff(
             conversation_id,

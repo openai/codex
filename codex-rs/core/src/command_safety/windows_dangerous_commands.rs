@@ -82,6 +82,11 @@ fn is_dangerous_powershell(command: &[String]) -> bool {
         }
     }
 
+    // Check for force delete operations (e.g., Remove-Item -Force)
+    if has_force_delete_cmdlet(&tokens_lc) {
+        return true;
+    }
+
     false
 }
 
@@ -107,15 +112,49 @@ fn is_dangerous_cmd(command: &[String]) -> bool {
         }
     }
 
-    let Some(first_cmd) = iter.next() else {
-        return false;
-    };
-    // Classic `cmd /c start https://...` ShellExecute path.
-    if !first_cmd.eq_ignore_ascii_case("start") {
+    let remaining: Vec<String> = iter.cloned().collect();
+    if remaining.is_empty() {
         return false;
     }
-    let remaining: Vec<String> = iter.cloned().collect();
-    args_have_url(&remaining)
+
+    let cmd_tokens: Vec<String> = match remaining.as_slice() {
+        [only] => shlex_split(only).unwrap_or_else(|| vec![only.clone()]),
+        _ => remaining,
+    };
+
+    // Refine tokens by splitting concatenated CMD operators (e.g. "echo hi&del")
+    let tokens: Vec<String> = cmd_tokens
+        .into_iter()
+        .flat_map(|t| split_embedded_cmd_operators(&t))
+        .collect();
+
+    const CMD_SEPARATORS: &[&str] = &["&", "&&", "|", "||"];
+    tokens
+        .split(|t| CMD_SEPARATORS.contains(&t.as_str()))
+        .any(|segment| {
+            let Some(cmd) = segment.first() else {
+                return false;
+            };
+
+            // Classic `cmd /c ... start https://...` ShellExecute path.
+            if cmd.eq_ignore_ascii_case("start") && args_have_url(segment) {
+                return true;
+            }
+            // Force delete: del /f, erase /f
+            if (cmd.eq_ignore_ascii_case("del") || cmd.eq_ignore_ascii_case("erase"))
+                && has_force_flag_cmd(segment)
+            {
+                return true;
+            }
+            // Recursive directory removal: rd /s /q, rmdir /s /q
+            if (cmd.eq_ignore_ascii_case("rd") || cmd.eq_ignore_ascii_case("rmdir"))
+                && has_recursive_flag_cmd(segment)
+                && has_quiet_flag_cmd(segment)
+            {
+                return true;
+            }
+            false
+        })
 }
 
 fn is_direct_gui_launch(command: &[String]) -> bool {
@@ -147,6 +186,123 @@ fn is_direct_gui_launch(command: &[String]) -> bool {
     }
 
     false
+}
+
+fn split_embedded_cmd_operators(token: &str) -> Vec<String> {
+    // Split concatenated CMD operators so `echo hi&del` becomes `["echo hi", "&", "del"]`.
+    // Handles `&`, `&&`, `|`, `||`. Best-effort (CMD escaping is weird by nature).
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut it = token.char_indices().peekable();
+
+    while let Some((i, ch)) = it.next() {
+        if ch == '&' || ch == '|' {
+            if i > start {
+                parts.push(token[start..i].to_string());
+            }
+
+            // Detect doubled operator: && or ||
+            let op_len = match it.peek() {
+                Some(&(j, next)) if next == ch => {
+                    it.next(); // consume second char
+                    (j + next.len_utf8()) - i
+                }
+                _ => ch.len_utf8(),
+            };
+
+            parts.push(token[i..i + op_len].to_string());
+            start = i + op_len;
+        }
+    }
+
+    if start < token.len() {
+        parts.push(token[start..].to_string());
+    }
+
+    parts.retain(|s| !s.trim().is_empty());
+    parts
+}
+
+fn has_force_delete_cmdlet(tokens: &[String]) -> bool {
+    const DELETE_CMDLETS: &[&str] = &["remove-item", "ri", "rm", "del", "erase", "rd", "rmdir"];
+
+    // Hard separators that end a command segment (so -Force must be in same segment)
+    const SEG_SEPS: &[char] = &[';', '|', '&', '\n', '\r', '\t'];
+
+    // Soft separators: punctuation that can stick to tokens (blocks, parens, brackets, commas, etc.)
+    const SOFT_SEPS: &[char] = &['{', '}', '(', ')', '[', ']', ',', ';'];
+
+    // Build rough command segments first
+    let mut segments: Vec<Vec<String>> = vec![Vec::new()];
+    for tok in tokens {
+        // If token itself contains segment separators, split it (best-effort)
+        let mut cur = String::new();
+        for ch in tok.chars() {
+            if SEG_SEPS.contains(&ch) {
+                let s = cur.trim();
+                if let Some(msg) = segments.last_mut()
+                    && !s.is_empty()
+                {
+                    msg.push(s.to_string());
+                }
+                cur.clear();
+                if let Some(last) = segments.last()
+                    && !last.is_empty()
+                {
+                    segments.push(Vec::new());
+                }
+            } else {
+                cur.push(ch);
+            }
+        }
+        let s = cur.trim();
+        if let Some(segment) = segments.last_mut()
+            && !s.is_empty()
+        {
+            segment.push(s.to_string());
+        }
+    }
+
+    // Now, inside each segment, normalize tokens by splitting on soft punctuation
+    segments.into_iter().any(|seg| {
+        let atoms = seg
+            .iter()
+            .flat_map(|t| t.split(|c| SOFT_SEPS.contains(&c)))
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+
+        let mut has_delete = false;
+        let mut has_force = false;
+
+        for a in atoms {
+            if DELETE_CMDLETS.iter().any(|cmd| a.eq_ignore_ascii_case(cmd)) {
+                has_delete = true;
+            }
+            if a.eq_ignore_ascii_case("-force")
+                || a.get(..7)
+                    .is_some_and(|p| p.eq_ignore_ascii_case("-force:"))
+            {
+                has_force = true;
+            }
+        }
+
+        has_delete && has_force
+    })
+}
+
+/// Check for /f or /F flag in CMD del/erase arguments.
+fn has_force_flag_cmd(args: &[String]) -> bool {
+    args.iter().any(|a| a.eq_ignore_ascii_case("/f"))
+}
+
+/// Check for /s or /S flag in CMD rd/rmdir arguments.
+fn has_recursive_flag_cmd(args: &[String]) -> bool {
+    args.iter().any(|a| a.eq_ignore_ascii_case("/s"))
+}
+
+/// Check for /q or /Q flag in CMD rd/rmdir arguments.
+fn has_quiet_flag_cmd(args: &[String]) -> bool {
+    args.iter().any(|a| a.eq_ignore_ascii_case("/q"))
 }
 
 fn args_have_url(args: &[String]) -> bool {
@@ -311,6 +467,289 @@ mod tests {
         assert!(!is_dangerous_command_windows(&vec_str(&[
             "explorer.exe",
             "."
+        ])));
+    }
+
+    // Force delete tests for PowerShell
+
+    #[test]
+    fn powershell_remove_item_force_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-Command",
+            "Remove-Item test -Force"
+        ])));
+    }
+
+    #[test]
+    fn powershell_remove_item_recurse_force_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-Command",
+            "Remove-Item test -Recurse -Force"
+        ])));
+    }
+
+    #[test]
+    fn powershell_ri_alias_force_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "pwsh",
+            "-Command",
+            "ri test -Force"
+        ])));
+    }
+
+    #[test]
+    fn powershell_remove_item_without_force_is_not_flagged() {
+        assert!(!is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-Command",
+            "Remove-Item test"
+        ])));
+    }
+
+    // Force delete tests for CMD
+    #[test]
+    fn cmd_del_force_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd", "/c", "del", "/f", "test.txt"
+        ])));
+    }
+
+    #[test]
+    fn cmd_erase_force_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd", "/c", "erase", "/f", "test.txt"
+        ])));
+    }
+
+    #[test]
+    fn cmd_del_without_force_is_not_flagged() {
+        assert!(!is_dangerous_command_windows(&vec_str(&[
+            "cmd", "/c", "del", "test.txt"
+        ])));
+    }
+
+    #[test]
+    fn cmd_rd_recursive_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd", "/c", "rd", "/s", "/q", "test"
+        ])));
+    }
+
+    #[test]
+    fn cmd_rd_without_quiet_is_not_flagged() {
+        assert!(!is_dangerous_command_windows(&vec_str(&[
+            "cmd", "/c", "rd", "/s", "test"
+        ])));
+    }
+
+    #[test]
+    fn cmd_rmdir_recursive_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd", "/c", "rmdir", "/s", "/q", "test"
+        ])));
+    }
+
+    // Test exact scenario from issue #8567
+    #[test]
+    fn powershell_remove_item_path_recurse_force_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-Command",
+            "Remove-Item -Path 'test' -Recurse -Force"
+        ])));
+    }
+
+    #[test]
+    fn powershell_remove_item_force_with_semicolon_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-Command",
+            "Remove-Item test -Force; Write-Host done"
+        ])));
+    }
+
+    #[test]
+    fn powershell_remove_item_force_inside_block_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-Command",
+            "if ($true) { Remove-Item test -Force}"
+        ])));
+    }
+
+    #[test]
+    fn powershell_remove_item_force_inside_brackets_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-Command",
+            "[void]( Remove-Item test -Force)]"
+        ])));
+    }
+
+    #[test]
+    fn cmd_del_path_containing_f_is_not_flagged() {
+        assert!(!is_dangerous_command_windows(&vec_str(&[
+            "cmd",
+            "/c",
+            "del",
+            "C:/foo/bar.txt"
+        ])));
+    }
+
+    #[test]
+    fn cmd_rd_path_containing_s_is_not_flagged() {
+        assert!(!is_dangerous_command_windows(&vec_str(&[
+            "cmd",
+            "/c",
+            "rd",
+            "C:/source"
+        ])));
+    }
+
+    #[test]
+    fn cmd_bypass_chained_del_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd", "/c", "echo", "hello", "&", "del", "/f", "file.txt"
+        ])));
+    }
+
+    #[test]
+    fn powershell_chained_no_space_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-Command",
+            "Write-Host hi;Remove-Item -Force C:\\tmp"
+        ])));
+    }
+
+    #[test]
+    fn powershell_comma_separated_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-Command",
+            "del,-Force,C:\\foo"
+        ])));
+    }
+
+    #[test]
+    fn cmd_echo_del_is_not_dangerous() {
+        assert!(!is_dangerous_command_windows(&vec_str(&[
+            "cmd", "/c", "echo", "del", "/f"
+        ])));
+    }
+
+    #[test]
+    fn cmd_del_single_string_argument_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd",
+            "/c",
+            "del /f file.txt"
+        ])));
+    }
+
+    #[test]
+    fn cmd_del_chained_single_string_argument_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd",
+            "/c",
+            "echo hello & del /f file.txt"
+        ])));
+    }
+
+    #[test]
+    fn cmd_chained_no_space_del_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd",
+            "/c",
+            "echo hi&del /f file.txt"
+        ])));
+    }
+
+    #[test]
+    fn cmd_chained_andand_no_space_del_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd",
+            "/c",
+            "echo hi&&del /f file.txt"
+        ])));
+    }
+
+    #[test]
+    fn cmd_chained_oror_no_space_del_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd",
+            "/c",
+            "echo hi||del /f file.txt"
+        ])));
+    }
+
+    #[test]
+    fn cmd_start_url_single_string_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd",
+            "/c",
+            "start https://example.com"
+        ])));
+    }
+
+    #[test]
+    fn cmd_chained_no_space_rmdir_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd",
+            "/c",
+            "echo hi&rmdir /s /q testdir"
+        ])));
+    }
+
+    #[test]
+    fn cmd_del_force_uppercase_flag_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd", "/c", "DEL", "/F", "file.txt"
+        ])));
+    }
+
+    #[test]
+    fn cmdexe_r_del_force_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd.exe", "/r", "del", "/f", "file.txt"
+        ])));
+    }
+
+    #[test]
+    fn cmd_start_quoted_url_single_string_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd",
+            "/c",
+            r#"start "https://example.com""#
+        ])));
+    }
+
+    #[test]
+    fn cmd_start_title_then_url_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd",
+            "/c",
+            r#"start "" https://example.com"#
+        ])));
+    }
+
+    #[test]
+    fn powershell_rm_alias_force_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-Command",
+            "rm test -Force"
+        ])));
+    }
+
+    #[test]
+    fn powershell_benign_force_separate_command_is_not_dangerous() {
+        assert!(!is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-Command",
+            "Get-ChildItem -Force; Remove-Item test"
         ])));
     }
 }

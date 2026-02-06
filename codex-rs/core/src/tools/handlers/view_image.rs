@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use codex_protocol::models::FunctionCallOutputBody;
 use serde::Deserialize;
 use tokio::fs;
 
@@ -8,9 +9,12 @@ use crate::protocol::ViewImageToolCallEvent;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use codex_protocol::user_input::UserInput;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::local_image_content_items_with_label_number;
 
 pub struct ViewImageHandler;
 
@@ -43,9 +47,7 @@ impl ToolHandler for ViewImageHandler {
             }
         };
 
-        let args: ViewImageArgs = serde_json::from_str(&arguments).map_err(|e| {
-            FunctionCallError::RespondToModel(format!("failed to parse function arguments: {e:?}"))
-        })?;
+        let args: ViewImageArgs = parse_arguments(&arguments)?;
 
         let abs_path = turn.resolve_path(Some(args.path));
 
@@ -64,8 +66,15 @@ impl ToolHandler for ViewImageHandler {
         }
         let event_path = abs_path.clone();
 
+        let content: Vec<ContentItem> =
+            local_image_content_items_with_label_number(&abs_path, None);
+        let input = ResponseInputItem::Message {
+            role: "user".to_string(),
+            content,
+        };
+
         session
-            .inject_input(vec![UserInput::LocalImage { path: abs_path }])
+            .inject_response_items(vec![input])
             .await
             .map_err(|_| {
                 FunctionCallError::RespondToModel(
@@ -84,8 +93,7 @@ impl ToolHandler for ViewImageHandler {
             .await;
 
         Ok(ToolOutput::Function {
-            content: "attached local image path".to_string(),
-            content_items: None,
+            body: FunctionCallOutputBody::Text("attached local image path".to_string()),
             success: Some(true),
         })
     }

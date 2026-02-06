@@ -1,0 +1,15 @@
+---
+source: tui/src/bottom_pane/skills_toggle_view.rs
+assertion_line: 439
+expression: "render_lines(&view, 72)"
+---
+                                                                        
+  Enable/Disable Skills                                                 
+  Turn skills on or off. Your changes are saved automatically.          
+                                                                        
+  Type to search skills                                                 
+  >                                                                     
+› [x] Repo Scout        Summarize the repo layout                       
+  [ ] Changelog Writer  Draft release notes                             
+                                                                        
+  Press space or enter to toggle; esc to close

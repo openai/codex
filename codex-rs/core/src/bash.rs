@@ -138,26 +138,12 @@ fn parse_plain_command_from_node(cmd: tree_sitter::Node, src: &str) -> Option<Ve
                 words.push(child.utf8_text(src.as_bytes()).ok()?.to_owned());
             }
             "string" => {
-                if child.child_count() == 3
-                    && child.child(0)?.kind() == "\""
-                    && child.child(1)?.kind() == "string_content"
-                    && child.child(2)?.kind() == "\""
-                {
-                    words.push(child.child(1)?.utf8_text(src.as_bytes()).ok()?.to_owned());
-                } else {
-                    return None;
-                }
+                let parsed = parse_double_quoted_string(child, src)?;
+                words.push(parsed);
             }
             "raw_string" => {
-                let raw_string = child.utf8_text(src.as_bytes()).ok()?;
-                let stripped = raw_string
-                    .strip_prefix('\'')
-                    .and_then(|s| s.strip_suffix('\''));
-                if let Some(s) = stripped {
-                    words.push(s.to_owned());
-                } else {
-                    return None;
-                }
+                let parsed = parse_raw_string(child, src)?;
+                words.push(parsed);
             }
             "concatenation" => {
                 // Handle concatenated arguments like -g"*.py"
@@ -170,28 +156,12 @@ fn parse_plain_command_from_node(cmd: tree_sitter::Node, src: &str) -> Option<Ve
                                 .push_str(part.utf8_text(src.as_bytes()).ok()?.to_owned().as_str());
                         }
                         "string" => {
-                            if part.child_count() == 3
-                                && part.child(0)?.kind() == "\""
-                                && part.child(1)?.kind() == "string_content"
-                                && part.child(2)?.kind() == "\""
-                            {
-                                concatenated.push_str(
-                                    part.child(1)?
-                                        .utf8_text(src.as_bytes())
-                                        .ok()?
-                                        .to_owned()
-                                        .as_str(),
-                                );
-                            } else {
-                                return None;
-                            }
+                            let parsed = parse_double_quoted_string(part, src)?;
+                            concatenated.push_str(&parsed);
                         }
                         "raw_string" => {
-                            let raw_string = part.utf8_text(src.as_bytes()).ok()?;
-                            let stripped = raw_string
-                                .strip_prefix('\'')
-                                .and_then(|s| s.strip_suffix('\''))?;
-                            concatenated.push_str(stripped);
+                            let parsed = parse_raw_string(part, src)?;
+                            concatenated.push_str(&parsed);
                         }
                         _ => return None,
                     }
@@ -207,9 +177,40 @@ fn parse_plain_command_from_node(cmd: tree_sitter::Node, src: &str) -> Option<Ve
     Some(words)
 }
 
+fn parse_double_quoted_string(node: Node, src: &str) -> Option<String> {
+    if node.kind() != "string" {
+        return None;
+    }
+
+    let mut cursor = node.walk();
+    for part in node.named_children(&mut cursor) {
+        if part.kind() != "string_content" {
+            return None;
+        }
+    }
+    let raw = node.utf8_text(src.as_bytes()).ok()?;
+    let stripped = raw
+        .strip_prefix('"')
+        .and_then(|text| text.strip_suffix('"'))?;
+    Some(stripped.to_string())
+}
+
+fn parse_raw_string(node: Node, src: &str) -> Option<String> {
+    if node.kind() != "raw_string" {
+        return None;
+    }
+
+    let raw_string = node.utf8_text(src.as_bytes()).ok()?;
+    let stripped = raw_string
+        .strip_prefix('\'')
+        .and_then(|s| s.strip_suffix('\''));
+    stripped.map(str::to_owned)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
 
     fn parse_seq(src: &str) -> Option<Vec<Vec<String>>> {
         let tree = try_parse_shell(src)?;
@@ -248,6 +249,38 @@ mod tests {
             cmds2,
             vec![vec!["echo".to_string(), "hi there".to_string()]]
         );
+    }
+
+    #[test]
+    fn accepts_double_quoted_strings_with_newlines() {
+        let cmds = parse_seq("git commit -m \"line1\nline2\"").unwrap();
+        assert_eq!(
+            cmds,
+            vec![vec![
+                "git".to_string(),
+                "commit".to_string(),
+                "-m".to_string(),
+                "line1\nline2".to_string(),
+            ]]
+        );
+    }
+
+    #[test]
+    fn accepts_mixed_quote_concatenation() {
+        assert_eq!(
+            parse_seq(r#"echo "/usr"'/'"local"/bin"#).unwrap(),
+            vec![vec!["echo".to_string(), "/usr/local/bin".to_string()]]
+        );
+        assert_eq!(
+            parse_seq(r#"echo '/usr'"/"'local'/bin"#).unwrap(),
+            vec![vec!["echo".to_string(), "/usr/local/bin".to_string()]]
+        );
+    }
+
+    #[test]
+    fn rejects_double_quoted_strings_with_expansions() {
+        assert!(parse_seq(r#"echo "hi ${USER}""#).is_none());
+        assert!(parse_seq(r#"echo "$HOME""#).is_none());
     }
 
     #[test]

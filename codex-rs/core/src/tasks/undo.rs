@@ -38,6 +38,11 @@ impl SessionTask for UndoTask {
         _input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
+        let _ = session
+            .session
+            .services
+            .otel_manager
+            .counter("codex.task.undo", 1, &[]);
         let sess = session.clone_session();
         sess.send_event(
             ctx.as_ref(),
@@ -59,8 +64,8 @@ impl SessionTask for UndoTask {
             return None;
         }
 
-        let mut history = sess.clone_history().await;
-        let mut items = history.get_history();
+        let history = sess.clone_history().await;
+        let mut items = history.raw_items().to_vec();
         let mut completed = UndoCompletedEvent {
             success: false,
             message: None,

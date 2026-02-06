@@ -131,3 +131,19 @@ const codex = new Codex({
 
 The SDK still injects its required variables (such as `OPENAI_BASE_URL` and `CODEX_API_KEY`) on top of the environment you
 provide.
+
+### Passing `--config` overrides
+
+Use the `config` option to provide additional Codex CLI configuration overrides. The SDK accepts a JSON object, flattens it
+into dotted paths, and serializes values as TOML literals before passing them as repeated `--config key=value` flags.
+
+```typescript
+const codex = new Codex({
+  config: {
+    show_raw_agent_reasoning: true,
+    sandbox_workspace_write: { network_access: true },
+  },
+});
+```
+
+Thread options still take precedence for overlapping settings because they are emitted after these global overrides.

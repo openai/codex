@@ -1,5 +1,0 @@
----
-source: tui/src/bottom_pane/mod.rs
-expression: "render_snapshot(&pane, area1)"
----
-› Ask Codex to do a

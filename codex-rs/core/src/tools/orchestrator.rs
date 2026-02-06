@@ -8,6 +8,7 @@ retry without sandbox on denial (no re‑approval thanks to caching).
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
 use crate::exec::ExecToolCallOutput;
+use crate::features::Feature;
 use crate::sandboxing::SandboxManager;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
@@ -17,6 +18,7 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::default_exec_approval_requirement;
+use codex_otel::ToolDecisionSource;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 
@@ -42,11 +44,11 @@ impl ToolOrchestrator {
     where
         T: ToolRuntime<Rq, Out>,
     {
-        let otel = turn_ctx.client.get_otel_manager();
+        let otel = turn_ctx.otel_manager.clone();
         let otel_tn = &tool_ctx.tool_name;
         let otel_ci = &tool_ctx.call_id;
-        let otel_user = codex_otel::otel_manager::ToolDecisionSource::User;
-        let otel_cfg = codex_otel::otel_manager::ToolDecisionSource::Config;
+        let otel_user = ToolDecisionSource::User;
+        let otel_cfg = ToolDecisionSource::Config;
 
         // 1) Approval
         let mut already_approved = false;
@@ -87,19 +89,24 @@ impl ToolOrchestrator {
         // 2) First attempt under the selected sandbox.
         let initial_sandbox = match tool.sandbox_mode_for_first_attempt(req) {
             SandboxOverride::BypassSandboxFirstAttempt => crate::exec::SandboxType::None,
-            SandboxOverride::NoOverride => self
-                .sandbox
-                .select_initial(&turn_ctx.sandbox_policy, tool.sandbox_preference()),
+            SandboxOverride::NoOverride => self.sandbox.select_initial(
+                &turn_ctx.sandbox_policy,
+                tool.sandbox_preference(),
+                turn_ctx.windows_sandbox_level,
+            ),
         };
 
         // Platform-specific flag gating is handled by SandboxManager::select_initial
-        // via crate::safety::get_platform_sandbox().
+        // via crate::safety::get_platform_sandbox(..).
+        let use_linux_sandbox_bwrap = turn_ctx.features.enabled(Feature::UseLinuxSandboxBwrap);
         let initial_attempt = SandboxAttempt {
             sandbox: initial_sandbox,
             policy: &turn_ctx.sandbox_policy,
             manager: &self.sandbox,
             sandbox_cwd: &turn_ctx.cwd,
             codex_linux_sandbox_exe: turn_ctx.codex_linux_sandbox_exe.as_ref(),
+            use_linux_sandbox_bwrap,
+            windows_sandbox_level: turn_ctx.windows_sandbox_level,
         };
 
         match tool.run(req, &initial_attempt, tool_ctx).await {
@@ -150,6 +157,8 @@ impl ToolOrchestrator {
                     manager: &self.sandbox,
                     sandbox_cwd: &turn_ctx.cwd,
                     codex_linux_sandbox_exe: None,
+                    use_linux_sandbox_bwrap,
+                    windows_sandbox_level: turn_ctx.windows_sandbox_level,
                 };
 
                 // Second attempt.

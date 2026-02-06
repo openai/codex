@@ -6,6 +6,7 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::TokenUsage;
 use futures::Stream;
+use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 use std::pin::Pin;
@@ -13,7 +14,7 @@ use std::task::Context;
 use std::task::Poll;
 use tokio::sync::mpsc;
 
-/// Canonical prompt input for Chat and Responses endpoints.
+/// Canonical prompt input for Responses endpoints.
 #[derive(Debug, Clone)]
 pub struct Prompt {
     /// Fully-resolved system instructions for this turn.
@@ -37,11 +38,42 @@ pub struct CompactionInput<'a> {
     pub instructions: &'a str,
 }
 
+/// Canonical input payload for the memory trace summarize endpoint.
+#[derive(Debug, Clone, Serialize)]
+pub struct MemoryTraceSummarizeInput {
+    pub model: String,
+    pub traces: Vec<MemoryTrace>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<Reasoning>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MemoryTrace {
+    pub id: String,
+    pub metadata: MemoryTraceMetadata,
+    pub items: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MemoryTraceMetadata {
+    pub source_path: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct MemoryTraceSummaryOutput {
+    pub trace_summary: String,
+    pub memory_summary: String,
+}
+
 #[derive(Debug)]
 pub enum ResponseEvent {
     Created,
     OutputItemDone(ResponseItem),
     OutputItemAdded(ResponseItem),
+    /// Emitted when `X-Reasoning-Included: true` is present on the response,
+    /// meaning the server already accounted for past reasoning tokens and the
+    /// client should not re-estimate them.
+    ServerReasoningIncluded(bool),
     Completed {
         response_id: String,
         token_usage: Option<TokenUsage>,
@@ -134,6 +166,38 @@ pub struct ResponsesApiRequest<'a> {
     pub prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<TextControls>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ResponseCreateWsRequest {
+    pub model: String,
+    pub instructions: String,
+    pub input: Vec<ResponseItem>,
+    pub tools: Vec<Value>,
+    pub tool_choice: String,
+    pub parallel_tool_calls: bool,
+    pub reasoning: Option<Reasoning>,
+    pub store: bool,
+    pub stream: bool,
+    pub include: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<TextControls>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ResponseAppendWsRequest {
+    pub input: Vec<ResponseItem>,
+}
+#[derive(Debug, Serialize)]
+#[serde(tag = "type")]
+#[allow(clippy::large_enum_variant)]
+pub enum ResponsesWsRequest {
+    #[serde(rename = "response.create")]
+    ResponseCreate(ResponseCreateWsRequest),
+    #[serde(rename = "response.append")]
+    ResponseAppend(ResponseAppendWsRequest),
 }
 
 pub fn create_text_param_for_request(

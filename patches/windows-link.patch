@@ -1,0 +1,10 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index 2d5a2a2..6e8c4cd 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,4 +1,4 @@
+-#![doc = include_str!("../readme.md")]
++#![doc = "windows-link"]
+ #![no_std]
+ 
+ /// Defines an external function to import.

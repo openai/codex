@@ -45,6 +45,7 @@ pub fn parse_command(command: &[String]) -> Vec<ParsedCommand> {
 /// Tests are at the top to encourage using TDD + Codex to fix the implementation.
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
     use std::path::PathBuf;
     use std::string::ToString;
 
@@ -67,6 +68,47 @@ mod tests {
             &vec_str(&["git", "status"]),
             vec![ParsedCommand::Unknown {
                 cmd: "git status".to_string(),
+            }],
+        );
+    }
+
+    #[test]
+    fn supports_git_grep_and_ls_files() {
+        assert_parsed(
+            &shlex_split_safe("git grep TODO src"),
+            vec![ParsedCommand::Search {
+                cmd: "git grep TODO src".to_string(),
+                query: Some("TODO".to_string()),
+                path: Some("src".to_string()),
+            }],
+        );
+        assert_parsed(
+            &shlex_split_safe("git grep -l TODO src"),
+            vec![ParsedCommand::Search {
+                cmd: "git grep -l TODO src".to_string(),
+                query: Some("TODO".to_string()),
+                path: Some("src".to_string()),
+            }],
+        );
+        assert_parsed(
+            &shlex_split_safe("git ls-files"),
+            vec![ParsedCommand::ListFiles {
+                cmd: "git ls-files".to_string(),
+                path: None,
+            }],
+        );
+        assert_parsed(
+            &shlex_split_safe("git ls-files src"),
+            vec![ParsedCommand::ListFiles {
+                cmd: "git ls-files src".to_string(),
+                path: Some("src".to_string()),
+            }],
+        );
+        assert_parsed(
+            &shlex_split_safe("git ls-files --exclude target src"),
+            vec![ParsedCommand::ListFiles {
+                cmd: "git ls-files --exclude target src".to_string(),
+                path: Some("src".to_string()),
             }],
         );
     }
@@ -112,9 +154,8 @@ mod tests {
                 ParsedCommand::Unknown {
                     cmd: "pnpm -v".to_string(),
                 },
-                ParsedCommand::Search {
+                ParsedCommand::ListFiles {
                     cmd: "rg --files".to_string(),
-                    query: None,
                     path: None,
                 },
             ],
@@ -153,9 +194,8 @@ mod tests {
         let inner = "rg --files webview/src | sed -n";
         assert_parsed(
             &vec_str(&["bash", "-lc", inner]),
-            vec![ParsedCommand::Search {
+            vec![ParsedCommand::ListFiles {
                 cmd: "rg --files webview/src".to_string(),
-                query: None,
                 path: Some("webview".to_string()),
             }],
         );
@@ -166,10 +206,71 @@ mod tests {
         let inner = "rg --files | head -n 50";
         assert_parsed(
             &vec_str(&["bash", "-lc", inner]),
-            vec![ParsedCommand::Search {
+            vec![ParsedCommand::ListFiles {
                 cmd: "rg --files".to_string(),
-                query: None,
                 path: None,
+            }],
+        );
+    }
+
+    #[test]
+    fn keeps_mutating_xargs_pipeline() {
+        let inner = r#"rg -l QkBindingController presentation/src/main/java | xargs perl -pi -e 's/QkBindingController/QkController/g'"#;
+        assert_parsed(
+            &vec_str(&["bash", "-lc", inner]),
+            vec![
+                ParsedCommand::Search {
+                    cmd: "rg -l QkBindingController presentation/src/main/java".to_string(),
+                    query: Some("QkBindingController".to_string()),
+                    path: Some("java".to_string()),
+                },
+                ParsedCommand::Unknown {
+                    cmd: "xargs perl -pi -e s/QkBindingController/QkController/g".to_string(),
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn rg_files_with_matches_flags_are_search() {
+        assert_parsed(
+            &shlex_split_safe("rg -l TODO src"),
+            vec![ParsedCommand::Search {
+                cmd: "rg -l TODO src".to_string(),
+                query: Some("TODO".to_string()),
+                path: Some("src".to_string()),
+            }],
+        );
+        assert_parsed(
+            &shlex_split_safe("rg --files-with-matches TODO src"),
+            vec![ParsedCommand::Search {
+                cmd: "rg --files-with-matches TODO src".to_string(),
+                query: Some("TODO".to_string()),
+                path: Some("src".to_string()),
+            }],
+        );
+        assert_parsed(
+            &shlex_split_safe("rg -L TODO src"),
+            vec![ParsedCommand::Search {
+                cmd: "rg -L TODO src".to_string(),
+                query: Some("TODO".to_string()),
+                path: Some("src".to_string()),
+            }],
+        );
+        assert_parsed(
+            &shlex_split_safe("rg --files-without-match TODO src"),
+            vec![ParsedCommand::Search {
+                cmd: "rg --files-without-match TODO src".to_string(),
+                query: Some("TODO".to_string()),
+                path: Some("src".to_string()),
+            }],
+        );
+        assert_parsed(
+            &shlex_split_safe("rga -l TODO src"),
+            vec![ParsedCommand::Search {
+                cmd: "rga -l TODO src".to_string(),
+                query: Some("TODO".to_string()),
+                path: Some("src".to_string()),
             }],
         );
     }
@@ -201,6 +302,58 @@ mod tests {
     }
 
     #[test]
+    fn supports_bat() {
+        let inner = "bat --theme TwoDark README.md";
+        assert_parsed(
+            &vec_str(&["bash", "-lc", inner]),
+            vec![ParsedCommand::Read {
+                cmd: inner.to_string(),
+                name: "README.md".to_string(),
+                path: PathBuf::from("README.md"),
+            }],
+        );
+    }
+
+    #[test]
+    fn supports_batcat() {
+        let inner = "batcat README.md";
+        assert_parsed(
+            &vec_str(&["bash", "-lc", inner]),
+            vec![ParsedCommand::Read {
+                cmd: inner.to_string(),
+                name: "README.md".to_string(),
+                path: PathBuf::from("README.md"),
+            }],
+        );
+    }
+
+    #[test]
+    fn supports_less() {
+        let inner = "less -p TODO README.md";
+        assert_parsed(
+            &vec_str(&["bash", "-lc", inner]),
+            vec![ParsedCommand::Read {
+                cmd: inner.to_string(),
+                name: "README.md".to_string(),
+                path: PathBuf::from("README.md"),
+            }],
+        );
+    }
+
+    #[test]
+    fn supports_more() {
+        let inner = "more README.md";
+        assert_parsed(
+            &vec_str(&["bash", "-lc", inner]),
+            vec![ParsedCommand::Read {
+                cmd: inner.to_string(),
+                name: "README.md".to_string(),
+                path: PathBuf::from("README.md"),
+            }],
+        );
+    }
+
+    #[test]
     fn cd_then_cat_is_single_read() {
         assert_parsed(
             &shlex_split_safe("cd foo && cat foo.txt"),
@@ -208,6 +361,30 @@ mod tests {
                 cmd: "cat foo.txt".to_string(),
                 name: "foo.txt".to_string(),
                 path: PathBuf::from("foo/foo.txt"),
+            }],
+        );
+    }
+
+    #[test]
+    fn cd_with_double_dash_then_cat_is_read() {
+        assert_parsed(
+            &shlex_split_safe("cd -- -weird && cat foo.txt"),
+            vec![ParsedCommand::Read {
+                cmd: "cat foo.txt".to_string(),
+                name: "foo.txt".to_string(),
+                path: PathBuf::from("-weird/foo.txt"),
+            }],
+        );
+    }
+
+    #[test]
+    fn cd_with_multiple_operands_uses_last() {
+        assert_parsed(
+            &shlex_split_safe("cd dir1 dir2 && cat foo.txt"),
+            vec![ParsedCommand::Read {
+                cmd: "cat foo.txt".to_string(),
+                name: "foo.txt".to_string(),
+                path: PathBuf::from("dir2/foo.txt"),
             }],
         );
     }
@@ -243,6 +420,38 @@ mod tests {
             vec![ParsedCommand::ListFiles {
                 cmd: "ls -la".to_string(),
                 path: None,
+            }],
+        );
+    }
+
+    #[test]
+    fn supports_eza_exa_tree_du() {
+        assert_parsed(
+            &shlex_split_safe("eza --color=always src"),
+            vec![ParsedCommand::ListFiles {
+                cmd: "eza '--color=always' src".to_string(),
+                path: Some("src".to_string()),
+            }],
+        );
+        assert_parsed(
+            &shlex_split_safe("exa -I target ."),
+            vec![ParsedCommand::ListFiles {
+                cmd: "exa -I target .".to_string(),
+                path: Some(".".to_string()),
+            }],
+        );
+        assert_parsed(
+            &shlex_split_safe("tree -L 2 src"),
+            vec![ParsedCommand::ListFiles {
+                cmd: "tree -L 2 src".to_string(),
+                path: Some("src".to_string()),
+            }],
+        );
+        assert_parsed(
+            &shlex_split_safe("du -d 2 ."),
+            vec![ParsedCommand::ListFiles {
+                cmd: "du -d 2 .".to_string(),
+                path: Some(".".to_string()),
             }],
         );
     }
@@ -367,6 +576,62 @@ mod tests {
     }
 
     #[test]
+    fn supports_egrep_and_fgrep() {
+        assert_parsed(
+            &shlex_split_safe("egrep -R TODO src"),
+            vec![ParsedCommand::Search {
+                cmd: "egrep -R TODO src".to_string(),
+                query: Some("TODO".to_string()),
+                path: Some("src".to_string()),
+            }],
+        );
+        assert_parsed(
+            &shlex_split_safe("fgrep -l TODO src"),
+            vec![ParsedCommand::Search {
+                cmd: "fgrep -l TODO src".to_string(),
+                query: Some("TODO".to_string()),
+                path: Some("src".to_string()),
+            }],
+        );
+    }
+
+    #[test]
+    fn grep_files_with_matches_flags_are_search() {
+        assert_parsed(
+            &shlex_split_safe("grep -l TODO src"),
+            vec![ParsedCommand::Search {
+                cmd: "grep -l TODO src".to_string(),
+                query: Some("TODO".to_string()),
+                path: Some("src".to_string()),
+            }],
+        );
+        assert_parsed(
+            &shlex_split_safe("grep --files-with-matches TODO src"),
+            vec![ParsedCommand::Search {
+                cmd: "grep --files-with-matches TODO src".to_string(),
+                query: Some("TODO".to_string()),
+                path: Some("src".to_string()),
+            }],
+        );
+        assert_parsed(
+            &shlex_split_safe("grep -L TODO src"),
+            vec![ParsedCommand::Search {
+                cmd: "grep -L TODO src".to_string(),
+                query: Some("TODO".to_string()),
+                path: Some("src".to_string()),
+            }],
+        );
+        assert_parsed(
+            &shlex_split_safe("grep --files-without-match TODO src"),
+            vec![ParsedCommand::Search {
+                cmd: "grep --files-without-match TODO src".to_string(),
+                query: Some("TODO".to_string()),
+                path: Some("src".to_string()),
+            }],
+        );
+    }
+
+    #[test]
     fn supports_grep_query_with_slashes_not_shortened() {
         // Query strings may contain slashes and should not be shortened to the basename.
         // Previously, grep queries were passed through short_display_path, which is incorrect.
@@ -396,9 +661,8 @@ mod tests {
     fn supports_cd_and_rg_files() {
         assert_parsed(
             &shlex_split_safe("cd codex-rs && rg --files"),
-            vec![ParsedCommand::Search {
+            vec![ParsedCommand::ListFiles {
                 cmd: "rg --files".to_string(),
-                query: None,
                 path: None,
             }],
         );
@@ -417,17 +681,63 @@ mod tests {
         );
     }
 
+    #[test]
+    fn supports_python_walks_files() {
+        let inner = r#"python -c "import os; print(os.listdir('.'))""#;
+        assert_parsed(
+            &vec_str(&["bash", "-lc", inner]),
+            vec![ParsedCommand::ListFiles {
+                cmd: shlex_join(&shlex_split_safe(inner)),
+                path: None,
+            }],
+        );
+    }
+
+    #[test]
+    fn supports_python3_walks_files() {
+        let inner = r#"python3 -c "import glob; print(glob.glob('*.rs'))""#;
+        assert_parsed(
+            &vec_str(&["bash", "-lc", inner]),
+            vec![ParsedCommand::ListFiles {
+                cmd: shlex_join(&shlex_split_safe(inner)),
+                path: None,
+            }],
+        );
+    }
+
+    #[test]
+    fn python_without_file_walk_is_unknown() {
+        let inner = r#"python -c "print('hello')""#;
+        assert_parsed(
+            &vec_str(&["bash", "-lc", inner]),
+            vec![ParsedCommand::Unknown {
+                cmd: shlex_join(&shlex_split_safe(inner)),
+            }],
+        );
+    }
+
     // ---- is_small_formatting_command unit tests ----
     #[test]
     fn small_formatting_always_true_commands() {
-        for cmd in [
-            "wc", "tr", "cut", "sort", "uniq", "xargs", "tee", "column", "awk",
-        ] {
+        for cmd in ["wc", "tr", "cut", "sort", "uniq", "xargs", "tee", "column"] {
             assert!(is_small_formatting_command(&shlex_split_safe(cmd)));
             assert!(is_small_formatting_command(&shlex_split_safe(&format!(
                 "{cmd} -x"
             ))));
         }
+    }
+
+    #[test]
+    fn awk_behavior() {
+        assert!(is_small_formatting_command(&shlex_split_safe(
+            "awk '{print $1}'"
+        )));
+        assert!(!is_small_formatting_command(&shlex_split_safe(
+            "awk '{print $1}' Cargo.toml"
+        )));
+        assert!(!is_small_formatting_command(&shlex_split_safe(
+            "awk -f script.awk Cargo.toml"
+        )));
     }
 
     #[test]
@@ -484,6 +794,12 @@ mod tests {
             "sed -n 10p file.txt"
         )));
         assert!(!is_small_formatting_command(&shlex_split_safe(
+            "sed -n -e 10p file.txt"
+        )));
+        assert!(!is_small_formatting_command(&shlex_split_safe(
+            "sed -n 10p -- file.txt"
+        )));
+        assert!(!is_small_formatting_command(&shlex_split_safe(
             "sed -n 1,200p file.txt"
         )));
         // Invalid ranges with file -> small formatting
@@ -528,6 +844,19 @@ mod tests {
     }
 
     #[test]
+    fn supports_awk_with_file() {
+        let inner = "awk '{print $1}' Cargo.toml";
+        assert_parsed(
+            &vec_str(&["bash", "-lc", inner]),
+            vec![ParsedCommand::Read {
+                cmd: inner.to_string(),
+                name: "Cargo.toml".to_string(),
+                path: PathBuf::from("Cargo.toml"),
+            }],
+        );
+    }
+
+    #[test]
     fn filters_out_printf() {
         let inner =
             r#"printf "\n===== ansi-escape/Cargo.toml =====\n"; cat -- ansi-escape/Cargo.toml"#;
@@ -547,9 +876,8 @@ mod tests {
         let inner = "yes | rg --files";
         assert_parsed(
             &vec_str(&["bash", "-lc", inner]),
-            vec![ParsedCommand::Search {
+            vec![ParsedCommand::ListFiles {
                 cmd: "rg --files".to_string(),
-                query: None,
                 path: None,
             }],
         );
@@ -643,10 +971,9 @@ mod tests {
                 cmd: shlex_join(&shlex_split_safe("ls -la")),
                 path: None,
             },
-            ParsedCommand::Search {
+            ParsedCommand::ListFiles {
                 cmd: shlex_join(&shlex_split_safe("rg --files -g '!target'")),
-                query: None,
-                path: Some("!target".to_string()),
+                path: None,
             },
             ParsedCommand::Search {
                 cmd: shlex_join(&shlex_split_safe("rg -n '^\\[workspace\\]' -n Cargo.toml")),
@@ -679,18 +1006,16 @@ mod tests {
         // `true` should be dropped from parsed sequences
         assert_parsed(
             &shlex_split_safe("true && rg --files"),
-            vec![ParsedCommand::Search {
+            vec![ParsedCommand::ListFiles {
                 cmd: "rg --files".to_string(),
-                query: None,
                 path: None,
             }],
         );
 
         assert_parsed(
             &shlex_split_safe("rg --files && true"),
-            vec![ParsedCommand::Search {
+            vec![ParsedCommand::ListFiles {
                 cmd: "rg --files".to_string(),
-                query: None,
                 path: None,
             }],
         );
@@ -701,9 +1026,8 @@ mod tests {
         let inner = "true && rg --files";
         assert_parsed(
             &vec_str(&["bash", "-lc", inner]),
-            vec![ParsedCommand::Search {
+            vec![ParsedCommand::ListFiles {
                 cmd: "rg --files".to_string(),
-                query: None,
                 path: None,
             }],
         );
@@ -711,9 +1035,8 @@ mod tests {
         let inner2 = "rg --files || true";
         assert_parsed(
             &vec_str(&["bash", "-lc", inner2]),
-            vec![ParsedCommand::Search {
+            vec![ParsedCommand::ListFiles {
                 cmd: "rg --files".to_string(),
-                query: None,
                 path: None,
             }],
         );
@@ -749,9 +1072,8 @@ mod tests {
         let inner = "rg --files | head -n 1";
         assert_parsed(
             &vec_str(&["bash", "-c", inner]),
-            vec![ParsedCommand::Search {
+            vec![ParsedCommand::ListFiles {
                 cmd: "rg --files".to_string(),
-                query: None,
                 path: None,
             }],
         );
@@ -775,6 +1097,70 @@ mod tests {
             &shlex_split_safe("grep -R TODO src"),
             vec![ParsedCommand::Search {
                 cmd: "grep -R TODO src".to_string(),
+                query: Some("TODO".to_string()),
+                path: Some("src".to_string()),
+            }],
+        );
+    }
+
+    #[test]
+    fn supports_ag_ack_pt_rga() {
+        assert_parsed(
+            &shlex_split_safe("ag TODO src"),
+            vec![ParsedCommand::Search {
+                cmd: "ag TODO src".to_string(),
+                query: Some("TODO".to_string()),
+                path: Some("src".to_string()),
+            }],
+        );
+        assert_parsed(
+            &shlex_split_safe("ack TODO src"),
+            vec![ParsedCommand::Search {
+                cmd: "ack TODO src".to_string(),
+                query: Some("TODO".to_string()),
+                path: Some("src".to_string()),
+            }],
+        );
+        assert_parsed(
+            &shlex_split_safe("pt TODO src"),
+            vec![ParsedCommand::Search {
+                cmd: "pt TODO src".to_string(),
+                query: Some("TODO".to_string()),
+                path: Some("src".to_string()),
+            }],
+        );
+        assert_parsed(
+            &shlex_split_safe("rga TODO src"),
+            vec![ParsedCommand::Search {
+                cmd: "rga TODO src".to_string(),
+                query: Some("TODO".to_string()),
+                path: Some("src".to_string()),
+            }],
+        );
+    }
+
+    #[test]
+    fn ag_ack_pt_files_with_matches_flags_are_search() {
+        assert_parsed(
+            &shlex_split_safe("ag -l TODO src"),
+            vec![ParsedCommand::Search {
+                cmd: "ag -l TODO src".to_string(),
+                query: Some("TODO".to_string()),
+                path: Some("src".to_string()),
+            }],
+        );
+        assert_parsed(
+            &shlex_split_safe("ack -l TODO src"),
+            vec![ParsedCommand::Search {
+                cmd: "ack -l TODO src".to_string(),
+                query: Some("TODO".to_string()),
+                path: Some("src".to_string()),
+            }],
+        );
+        assert_parsed(
+            &shlex_split_safe("pt -l TODO src"),
+            vec![ParsedCommand::Search {
+                cmd: "pt -l TODO src".to_string(),
                 query: Some("TODO".to_string()),
                 path: Some("src".to_string()),
             }],
@@ -821,9 +1207,8 @@ mod tests {
         // When an `nl` stage has only flags, it should be dropped from the summary
         assert_parsed(
             &shlex_split_safe("rg --files | nl -ba"),
-            vec![ParsedCommand::Search {
+            vec![ParsedCommand::ListFiles {
                 cmd: "rg --files".to_string(),
-                query: None,
                 path: None,
             }],
         );
@@ -845,9 +1230,8 @@ mod tests {
     fn fd_file_finder_variants() {
         assert_parsed(
             &shlex_split_safe("fd -t f src/"),
-            vec![ParsedCommand::Search {
+            vec![ParsedCommand::ListFiles {
                 cmd: "fd -t f src/".to_string(),
-                query: None,
                 path: Some("src".to_string()),
             }],
         );
@@ -879,9 +1263,8 @@ mod tests {
     fn find_type_only_path() {
         assert_parsed(
             &shlex_split_safe("find src -type f"),
-            vec![ParsedCommand::Search {
+            vec![ParsedCommand::ListFiles {
                 cmd: "find src -type f".to_string(),
-                query: None,
                 path: Some("src".to_string()),
             }],
         );
@@ -976,9 +1359,9 @@ pub fn parse_command_impl(command: &[String]) -> Vec<ParsedCommand> {
         if let Some((head, tail)) = tokens.split_first()
             && head == "cd"
         {
-            if let Some(dir) = tail.first() {
+            if let Some(dir) = cd_target(tail) {
                 cwd = Some(match &cwd {
-                    Some(base) => join_paths(base, dir),
+                    Some(base) => join_paths(base, &dir),
                     None => dir.clone(),
                 });
             }
@@ -1091,6 +1474,49 @@ fn is_valid_sed_n_arg(arg: Option<&str>) -> bool {
     }
 }
 
+fn sed_read_path(args: &[String]) -> Option<String> {
+    let args_no_connector = trim_at_connector(args);
+    if !args_no_connector.iter().any(|arg| arg == "-n") {
+        return None;
+    }
+    let mut has_range_script = false;
+    let mut i = 0;
+    while i < args_no_connector.len() {
+        let arg = &args_no_connector[i];
+        if matches!(arg.as_str(), "-e" | "--expression") {
+            if is_valid_sed_n_arg(args_no_connector.get(i + 1).map(String::as_str)) {
+                has_range_script = true;
+            }
+            i += 2;
+            continue;
+        }
+        if matches!(arg.as_str(), "-f" | "--file") {
+            i += 2;
+            continue;
+        }
+        i += 1;
+    }
+    if !has_range_script {
+        has_range_script = args_no_connector
+            .iter()
+            .any(|arg| !arg.starts_with('-') && is_valid_sed_n_arg(Some(arg)));
+    }
+    if !has_range_script {
+        return None;
+    }
+    let candidates = skip_flag_values(&args_no_connector, &["-e", "-f", "--expression", "--file"]);
+    let non_flags: Vec<String> = candidates
+        .into_iter()
+        .filter(|arg| !arg.starts_with('-'))
+        .cloned()
+        .collect();
+    match non_flags.as_slice() {
+        [] => None,
+        [first, rest @ ..] if is_valid_sed_n_arg(Some(first)) => rest.first().cloned(),
+        [first, ..] => Some(first.clone()),
+    }
+}
+
 /// Normalize a command by:
 /// - Removing `yes`/`no`/`bash -c`/`bash -lc`/`zsh -c`/`zsh -lc` prefixes.
 /// - Splitting on `|` and `&&`/`||`/`;
@@ -1195,6 +1621,190 @@ fn skip_flag_values<'a>(args: &'a [String], flags_with_vals: &[&str]) -> Vec<&'a
     out
 }
 
+fn first_non_flag_operand(args: &[String], flags_with_vals: &[&str]) -> Option<String> {
+    positional_operands(args, flags_with_vals)
+        .into_iter()
+        .next()
+        .cloned()
+}
+
+fn single_non_flag_operand(args: &[String], flags_with_vals: &[&str]) -> Option<String> {
+    let mut operands = positional_operands(args, flags_with_vals).into_iter();
+    let first = operands.next()?;
+    if operands.next().is_some() {
+        return None;
+    }
+    Some(first.clone())
+}
+
+fn positional_operands<'a>(args: &'a [String], flags_with_vals: &[&str]) -> Vec<&'a String> {
+    let mut out = Vec::new();
+    let mut after_double_dash = false;
+    let mut skip_next = false;
+    for (i, arg) in args.iter().enumerate() {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if after_double_dash {
+            out.push(arg);
+            continue;
+        }
+        if arg == "--" {
+            after_double_dash = true;
+            continue;
+        }
+        if arg.starts_with("--") && arg.contains('=') {
+            continue;
+        }
+        if flags_with_vals.contains(&arg.as_str()) {
+            if i + 1 < args.len() {
+                skip_next = true;
+            }
+            continue;
+        }
+        if arg.starts_with('-') {
+            continue;
+        }
+        out.push(arg);
+    }
+    out
+}
+
+fn parse_grep_like(main_cmd: &[String], args: &[String]) -> ParsedCommand {
+    let args_no_connector = trim_at_connector(args);
+    let mut operands = Vec::new();
+    let mut pattern: Option<String> = None;
+    let mut after_double_dash = false;
+    let mut iter = args_no_connector.iter().peekable();
+    while let Some(arg) = iter.next() {
+        if after_double_dash {
+            operands.push(arg);
+            continue;
+        }
+        if arg == "--" {
+            after_double_dash = true;
+            continue;
+        }
+        match arg.as_str() {
+            "-e" | "--regexp" => {
+                if let Some(pat) = iter.next()
+                    && pattern.is_none()
+                {
+                    pattern = Some(pat.clone());
+                }
+                continue;
+            }
+            "-f" | "--file" => {
+                if let Some(pat_file) = iter.next()
+                    && pattern.is_none()
+                {
+                    pattern = Some(pat_file.clone());
+                }
+                continue;
+            }
+            "-m" | "--max-count" | "-C" | "--context" | "-A" | "--after-context" | "-B"
+            | "--before-context" => {
+                iter.next();
+                continue;
+            }
+            _ => {}
+        }
+        if arg.starts_with('-') {
+            continue;
+        }
+        operands.push(arg);
+    }
+    // Do not shorten the query: grep patterns may legitimately contain slashes
+    // and should be preserved verbatim. Only paths should be shortened.
+    let has_pattern = pattern.is_some();
+    let query = pattern.or_else(|| operands.first().cloned().map(String::from));
+    let path_index = if has_pattern { 0 } else { 1 };
+    let path = operands.get(path_index).map(|s| short_display_path(s));
+    ParsedCommand::Search {
+        cmd: shlex_join(main_cmd),
+        query,
+        path,
+    }
+}
+
+fn awk_data_file_operand(args: &[String]) -> Option<String> {
+    if args.is_empty() {
+        return None;
+    }
+    let args_no_connector = trim_at_connector(args);
+    let has_script_file = args_no_connector
+        .iter()
+        .any(|arg| arg == "-f" || arg == "--file");
+    let candidates = skip_flag_values(
+        &args_no_connector,
+        &["-F", "-v", "-f", "--field-separator", "--assign", "--file"],
+    );
+    let non_flags: Vec<&String> = candidates
+        .into_iter()
+        .filter(|arg| !arg.starts_with('-'))
+        .collect();
+    if has_script_file {
+        return non_flags.first().cloned().cloned();
+    }
+    if non_flags.len() >= 2 {
+        return Some(non_flags[1].clone());
+    }
+    None
+}
+
+fn python_walks_files(args: &[String]) -> bool {
+    let args_no_connector = trim_at_connector(args);
+    let mut iter = args_no_connector.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "-c"
+            && let Some(script) = iter.next()
+        {
+            return script.contains("os.walk")
+                || script.contains("os.listdir")
+                || script.contains("os.scandir")
+                || script.contains("glob.glob")
+                || script.contains("glob.iglob")
+                || script.contains("pathlib.Path")
+                || script.contains(".rglob(");
+        }
+    }
+    false
+}
+
+fn is_python_command(cmd: &str) -> bool {
+    cmd == "python"
+        || cmd == "python2"
+        || cmd == "python3"
+        || cmd.starts_with("python2.")
+        || cmd.starts_with("python3.")
+}
+
+fn cd_target(args: &[String]) -> Option<String> {
+    if args.is_empty() {
+        return None;
+    }
+    let mut i = 0;
+    let mut target: Option<String> = None;
+    while i < args.len() {
+        let arg = &args[i];
+        if arg == "--" {
+            return args.get(i + 1).cloned();
+        }
+        if matches!(arg.as_str(), "-L" | "-P") {
+            i += 1;
+            continue;
+        }
+        if arg.starts_with('-') {
+            i += 1;
+            continue;
+        }
+        target = Some(arg.clone());
+        i += 1;
+    }
+    target
+}
+
 fn is_pathish(s: &str) -> bool {
     s == "."
         || s == ".."
@@ -1290,9 +1900,9 @@ fn parse_shell_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
             if let Some((head, tail)) = tokens.split_first()
                 && head == "cd"
             {
-                if let Some(dir) = tail.first() {
+                if let Some(dir) = cd_target(tail) {
                     cwd = Some(match &cwd {
-                        Some(base) => join_paths(base, dir),
+                        Some(base) => join_paths(base, &dir),
                         None => dir.clone(),
                     });
                 }
@@ -1326,8 +1936,8 @@ fn parse_shell_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
         if commands.len() == 1 {
             // If we reduced to a single command, attribute the full original script
             // for clearer UX in file-reading and listing scenarios, or when there were
-            // no connectors in the original script. For search commands that came from
-            // a pipeline (e.g. `rg --files | sed -n`), keep only the primary command.
+            // no connectors in the original script. For pipeline commands (e.g.
+            // `rg --files | sed -n`), keep only the primary command.
             let had_connectors = had_multiple_commands
                 || script_tokens
                     .iter()
@@ -1404,8 +2014,9 @@ fn is_small_formatting_command(tokens: &[String]) -> bool {
     match cmd {
         // Always formatting; typically used in pipes.
         // `nl` is special-cased below to allow `nl <file>` to be treated as a read command.
-        "wc" | "tr" | "cut" | "sort" | "uniq" | "xargs" | "tee" | "column" | "awk" | "yes"
-        | "printf" => true,
+        "wc" | "tr" | "cut" | "sort" | "uniq" | "tee" | "column" | "yes" | "printf" => true,
+        "xargs" => !is_mutating_xargs_command(tokens),
+        "awk" => awk_data_file_operand(&tokens[1..]).is_none(),
         "head" => {
             // Treat as formatting when no explicit file operand is present.
             // Common forms: `head -n 40`, `head -c 100`.
@@ -1458,11 +2069,58 @@ fn is_small_formatting_command(tokens: &[String]) -> bool {
         "sed" => {
             // Keep `sed -n <range> file` (treated as a file read elsewhere);
             // otherwise consider it a formatting helper in a pipeline.
-            tokens.len() < 4
-                || !(tokens[1] == "-n" && is_valid_sed_n_arg(tokens.get(2).map(String::as_str)))
+            sed_read_path(&tokens[1..]).is_none()
         }
         _ => false,
     }
+}
+
+fn is_mutating_xargs_command(tokens: &[String]) -> bool {
+    xargs_subcommand(tokens).is_some_and(xargs_is_mutating_subcommand)
+}
+
+fn xargs_subcommand(tokens: &[String]) -> Option<&[String]> {
+    if tokens.first().map(String::as_str) != Some("xargs") {
+        return None;
+    }
+    let mut i = 1;
+    while i < tokens.len() {
+        let token = &tokens[i];
+        if token == "--" {
+            return tokens.get(i + 1..).filter(|rest| !rest.is_empty());
+        }
+        if !token.starts_with('-') {
+            return tokens.get(i..).filter(|rest| !rest.is_empty());
+        }
+        let takes_value = matches!(
+            token.as_str(),
+            "-E" | "-e" | "-I" | "-L" | "-n" | "-P" | "-s"
+        );
+        if takes_value && token.len() == 2 {
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
+fn xargs_is_mutating_subcommand(tokens: &[String]) -> bool {
+    let Some((head, tail)) = tokens.split_first() else {
+        return false;
+    };
+    match head.as_str() {
+        "perl" | "ruby" => xargs_has_in_place_flag(tail),
+        "sed" => xargs_has_in_place_flag(tail) || tail.iter().any(|token| token == "--in-place"),
+        "rg" => tail.iter().any(|token| token == "--replace"),
+        _ => false,
+    }
+}
+
+fn xargs_has_in_place_flag(tokens: &[String]) -> bool {
+    tokens.iter().any(|token| {
+        token == "-i" || token.starts_with("-i") || token == "-pi" || token.starts_with("-pi")
+    })
 }
 
 fn drop_small_formatting_commands(mut commands: Vec<Vec<String>>) -> Vec<Vec<String>> {
@@ -1472,11 +2130,9 @@ fn drop_small_formatting_commands(mut commands: Vec<Vec<String>>) -> Vec<Vec<Str
 
 fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
     match main_cmd.split_first() {
-        Some((head, tail)) if head == "ls" => {
-            // Avoid treating option values as paths (e.g., ls -I "*.test.js").
-            let candidates = skip_flag_values(
-                tail,
-                &[
+        Some((head, tail)) if matches!(head.as_str(), "ls" | "eza" | "exa") => {
+            let flags_with_vals: &[&str] = match head.as_str() {
+                "ls" => &[
                     "-I",
                     "-w",
                     "--block-size",
@@ -1485,62 +2141,162 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
                     "--color",
                     "--quoting-style",
                 ],
-            );
-            let path = candidates
-                .into_iter()
-                .find(|p| !p.starts_with('-'))
-                .map(|p| short_display_path(p));
+                "eza" | "exa" => &[
+                    "-I",
+                    "--ignore-glob",
+                    "--color",
+                    "--sort",
+                    "--time-style",
+                    "--time",
+                ],
+                _ => &[],
+            };
+            let path =
+                first_non_flag_operand(tail, flags_with_vals).map(|p| short_display_path(&p));
             ParsedCommand::ListFiles {
                 cmd: shlex_join(main_cmd),
                 path,
             }
         }
-        Some((head, tail)) if head == "rg" => {
-            let args_no_connector = trim_at_connector(tail);
-            let has_files_flag = args_no_connector.iter().any(|a| a == "--files");
-            let non_flags: Vec<&String> = args_no_connector
-                .iter()
-                .filter(|p| !p.starts_with('-'))
-                .collect();
-            let (query, path) = if has_files_flag {
-                (None, non_flags.first().map(|s| short_display_path(s)))
-            } else {
-                (
-                    non_flags.first().cloned().map(String::from),
-                    non_flags.get(1).map(|s| short_display_path(s)),
-                )
-            };
-            ParsedCommand::Search {
+        Some((head, tail)) if head == "tree" => {
+            let path = first_non_flag_operand(
+                tail,
+                &["-L", "-P", "-I", "--charset", "--filelimit", "--sort"],
+            )
+            .map(|p| short_display_path(&p));
+            ParsedCommand::ListFiles {
                 cmd: shlex_join(main_cmd),
-                query,
                 path,
             }
         }
+        Some((head, tail)) if head == "du" => {
+            let path = first_non_flag_operand(
+                tail,
+                &[
+                    "-d",
+                    "--max-depth",
+                    "-B",
+                    "--block-size",
+                    "--exclude",
+                    "--time-style",
+                ],
+            )
+            .map(|p| short_display_path(&p));
+            ParsedCommand::ListFiles {
+                cmd: shlex_join(main_cmd),
+                path,
+            }
+        }
+        Some((head, tail)) if head == "rg" || head == "rga" || head == "ripgrep-all" => {
+            let args_no_connector = trim_at_connector(tail);
+            let has_files_flag = args_no_connector.iter().any(|a| a == "--files");
+            let candidates = skip_flag_values(
+                &args_no_connector,
+                &[
+                    "-g",
+                    "--glob",
+                    "--iglob",
+                    "-t",
+                    "--type",
+                    "--type-add",
+                    "--type-not",
+                    "-m",
+                    "--max-count",
+                    "-A",
+                    "-B",
+                    "-C",
+                    "--context",
+                    "--max-depth",
+                ],
+            );
+            let non_flags: Vec<&String> = candidates
+                .into_iter()
+                .filter(|p| !p.starts_with('-'))
+                .collect();
+            if has_files_flag {
+                let path = non_flags.first().map(|s| short_display_path(s));
+                ParsedCommand::ListFiles {
+                    cmd: shlex_join(main_cmd),
+                    path,
+                }
+            } else {
+                let query = non_flags.first().cloned().map(String::from);
+                let path = non_flags.get(1).map(|s| short_display_path(s));
+                ParsedCommand::Search {
+                    cmd: shlex_join(main_cmd),
+                    query,
+                    path,
+                }
+            }
+        }
+        Some((head, tail)) if head == "git" => match tail.split_first() {
+            Some((subcmd, sub_tail)) if subcmd == "grep" => parse_grep_like(main_cmd, sub_tail),
+            Some((subcmd, sub_tail)) if subcmd == "ls-files" => {
+                let path = first_non_flag_operand(
+                    sub_tail,
+                    &["--exclude", "--exclude-from", "--pathspec-from-file"],
+                )
+                .map(|p| short_display_path(&p));
+                ParsedCommand::ListFiles {
+                    cmd: shlex_join(main_cmd),
+                    path,
+                }
+            }
+            _ => ParsedCommand::Unknown {
+                cmd: shlex_join(main_cmd),
+            },
+        },
         Some((head, tail)) if head == "fd" => {
             let (query, path) = parse_fd_query_and_path(tail);
-            ParsedCommand::Search {
-                cmd: shlex_join(main_cmd),
-                query,
-                path,
+            if query.is_some() {
+                ParsedCommand::Search {
+                    cmd: shlex_join(main_cmd),
+                    query,
+                    path,
+                }
+            } else {
+                ParsedCommand::ListFiles {
+                    cmd: shlex_join(main_cmd),
+                    path,
+                }
             }
         }
         Some((head, tail)) if head == "find" => {
             // Basic find support: capture path and common name filter
             let (query, path) = parse_find_query_and_path(tail);
-            ParsedCommand::Search {
-                cmd: shlex_join(main_cmd),
-                query,
-                path,
+            if query.is_some() {
+                ParsedCommand::Search {
+                    cmd: shlex_join(main_cmd),
+                    query,
+                    path,
+                }
+            } else {
+                ParsedCommand::ListFiles {
+                    cmd: shlex_join(main_cmd),
+                    path,
+                }
             }
         }
-        Some((head, tail)) if head == "grep" => {
+        Some((head, tail)) if matches!(head.as_str(), "grep" | "egrep" | "fgrep") => {
+            parse_grep_like(main_cmd, tail)
+        }
+        Some((head, tail)) if matches!(head.as_str(), "ag" | "ack" | "pt") => {
             let args_no_connector = trim_at_connector(tail);
-            let non_flags: Vec<&String> = args_no_connector
-                .iter()
+            let candidates = skip_flag_values(
+                &args_no_connector,
+                &[
+                    "-G",
+                    "-g",
+                    "--file-search-regex",
+                    "--ignore-dir",
+                    "--ignore-file",
+                    "--path-to-ignore",
+                ],
+            );
+            let non_flags: Vec<&String> = candidates
+                .into_iter()
                 .filter(|p| !p.starts_with('-'))
                 .collect();
-            // Do not shorten the query: grep patterns may legitimately contain slashes
-            // and should be preserved verbatim. Only paths should be shortened.
             let query = non_flags.first().cloned().map(String::from);
             let path = non_flags.get(1).map(|s| short_display_path(s));
             ParsedCommand::Search {
@@ -1550,14 +2306,75 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
             }
         }
         Some((head, tail)) if head == "cat" => {
-            // Support both `cat <file>` and `cat -- <file>` forms.
-            let effective_tail: &[String] = if tail.first().map(String::as_str) == Some("--") {
-                &tail[1..]
+            if let Some(path) = single_non_flag_operand(tail, &[]) {
+                let name = short_display_path(&path);
+                ParsedCommand::Read {
+                    cmd: shlex_join(main_cmd),
+                    name,
+                    path: PathBuf::from(path),
+                }
             } else {
-                tail
-            };
-            if effective_tail.len() == 1 {
-                let path = effective_tail[0].clone();
+                ParsedCommand::Unknown {
+                    cmd: shlex_join(main_cmd),
+                }
+            }
+        }
+        Some((head, tail)) if matches!(head.as_str(), "bat" | "batcat") => {
+            if let Some(path) = single_non_flag_operand(
+                tail,
+                &[
+                    "--theme",
+                    "--language",
+                    "--style",
+                    "--terminal-width",
+                    "--tabs",
+                    "--line-range",
+                    "--map-syntax",
+                ],
+            ) {
+                let name = short_display_path(&path);
+                ParsedCommand::Read {
+                    cmd: shlex_join(main_cmd),
+                    name,
+                    path: PathBuf::from(path),
+                }
+            } else {
+                ParsedCommand::Unknown {
+                    cmd: shlex_join(main_cmd),
+                }
+            }
+        }
+        Some((head, tail)) if head == "less" => {
+            if let Some(path) = single_non_flag_operand(
+                tail,
+                &[
+                    "-p",
+                    "-P",
+                    "-x",
+                    "-y",
+                    "-z",
+                    "-j",
+                    "--pattern",
+                    "--prompt",
+                    "--tabs",
+                    "--shift",
+                    "--jump-target",
+                ],
+            ) {
+                let name = short_display_path(&path);
+                ParsedCommand::Read {
+                    cmd: shlex_join(main_cmd),
+                    name,
+                    path: PathBuf::from(path),
+                }
+            } else {
+                ParsedCommand::Unknown {
+                    cmd: shlex_join(main_cmd),
+                }
+            }
+        }
+        Some((head, tail)) if head == "more" => {
+            if let Some(path) = single_non_flag_operand(tail, &[]) {
                 let name = short_display_path(&path);
                 ParsedCommand::Read {
                     cmd: shlex_join(main_cmd),
@@ -1674,6 +2491,20 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
                 cmd: shlex_join(main_cmd),
             }
         }
+        Some((head, tail)) if head == "awk" => {
+            if let Some(path) = awk_data_file_operand(tail) {
+                let name = short_display_path(&path);
+                ParsedCommand::Read {
+                    cmd: shlex_join(main_cmd),
+                    name,
+                    path: PathBuf::from(path),
+                }
+            } else {
+                ParsedCommand::Unknown {
+                    cmd: shlex_join(main_cmd),
+                }
+            }
+        }
         Some((head, tail)) if head == "nl" => {
             // Avoid treating option values as paths (e.g., nl -s "  ").
             let candidates = skip_flag_values(tail, &["-s", "-w", "-v", "-i", "-b"]);
@@ -1691,19 +2522,25 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
                 }
             }
         }
-        Some((head, tail))
-            if head == "sed"
-                && tail.len() >= 3
-                && tail[0] == "-n"
-                && is_valid_sed_n_arg(tail.get(1).map(String::as_str)) =>
-        {
-            if let Some(path) = tail.get(2) {
-                let path = path.clone();
+        Some((head, tail)) if head == "sed" => {
+            if let Some(path) = sed_read_path(tail) {
                 let name = short_display_path(&path);
                 ParsedCommand::Read {
                     cmd: shlex_join(main_cmd),
                     name,
                     path: PathBuf::from(path),
+                }
+            } else {
+                ParsedCommand::Unknown {
+                    cmd: shlex_join(main_cmd),
+                }
+            }
+        }
+        Some((head, tail)) if is_python_command(head) => {
+            if python_walks_files(tail) {
+                ParsedCommand::ListFiles {
+                    cmd: shlex_join(main_cmd),
+                    path: None,
                 }
             } else {
                 ParsedCommand::Unknown {

@@ -10,7 +10,10 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 portable-pty = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio = { workspace = true, features = ["io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 filedescriptor = "0.8.3"
@@ -27,3 +30,5 @@ winapi = { version = "0.3.9", features = [
     "winerror",
     "winnt",
 ] }
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }

@@ -1,11 +1,16 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::ffi::OsStr;
 use std::fs::File;
+use std::fs::FileTimes;
 use std::fs::{self};
 use std::io::Write;
 use std::path::Path;
 
+use chrono::TimeZone;
+use pretty_assertions::assert_eq;
 use tempfile::TempDir;
+use time::Duration;
 use time::OffsetDateTime;
 use time::PrimitiveDateTime;
 use time::format_description::FormatItem;
@@ -13,12 +18,16 @@ use time::macros::format_description;
 use uuid::Uuid;
 
 use crate::rollout::INTERACTIVE_SESSION_SOURCES;
-use crate::rollout::list::ConversationItem;
-use crate::rollout::list::ConversationsPage;
 use crate::rollout::list::Cursor;
-use crate::rollout::list::get_conversations;
+use crate::rollout::list::ThreadItem;
+use crate::rollout::list::ThreadSortKey;
+use crate::rollout::list::ThreadsPage;
+use crate::rollout::list::get_threads;
+use crate::rollout::list::read_head_for_summary;
+use crate::rollout::recorder::RolloutRecorder;
+use crate::rollout::rollout_date_parts;
 use anyhow::Result;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
@@ -37,6 +46,280 @@ fn provider_vec(providers: &[&str]) -> Vec<String> {
         .iter()
         .map(std::string::ToString::to_string)
         .collect()
+}
+
+fn thread_id_from_uuid(uuid: Uuid) -> ThreadId {
+    ThreadId::from_string(&uuid.to_string()).expect("valid thread id")
+}
+
+async fn insert_state_db_thread(
+    home: &Path,
+    thread_id: ThreadId,
+    rollout_path: &Path,
+    archived: bool,
+) {
+    let runtime =
+        codex_state::StateRuntime::init(home.to_path_buf(), TEST_PROVIDER.to_string(), None)
+            .await
+            .expect("state db should initialize");
+    runtime
+        .mark_backfill_complete(None)
+        .await
+        .expect("backfill should be complete");
+    let created_at = chrono::Utc
+        .with_ymd_and_hms(2025, 1, 3, 12, 0, 0)
+        .single()
+        .expect("valid datetime");
+    let mut builder = codex_state::ThreadMetadataBuilder::new(
+        thread_id,
+        rollout_path.to_path_buf(),
+        created_at,
+        SessionSource::Cli,
+    );
+    builder.model_provider = Some(TEST_PROVIDER.to_string());
+    builder.cwd = home.to_path_buf();
+    if archived {
+        builder.archived_at = Some(created_at);
+    }
+    let mut metadata = builder.build(TEST_PROVIDER);
+    metadata.first_user_message = Some("Hello from user".to_string());
+    runtime
+        .upsert_thread(&metadata)
+        .await
+        .expect("state db upsert should succeed");
+}
+
+#[tokio::test]
+async fn list_threads_prefers_state_db_when_available() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+    let fs_uuid = Uuid::from_u128(101);
+    write_session_file(
+        home,
+        "2025-01-03T13-00-00",
+        fs_uuid,
+        1,
+        Some(SessionSource::Cli),
+    )
+    .unwrap();
+
+    let db_uuid = Uuid::from_u128(102);
+    let db_thread_id = ThreadId::from_string(&db_uuid.to_string()).expect("valid thread id");
+    let db_rollout_path = home.join(format!(
+        "sessions/2025/01/03/rollout-2025-01-03T12-00-00-{db_uuid}.jsonl"
+    ));
+    insert_state_db_thread(home, db_thread_id, db_rollout_path.as_path(), false).await;
+
+    let page = RolloutRecorder::list_threads(
+        home,
+        10,
+        None,
+        ThreadSortKey::CreatedAt,
+        NO_SOURCE_FILTER,
+        None,
+        TEST_PROVIDER,
+    )
+    .await
+    .expect("thread listing should succeed");
+
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].path, db_rollout_path);
+    assert_eq!(page.items[0].thread_id, Some(db_thread_id));
+    assert_eq!(page.items[0].cwd, Some(home.to_path_buf()));
+    assert_eq!(
+        page.items[0].first_user_message.as_deref(),
+        Some("Hello from user")
+    );
+}
+
+#[tokio::test]
+async fn list_archived_threads_prefers_state_db_when_available() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+    let archived_root = home.join("archived_sessions");
+    fs::create_dir_all(&archived_root).unwrap();
+    let fs_uuid = Uuid::from_u128(201);
+    let fs_path = archived_root.join(format!("rollout-2025-01-03T13-00-00-{fs_uuid}.jsonl"));
+    fs::write(&fs_path, "{\"type\":\"session_meta\",\"payload\":{}}\n").unwrap();
+
+    let db_uuid = Uuid::from_u128(202);
+    let db_thread_id = ThreadId::from_string(&db_uuid.to_string()).expect("valid thread id");
+    let db_rollout_path =
+        archived_root.join(format!("rollout-2025-01-03T12-00-00-{db_uuid}.jsonl"));
+    insert_state_db_thread(home, db_thread_id, db_rollout_path.as_path(), true).await;
+
+    let page = RolloutRecorder::list_archived_threads(
+        home,
+        10,
+        None,
+        ThreadSortKey::CreatedAt,
+        NO_SOURCE_FILTER,
+        None,
+        TEST_PROVIDER,
+    )
+    .await
+    .expect("archived thread listing should succeed");
+
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].path, db_rollout_path);
+}
+
+#[tokio::test]
+async fn list_threads_db_excludes_archived_entries() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+    let sessions_root = home.join("sessions/2025/01/03");
+    let archived_root = home.join("archived_sessions");
+    fs::create_dir_all(&sessions_root).unwrap();
+    fs::create_dir_all(&archived_root).unwrap();
+
+    let active_uuid = Uuid::from_u128(211);
+    let active_thread_id =
+        ThreadId::from_string(&active_uuid.to_string()).expect("valid active thread id");
+    let active_rollout_path =
+        sessions_root.join(format!("rollout-2025-01-03T12-00-00-{active_uuid}.jsonl"));
+    insert_state_db_thread(home, active_thread_id, active_rollout_path.as_path(), false).await;
+
+    let archived_uuid = Uuid::from_u128(212);
+    let archived_thread_id =
+        ThreadId::from_string(&archived_uuid.to_string()).expect("valid archived thread id");
+    let archived_rollout_path =
+        archived_root.join(format!("rollout-2025-01-03T11-00-00-{archived_uuid}.jsonl"));
+    insert_state_db_thread(
+        home,
+        archived_thread_id,
+        archived_rollout_path.as_path(),
+        true,
+    )
+    .await;
+
+    let page = RolloutRecorder::list_threads(
+        home,
+        10,
+        None,
+        ThreadSortKey::CreatedAt,
+        NO_SOURCE_FILTER,
+        None,
+        TEST_PROVIDER,
+    )
+    .await
+    .expect("thread listing should succeed");
+
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].path, active_rollout_path);
+}
+
+#[tokio::test]
+async fn list_threads_falls_back_to_files_when_state_db_is_unavailable() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+    let fs_uuid = Uuid::from_u128(301);
+    write_session_file(
+        home,
+        "2025-01-03T13-00-00",
+        fs_uuid,
+        1,
+        Some(SessionSource::Cli),
+    )
+    .unwrap();
+
+    let page = RolloutRecorder::list_threads(
+        home,
+        10,
+        None,
+        ThreadSortKey::CreatedAt,
+        NO_SOURCE_FILTER,
+        None,
+        TEST_PROVIDER,
+    )
+    .await
+    .expect("thread listing should succeed");
+
+    assert_eq!(page.items.len(), 1);
+    let file_name = page.items[0]
+        .path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .expect("rollout file name should be utf8");
+    assert!(
+        file_name.contains(&fs_uuid.to_string()),
+        "expected file path from filesystem listing, got: {file_name}"
+    );
+}
+
+#[tokio::test]
+async fn find_thread_path_falls_back_when_db_path_is_stale() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+    let uuid = Uuid::from_u128(302);
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+    let ts = "2025-01-03T13-00-00";
+    write_session_file(home, ts, uuid, 1, Some(SessionSource::Cli)).unwrap();
+    let fs_rollout_path = home.join(format!("sessions/2025/01/03/rollout-{ts}-{uuid}.jsonl"));
+
+    let stale_db_path = home.join(format!(
+        "sessions/2099/01/01/rollout-2099-01-01T00-00-00-{uuid}.jsonl"
+    ));
+    insert_state_db_thread(home, thread_id, stale_db_path.as_path(), false).await;
+
+    let found = crate::rollout::find_thread_path_by_id_str(home, &uuid.to_string())
+        .await
+        .expect("lookup should succeed");
+    assert_eq!(found, Some(fs_rollout_path.clone()));
+    assert_state_db_rollout_path(home, thread_id, Some(fs_rollout_path.as_path())).await;
+}
+
+#[tokio::test]
+async fn find_thread_path_repairs_missing_db_row_after_filesystem_fallback() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+    let uuid = Uuid::from_u128(303);
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+    let ts = "2025-01-03T13-00-00";
+    write_session_file(home, ts, uuid, 1, Some(SessionSource::Cli)).unwrap();
+    let fs_rollout_path = home.join(format!("sessions/2025/01/03/rollout-{ts}-{uuid}.jsonl"));
+
+    // Create an empty state DB so lookup takes the DB-first path and then falls back to files.
+    let _runtime =
+        codex_state::StateRuntime::init(home.to_path_buf(), TEST_PROVIDER.to_string(), None)
+            .await
+            .expect("state db should initialize");
+    _runtime
+        .mark_backfill_complete(None)
+        .await
+        .expect("backfill should be complete");
+
+    let found = crate::rollout::find_thread_path_by_id_str(home, &uuid.to_string())
+        .await
+        .expect("lookup should succeed");
+    assert_eq!(found, Some(fs_rollout_path.clone()));
+    assert_state_db_rollout_path(home, thread_id, Some(fs_rollout_path.as_path())).await;
+}
+
+#[test]
+fn rollout_date_parts_extracts_directory_components() {
+    let file_name = OsStr::new("rollout-2025-03-01T09-00-00-123.jsonl");
+    let parts = rollout_date_parts(file_name);
+    assert_eq!(
+        parts,
+        Some(("2025".to_string(), "03".to_string(), "01".to_string()))
+    );
+}
+
+async fn assert_state_db_rollout_path(
+    home: &Path,
+    thread_id: ThreadId,
+    expected_path: Option<&Path>,
+) {
+    let runtime =
+        codex_state::StateRuntime::init(home.to_path_buf(), TEST_PROVIDER.to_string(), None)
+            .await
+            .expect("state db should initialize");
+    let path = runtime
+        .find_rollout_path_by_id(thread_id, Some(false))
+        .await
+        .expect("state db lookup should succeed");
+    assert_eq!(path.as_deref(), expected_path);
 }
 
 fn write_session_file(
@@ -83,10 +366,10 @@ fn write_session_file_with_provider(
     let mut payload = serde_json::json!({
         "id": uuid,
         "timestamp": ts_str,
-        "instructions": null,
         "cwd": ".",
         "originator": "test_originator",
         "cli_version": "test_version",
+        "base_instructions": null,
     });
 
     if let Some(source) = source {
@@ -122,7 +405,108 @@ fn write_session_file_with_provider(
         });
         writeln!(file, "{rec}")?;
     }
+    let times = FileTimes::new().set_modified(dt.into());
+    file.set_times(times)?;
     Ok((dt, uuid))
+}
+
+fn write_session_file_with_delayed_user_event(
+    root: &Path,
+    ts_str: &str,
+    uuid: Uuid,
+    meta_lines_before_user: usize,
+) -> std::io::Result<()> {
+    let format: &[FormatItem] =
+        format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
+    let dt = PrimitiveDateTime::parse(ts_str, format)
+        .unwrap()
+        .assume_utc();
+    let dir = root
+        .join("sessions")
+        .join(format!("{:04}", dt.year()))
+        .join(format!("{:02}", u8::from(dt.month())))
+        .join(format!("{:02}", dt.day()));
+    fs::create_dir_all(&dir)?;
+
+    let filename = format!("rollout-{ts_str}-{uuid}.jsonl");
+    let file_path = dir.join(filename);
+    let mut file = File::create(file_path)?;
+
+    for i in 0..meta_lines_before_user {
+        let id = if i == 0 {
+            uuid
+        } else {
+            Uuid::from_u128(100 + i as u128)
+        };
+        let payload = serde_json::json!({
+            "id": id,
+            "timestamp": ts_str,
+            "cwd": ".",
+            "originator": "test_originator",
+            "cli_version": "test_version",
+            "source": "vscode",
+            "model_provider": "test-provider",
+        });
+        let meta = serde_json::json!({
+            "timestamp": ts_str,
+            "type": "session_meta",
+            "payload": payload,
+        });
+        writeln!(file, "{meta}")?;
+    }
+
+    let user_event = serde_json::json!({
+        "timestamp": ts_str,
+        "type": "event_msg",
+        "payload": {"type": "user_message", "message": "Hello from user", "kind": "plain"}
+    });
+    writeln!(file, "{user_event}")?;
+
+    let times = FileTimes::new().set_modified(dt.into());
+    file.set_times(times)?;
+    Ok(())
+}
+
+fn write_session_file_with_meta_payload(
+    root: &Path,
+    ts_str: &str,
+    uuid: Uuid,
+    payload: serde_json::Value,
+) -> std::io::Result<()> {
+    let format: &[FormatItem] =
+        format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
+    let dt = PrimitiveDateTime::parse(ts_str, format)
+        .unwrap()
+        .assume_utc();
+    let dir = root
+        .join("sessions")
+        .join(format!("{:04}", dt.year()))
+        .join(format!("{:02}", u8::from(dt.month())))
+        .join(format!("{:02}", dt.day()));
+    fs::create_dir_all(&dir)?;
+
+    let filename = format!("rollout-{ts_str}-{uuid}.jsonl");
+    let file_path = dir.join(filename);
+    let mut file = File::create(file_path)?;
+
+    let meta = serde_json::json!({
+        "timestamp": ts_str,
+        "type": "session_meta",
+        "payload": payload,
+    });
+    writeln!(file, "{meta}")?;
+
+    let user_event = serde_json::json!({
+        "timestamp": ts_str,
+        "type": "event_msg",
+        "payload": {"type": "user_message", "message": "Hello from user", "kind": "plain"}
+    });
+    writeln!(file, "{user_event}")?;
+
+    let times = FileTimes::new().set_modified(dt.into());
+    file.set_times(times)?;
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -162,10 +546,11 @@ async fn test_list_conversations_latest_first() {
     .unwrap();
 
     let provider_filter = provider_vec(&[TEST_PROVIDER]);
-    let page = get_conversations(
+    let page = get_threads(
         home,
         10,
         None,
+        ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
@@ -193,57 +578,50 @@ async fn test_list_conversations_latest_first() {
         .join("01")
         .join(format!("rollout-2025-01-01T12-00-00-{u1}.jsonl"));
 
-    let head_3 = vec![serde_json::json!({
-        "id": u3,
-        "timestamp": "2025-01-03T12-00-00",
-        "instructions": null,
-        "cwd": ".",
-        "originator": "test_originator",
-        "cli_version": "test_version",
-        "source": "vscode",
-        "model_provider": "test-provider",
-    })];
-    let head_2 = vec![serde_json::json!({
-        "id": u2,
-        "timestamp": "2025-01-02T12-00-00",
-        "instructions": null,
-        "cwd": ".",
-        "originator": "test_originator",
-        "cli_version": "test_version",
-        "source": "vscode",
-        "model_provider": "test-provider",
-    })];
-    let head_1 = vec![serde_json::json!({
-        "id": u1,
-        "timestamp": "2025-01-01T12-00-00",
-        "instructions": null,
-        "cwd": ".",
-        "originator": "test_originator",
-        "cli_version": "test_version",
-        "source": "vscode",
-        "model_provider": "test-provider",
-    })];
-
     let updated_times: Vec<Option<String>> =
         page.items.iter().map(|i| i.updated_at.clone()).collect();
 
-    let expected = ConversationsPage {
+    let expected = ThreadsPage {
         items: vec![
-            ConversationItem {
+            ThreadItem {
                 path: p1,
-                head: head_3,
+                thread_id: Some(thread_id_from_uuid(u3)),
+                first_user_message: Some("Hello from user".to_string()),
+                cwd: Some(Path::new(".").to_path_buf()),
+                git_branch: None,
+                git_sha: None,
+                git_origin_url: None,
+                source: Some(SessionSource::VSCode),
+                model_provider: Some(TEST_PROVIDER.to_string()),
+                cli_version: Some("test_version".to_string()),
                 created_at: Some("2025-01-03T12-00-00".into()),
                 updated_at: updated_times.first().cloned().flatten(),
             },
-            ConversationItem {
+            ThreadItem {
                 path: p2,
-                head: head_2,
+                thread_id: Some(thread_id_from_uuid(u2)),
+                first_user_message: Some("Hello from user".to_string()),
+                cwd: Some(Path::new(".").to_path_buf()),
+                git_branch: None,
+                git_sha: None,
+                git_origin_url: None,
+                source: Some(SessionSource::VSCode),
+                model_provider: Some(TEST_PROVIDER.to_string()),
+                cli_version: Some("test_version".to_string()),
                 created_at: Some("2025-01-02T12-00-00".into()),
                 updated_at: updated_times.get(1).cloned().flatten(),
             },
-            ConversationItem {
+            ThreadItem {
                 path: p3,
-                head: head_1,
+                thread_id: Some(thread_id_from_uuid(u1)),
+                first_user_message: Some("Hello from user".to_string()),
+                cwd: Some(Path::new(".").to_path_buf()),
+                git_branch: None,
+                git_sha: None,
+                git_origin_url: None,
+                source: Some(SessionSource::VSCode),
+                model_provider: Some(TEST_PROVIDER.to_string()),
+                cli_version: Some("test_version".to_string()),
                 created_at: Some("2025-01-01T12-00-00".into()),
                 updated_at: updated_times.get(2).cloned().flatten(),
             },
@@ -311,10 +689,11 @@ async fn test_pagination_cursor() {
     .unwrap();
 
     let provider_filter = provider_vec(&[TEST_PROVIDER]);
-    let page1 = get_conversations(
+    let page1 = get_threads(
         home,
         2,
         None,
+        ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
@@ -333,41 +712,37 @@ async fn test_pagination_cursor() {
         .join("03")
         .join("04")
         .join(format!("rollout-2025-03-04T09-00-00-{u4}.jsonl"));
-    let head_5 = vec![serde_json::json!({
-        "id": u5,
-        "timestamp": "2025-03-05T09-00-00",
-        "instructions": null,
-        "cwd": ".",
-        "originator": "test_originator",
-        "cli_version": "test_version",
-        "source": "vscode",
-        "model_provider": "test-provider",
-    })];
-    let head_4 = vec![serde_json::json!({
-        "id": u4,
-        "timestamp": "2025-03-04T09-00-00",
-        "instructions": null,
-        "cwd": ".",
-        "originator": "test_originator",
-        "cli_version": "test_version",
-        "source": "vscode",
-        "model_provider": "test-provider",
-    })];
     let updated_page1: Vec<Option<String>> =
         page1.items.iter().map(|i| i.updated_at.clone()).collect();
     let expected_cursor1: Cursor =
         serde_json::from_str(&format!("\"2025-03-04T09-00-00|{u4}\"")).unwrap();
-    let expected_page1 = ConversationsPage {
+    let expected_page1 = ThreadsPage {
         items: vec![
-            ConversationItem {
+            ThreadItem {
                 path: p5,
-                head: head_5,
+                thread_id: Some(thread_id_from_uuid(u5)),
+                first_user_message: Some("Hello from user".to_string()),
+                cwd: Some(Path::new(".").to_path_buf()),
+                git_branch: None,
+                git_sha: None,
+                git_origin_url: None,
+                source: Some(SessionSource::VSCode),
+                model_provider: Some(TEST_PROVIDER.to_string()),
+                cli_version: Some("test_version".to_string()),
                 created_at: Some("2025-03-05T09-00-00".into()),
                 updated_at: updated_page1.first().cloned().flatten(),
             },
-            ConversationItem {
+            ThreadItem {
                 path: p4,
-                head: head_4,
+                thread_id: Some(thread_id_from_uuid(u4)),
+                first_user_message: Some("Hello from user".to_string()),
+                cwd: Some(Path::new(".").to_path_buf()),
+                git_branch: None,
+                git_sha: None,
+                git_origin_url: None,
+                source: Some(SessionSource::VSCode),
+                model_provider: Some(TEST_PROVIDER.to_string()),
+                cli_version: Some("test_version".to_string()),
                 created_at: Some("2025-03-04T09-00-00".into()),
                 updated_at: updated_page1.get(1).cloned().flatten(),
             },
@@ -378,10 +753,11 @@ async fn test_pagination_cursor() {
     };
     assert_eq!(page1, expected_page1);
 
-    let page2 = get_conversations(
+    let page2 = get_threads(
         home,
         2,
         page1.next_cursor.as_ref(),
+        ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
@@ -400,41 +776,37 @@ async fn test_pagination_cursor() {
         .join("03")
         .join("02")
         .join(format!("rollout-2025-03-02T09-00-00-{u2}.jsonl"));
-    let head_3 = vec![serde_json::json!({
-        "id": u3,
-        "timestamp": "2025-03-03T09-00-00",
-        "instructions": null,
-        "cwd": ".",
-        "originator": "test_originator",
-        "cli_version": "test_version",
-        "source": "vscode",
-        "model_provider": "test-provider",
-    })];
-    let head_2 = vec![serde_json::json!({
-        "id": u2,
-        "timestamp": "2025-03-02T09-00-00",
-        "instructions": null,
-        "cwd": ".",
-        "originator": "test_originator",
-        "cli_version": "test_version",
-        "source": "vscode",
-        "model_provider": "test-provider",
-    })];
     let updated_page2: Vec<Option<String>> =
         page2.items.iter().map(|i| i.updated_at.clone()).collect();
     let expected_cursor2: Cursor =
         serde_json::from_str(&format!("\"2025-03-02T09-00-00|{u2}\"")).unwrap();
-    let expected_page2 = ConversationsPage {
+    let expected_page2 = ThreadsPage {
         items: vec![
-            ConversationItem {
+            ThreadItem {
                 path: p3,
-                head: head_3,
+                thread_id: Some(thread_id_from_uuid(u3)),
+                first_user_message: Some("Hello from user".to_string()),
+                cwd: Some(Path::new(".").to_path_buf()),
+                git_branch: None,
+                git_sha: None,
+                git_origin_url: None,
+                source: Some(SessionSource::VSCode),
+                model_provider: Some(TEST_PROVIDER.to_string()),
+                cli_version: Some("test_version".to_string()),
                 created_at: Some("2025-03-03T09-00-00".into()),
                 updated_at: updated_page2.first().cloned().flatten(),
             },
-            ConversationItem {
+            ThreadItem {
                 path: p2,
-                head: head_2,
+                thread_id: Some(thread_id_from_uuid(u2)),
+                first_user_message: Some("Hello from user".to_string()),
+                cwd: Some(Path::new(".").to_path_buf()),
+                git_branch: None,
+                git_sha: None,
+                git_origin_url: None,
+                source: Some(SessionSource::VSCode),
+                model_provider: Some(TEST_PROVIDER.to_string()),
+                cli_version: Some("test_version".to_string()),
                 created_at: Some("2025-03-02T09-00-00".into()),
                 updated_at: updated_page2.get(1).cloned().flatten(),
             },
@@ -445,10 +817,11 @@ async fn test_pagination_cursor() {
     };
     assert_eq!(page2, expected_page2);
 
-    let page3 = get_conversations(
+    let page3 = get_threads(
         home,
         2,
         page2.next_cursor.as_ref(),
+        ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
@@ -461,22 +834,20 @@ async fn test_pagination_cursor() {
         .join("03")
         .join("01")
         .join(format!("rollout-2025-03-01T09-00-00-{u1}.jsonl"));
-    let head_1 = vec![serde_json::json!({
-        "id": u1,
-        "timestamp": "2025-03-01T09-00-00",
-        "instructions": null,
-        "cwd": ".",
-        "originator": "test_originator",
-        "cli_version": "test_version",
-        "source": "vscode",
-        "model_provider": "test-provider",
-    })];
     let updated_page3: Vec<Option<String>> =
         page3.items.iter().map(|i| i.updated_at.clone()).collect();
-    let expected_page3 = ConversationsPage {
-        items: vec![ConversationItem {
+    let expected_page3 = ThreadsPage {
+        items: vec![ThreadItem {
             path: p1,
-            head: head_1,
+            thread_id: Some(thread_id_from_uuid(u1)),
+            first_user_message: Some("Hello from user".to_string()),
+            cwd: Some(Path::new(".").to_path_buf()),
+            git_branch: None,
+            git_sha: None,
+            git_origin_url: None,
+            source: Some(SessionSource::VSCode),
+            model_provider: Some(TEST_PROVIDER.to_string()),
+            cli_version: Some("test_version".to_string()),
             created_at: Some("2025-03-01T09-00-00".into()),
             updated_at: updated_page3.first().cloned().flatten(),
         }],
@@ -488,7 +859,32 @@ async fn test_pagination_cursor() {
 }
 
 #[tokio::test]
-async fn test_get_conversation_contents() {
+async fn test_list_threads_scans_past_head_for_user_event() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+
+    let uuid = Uuid::from_u128(99);
+    let ts = "2025-05-01T10-30-00";
+    write_session_file_with_delayed_user_event(home, ts, uuid, 12).unwrap();
+
+    let provider_filter = provider_vec(&[TEST_PROVIDER]);
+    let page = get_threads(
+        home,
+        10,
+        None,
+        ThreadSortKey::CreatedAt,
+        INTERACTIVE_SESSION_SOURCES,
+        Some(provider_filter.as_slice()),
+        TEST_PROVIDER,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(page.items.len(), 1);
+}
+
+#[tokio::test]
+async fn test_get_thread_contents() {
     let temp = TempDir::new().unwrap();
     let home = temp.path();
 
@@ -497,10 +893,11 @@ async fn test_get_conversation_contents() {
     write_session_file(home, ts, uuid, 2, Some(SessionSource::VSCode)).unwrap();
 
     let provider_filter = provider_vec(&[TEST_PROVIDER]);
-    let page = get_conversations(
+    let page = get_threads(
         home,
         1,
         None,
+        ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
@@ -518,20 +915,18 @@ async fn test_get_conversation_contents() {
         .join("04")
         .join("01")
         .join(format!("rollout-2025-04-01T10-30-00-{uuid}.jsonl"));
-    let expected_head = vec![serde_json::json!({
-        "id": uuid,
-        "timestamp": ts,
-        "instructions": null,
-        "cwd": ".",
-        "originator": "test_originator",
-        "cli_version": "test_version",
-        "source": "vscode",
-        "model_provider": "test-provider",
-    })];
-    let expected_page = ConversationsPage {
-        items: vec![ConversationItem {
+    let expected_page = ThreadsPage {
+        items: vec![ThreadItem {
             path: expected_path,
-            head: expected_head,
+            thread_id: Some(thread_id_from_uuid(uuid)),
+            first_user_message: Some("Hello from user".to_string()),
+            cwd: Some(Path::new(".").to_path_buf()),
+            git_branch: None,
+            git_sha: None,
+            git_origin_url: None,
+            source: Some(SessionSource::VSCode),
+            model_provider: Some(TEST_PROVIDER.to_string()),
+            cli_version: Some("test_version".to_string()),
             created_at: Some(ts.into()),
             updated_at: page.items[0].updated_at.clone(),
         }],
@@ -548,10 +943,10 @@ async fn test_get_conversation_contents() {
         "payload": {
             "id": uuid,
             "timestamp": ts,
-            "instructions": null,
             "cwd": ".",
             "originator": "test_originator",
             "cli_version": "test_version",
+            "base_instructions": null,
             "source": "vscode",
             "model_provider": "test-provider",
         }
@@ -568,6 +963,137 @@ async fn test_get_conversation_contents() {
 }
 
 #[tokio::test]
+async fn test_base_instructions_missing_in_meta_defaults_to_null() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+
+    let ts = "2025-04-02T10-30-00";
+    let uuid = Uuid::from_u128(101);
+    let payload = serde_json::json!({
+        "id": uuid,
+        "timestamp": ts,
+        "cwd": ".",
+        "originator": "test_originator",
+        "cli_version": "test_version",
+        "source": "vscode",
+        "model_provider": "test-provider",
+    });
+    write_session_file_with_meta_payload(home, ts, uuid, payload).unwrap();
+
+    let provider_filter = provider_vec(&[TEST_PROVIDER]);
+    let page = get_threads(
+        home,
+        1,
+        None,
+        ThreadSortKey::CreatedAt,
+        INTERACTIVE_SESSION_SOURCES,
+        Some(provider_filter.as_slice()),
+        TEST_PROVIDER,
+    )
+    .await
+    .unwrap();
+
+    let head = read_head_for_summary(&page.items[0].path)
+        .await
+        .expect("session meta head");
+    let first = head.first().expect("first head entry");
+    assert_eq!(
+        first.get("base_instructions"),
+        Some(&serde_json::Value::Null)
+    );
+}
+
+#[tokio::test]
+async fn test_base_instructions_present_in_meta_is_preserved() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+
+    let ts = "2025-04-03T10-30-00";
+    let uuid = Uuid::from_u128(102);
+    let base_text = "Custom base instructions";
+    let payload = serde_json::json!({
+        "id": uuid,
+        "timestamp": ts,
+        "cwd": ".",
+        "originator": "test_originator",
+        "cli_version": "test_version",
+        "source": "vscode",
+        "model_provider": "test-provider",
+        "base_instructions": {"text": base_text},
+    });
+    write_session_file_with_meta_payload(home, ts, uuid, payload).unwrap();
+
+    let provider_filter = provider_vec(&[TEST_PROVIDER]);
+    let page = get_threads(
+        home,
+        1,
+        None,
+        ThreadSortKey::CreatedAt,
+        INTERACTIVE_SESSION_SOURCES,
+        Some(provider_filter.as_slice()),
+        TEST_PROVIDER,
+    )
+    .await
+    .unwrap();
+
+    let head = read_head_for_summary(&page.items[0].path)
+        .await
+        .expect("session meta head");
+    let first = head.first().expect("first head entry");
+    let base = first
+        .get("base_instructions")
+        .and_then(|value| value.get("text"))
+        .and_then(serde_json::Value::as_str);
+    assert_eq!(base, Some(base_text));
+}
+
+#[tokio::test]
+async fn test_created_at_sort_uses_file_mtime_for_updated_at() -> Result<()> {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+
+    let ts = "2025-06-01T08-00-00";
+    let uuid = Uuid::from_u128(43);
+    write_session_file(home, ts, uuid, 0, Some(SessionSource::VSCode)).unwrap();
+
+    let created = PrimitiveDateTime::parse(
+        ts,
+        format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]"),
+    )?
+    .assume_utc();
+    let updated = created + Duration::hours(2);
+    let expected_updated = updated.format(&time::format_description::well_known::Rfc3339)?;
+
+    let file_path = home
+        .join("sessions")
+        .join("2025")
+        .join("06")
+        .join("01")
+        .join(format!("rollout-{ts}-{uuid}.jsonl"));
+    let file = std::fs::OpenOptions::new().write(true).open(&file_path)?;
+    let times = FileTimes::new().set_modified(updated.into());
+    file.set_times(times)?;
+
+    let provider_filter = provider_vec(&[TEST_PROVIDER]);
+    let page = get_threads(
+        home,
+        1,
+        None,
+        ThreadSortKey::CreatedAt,
+        INTERACTIVE_SESSION_SOURCES,
+        Some(provider_filter.as_slice()),
+        TEST_PROVIDER,
+    )
+    .await?;
+
+    let item = page.items.first().expect("conversation item");
+    assert_eq!(item.created_at.as_deref(), Some(ts));
+    assert_eq!(item.updated_at.as_deref(), Some(expected_updated.as_str()));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_updated_at_uses_file_mtime() -> Result<()> {
     let temp = TempDir::new().unwrap();
     let home = temp.path();
@@ -579,19 +1105,21 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
     let file_path = day_dir.join(format!("rollout-{ts}-{uuid}.jsonl"));
     let mut file = File::create(&file_path)?;
 
-    let conversation_id = ConversationId::from_string(&uuid.to_string())?;
+    let conversation_id = ThreadId::from_string(&uuid.to_string())?;
     let meta_line = RolloutLine {
         timestamp: ts.to_string(),
         item: RolloutItem::SessionMeta(SessionMetaLine {
             meta: SessionMeta {
                 id: conversation_id,
+                forked_from_id: None,
                 timestamp: ts.to_string(),
-                instructions: None,
                 cwd: ".".into(),
                 originator: "test_originator".into(),
                 cli_version: "test_version".into(),
                 source: SessionSource::VSCode,
                 model_provider: Some("test-provider".into()),
+                base_instructions: None,
+                dynamic_tools: None,
             },
             git: None,
         }),
@@ -603,6 +1131,8 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
         item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
             message: "hello".into(),
             images: None,
+            text_elements: Vec::new(),
+            local_images: Vec::new(),
         })),
     };
     writeln!(file, "{}", serde_json::to_string(&user_event_line)?)?;
@@ -617,6 +1147,8 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
                 content: vec![ContentItem::OutputText {
                     text: format!("reply-{idx}"),
                 }],
+                end_turn: None,
+                phase: None,
             }),
         };
         writeln!(file, "{}", serde_json::to_string(&response_line)?)?;
@@ -624,10 +1156,11 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
     drop(file);
 
     let provider_filter = provider_vec(&[TEST_PROVIDER]);
-    let page = get_conversations(
+    let page = get_threads(
         home,
         1,
         None,
+        ThreadSortKey::UpdatedAt,
         INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
@@ -663,10 +1196,11 @@ async fn test_stable_ordering_same_second_pagination() {
     write_session_file(home, ts, u3, 0, Some(SessionSource::VSCode)).unwrap();
 
     let provider_filter = provider_vec(&[TEST_PROVIDER]);
-    let page1 = get_conversations(
+    let page1 = get_threads(
         home,
         2,
         None,
+        ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
@@ -686,32 +1220,36 @@ async fn test_stable_ordering_same_second_pagination() {
         .join("07")
         .join("01")
         .join(format!("rollout-2025-07-01T00-00-00-{u2}.jsonl"));
-    let head = |u: Uuid| -> Vec<serde_json::Value> {
-        vec![serde_json::json!({
-            "id": u,
-            "timestamp": ts,
-            "instructions": null,
-            "cwd": ".",
-            "originator": "test_originator",
-            "cli_version": "test_version",
-            "source": "vscode",
-            "model_provider": "test-provider",
-        })]
-    };
     let updated_page1: Vec<Option<String>> =
         page1.items.iter().map(|i| i.updated_at.clone()).collect();
     let expected_cursor1: Cursor = serde_json::from_str(&format!("\"{ts}|{u2}\"")).unwrap();
-    let expected_page1 = ConversationsPage {
+    let expected_page1 = ThreadsPage {
         items: vec![
-            ConversationItem {
+            ThreadItem {
                 path: p3,
-                head: head(u3),
+                thread_id: Some(thread_id_from_uuid(u3)),
+                first_user_message: Some("Hello from user".to_string()),
+                cwd: Some(Path::new(".").to_path_buf()),
+                git_branch: None,
+                git_sha: None,
+                git_origin_url: None,
+                source: Some(SessionSource::VSCode),
+                model_provider: Some(TEST_PROVIDER.to_string()),
+                cli_version: Some("test_version".to_string()),
                 created_at: Some(ts.to_string()),
                 updated_at: updated_page1.first().cloned().flatten(),
             },
-            ConversationItem {
+            ThreadItem {
                 path: p2,
-                head: head(u2),
+                thread_id: Some(thread_id_from_uuid(u2)),
+                first_user_message: Some("Hello from user".to_string()),
+                cwd: Some(Path::new(".").to_path_buf()),
+                git_branch: None,
+                git_sha: None,
+                git_origin_url: None,
+                source: Some(SessionSource::VSCode),
+                model_provider: Some(TEST_PROVIDER.to_string()),
+                cli_version: Some("test_version".to_string()),
                 created_at: Some(ts.to_string()),
                 updated_at: updated_page1.get(1).cloned().flatten(),
             },
@@ -722,10 +1260,11 @@ async fn test_stable_ordering_same_second_pagination() {
     };
     assert_eq!(page1, expected_page1);
 
-    let page2 = get_conversations(
+    let page2 = get_threads(
         home,
         2,
         page1.next_cursor.as_ref(),
+        ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
@@ -740,10 +1279,18 @@ async fn test_stable_ordering_same_second_pagination() {
         .join(format!("rollout-2025-07-01T00-00-00-{u1}.jsonl"));
     let updated_page2: Vec<Option<String>> =
         page2.items.iter().map(|i| i.updated_at.clone()).collect();
-    let expected_page2 = ConversationsPage {
-        items: vec![ConversationItem {
+    let expected_page2 = ThreadsPage {
+        items: vec![ThreadItem {
             path: p1,
-            head: head(u1),
+            thread_id: Some(thread_id_from_uuid(u1)),
+            first_user_message: Some("Hello from user".to_string()),
+            cwd: Some(Path::new(".").to_path_buf()),
+            git_branch: None,
+            git_sha: None,
+            git_origin_url: None,
+            source: Some(SessionSource::VSCode),
+            model_provider: Some(TEST_PROVIDER.to_string()),
+            cli_version: Some("test_version".to_string()),
             created_at: Some(ts.to_string()),
             updated_at: updated_page2.first().cloned().flatten(),
         }],
@@ -780,10 +1327,11 @@ async fn test_source_filter_excludes_non_matching_sessions() {
     .unwrap();
 
     let provider_filter = provider_vec(&[TEST_PROVIDER]);
-    let interactive_only = get_conversations(
+    let interactive_only = get_threads(
         home,
         10,
         None,
+        ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
@@ -801,9 +1349,17 @@ async fn test_source_filter_excludes_non_matching_sessions() {
         path.ends_with("rollout-2025-08-02T10-00-00-00000000-0000-0000-0000-00000000002a.jsonl")
     }));
 
-    let all_sessions = get_conversations(home, 10, None, NO_SOURCE_FILTER, None, TEST_PROVIDER)
-        .await
-        .unwrap();
+    let all_sessions = get_threads(
+        home,
+        10,
+        None,
+        ThreadSortKey::CreatedAt,
+        NO_SOURCE_FILTER,
+        None,
+        TEST_PROVIDER,
+    )
+    .await
+    .unwrap();
     let all_paths: Vec<_> = all_sessions
         .items
         .into_iter()
@@ -855,10 +1411,11 @@ async fn test_model_provider_filter_selects_only_matching_sessions() -> Result<(
     let openai_id_str = openai_id.to_string();
     let none_id_str = none_id.to_string();
     let openai_filter = provider_vec(&["openai"]);
-    let openai_sessions = get_conversations(
+    let openai_sessions = get_threads(
         home,
         10,
         None,
+        ThreadSortKey::CreatedAt,
         NO_SOURCE_FILTER,
         Some(openai_filter.as_slice()),
         "openai",
@@ -868,22 +1425,17 @@ async fn test_model_provider_filter_selects_only_matching_sessions() -> Result<(
     let openai_ids: Vec<_> = openai_sessions
         .items
         .iter()
-        .filter_map(|item| {
-            item.head
-                .first()
-                .and_then(|value| value.get("id"))
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string)
-        })
+        .filter_map(|item| item.thread_id.as_ref().map(ToString::to_string))
         .collect();
     assert!(openai_ids.contains(&openai_id_str));
     assert!(openai_ids.contains(&none_id_str));
 
     let beta_filter = provider_vec(&["beta"]);
-    let beta_sessions = get_conversations(
+    let beta_sessions = get_threads(
         home,
         10,
         None,
+        ThreadSortKey::CreatedAt,
         NO_SOURCE_FILTER,
         Some(beta_filter.as_slice()),
         "openai",
@@ -894,16 +1446,15 @@ async fn test_model_provider_filter_selects_only_matching_sessions() -> Result<(
     let beta_head = beta_sessions
         .items
         .first()
-        .and_then(|item| item.head.first())
-        .and_then(|value| value.get("id"))
-        .and_then(serde_json::Value::as_str);
-    assert_eq!(beta_head, Some(beta_id_str.as_str()));
+        .and_then(|item| item.thread_id.as_ref().map(ToString::to_string));
+    assert_eq!(beta_head.as_deref(), Some(beta_id_str.as_str()));
 
     let unknown_filter = provider_vec(&["unknown"]);
-    let unknown_sessions = get_conversations(
+    let unknown_sessions = get_threads(
         home,
         10,
         None,
+        ThreadSortKey::CreatedAt,
         NO_SOURCE_FILTER,
         Some(unknown_filter.as_slice()),
         "openai",
@@ -911,7 +1462,16 @@ async fn test_model_provider_filter_selects_only_matching_sessions() -> Result<(
     .await?;
     assert!(unknown_sessions.items.is_empty());
 
-    let all_sessions = get_conversations(home, 10, None, NO_SOURCE_FILTER, None, "openai").await?;
+    let all_sessions = get_threads(
+        home,
+        10,
+        None,
+        ThreadSortKey::CreatedAt,
+        NO_SOURCE_FILTER,
+        None,
+        "openai",
+    )
+    .await?;
     assert_eq!(all_sessions.items.len(), 3);
 
     Ok(())

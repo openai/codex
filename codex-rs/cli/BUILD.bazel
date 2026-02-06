@@ -1,0 +1,10 @@
+load("//:defs.bzl", "codex_rust_crate", "multiplatform_binaries")
+
+codex_rust_crate(
+    name = "cli",
+    crate_name = "codex_cli",
+)
+
+multiplatform_binaries(
+    name = "codex",
+)

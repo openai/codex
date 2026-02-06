@@ -54,9 +54,13 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     command: &[String],
     session_shell: &Shell,
 ) -> Vec<String> {
-    let Some(snapshot) = &session_shell.shell_snapshot else {
+    let Some(snapshot) = session_shell.shell_snapshot() else {
         return command.to_vec();
     };
+
+    if !snapshot.path.exists() {
+        return command.to_vec();
+    }
 
     if command.len() < 3 {
         return command.to_vec();

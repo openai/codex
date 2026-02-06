@@ -11,11 +11,11 @@ use ratatui::style::Color;
 use ratatui::widgets::Clear;
 use ratatui::widgets::WidgetRef;
 
-use codex_app_server_protocol::AuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 
 use crate::LoginStatus;
 use crate::onboarding::auth::AuthModeWidget;
+use crate::onboarding::auth::SignInOption;
 use crate::onboarding::auth::SignInState;
 use crate::onboarding::trust_directory::TrustDirectorySelection;
 use crate::onboarding::trust_directory::TrustDirectoryWidget;
@@ -92,8 +92,8 @@ impl OnboardingScreen {
         )));
         if show_login_screen {
             let highlighted_mode = match forced_login_method {
-                Some(ForcedLoginMethod::Api) => AuthMode::ApiKey,
-                _ => AuthMode::ChatGPT,
+                Some(ForcedLoginMethod::Api) => SignInOption::ApiKey,
+                _ => SignInOption::ChatGpt,
             };
             steps.push(Step::Auth(AuthModeWidget {
                 request_frame: tui.frame_requester(),
@@ -211,6 +211,9 @@ impl OnboardingScreen {
 
 impl KeyboardHandler for OnboardingScreen {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
+        if !matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+            return;
+        }
         let is_api_key_entry_active = self.is_api_key_entry_active();
         let should_quit = match key_event {
             KeyEvent {
@@ -311,6 +314,9 @@ impl WidgetRef for &OnboardingScreen {
             }
             let scratch_area = Rect::new(0, 0, width, max_h);
             let mut scratch = Buffer::empty(scratch_area);
+            if let Step::Welcome(widget) = step {
+                widget.update_layout_area(scratch_area);
+            }
             step.render_ref(scratch_area, &mut scratch);
             let h = used_rows(&scratch, width, max_h).min(max_h);
             if h > 0 {

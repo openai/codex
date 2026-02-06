@@ -2,7 +2,8 @@
 source: tui/src/bottom_pane/footer.rs
 expression: terminal.backend()
 ---
-"  / for commands                             shift + enter for newline          "
+"  / for commands                             ! for shell commands               "
+"  shift + enter for newline                  tab to queue message               "
 "  @ for file paths                           ctrl + v to paste images           "
 "  ctrl + g to edit in external editor        esc again to edit previous message "
 "  ctrl + c to exit                                                              "

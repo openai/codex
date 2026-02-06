@@ -3,7 +3,8 @@ import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 
-import { SandboxMode, ModelReasoningEffort, ApprovalMode } from "./threadOptions";
+import type { CodexConfigObject, CodexConfigValue } from "./codexOptions";
+import { SandboxMode, ModelReasoningEffort, ApprovalMode, WebSearchMode } from "./threadOptions";
 
 export type CodexExecArgs = {
   input: string;
@@ -30,7 +31,9 @@ export type CodexExecArgs = {
   signal?: AbortSignal;
   // --config sandbox_workspace_write.network_access
   networkAccessEnabled?: boolean;
-  // --config features.web_search_request
+  // --config web_search
+  webSearchMode?: WebSearchMode;
+  // legacy --config features.web_search_request
   webSearchEnabled?: boolean;
   // --config approval_policy
   approvalPolicy?: ApprovalMode;
@@ -42,14 +45,26 @@ const TYPESCRIPT_SDK_ORIGINATOR = "codex_sdk_ts";
 export class CodexExec {
   private executablePath: string;
   private envOverride?: Record<string, string>;
+  private configOverrides?: CodexConfigObject;
 
-  constructor(executablePath: string | null = null, env?: Record<string, string>) {
+  constructor(
+    executablePath: string | null = null,
+    env?: Record<string, string>,
+    configOverrides?: CodexConfigObject,
+  ) {
     this.executablePath = executablePath || findCodexPath();
     this.envOverride = env;
+    this.configOverrides = configOverrides;
   }
 
   async *run(args: CodexExecArgs): AsyncGenerator<string> {
     const commandArgs: string[] = ["exec", "--experimental-json"];
+
+    if (this.configOverrides) {
+      for (const override of serializeConfigOverrides(this.configOverrides)) {
+        commandArgs.push("--config", override);
+      }
+    }
 
     if (args.model) {
       commandArgs.push("--model", args.model);
@@ -88,22 +103,26 @@ export class CodexExec {
       );
     }
 
-    if (args.webSearchEnabled !== undefined) {
-      commandArgs.push("--config", `features.web_search_request=${args.webSearchEnabled}`);
+    if (args.webSearchMode) {
+      commandArgs.push("--config", `web_search="${args.webSearchMode}"`);
+    } else if (args.webSearchEnabled === true) {
+      commandArgs.push("--config", `web_search="live"`);
+    } else if (args.webSearchEnabled === false) {
+      commandArgs.push("--config", `web_search="disabled"`);
     }
 
     if (args.approvalPolicy) {
       commandArgs.push("--config", `approval_policy="${args.approvalPolicy}"`);
     }
 
+    if (args.threadId) {
+      commandArgs.push("resume", args.threadId);
+    }
+
     if (args.images?.length) {
       for (const image of args.images) {
         commandArgs.push("--image", image);
       }
-    }
-
-    if (args.threadId) {
-      commandArgs.push("resume", args.threadId);
     }
 
     const env: Record<string, string> = {};
@@ -153,6 +172,14 @@ export class CodexExec {
       });
     }
 
+    const exitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      (resolve) => {
+        child.once("exit", (code, signal) => {
+          resolve({ code, signal });
+        });
+      },
+    );
+
     const rl = readline.createInterface({
       input: child.stdout,
       crlfDelay: Infinity,
@@ -164,21 +191,13 @@ export class CodexExec {
         yield line as string;
       }
 
-      const exitCode = new Promise((resolve, reject) => {
-        child.once("exit", (code) => {
-          if (code === 0) {
-            resolve(code);
-          } else {
-            const stderrBuffer = Buffer.concat(stderrChunks);
-            reject(
-              new Error(`Codex Exec exited with code ${code}: ${stderrBuffer.toString("utf8")}`),
-            );
-          }
-        });
-      });
-
       if (spawnError) throw spawnError;
-      await exitCode;
+      const { code, signal } = await exitPromise;
+      if (code !== 0 || signal) {
+        const stderrBuffer = Buffer.concat(stderrChunks);
+        const detail = signal ? `signal ${signal}` : `code ${code ?? 1}`;
+        throw new Error(`Codex Exec exited with ${detail}: ${stderrBuffer.toString("utf8")}`);
+      }
     } finally {
       rl.close();
       child.removeAllListeners();
@@ -189,6 +208,94 @@ export class CodexExec {
       }
     }
   }
+}
+
+function serializeConfigOverrides(configOverrides: CodexConfigObject): string[] {
+  const overrides: string[] = [];
+  flattenConfigOverrides(configOverrides, "", overrides);
+  return overrides;
+}
+
+function flattenConfigOverrides(
+  value: CodexConfigValue,
+  prefix: string,
+  overrides: string[],
+): void {
+  if (!isPlainObject(value)) {
+    if (prefix) {
+      overrides.push(`${prefix}=${toTomlValue(value, prefix)}`);
+      return;
+    } else {
+      throw new Error("Codex config overrides must be a plain object");
+    }
+  }
+
+  const entries = Object.entries(value);
+  if (!prefix && entries.length === 0) {
+    return;
+  }
+
+  if (prefix && entries.length === 0) {
+    overrides.push(`${prefix}={}`);
+    return;
+  }
+
+  for (const [key, child] of entries) {
+    if (!key) {
+      throw new Error("Codex config override keys must be non-empty strings");
+    }
+    if (child === undefined) {
+      continue;
+    }
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (isPlainObject(child)) {
+      flattenConfigOverrides(child, path, overrides);
+    } else {
+      overrides.push(`${path}=${toTomlValue(child, path)}`);
+    }
+  }
+}
+
+function toTomlValue(value: CodexConfigValue, path: string): string {
+  if (typeof value === "string") {
+    return JSON.stringify(value);
+  } else if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new Error(`Codex config override at ${path} must be a finite number`);
+    }
+    return `${value}`;
+  } else if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  } else if (Array.isArray(value)) {
+    const rendered = value.map((item, index) => toTomlValue(item, `${path}[${index}]`));
+    return `[${rendered.join(", ")}]`;
+  } else if (isPlainObject(value)) {
+    const parts: string[] = [];
+    for (const [key, child] of Object.entries(value)) {
+      if (!key) {
+        throw new Error("Codex config override keys must be non-empty strings");
+      }
+      if (child === undefined) {
+        continue;
+      }
+      parts.push(`${formatTomlKey(key)} = ${toTomlValue(child, `${path}.${key}`)}`);
+    }
+    return `{${parts.join(", ")}}`;
+  } else if (value === null) {
+    throw new Error(`Codex config override at ${path} cannot be null`);
+  } else {
+    const typeName = typeof value;
+    throw new Error(`Unsupported Codex config override value at ${path}: ${typeName}`);
+  }
+}
+
+const TOML_BARE_KEY = /^[A-Za-z0-9_-]+$/;
+function formatTomlKey(key: string): string {
+  return TOML_BARE_KEY.test(key) ? key : JSON.stringify(key);
+}
+
+function isPlainObject(value: unknown): value is CodexConfigObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 const scriptFileName = fileURLToPath(import.meta.url);

@@ -10,13 +10,13 @@ This module is the canonical place to **load and describe Codex configuration la
 
 Exported from `codex_core::config_loader`:
 
-- `load_config_layers_state(codex_home, cwd_opt, cli_overrides, overrides) -> ConfigLayerStack`
+- `load_config_layers_state(codex_home, cwd_opt, cli_overrides, overrides, cloud_requirements) -> ConfigLayerStack`
 - `ConfigLayerStack`
   - `effective_config() -> toml::Value`
   - `origins() -> HashMap<String, ConfigLayerMetadata>`
   - `layers_high_to_low() -> Vec<ConfigLayer>`
   - `with_user_config(user_config) -> ConfigLayerStack`
-- `ConfigLayerEntry` (one layer’s `{name, config, version}`; `name` carries source metadata)
+- `ConfigLayerEntry` (one layer’s `{name, config, version, disabled_reason}`; `name` carries source metadata)
 - `LoaderOverrides` (test/override hooks for managed config sources)
 - `merge_toml_values(base, overlay)` (public helper used elsewhere)
 
@@ -29,7 +29,9 @@ Precedence is **top overrides bottom**:
 3. **Session flags** (CLI overrides, applied as dotted-path TOML writes)
 4. **User** config (`config.toml`)
 
-This is what `ConfigLayerStack::effective_config()` implements.
+Layers with a `disabled_reason` are still surfaced for UI, but are ignored when
+computing the effective config and origins metadata. This is what
+`ConfigLayerStack::effective_config()` implements.
 
 ## Typical usage
 
@@ -47,6 +49,7 @@ let layers = load_config_layers_state(
     Some(cwd),
     &cli_overrides,
     LoaderOverrides::default(),
+    None,
 ).await?;
 
 let effective = layers.effective_config();

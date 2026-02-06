@@ -10,12 +10,8 @@
 use super::compact::COMPACT_WARNING_MESSAGE;
 use super::compact::FIRST_REPLY;
 use super::compact::SUMMARY_TEXT;
-use codex_core::CodexAuth;
-use codex_core::CodexConversation;
-use codex_core::ConversationManager;
-use codex_core::ModelProviderInfo;
-use codex_core::NewConversation;
-use codex_core::built_in_model_providers;
+use codex_core::CodexThread;
+use codex_core::ThreadManager;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Config;
 use codex_core::protocol::EventMsg;
@@ -23,12 +19,12 @@ use codex_core::protocol::Op;
 use codex_core::protocol::WarningEvent;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_protocol::user_input::UserInput;
-use core_test_support::load_default_config_for_test;
+use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
-use core_test_support::responses::get_responses_request_bodies;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::sse;
+use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -99,8 +95,7 @@ fn extract_summary_message(request: &Value, summary_text: &str) -> Value {
                         .and_then(|arr| arr.first())
                         .and_then(|entry| entry.get("text"))
                         .and_then(Value::as_str)
-                        .map(|text| text.contains(summary_text))
-                        .unwrap_or(false)
+                        .is_some_and(|text| text.contains(summary_text))
             })
         })
         .cloned()
@@ -117,21 +112,18 @@ fn normalize_compact_prompts(requests: &mut [Value]) {
                 {
                     return true;
                 }
-                let content = item
-                    .get("content")
-                    .and_then(Value::as_array)
-                    .cloned()
+                let Some(content) = item.get("content").and_then(Value::as_array) else {
+                    return false;
+                };
+                let Some(first) = content.first() else {
+                    return false;
+                };
+                let text = first
+                    .get("text")
+                    .and_then(Value::as_str)
                     .unwrap_or_default();
-                if let Some(first) = content.first() {
-                    let text = first
-                        .get("text")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default();
-                    let normalized_text = normalize_line_endings_str(text);
-                    !(text.is_empty() || normalized_text == normalized_summary_prompt)
-                } else {
-                    false
-                }
+                let normalized_text = normalize_line_endings_str(text);
+                !(text.is_empty() || normalized_text == normalized_summary_prompt)
             });
         }
     }
@@ -148,7 +140,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
 
     // 1. Arrange mocked SSE responses for the initial compact/resume/fork flow.
     let server = MockServer::start().await;
-    mount_initial_flow(&server).await;
+    let request_log = mount_initial_flow(&server).await;
     let expected_model = "gpt-5.1-codex";
     // 2. Start a new conversation and drive it through the compact/resume/fork steps.
     let (_home, config, manager, base) =
@@ -171,11 +163,11 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         "compact+resume test expects resumed path {resumed_path:?} to exist",
     );
 
-    let forked = fork_conversation(&manager, &config, resumed_path, 2).await;
+    let forked = fork_thread(&manager, &config, resumed_path, 2).await;
     user_turn(&forked, "AFTER_FORK").await;
 
     // 3. Capture the requests to the model and validate the history slices.
-    let mut requests = gather_request_bodies(&server).await;
+    let mut requests = gather_request_bodies(&request_log);
     normalize_compact_prompts(&mut requests);
 
     // input after compact is a prefix of input after resume/fork
@@ -216,11 +208,12 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         .as_str()
         .unwrap_or_default()
         .to_string();
-    let user_instructions = requests[0]["input"][0]["content"][0]["text"]
+    let permissions_message = requests[0]["input"][0].clone();
+    let user_instructions = requests[0]["input"][1]["content"][0]["text"]
         .as_str()
         .unwrap_or_default()
         .to_string();
-    let environment_context = requests[0]["input"][1]["content"][0]["text"]
+    let environment_context = requests[0]["input"][2]["content"][0]["text"]
         .as_str()
         .unwrap_or_default()
         .to_string();
@@ -241,6 +234,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "model": expected_model,
       "instructions": prompt,
       "input": [
+        permissions_message,
         {
           "type": "message",
           "role": "user",
@@ -276,6 +270,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "tool_choice": "auto",
       "parallel_tool_calls": false,
       "reasoning": {
+        "effort": "medium",
         "summary": "auto"
       },
       "store": false,
@@ -290,6 +285,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "model": expected_model,
       "instructions": prompt,
       "input": [
+        permissions_message,
         {
           "type": "message",
           "role": "user",
@@ -345,6 +341,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "tool_choice": "auto",
       "parallel_tool_calls": false,
       "reasoning": {
+        "effort": "medium",
         "summary": "auto"
       },
       "store": false,
@@ -359,6 +356,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "model": expected_model,
       "instructions": prompt,
       "input": [
+        permissions_message,
         {
           "type": "message",
           "role": "user",
@@ -405,6 +403,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "tool_choice": "auto",
       "parallel_tool_calls": false,
       "reasoning": {
+        "effort": "medium",
         "summary": "auto"
       },
       "store": false,
@@ -419,6 +418,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "model": expected_model,
       "instructions": prompt,
       "input": [
+        permissions_message,
         {
           "type": "message",
           "role": "user",
@@ -470,6 +470,27 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
             }
           ]
         },
+        permissions_message,
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": user_instructions
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": environment_context
+            }
+          ]
+        },
         {
           "type": "message",
           "role": "user",
@@ -485,6 +506,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "tool_choice": "auto",
       "parallel_tool_calls": false,
       "reasoning": {
+        "effort": "medium",
         "summary": "auto"
       },
       "store": false,
@@ -499,6 +521,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "model": expected_model,
       "instructions": prompt,
       "input": [
+        permissions_message,
         {
           "type": "message",
           "role": "user",
@@ -550,6 +573,48 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
             }
           ]
         },
+        permissions_message,
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": user_instructions
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": environment_context
+            }
+          ]
+        },
+        permissions_message,
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": user_instructions
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": environment_context
+            }
+          ]
+        },
         {
           "type": "message",
           "role": "user",
@@ -565,6 +630,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "tool_choice": "auto",
       "parallel_tool_calls": false,
       "reasoning": {
+        "effort": "medium",
         "summary": "auto"
       },
       "store": false,
@@ -600,8 +666,8 @@ async fn compact_resume_after_second_compaction_preserves_history() {
 
     // 1. Arrange mocked SSE responses for the initial flow plus the second compact.
     let server = MockServer::start().await;
-    mount_initial_flow(&server).await;
-    mount_second_compact_flow(&server).await;
+    let mut request_log = mount_initial_flow(&server).await;
+    request_log.extend(mount_second_compact_flow(&server).await);
 
     // 2. Drive the conversation through compact -> resume -> fork -> compact -> resume.
     let (_home, config, manager, base) = start_test_conversation(&server, None).await;
@@ -623,7 +689,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
         "second compact test expects resumed path {resumed_path:?} to exist",
     );
 
-    let forked = fork_conversation(&manager, &config, resumed_path, 3).await;
+    let forked = fork_thread(&manager, &config, resumed_path, 3).await;
     user_turn(&forked, "AFTER_FORK").await;
 
     compact_conversation(&forked).await;
@@ -637,7 +703,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
     let resumed_again = resume_conversation(&manager, &config, forked_path).await;
     user_turn(&resumed_again, AFTER_SECOND_RESUME).await;
 
-    let mut requests = gather_request_bodies(&server).await;
+    let mut requests = gather_request_bodies(&request_log);
     normalize_compact_prompts(&mut requests);
     let input_after_compact = json!(requests[requests.len() - 2]["input"]);
     let input_after_resume = json!(requests[requests.len() - 1]["input"]);
@@ -664,11 +730,12 @@ async fn compact_resume_after_second_compaction_preserves_history() {
         .as_str()
         .unwrap_or_default()
         .to_string();
-    let user_instructions = requests[0]["input"][0]["content"][0]["text"]
+    let permissions_message = requests[0]["input"][0].clone();
+    let user_instructions = requests[0]["input"][1]["content"][0]["text"]
         .as_str()
         .unwrap_or_default()
         .to_string();
-    let environment_instructions = requests[0]["input"][1]["content"][0]["text"]
+    let environment_instructions = requests[0]["input"][2]["content"][0]["text"]
         .as_str()
         .unwrap_or_default()
         .to_string();
@@ -682,6 +749,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
       {
         "instructions": prompt,
         "input": [
+          permissions_message,
           {
             "type": "message",
             "role": "user",
@@ -720,6 +788,27 @@ async fn compact_resume_after_second_compaction_preserves_history() {
               {
                 "type": "input_text",
                 "text": "AFTER_COMPACT_2"
+              }
+            ]
+          },
+          permissions_message,
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": user_instructions
+              }
+            ]
+          },
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": environment_instructions
               }
             ]
           },
@@ -771,15 +860,17 @@ fn normalize_line_endings(value: &mut Value) {
     }
 }
 
-async fn gather_request_bodies(server: &MockServer) -> Vec<Value> {
-    let mut bodies = get_responses_request_bodies(server).await;
-    for body in &mut bodies {
-        normalize_line_endings(body);
-    }
+fn gather_request_bodies(request_log: &[ResponseMock]) -> Vec<Value> {
+    let mut bodies = request_log
+        .iter()
+        .flat_map(ResponseMock::requests)
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
+    bodies.iter_mut().for_each(normalize_line_endings);
     bodies
 }
 
-async fn mount_initial_flow(server: &MockServer) {
+async fn mount_initial_flow(server: &MockServer) -> Vec<ResponseMock> {
     let sse1 = sse(vec![
         ev_assistant_message("m1", FIRST_REPLY),
         ev_completed("r1"),
@@ -803,13 +894,13 @@ async fn mount_initial_flow(server: &MockServer) {
             && !body.contains("\"text\":\"AFTER_RESUME\"")
             && !body.contains("\"text\":\"AFTER_FORK\"")
     };
-    mount_sse_once_match(server, match_first, sse1).await;
+    let first = mount_sse_once_match(server, match_first, sse1).await;
 
     let match_compact = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body_contains_text(body, SUMMARIZATION_PROMPT) || body.contains(&json_fragment(FIRST_REPLY))
     };
-    mount_sse_once_match(server, match_compact, sse2).await;
+    let compact = mount_sse_once_match(server, match_compact, sse2).await;
 
     let match_after_compact = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
@@ -817,22 +908,24 @@ async fn mount_initial_flow(server: &MockServer) {
             && !body.contains("\"text\":\"AFTER_RESUME\"")
             && !body.contains("\"text\":\"AFTER_FORK\"")
     };
-    mount_sse_once_match(server, match_after_compact, sse3).await;
+    let after_compact = mount_sse_once_match(server, match_after_compact, sse3).await;
 
     let match_after_resume = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains("\"text\":\"AFTER_RESUME\"")
     };
-    mount_sse_once_match(server, match_after_resume, sse4).await;
+    let after_resume = mount_sse_once_match(server, match_after_resume, sse4).await;
 
     let match_after_fork = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains("\"text\":\"AFTER_FORK\"")
     };
-    mount_sse_once_match(server, match_after_fork, sse5).await;
+    let after_fork = mount_sse_once_match(server, match_after_fork, sse5).await;
+
+    vec![first, compact, after_compact, after_resume, after_fork]
 }
 
-async fn mount_second_compact_flow(server: &MockServer) {
+async fn mount_second_compact_flow(server: &MockServer) -> Vec<ResponseMock> {
     let sse6 = sse(vec![
         ev_assistant_message("m4", SUMMARY_TEXT),
         ev_completed("r6"),
@@ -843,54 +936,50 @@ async fn mount_second_compact_flow(server: &MockServer) {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains("AFTER_FORK")
     };
-    mount_sse_once_match(server, match_second_compact, sse6).await;
+    let second_compact = mount_sse_once_match(server, match_second_compact, sse6).await;
 
     let match_after_second_resume = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(&format!("\"text\":\"{AFTER_SECOND_RESUME}\""))
     };
-    mount_sse_once_match(server, match_after_second_resume, sse7).await;
+    let after_second_resume = mount_sse_once_match(server, match_after_second_resume, sse7).await;
+
+    vec![second_compact, after_second_resume]
 }
 
 async fn start_test_conversation(
     server: &MockServer,
     model: Option<&str>,
-) -> (TempDir, Config, ConversationManager, Arc<CodexConversation>) {
-    let model_provider = ModelProviderInfo {
-        name: "Non-OpenAI Model provider".into(),
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
-    let home = TempDir::new().expect("create temp dir");
-    let mut config = load_default_config_for_test(&home).await;
-    config.model_provider = model_provider;
-    config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
-    if let Some(model) = model {
-        config.model = Some(model.to_string());
-    }
-    let manager = ConversationManager::with_models_provider(
-        CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-    );
-    let NewConversation { conversation, .. } = manager
-        .new_conversation(config.clone())
-        .await
-        .expect("create conversation");
-
-    (home, config, manager, conversation)
+) -> (Arc<TempDir>, Config, Arc<ThreadManager>, Arc<CodexThread>) {
+    let base_url = format!("{}/v1", server.uri());
+    let model = model.map(str::to_string);
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider.name = "Non-OpenAI Model provider".to_string();
+        config.model_provider.base_url = Some(base_url);
+        config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
+        if let Some(model) = model {
+            config.model = Some(model);
+        }
+    });
+    let test = builder.build(server).await.expect("create conversation");
+    (test.home, test.config, test.thread_manager, test.codex)
 }
 
-async fn user_turn(conversation: &Arc<CodexConversation>, text: &str) {
+async fn user_turn(conversation: &Arc<CodexThread>, text: &str) {
     conversation
         .submit(Op::UserInput {
-            items: vec![UserInput::Text { text: text.into() }],
+            items: vec![UserInput::Text {
+                text: text.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
         })
         .await
         .expect("submit user turn");
-    wait_for_event(conversation, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(conversation, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 }
 
-async fn compact_conversation(conversation: &Arc<CodexConversation>) {
+async fn compact_conversation(conversation: &Arc<CodexThread>) {
     conversation
         .submit(Op::Compact)
         .await
@@ -900,37 +989,38 @@ async fn compact_conversation(conversation: &Arc<CodexConversation>) {
         panic!("expected warning event after compact");
     };
     assert_eq!(message, COMPACT_WARNING_MESSAGE);
-    wait_for_event(conversation, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(conversation, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 }
 
-async fn fetch_conversation_path(conversation: &Arc<CodexConversation>) -> std::path::PathBuf {
-    conversation.rollout_path()
+async fn fetch_conversation_path(conversation: &Arc<CodexThread>) -> std::path::PathBuf {
+    conversation.rollout_path().expect("rollout path")
 }
 
 async fn resume_conversation(
-    manager: &ConversationManager,
+    manager: &ThreadManager,
     config: &Config,
     path: std::path::PathBuf,
-) -> Arc<CodexConversation> {
-    let auth_manager =
-        codex_core::AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy"));
-    let NewConversation { conversation, .. } = manager
-        .resume_conversation_from_rollout(config.clone(), path, auth_manager)
+) -> Arc<CodexThread> {
+    let auth_manager = codex_core::AuthManager::from_auth_for_testing(
+        codex_core::CodexAuth::from_api_key("dummy"),
+    );
+    manager
+        .resume_thread_from_rollout(config.clone(), path, auth_manager)
         .await
-        .expect("resume conversation");
-    conversation
+        .expect("resume conversation")
+        .thread
 }
 
 #[cfg(test)]
-async fn fork_conversation(
-    manager: &ConversationManager,
+async fn fork_thread(
+    manager: &ThreadManager,
     config: &Config,
     path: std::path::PathBuf,
     nth_user_message: usize,
-) -> Arc<CodexConversation> {
-    let NewConversation { conversation, .. } = manager
-        .fork_conversation(nth_user_message, config.clone(), path)
+) -> Arc<CodexThread> {
+    manager
+        .fork_thread(nth_user_message, config.clone(), path)
         .await
-        .expect("fork conversation");
-    conversation
+        .expect("fork conversation")
+        .thread
 }

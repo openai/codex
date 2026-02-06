@@ -11,6 +11,7 @@ use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
+use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::Sandboxable;
 use crate::tools::sandboxing::SandboxablePreference;
@@ -18,29 +19,27 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
+use codex_apply_patch::ApplyPatchAction;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct ApplyPatchRequest {
-    pub patch: String,
-    pub cwd: PathBuf,
+    pub action: ApplyPatchAction,
+    pub file_paths: Vec<AbsolutePathBuf>,
+    pub changes: std::collections::HashMap<PathBuf, FileChange>,
+    pub exec_approval_requirement: ExecApprovalRequirement,
     pub timeout_ms: Option<u64>,
-    pub user_explicitly_approved: bool,
     pub codex_exe: Option<PathBuf>,
 }
 
 #[derive(Default)]
 pub struct ApplyPatchRuntime;
-
-#[derive(serde::Serialize, Clone, Debug, Eq, PartialEq, Hash)]
-pub(crate) struct ApprovalKey {
-    patch: String,
-    cwd: PathBuf,
-}
 
 impl ApplyPatchRuntime {
     pub fn new() -> Self {
@@ -58,8 +57,8 @@ impl ApplyPatchRuntime {
         let program = exe.to_string_lossy().to_string();
         Ok(CommandSpec {
             program,
-            args: vec![CODEX_APPLY_PATCH_ARG1.to_string(), req.patch.clone()],
-            cwd: req.cwd.clone(),
+            args: vec![CODEX_APPLY_PATCH_ARG1.to_string(), req.action.patch.clone()],
+            cwd: req.action.cwd.clone(),
             expiration: req.timeout_ms.into(),
             // Run apply_patch with a minimal environment for determinism and to avoid leaks.
             env: HashMap::new(),
@@ -87,13 +86,10 @@ impl Sandboxable for ApplyPatchRuntime {
 }
 
 impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
-    type ApprovalKey = ApprovalKey;
+    type ApprovalKey = AbsolutePathBuf;
 
-    fn approval_key(&self, req: &ApplyPatchRequest) -> Self::ApprovalKey {
-        ApprovalKey {
-            patch: req.patch.clone(),
-            cwd: req.cwd.clone(),
-        }
+    fn approval_keys(&self, req: &ApplyPatchRequest) -> Vec<Self::ApprovalKey> {
+        req.file_paths.clone()
     }
 
     fn start_approval_async<'a>(
@@ -101,38 +97,48 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         req: &'a ApplyPatchRequest,
         ctx: ApprovalCtx<'a>,
     ) -> BoxFuture<'a, ReviewDecision> {
-        let key = self.approval_key(req);
         let session = ctx.session;
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
-        let cwd = req.cwd.clone();
         let retry_reason = ctx.retry_reason.clone();
-        let user_explicitly_approved = req.user_explicitly_approved;
+        let approval_keys = self.approval_keys(req);
+        let changes = req.changes.clone();
         Box::pin(async move {
-            with_cached_approval(&session.services, key, move || async move {
-                if let Some(reason) = retry_reason {
-                    session
-                        .request_command_approval(
-                            turn,
-                            call_id,
-                            vec!["apply_patch".to_string()],
-                            cwd,
-                            Some(reason),
-                            None,
-                        )
-                        .await
-                } else if user_explicitly_approved {
-                    ReviewDecision::ApprovedForSession
-                } else {
-                    ReviewDecision::Approved
-                }
-            })
+            if let Some(reason) = retry_reason {
+                let rx_approve = session
+                    .request_patch_approval(turn, call_id, changes.clone(), Some(reason), None)
+                    .await;
+                return rx_approve.await.unwrap_or_default();
+            }
+
+            with_cached_approval(
+                &session.services,
+                "apply_patch",
+                approval_keys,
+                || async move {
+                    let rx_approve = session
+                        .request_patch_approval(turn, call_id, changes, None, None)
+                        .await;
+                    rx_approve.await.unwrap_or_default()
+                },
+            )
             .await
         })
     }
 
     fn wants_no_sandbox_approval(&self, policy: AskForApproval) -> bool {
         !matches!(policy, AskForApproval::Never)
+    }
+
+    // apply_patch approvals are decided upstream by assess_patch_safety.
+    //
+    // This override ensures the orchestrator runs the patch approval flow when required instead
+    // of falling back to the global exec approval policy.
+    fn exec_approval_requirement(
+        &self,
+        req: &ApplyPatchRequest,
+    ) -> Option<ExecApprovalRequirement> {
+        Some(req.exec_approval_requirement.clone())
     }
 }
 

@@ -13,20 +13,25 @@ pub mod exec_events;
 pub use cli::Cli;
 pub use cli::Command;
 pub use cli::ReviewArgs;
+use codex_cloud_requirements::cloud_requirements_loader;
 use codex_common::oss::ensure_oss_provider_ready;
 use codex_common::oss::get_default_model_for_oss_provider;
 use codex_core::AuthManager;
-use codex_core::ConversationManager;
 use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
-use codex_core::NewConversation;
+use codex_core::NewThread;
 use codex_core::OLLAMA_OSS_PROVIDER_ID;
+use codex_core::ThreadManager;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::resolve_oss_provider;
+use codex_core::config_loader::ConfigLoadError;
+use codex_core::config_loader::format_config_error_with_source;
 use codex_core::git_info::get_git_repo_root;
+use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -37,34 +42,32 @@ use codex_core::protocol::SessionSource;
 use codex_protocol::approvals::ElicitationAction;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::user_input::UserInput;
-use codex_tui::SecurityReviewMode;
-use codex_tui::SecurityReviewRequest;
-use codex_tui::SecurityReviewSetupResult;
-use codex_tui::latest_running_review_candidate;
-use codex_tui::prepare_security_review_output_root;
-use codex_tui::run_security_review;
-use codex_tui::run_security_review_setup;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
 use event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
 use serde_json::Value;
+use std::collections::HashSet;
 use std::io::IsTerminal;
 use std::io::Read;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use supports_color::Stream;
+use tokio::sync::Mutex;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
+use tracing::warn;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
+use uuid::Uuid;
 
 use crate::cli::Command as ExecCommand;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
+use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::default_client::set_default_originator;
-use codex_core::find_conversation_path_by_id_str;
+use codex_core::find_thread_path_by_id_str;
+use codex_core::find_thread_path_by_name_str;
 
 enum InitialOperation {
     UserTurn {
@@ -74,6 +77,13 @@ enum InitialOperation {
     Review {
         review_request: ReviewRequest,
     },
+}
+
+#[derive(Clone)]
+struct ThreadEventEnvelope {
+    thread_id: codex_protocol::ThreadId,
+    thread: Arc<codex_core::CodexThread>,
+    event: Event,
 }
 
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
@@ -93,6 +103,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         cwd,
         skip_git_repo_check,
         add_dir,
+        ephemeral,
         color,
         last_message_file,
         json: json_mode,
@@ -150,29 +161,51 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     // we load config.toml here to determine project state.
     #[allow(clippy::print_stderr)]
-    let config_toml = {
-        let codex_home = match find_codex_home() {
-            Ok(codex_home) => codex_home,
-            Err(err) => {
-                eprintln!("Error finding codex home: {err}");
-                std::process::exit(1);
-            }
-        };
-
-        match load_config_as_toml_with_cli_overrides(
-            &codex_home,
-            &config_cwd,
-            cli_kv_overrides.clone(),
-        )
-        .await
-        {
-            Ok(config_toml) => config_toml,
-            Err(err) => {
-                eprintln!("Error loading config.toml: {err}");
-                std::process::exit(1);
-            }
+    let codex_home = match find_codex_home() {
+        Ok(codex_home) => codex_home,
+        Err(err) => {
+            eprintln!("Error finding codex home: {err}");
+            std::process::exit(1);
         }
     };
+
+    #[allow(clippy::print_stderr)]
+    let config_toml = match load_config_as_toml_with_cli_overrides(
+        &codex_home,
+        &config_cwd,
+        cli_kv_overrides.clone(),
+    )
+    .await
+    {
+        Ok(config_toml) => config_toml,
+        Err(err) => {
+            let config_error = err
+                .get_ref()
+                .and_then(|err| err.downcast_ref::<ConfigLoadError>())
+                .map(ConfigLoadError::config_error);
+            if let Some(config_error) = config_error {
+                eprintln!(
+                    "Error loading config.toml:\n{}",
+                    format_config_error_with_source(config_error)
+                );
+            } else {
+                eprintln!("Error loading config.toml: {err}");
+            }
+            std::process::exit(1);
+        }
+    };
+
+    let cloud_auth_manager = AuthManager::shared(
+        codex_home.clone(),
+        false,
+        config_toml.cli_auth_credentials_store.unwrap_or_default(),
+    );
+    let chatgpt_base_url = config_toml
+        .chatgpt_base_url
+        .clone()
+        .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
+    // TODO(gt): Make cloud requirements failures blocking once we can fail-closed.
+    let cloud_requirements = cloud_requirements_loader(cloud_auth_manager, chatgpt_base_url);
 
     let model_provider = if oss {
         let resolved = resolve_oss_provider(
@@ -185,7 +218,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             Some(provider)
         } else {
             return Err(anyhow::anyhow!(
-                "No default OSS provider configured. Use --local-provider=provider or set oss_provider to either {LMSTUDIO_OSS_PROVIDER_ID} or {OLLAMA_OSS_PROVIDER_ID} in config.toml"
+                "No default OSS provider configured. Use --local-provider=provider or set oss_provider to one of: {LMSTUDIO_OSS_PROVIDER_ID}, {OLLAMA_OSS_PROVIDER_ID} in config.toml"
             ));
         }
     } else {
@@ -217,29 +250,39 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         codex_linux_sandbox_exe,
         base_instructions: None,
         developer_instructions: None,
+        personality: None,
         compact_prompt: None,
         include_apply_patch_tool: None,
         show_raw_agent_reasoning: oss.then_some(true),
         tools_web_search_request: None,
+        ephemeral: ephemeral.then_some(true),
         additional_writable_roots: add_dir,
     };
 
-    let config =
-        Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides).await?;
+    let config = ConfigBuilder::default()
+        .cli_overrides(cli_kv_overrides)
+        .harness_overrides(overrides)
+        .cloud_requirements(cloud_requirements)
+        .build()
+        .await?;
+    set_default_client_residency_requirement(config.enforce_residency.value());
 
-    if let Err(err) = enforce_login_restrictions(&config).await {
+    if let Err(err) = enforce_login_restrictions(&config) {
         eprintln!("{err}");
         std::process::exit(1);
     }
 
-    let otel = codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"));
-
-    #[allow(clippy::print_stderr)]
-    let otel = match otel {
-        Ok(otel) => otel,
-        Err(e) => {
+    let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None, false)
+    })) {
+        Ok(Ok(otel)) => otel,
+        Ok(Err(e)) => {
             eprintln!("Could not create otel exporter: {e}");
-            std::process::exit(1);
+            None
+        }
+        Err(_) => {
+            eprintln!("Could not create otel exporter: panicked during initialization");
+            None
         }
     };
 
@@ -285,7 +328,12 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     let default_effort = config.model_reasoning_effort;
     let default_summary = config.model_reasoning_summary;
 
-    if !skip_git_repo_check && get_git_repo_root(&default_cwd).is_none() {
+    // When --yolo (dangerously_bypass_approvals_and_sandbox) is set, also skip the git repo check
+    // since the user is explicitly running in an externally sandboxed environment.
+    if !skip_git_repo_check
+        && !dangerously_bypass_approvals_and_sandbox
+        && get_git_repo_root(&default_cwd).is_none()
+    {
         eprintln!("Not inside a trusted directory and --skip-git-repo-check was not specified.");
         std::process::exit(1);
     }
@@ -295,163 +343,33 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         true,
         config.cli_auth_credentials_store_mode,
     );
-    if let Some(prompt_text) = prompt.as_deref()
-        && let Some(review_args) = parse_security_review_command(prompt_text, &default_cwd)?
-    {
-        if review_args.setup {
-            match run_security_review_setup(&config).await {
-                Ok(SecurityReviewSetupResult { logs }) => {
-                    for line in logs {
-                        eprintln!("{line}");
-                    }
-                    return Ok(());
-                }
-                Err(error) => {
-                    for line in error.logs {
-                        eprintln!("{line}");
-                    }
-                    return Err(anyhow::anyhow!(
-                        "Security review setup failed: {}",
-                        error.message
-                    ));
-                }
-            }
-        }
-
-        let (output_root, include_paths, scope_display_paths, mode, resume_checkpoint) =
-            if review_args.resume {
-                if let Some(candidate) = latest_running_review_candidate(&default_cwd) {
-                    (
-                        candidate.output_root.clone(),
-                        Vec::new(),
-                        Vec::new(),
-                        review_args.mode,
-                        Some(candidate.checkpoint),
-                    )
-                } else {
-                    eprintln!("No in-progress security review found to resume.");
-                    std::process::exit(1);
-                }
-            } else {
-                (
-                    prepare_security_review_output_root(&default_cwd)?,
-                    review_args.include_paths,
-                    review_args.scope_display_paths,
-                    review_args.mode,
-                    None,
-                )
-            };
-        let log_callback: Arc<dyn Fn(String) + Send + Sync> = Arc::new(|line| eprintln!("{line}"));
-        let log_sink = match codex_tui::SecurityReviewLogSink::with_path_and_callback(
-            &output_root.join("sec-review.log"),
-            log_callback.clone(),
-        ) {
-            Ok(sink) => Arc::new(sink),
-            Err(err) => {
-                eprintln!("Failed to initialize security review log sink: {err}");
-                Arc::new(codex_tui::SecurityReviewLogSink::with_callback(
-                    log_callback,
-                ))
-            }
-        };
-        let request = SecurityReviewRequest {
-            repo_path: default_cwd.clone(),
-            include_paths,
-            scope_display_paths,
-            output_root: output_root.clone(),
-            mode,
-            include_spec_in_bug_analysis: true,
-            triage_model: config
-                .security_review_models
-                .file_triage
-                .clone()
-                .unwrap_or_default(),
-            spec_model: config
-                .security_review_models
-                .spec
-                .clone()
-                .unwrap_or_default(),
-            model: config
-                .security_review_models
-                .bugs
-                .clone()
-                .unwrap_or_default(),
-            validation_model: config
-                .security_review_models
-                .validation
-                .clone()
-                .unwrap_or_default(),
-            writing_model: config
-                .security_review_models
-                .writing
-                .clone()
-                .unwrap_or_default(),
-            provider: config.model_provider.clone(),
-            auth: auth_manager.auth(),
-            config: config.clone(),
-            auth_manager: auth_manager.clone(),
-            progress_sender: None,
-            log_sink: Some(log_sink),
-            progress_callback: None,
-            skip_auto_scope_confirmation: true,
-            auto_scope_prompt: review_args.auto_scope_prompt,
-            resume_checkpoint,
-            linear_issue: None,
-            validation_target_url: review_args.target_url,
-            validation_creds_path: review_args.creds_path,
-        };
-
-        match run_security_review(request).await {
-            Ok(result) => {
-                for line in &result.logs {
-                    eprintln!("{line}");
-                }
-                eprintln!(
-                    "Security review succeeded. Bugs: {}, Snapshot: {}, Report: {}, HTML: {}, Output root: {}",
-                    result.bugs_path.display(),
-                    result.snapshot_path.display(),
-                    display_optional_path(&result.report_path),
-                    display_optional_path(&result.report_html_path),
-                    output_root.display()
-                );
-                return Ok(());
-            }
-            Err(error) => {
-                for line in error.logs {
-                    eprintln!("{line}");
-                }
-                eprintln!("Security review failed: {}", error.message);
-                return Err(anyhow::anyhow!(error.message));
-            }
-        }
-    }
-    let conversation_manager = ConversationManager::new(auth_manager.clone(), SessionSource::Exec);
-    let default_model = conversation_manager
+    let thread_manager = Arc::new(ThreadManager::new(
+        config.codex_home.clone(),
+        auth_manager.clone(),
+        SessionSource::Exec,
+    ));
+    let default_model = thread_manager
         .get_models_manager()
-        .get_model(&config.model, &config)
+        .get_default_model(&config.model, &config, RefreshStrategy::OnlineIfUncached)
         .await;
 
     // Handle resume subcommand by resolving a rollout path and using explicit resume API.
-    let NewConversation {
-        conversation_id: _,
-        conversation,
+    let NewThread {
+        thread_id: primary_thread_id,
+        thread,
         session_configured,
     } = if let Some(ExecCommand::Resume(args)) = command.as_ref() {
         let resume_path = resolve_resume_path(&config, args).await?;
 
         if let Some(path) = resume_path {
-            conversation_manager
-                .resume_conversation_from_rollout(config.clone(), path, auth_manager.clone())
+            thread_manager
+                .resume_thread_from_rollout(config.clone(), path, auth_manager.clone())
                 .await?
         } else {
-            conversation_manager
-                .new_conversation(config.clone())
-                .await?
+            thread_manager.start_thread(config.clone()).await?
         }
     } else {
-        conversation_manager
-            .new_conversation(config.clone())
-            .await?
+        thread_manager.start_thread(config.clone()).await?
     };
     let (initial_operation, prompt_summary) = match (command, prompt, images) {
         (Some(ExecCommand::Review(review_cli)), _, _) => {
@@ -474,10 +392,13 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             let prompt_text = resolve_prompt(prompt_arg);
             let mut items: Vec<UserInput> = imgs
                 .into_iter()
+                .chain(args.images.into_iter())
                 .map(|path| UserInput::LocalImage { path })
                 .collect();
             items.push(UserInput::Text {
                 text: prompt_text.clone(),
+                // CLI input doesn't track UI element ranges, so none are available here.
+                text_elements: Vec::new(),
             });
             let output_schema = load_output_schema(output_schema_path.clone());
             (
@@ -496,6 +417,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 .collect();
             items.push(UserInput::Text {
                 text: prompt_text.clone(),
+                // CLI input doesn't track UI element ranges, so none are available here.
+                text_elements: Vec::new(),
             });
             let output_schema = load_output_schema(output_schema_path);
             (
@@ -514,40 +437,47 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     info!("Codex initialized with event: {session_configured:?}");
 
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<ThreadEventEnvelope>();
+    let attached_threads = Arc::new(Mutex::new(HashSet::from([primary_thread_id])));
+    spawn_thread_listener(primary_thread_id, thread.clone(), tx.clone());
+
     {
-        let conversation = conversation.clone();
+        let thread = thread.clone();
+        tokio::spawn(async move {
+            if tokio::signal::ctrl_c().await.is_ok() {
+                tracing::debug!("Keyboard interrupt");
+                // Immediately notify Codex to abort any in-flight task.
+                thread.submit(Op::Interrupt).await.ok();
+            }
+        });
+    }
+
+    {
+        let thread_manager = Arc::clone(&thread_manager);
+        let attached_threads = Arc::clone(&attached_threads);
+        let tx = tx.clone();
+        let mut thread_created_rx = thread_manager.subscribe_thread_created();
         tokio::spawn(async move {
             loop {
-                tokio::select! {
-                    _ = tokio::signal::ctrl_c() => {
-                        tracing::debug!("Keyboard interrupt");
-                        // Immediately notify Codex to abort any in‑flight task.
-                        conversation.submit(Op::Interrupt).await.ok();
-
-                        // Exit the inner loop and return to the main input prompt. The codex
-                        // will emit a `TurnInterrupted` (Error) event which is drained later.
-                        break;
-                    }
-                    res = conversation.next_event() => match res {
-                        Ok(event) => {
-                            debug!("Received event: {event:?}");
-
-                            let is_shutdown_complete = matches!(event.msg, EventMsg::ShutdownComplete);
-                            if let Err(e) = tx.send(event) {
-                                error!("Error sending event: {e:?}");
-                                break;
+                match thread_created_rx.recv().await {
+                    Ok(thread_id) => {
+                        if attached_threads.lock().await.contains(&thread_id) {
+                            continue;
+                        }
+                        match thread_manager.get_thread(thread_id).await {
+                            Ok(thread) => {
+                                attached_threads.lock().await.insert(thread_id);
+                                spawn_thread_listener(thread_id, thread, tx.clone());
                             }
-                            if is_shutdown_complete {
-                                info!("Received shutdown event, exiting event loop.");
-                                break;
+                            Err(err) => {
+                                warn!("failed to attach listener for thread {thread_id}: {err}")
                             }
-                        },
-                        Err(e) => {
-                            error!("Error receiving event: {e:?}");
-                            break;
                         }
                     }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        warn!("thread_created receiver lagged; skipping resync");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
         });
@@ -558,7 +488,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             items,
             output_schema,
         } => {
-            let task_id = conversation
+            let task_id = thread
                 .submit(Op::UserTurn {
                     items,
                     cwd: default_cwd,
@@ -568,13 +498,15 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                     effort: default_effort,
                     summary: default_summary,
                     final_output_json_schema: output_schema,
+                    collaboration_mode: None,
+                    personality: None,
                 })
                 .await?;
             info!("Sent prompt with event ID: {task_id}");
             task_id
         }
         InitialOperation::Review { review_request } => {
-            let task_id = conversation.submit(Op::Review { review_request }).await?;
+            let task_id = thread.submit(Op::Review { review_request }).await?;
             info!("Sent review request with event ID: {task_id}");
             task_id
         }
@@ -584,10 +516,15 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     // Track whether a fatal error was reported by the server so we can
     // exit with a non-zero status for automation-friendly signaling.
     let mut error_seen = false;
-    while let Some(event) = rx.recv().await {
+    while let Some(envelope) = rx.recv().await {
+        let ThreadEventEnvelope {
+            thread_id,
+            thread,
+            event,
+        } = envelope;
         if let EventMsg::ElicitationRequest(ev) = &event.msg {
             // Automatically cancel elicitation requests in exec mode.
-            conversation
+            thread
                 .submit(Op::ResolveElicitation {
                     server_name: ev.server_name.clone(),
                     request_id: ev.id.clone(),
@@ -598,15 +535,20 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         if matches!(event.msg, EventMsg::Error(_)) {
             error_seen = true;
         }
-        let shutdown: CodexStatus = event_processor.process_event(event);
+        if thread_id != primary_thread_id && matches!(&event.msg, EventMsg::TurnComplete(_)) {
+            continue;
+        }
+        let shutdown = event_processor.process_event(event);
+        if thread_id != primary_thread_id && matches!(shutdown, CodexStatus::InitiateShutdown) {
+            continue;
+        }
         match shutdown {
             CodexStatus::Running => continue,
             CodexStatus::InitiateShutdown => {
-                conversation.submit(Op::Shutdown).await?;
+                thread.submit(Op::Shutdown).await?;
             }
-            CodexStatus::Shutdown => {
-                break;
-            }
+            CodexStatus::Shutdown if thread_id == primary_thread_id => break,
+            CodexStatus::Shutdown => continue,
         }
     }
     event_processor.print_final_output();
@@ -617,161 +559,40 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     Ok(())
 }
 
-struct SecurityReviewCliArgs {
-    mode: SecurityReviewMode,
-    include_paths: Vec<PathBuf>,
-    scope_display_paths: Vec<String>,
-    auto_scope_prompt: Option<String>,
-    setup: bool,
-    resume: bool,
-    target_url: Option<String>,
-    creds_path: Option<PathBuf>,
-}
+fn spawn_thread_listener(
+    thread_id: codex_protocol::ThreadId,
+    thread: Arc<codex_core::CodexThread>,
+    tx: tokio::sync::mpsc::UnboundedSender<ThreadEventEnvelope>,
+) {
+    tokio::spawn(async move {
+        loop {
+            match thread.next_event().await {
+                Ok(event) => {
+                    debug!("Received event: {event:?}");
 
-fn parse_security_review_command(
-    prompt: &str,
-    repo_root: &Path,
-) -> anyhow::Result<Option<SecurityReviewCliArgs>> {
-    let trimmed = prompt.trim();
-    if !trimmed.starts_with("/secreview") {
-        return Ok(None);
-    }
-
-    let tokens = shlex::split(trimmed)
-        .ok_or_else(|| anyhow::anyhow!("Failed to parse /secreview arguments."))?;
-    if tokens.is_empty() {
-        return Ok(None);
-    }
-    let mut mode = SecurityReviewMode::Full;
-    let mut raw_paths: Vec<String> = Vec::new();
-    let mut auto_scope_prompt: Option<String> = None;
-    let mut setup = false;
-    let mut resume = false;
-    let mut target_url: Option<String> = None;
-    let mut creds_path: Option<PathBuf> = None;
-
-    let mut iter = tokens.into_iter();
-    // Skip the command token.
-    let _ = iter.next();
-
-    while let Some(token) = iter.next() {
-        match token.as_str() {
-            "full" => mode = SecurityReviewMode::Full,
-            "bugs" => mode = SecurityReviewMode::Bugs,
-            "--mode" => {
-                let value = iter
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("--mode requires a value"))?;
-                match value.as_str() {
-                    "full" => mode = SecurityReviewMode::Full,
-                    "bugs" => mode = SecurityReviewMode::Bugs,
-                    other => {
-                        return Err(anyhow::anyhow!(
-                            "Unknown mode `{other}` for /secreview (expected full or bugs)."
-                        ));
+                    let is_shutdown_complete = matches!(event.msg, EventMsg::ShutdownComplete);
+                    if let Err(err) = tx.send(ThreadEventEnvelope {
+                        thread_id,
+                        thread: Arc::clone(&thread),
+                        event,
+                    }) {
+                        error!("Error sending event: {err:?}");
+                        break;
+                    }
+                    if is_shutdown_complete {
+                        info!(
+                            "Received shutdown event for thread {thread_id}, exiting event loop."
+                        );
+                        break;
                     }
                 }
-            }
-            "--path" => {
-                let value = iter
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("--path requires a value"))?;
-                raw_paths.push(value);
-            }
-            "--prompt" | "--scope" => {
-                let value = iter
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("--prompt requires a value"))?;
-                let trimmed_prompt = value.trim();
-                if !trimmed_prompt.is_empty() {
-                    auto_scope_prompt = Some(trimmed_prompt.to_string());
+                Err(err) => {
+                    error!("Error receiving event: {err:?}");
+                    break;
                 }
             }
-            "--target-url" => {
-                let value = iter
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("--target-url requires a value"))?;
-                let trimmed_target = value.trim();
-                if !trimmed_target.is_empty() {
-                    target_url = Some(trimmed_target.to_string());
-                }
-            }
-            "--creds" => {
-                let value = iter
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("--creds requires a value"))?;
-                let trimmed_path = value.trim();
-                if !trimmed_path.is_empty() {
-                    let (path, _) = resolve_security_review_path(trimmed_path, repo_root)?;
-                    creds_path = Some(path);
-                }
-            }
-            "resume" | "--resume" => {
-                resume = true;
-            }
-            "setup" | "--setup" => {
-                setup = true;
-            }
-            other if other.starts_with("--") => {
-                return Err(anyhow::anyhow!(
-                    "Unknown flag `{other}` for /secreview command."
-                ));
-            }
-            other => raw_paths.push(other.to_string()),
         }
-    }
-
-    let mut include_paths: Vec<PathBuf> = Vec::new();
-    let mut scope_display_paths: Vec<String> = Vec::new();
-    for raw in raw_paths {
-        let (path, display) = resolve_security_review_path(&raw, repo_root)?;
-        if include_paths.iter().any(|existing| existing == &path) {
-            continue;
-        }
-        include_paths.push(path);
-        scope_display_paths.push(display);
-    }
-
-    Ok(Some(SecurityReviewCliArgs {
-        mode,
-        include_paths,
-        scope_display_paths,
-        auto_scope_prompt,
-        setup,
-        resume,
-        target_url,
-        creds_path,
-    }))
-}
-
-fn resolve_security_review_path(raw: &str, repo_root: &Path) -> anyhow::Result<(PathBuf, String)> {
-    let candidate = if Path::new(raw).is_absolute() {
-        PathBuf::from(raw)
-    } else {
-        repo_root.join(raw)
-    };
-
-    if !candidate.exists() {
-        return Err(anyhow::anyhow!(format!(
-            "Path `{raw}` was not found within {}.",
-            repo_root.display()
-        )));
-    }
-
-    let canonical = candidate.canonicalize().unwrap_or(candidate);
-    let display = canonical
-        .strip_prefix(repo_root)
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|_| canonical.display().to_string());
-
-    Ok((canonical, display))
-}
-
-fn display_optional_path(path: &Option<PathBuf>) -> String {
-    match path {
-        Some(value) => value.display().to_string(),
-        None => "-".to_string(),
-    }
+    });
 }
 
 async fn resolve_resume_path(
@@ -780,25 +601,37 @@ async fn resolve_resume_path(
 ) -> anyhow::Result<Option<PathBuf>> {
     if args.last {
         let default_provider_filter = vec![config.model_provider_id.clone()];
-        match codex_core::RolloutRecorder::list_conversations(
+        let filter_cwd = if args.all {
+            None
+        } else {
+            Some(config.cwd.as_path())
+        };
+        match codex_core::RolloutRecorder::find_latest_thread_path(
             &config.codex_home,
             1,
             None,
+            codex_core::ThreadSortKey::UpdatedAt,
             &[],
             Some(default_provider_filter.as_slice()),
             &config.model_provider_id,
+            filter_cwd,
         )
         .await
         {
-            Ok(page) => Ok(page.items.first().map(|it| it.path.clone())),
+            Ok(path) => Ok(path),
             Err(e) => {
-                error!("Error listing conversations: {e}");
+                error!("Error listing threads: {e}");
                 Ok(None)
             }
         }
     } else if let Some(id_str) = args.session_id.as_deref() {
-        let path = find_conversation_path_by_id_str(&config.codex_home, id_str).await?;
-        Ok(path)
+        if Uuid::parse_str(id_str).is_ok() {
+            let path = find_thread_path_by_id_str(&config.codex_home, id_str).await?;
+            Ok(path)
+        } else {
+            let path = find_thread_path_by_name_str(&config.codex_home, id_str).await?;
+            Ok(path)
+        }
     } else {
         Ok(None)
     }
@@ -830,6 +663,79 @@ fn load_output_schema(path: Option<PathBuf>) -> Option<Value> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PromptDecodeError {
+    InvalidUtf8 { valid_up_to: usize },
+    InvalidUtf16 { encoding: &'static str },
+    UnsupportedBom { encoding: &'static str },
+}
+
+impl std::fmt::Display for PromptDecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PromptDecodeError::InvalidUtf8 { valid_up_to } => write!(
+                f,
+                "input is not valid UTF-8 (invalid byte at offset {valid_up_to}). Convert it to UTF-8 and retry (e.g., `iconv -f <ENC> -t UTF-8 prompt.txt`)."
+            ),
+            PromptDecodeError::InvalidUtf16 { encoding } => write!(
+                f,
+                "input looked like {encoding} but could not be decoded. Convert it to UTF-8 and retry."
+            ),
+            PromptDecodeError::UnsupportedBom { encoding } => write!(
+                f,
+                "input appears to be {encoding}. Convert it to UTF-8 and retry."
+            ),
+        }
+    }
+}
+
+fn decode_prompt_bytes(input: &[u8]) -> Result<String, PromptDecodeError> {
+    let input = input.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(input);
+
+    if input.starts_with(&[0xFF, 0xFE, 0x00, 0x00]) {
+        return Err(PromptDecodeError::UnsupportedBom {
+            encoding: "UTF-32LE",
+        });
+    }
+
+    if input.starts_with(&[0x00, 0x00, 0xFE, 0xFF]) {
+        return Err(PromptDecodeError::UnsupportedBom {
+            encoding: "UTF-32BE",
+        });
+    }
+
+    if let Some(rest) = input.strip_prefix(&[0xFF, 0xFE]) {
+        return decode_utf16(rest, "UTF-16LE", u16::from_le_bytes);
+    }
+
+    if let Some(rest) = input.strip_prefix(&[0xFE, 0xFF]) {
+        return decode_utf16(rest, "UTF-16BE", u16::from_be_bytes);
+    }
+
+    std::str::from_utf8(input)
+        .map(str::to_string)
+        .map_err(|e| PromptDecodeError::InvalidUtf8 {
+            valid_up_to: e.valid_up_to(),
+        })
+}
+
+fn decode_utf16(
+    input: &[u8],
+    encoding: &'static str,
+    decode_unit: fn([u8; 2]) -> u16,
+) -> Result<String, PromptDecodeError> {
+    if !input.len().is_multiple_of(2) {
+        return Err(PromptDecodeError::InvalidUtf16 { encoding });
+    }
+
+    let units: Vec<u16> = input
+        .chunks_exact(2)
+        .map(|chunk| decode_unit([chunk[0], chunk[1]]))
+        .collect();
+
+    String::from_utf16(&units).map_err(|_| PromptDecodeError::InvalidUtf16 { encoding })
+}
+
 fn resolve_prompt(prompt_arg: Option<String>) -> String {
     match prompt_arg {
         Some(p) if p != "-" => p,
@@ -846,11 +752,22 @@ fn resolve_prompt(prompt_arg: Option<String>) -> String {
             if !force_stdin {
                 eprintln!("Reading prompt from stdin...");
             }
-            let mut buffer = String::new();
-            if let Err(e) = std::io::stdin().read_to_string(&mut buffer) {
+
+            let mut bytes = Vec::new();
+            if let Err(e) = std::io::stdin().read_to_end(&mut bytes) {
                 eprintln!("Failed to read prompt from stdin: {e}");
                 std::process::exit(1);
-            } else if buffer.trim().is_empty() {
+            }
+
+            let buffer = match decode_prompt_bytes(&bytes) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Failed to read prompt from stdin: {e}");
+                    std::process::exit(1);
+                }
+            };
+
+            if buffer.trim().is_empty() {
                 eprintln!("No prompt provided via stdin.");
                 std::process::exit(1);
             }
@@ -954,5 +871,80 @@ mod tests {
         };
 
         assert_eq!(request, expected);
+    }
+
+    #[test]
+    fn decode_prompt_bytes_strips_utf8_bom() {
+        let input = [0xEF, 0xBB, 0xBF, b'h', b'i', b'\n'];
+
+        let out = decode_prompt_bytes(&input).expect("decode utf-8 with BOM");
+
+        assert_eq!(out, "hi\n");
+    }
+
+    #[test]
+    fn decode_prompt_bytes_decodes_utf16le_bom() {
+        // UTF-16LE BOM + "hi\n"
+        let input = [0xFF, 0xFE, b'h', 0x00, b'i', 0x00, b'\n', 0x00];
+
+        let out = decode_prompt_bytes(&input).expect("decode utf-16le with BOM");
+
+        assert_eq!(out, "hi\n");
+    }
+
+    #[test]
+    fn decode_prompt_bytes_decodes_utf16be_bom() {
+        // UTF-16BE BOM + "hi\n"
+        let input = [0xFE, 0xFF, 0x00, b'h', 0x00, b'i', 0x00, b'\n'];
+
+        let out = decode_prompt_bytes(&input).expect("decode utf-16be with BOM");
+
+        assert_eq!(out, "hi\n");
+    }
+
+    #[test]
+    fn decode_prompt_bytes_rejects_utf32le_bom() {
+        // UTF-32LE BOM + "hi\n"
+        let input = [
+            0xFF, 0xFE, 0x00, 0x00, b'h', 0x00, 0x00, 0x00, b'i', 0x00, 0x00, 0x00, b'\n', 0x00,
+            0x00, 0x00,
+        ];
+
+        let err = decode_prompt_bytes(&input).expect_err("utf-32le should be rejected");
+
+        assert_eq!(
+            err,
+            PromptDecodeError::UnsupportedBom {
+                encoding: "UTF-32LE"
+            }
+        );
+    }
+
+    #[test]
+    fn decode_prompt_bytes_rejects_utf32be_bom() {
+        // UTF-32BE BOM + "hi\n"
+        let input = [
+            0x00, 0x00, 0xFE, 0xFF, 0x00, 0x00, 0x00, b'h', 0x00, 0x00, 0x00, b'i', 0x00, 0x00,
+            0x00, b'\n',
+        ];
+
+        let err = decode_prompt_bytes(&input).expect_err("utf-32be should be rejected");
+
+        assert_eq!(
+            err,
+            PromptDecodeError::UnsupportedBom {
+                encoding: "UTF-32BE"
+            }
+        );
+    }
+
+    #[test]
+    fn decode_prompt_bytes_rejects_invalid_utf8() {
+        // Invalid UTF-8 sequence: 0xC3 0x28
+        let input = [0xC3, 0x28];
+
+        let err = decode_prompt_bytes(&input).expect_err("invalid utf-8 should fail");
+
+        assert_eq!(err, PromptDecodeError::InvalidUtf8 { valid_up_to: 0 });
     }
 }

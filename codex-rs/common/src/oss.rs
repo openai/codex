@@ -25,6 +25,7 @@ pub async fn ensure_oss_provider_ready(
                 .map_err(|e| std::io::Error::other(format!("OSS setup failed: {e}")))?;
         }
         OLLAMA_OSS_PROVIDER_ID => {
+            codex_ollama::ensure_responses_supported(&config.model_provider).await?;
             codex_ollama::ensure_oss_ready(config)
                 .await
                 .map_err(|e| std::io::Error::other(format!("OSS setup failed: {e}")))?;

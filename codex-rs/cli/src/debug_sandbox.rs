@@ -130,13 +130,14 @@ async fn run_command_under_sandbox(
     let sandbox_policy_cwd = cwd.clone();
 
     let stdio_policy = StdioPolicy::Inherit;
-    let env = create_env(&config.shell_environment_policy);
+    let env = create_env(&config.shell_environment_policy, None);
 
     // Special-case Windows sandbox: execute and exit the process to emulate inherited stdio.
     if let SandboxType::Windows = sandbox_type {
         #[cfg(target_os = "windows")]
         {
-            use codex_core::features::Feature;
+            use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+            use codex_protocol::config_types::WindowsSandboxLevel;
             use codex_windows_sandbox::run_windows_sandbox_capture;
             use codex_windows_sandbox::run_windows_sandbox_capture_elevated;
 
@@ -147,8 +148,10 @@ async fn run_command_under_sandbox(
             let env_map = env.clone();
             let command_vec = command.clone();
             let base_dir = config.codex_home.clone();
-            let use_elevated = config.features.enabled(Feature::WindowsSandbox)
-                && config.features.enabled(Feature::WindowsSandboxElevated);
+            let use_elevated = matches!(
+                WindowsSandboxLevel::from_config(&config),
+                WindowsSandboxLevel::Elevated
+            );
 
             // Preflight audit is invoked elsewhere at the appropriate times.
             let res = tokio::task::spawn_blocking(move || {
@@ -224,16 +227,19 @@ async fn run_command_under_sandbox(
             .await?
         }
         SandboxType::Landlock => {
+            use codex_core::features::Feature;
             #[expect(clippy::expect_used)]
             let codex_linux_sandbox_exe = config
                 .codex_linux_sandbox_exe
                 .expect("codex-linux-sandbox executable not found");
+            let use_bwrap_sandbox = config.features.enabled(Feature::UseLinuxSandboxBwrap);
             spawn_command_under_linux_sandbox(
                 codex_linux_sandbox_exe,
                 command,
                 cwd,
                 config.sandbox_policy.get(),
                 sandbox_policy_cwd.as_path(),
+                use_bwrap_sandbox,
                 stdio_policy,
                 env,
             )

@@ -23,11 +23,11 @@ use codex_core::protocol::ExecPolicyAmendment;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
+use codex_protocol::mcp::RequestId;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
-use mcp_types::RequestId;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
@@ -461,9 +461,13 @@ fn exec_options(
     .chain(
         proposed_execpolicy_amendment
             .filter(|_| features.enabled(Feature::ExecPolicy))
-            .map(|prefix| {
+            .and_then(|prefix| {
                 let rendered_prefix = strip_bash_lc_and_escape(prefix.command());
-                ApprovalOption {
+                if rendered_prefix.contains('\n') || rendered_prefix.contains('\r') {
+                    return None;
+                }
+
+                Some(ApprovalOption {
                     label: format!(
                         "Yes, and don't ask again for commands that start with `{rendered_prefix}`"
                     ),
@@ -474,7 +478,7 @@ fn exec_options(
                     ),
                     display_shortcut: None,
                     additional_shortcuts: vec![key_hint::plain(KeyCode::Char('p'))],
-                }
+                })
             }),
     )
     .chain([ApprovalOption {
@@ -493,6 +497,12 @@ fn patch_options() -> Vec<ApprovalOption> {
             decision: ApprovalDecision::Review(ReviewDecision::Approved),
             display_shortcut: None,
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
+        },
+        ApprovalOption {
+            label: "Yes, and don't ask again for these files".to_string(),
+            decision: ApprovalDecision::Review(ReviewDecision::ApprovedForSession),
+            display_shortcut: None,
+            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
         },
         ApprovalOption {
             label: "No, and tell Codex what to do differently".to_string(),

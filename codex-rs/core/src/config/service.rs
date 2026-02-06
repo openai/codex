@@ -2,12 +2,18 @@ use super::CONFIG_TOML_FILE;
 use super::ConfigToml;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
+use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigLayerStack;
+use crate::config_loader::ConfigLayerStackOrdering;
+use crate::config_loader::ConfigRequirementsToml;
 use crate::config_loader::LoaderOverrides;
 use crate::config_loader::load_config_layers_state;
 use crate::config_loader::merge_toml_values;
 use crate::path_utils;
+use crate::path_utils::SymlinkWritePaths;
+use crate::path_utils::resolve_symlink_write_paths;
+use crate::path_utils::write_atomically;
 use codex_app_server_protocol::Config as ApiConfig;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigLayerMetadata;
@@ -26,6 +32,7 @@ use std::borrow::Cow;
 use std::path::Path;
 use std::path::PathBuf;
 use thiserror::Error;
+use tokio::task;
 use toml::Value as TomlValue;
 use toml_edit::Item as TomlItem;
 
@@ -103,27 +110,30 @@ pub struct ConfigService {
     codex_home: PathBuf,
     cli_overrides: Vec<(String, TomlValue)>,
     loader_overrides: LoaderOverrides,
+    cloud_requirements: CloudRequirementsLoader,
 }
 
 impl ConfigService {
-    pub fn new(codex_home: PathBuf, cli_overrides: Vec<(String, TomlValue)>) -> Self {
-        Self {
-            codex_home,
-            cli_overrides,
-            loader_overrides: LoaderOverrides::default(),
-        }
-    }
-
-    #[cfg(test)]
-    fn with_overrides(
+    pub fn new(
         codex_home: PathBuf,
         cli_overrides: Vec<(String, TomlValue)>,
         loader_overrides: LoaderOverrides,
+        cloud_requirements: CloudRequirementsLoader,
     ) -> Self {
         Self {
             codex_home,
             cli_overrides,
             loader_overrides,
+            cloud_requirements,
+        }
+    }
+
+    pub fn new_with_defaults(codex_home: PathBuf) -> Self {
+        Self {
+            codex_home,
+            cli_overrides: Vec::new(),
+            loader_overrides: LoaderOverrides::default(),
+            cloud_requirements: CloudRequirementsLoader::default(),
         }
     }
 
@@ -131,10 +141,28 @@ impl ConfigService {
         &self,
         params: ConfigReadParams,
     ) -> Result<ConfigReadResponse, ConfigServiceError> {
-        let layers = self
-            .load_thread_agnostic_config()
-            .await
-            .map_err(|err| ConfigServiceError::io("failed to read configuration layers", err))?;
+        let layers = match params.cwd.as_deref() {
+            Some(cwd) => {
+                let cwd = AbsolutePathBuf::try_from(PathBuf::from(cwd)).map_err(|err| {
+                    ConfigServiceError::io("failed to resolve config cwd to an absolute path", err)
+                })?;
+                crate::config::ConfigBuilder::default()
+                    .codex_home(self.codex_home.clone())
+                    .cli_overrides(self.cli_overrides.clone())
+                    .loader_overrides(self.loader_overrides.clone())
+                    .fallback_cwd(Some(cwd.to_path_buf()))
+                    .cloud_requirements(self.cloud_requirements.clone())
+                    .build()
+                    .await
+                    .map_err(|err| {
+                        ConfigServiceError::io("failed to read configuration layers", err)
+                    })?
+                    .config_layer_stack
+            }
+            None => self.load_thread_agnostic_config().await.map_err(|err| {
+                ConfigServiceError::io("failed to read configuration layers", err)
+            })?,
+        };
 
         let effective = layers.effective_config();
         validate_config(&effective)
@@ -150,12 +178,28 @@ impl ConfigService {
             origins: layers.origins(),
             layers: params.include_layers.then(|| {
                 layers
-                    .layers_high_to_low()
+                    .get_layers(ConfigLayerStackOrdering::HighestPrecedenceFirst, true)
                     .iter()
                     .map(|layer| layer.as_layer())
                     .collect()
             }),
         })
+    }
+
+    pub async fn read_requirements(
+        &self,
+    ) -> Result<Option<ConfigRequirementsToml>, ConfigServiceError> {
+        let layers = self
+            .load_thread_agnostic_config()
+            .await
+            .map_err(|err| ConfigServiceError::io("failed to read configuration layers", err))?;
+
+        let requirements = layers.requirements_toml().clone();
+        if requirements.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(requirements))
+        }
     }
 
     pub async fn write_value(
@@ -338,6 +382,7 @@ impl ConfigService {
             cwd,
             &self.cli_overrides,
             self.loader_overrides.clone(),
+            self.cloud_requirements.clone(),
         )
         .await
     }
@@ -346,19 +391,30 @@ impl ConfigService {
 async fn create_empty_user_layer(
     config_toml: &AbsolutePathBuf,
 ) -> Result<ConfigLayerEntry, ConfigServiceError> {
-    let toml_value = match tokio::fs::read_to_string(config_toml).await {
-        Ok(contents) => toml::from_str(&contents).map_err(|e| {
-            ConfigServiceError::toml("failed to parse existing user config.toml", e)
-        })?,
-        Err(e) => {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                tokio::fs::write(config_toml, "").await.map_err(|e| {
-                    ConfigServiceError::io("failed to create empty user config.toml", e)
-                })?;
+    let SymlinkWritePaths {
+        read_path,
+        write_path,
+    } = resolve_symlink_write_paths(config_toml.as_path())
+        .map_err(|err| ConfigServiceError::io("failed to resolve user config path", err))?;
+    let toml_value = match read_path {
+        Some(path) => match tokio::fs::read_to_string(&path).await {
+            Ok(contents) => toml::from_str(&contents).map_err(|e| {
+                ConfigServiceError::toml("failed to parse existing user config.toml", e)
+            })?,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                write_empty_user_config(write_path.clone()).await?;
                 TomlValue::Table(toml::map::Map::new())
-            } else {
-                return Err(ConfigServiceError::io("failed to read user config.toml", e));
             }
+            Err(err) => {
+                return Err(ConfigServiceError::io(
+                    "failed to read user config.toml",
+                    err,
+                ));
+            }
+        },
+        None => {
+            write_empty_user_config(write_path).await?;
+            TomlValue::Table(toml::map::Map::new())
         }
     };
     Ok(ConfigLayerEntry::new(
@@ -367,6 +423,13 @@ async fn create_empty_user_layer(
         },
         toml_value,
     ))
+}
+
+async fn write_empty_user_config(write_path: PathBuf) -> Result<(), ConfigServiceError> {
+    task::spawn_blocking(move || write_atomically(&write_path, ""))
+        .await
+        .map_err(|err| ConfigServiceError::anyhow("config persistence task panicked", err.into()))?
+        .map_err(|err| ConfigServiceError::io("failed to create empty user config.toml", err))
 }
 
 fn parse_value(value: JsonValue) -> Result<Option<TomlValue>, String> {
@@ -707,7 +770,7 @@ unified_exec = true
 "#;
         std::fs::write(tmp.path().join(CONFIG_TOML_FILE), original)?;
 
-        let service = ConfigService::new(tmp.path().to_path_buf(), vec![]);
+        let service = ConfigService::new_with_defaults(tmp.path().to_path_buf());
         service
             .write_value(ConfigValueWriteParams {
                 file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
@@ -748,19 +811,22 @@ remote_compaction = true
         std::fs::write(&managed_path, "approval_policy = \"never\"").unwrap();
         let managed_file = AbsolutePathBuf::try_from(managed_path.clone()).expect("managed file");
 
-        let service = ConfigService::with_overrides(
+        let service = ConfigService::new(
             tmp.path().to_path_buf(),
             vec![],
             LoaderOverrides {
                 managed_config_path: Some(managed_path.clone()),
                 #[cfg(target_os = "macos")]
                 managed_preferences_base64: None,
+                macos_managed_config_requirements_base64: None,
             },
+            CloudRequirementsLoader::default(),
         );
 
         let response = service
             .read(ConfigReadParams {
                 include_layers: true,
+                cwd: None,
             })
             .await
             .expect("response");
@@ -828,14 +894,16 @@ remote_compaction = true
         std::fs::write(&managed_path, "approval_policy = \"never\"").unwrap();
         let managed_file = AbsolutePathBuf::try_from(managed_path.clone()).expect("managed file");
 
-        let service = ConfigService::with_overrides(
+        let service = ConfigService::new(
             tmp.path().to_path_buf(),
             vec![],
             LoaderOverrides {
                 managed_config_path: Some(managed_path.clone()),
                 #[cfg(target_os = "macos")]
                 managed_preferences_base64: None,
+                macos_managed_config_requirements_base64: None,
             },
+            CloudRequirementsLoader::default(),
         );
 
         let result = service
@@ -852,6 +920,7 @@ remote_compaction = true
         let read_after = service
             .read(ConfigReadParams {
                 include_layers: true,
+                cwd: None,
             })
             .await
             .expect("read");
@@ -879,7 +948,7 @@ remote_compaction = true
         let user_path = tmp.path().join(CONFIG_TOML_FILE);
         std::fs::write(&user_path, "model = \"user\"").unwrap();
 
-        let service = ConfigService::new(tmp.path().to_path_buf(), vec![]);
+        let service = ConfigService::new_with_defaults(tmp.path().to_path_buf());
         let error = service
             .write_value(ConfigValueWriteParams {
                 file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
@@ -902,7 +971,7 @@ remote_compaction = true
         let tmp = tempdir().expect("tempdir");
         std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "").unwrap();
 
-        let service = ConfigService::new(tmp.path().to_path_buf(), vec![]);
+        let service = ConfigService::new_with_defaults(tmp.path().to_path_buf());
         service
             .write_value(ConfigValueWriteParams {
                 file_path: None,
@@ -930,14 +999,16 @@ remote_compaction = true
         let managed_path = tmp.path().join("managed_config.toml");
         std::fs::write(&managed_path, "approval_policy = \"never\"").unwrap();
 
-        let service = ConfigService::with_overrides(
+        let service = ConfigService::new(
             tmp.path().to_path_buf(),
             vec![],
             LoaderOverrides {
                 managed_config_path: Some(managed_path.clone()),
                 #[cfg(target_os = "macos")]
                 managed_preferences_base64: None,
+                macos_managed_config_requirements_base64: None,
             },
+            CloudRequirementsLoader::default(),
         );
 
         let error = service
@@ -977,19 +1048,22 @@ remote_compaction = true
             TomlValue::String("session".to_string()),
         )];
 
-        let service = ConfigService::with_overrides(
+        let service = ConfigService::new(
             tmp.path().to_path_buf(),
             cli_overrides,
             LoaderOverrides {
                 managed_config_path: Some(managed_path.clone()),
                 #[cfg(target_os = "macos")]
                 managed_preferences_base64: None,
+                macos_managed_config_requirements_base64: None,
             },
+            CloudRequirementsLoader::default(),
         );
 
         let response = service
             .read(ConfigReadParams {
                 include_layers: true,
+                cwd: None,
             })
             .await
             .expect("response");
@@ -1022,14 +1096,16 @@ remote_compaction = true
         std::fs::write(&managed_path, "approval_policy = \"never\"").unwrap();
         let managed_file = AbsolutePathBuf::try_from(managed_path.clone()).expect("managed file");
 
-        let service = ConfigService::with_overrides(
+        let service = ConfigService::new(
             tmp.path().to_path_buf(),
             vec![],
             LoaderOverrides {
                 managed_config_path: Some(managed_path.clone()),
                 #[cfg(target_os = "macos")]
                 managed_preferences_base64: None,
+                macos_managed_config_requirements_base64: None,
             },
+            CloudRequirementsLoader::default(),
         );
 
         let result = service
@@ -1080,7 +1156,7 @@ alpha = "a"
 
         std::fs::write(&path, base)?;
 
-        let service = ConfigService::new(tmp.path().to_path_buf(), vec![]);
+        let service = ConfigService::new_with_defaults(tmp.path().to_path_buf());
         service
             .write_value(ConfigValueWriteParams {
                 file_path: Some(path.display().to_string()),

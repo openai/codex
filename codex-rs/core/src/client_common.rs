@@ -1,15 +1,14 @@
 use crate::client_common::tools::ToolSpec;
+use crate::config::types::Personality;
 use crate::error::Result;
-use crate::models_manager::model_family::ModelFamily;
 pub use codex_api::common::ResponseEvent;
-use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
+use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseItem;
 use futures::Stream;
 use serde::Deserialize;
 use serde_json::Value;
-use std::borrow::Cow;
 use std::collections::HashSet;
-use std::ops::Deref;
 use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
@@ -36,38 +35,16 @@ pub struct Prompt {
     /// Whether parallel tool calls are permitted for this prompt.
     pub(crate) parallel_tool_calls: bool,
 
-    /// Optional override for the built-in BASE_INSTRUCTIONS.
-    pub base_instructions_override: Option<String>,
+    pub base_instructions: BaseInstructions,
+
+    /// Optionally specify the personality of the model.
+    pub personality: Option<Personality>,
 
     /// Optional the output schema for the model's response.
     pub output_schema: Option<Value>,
 }
 
 impl Prompt {
-    pub(crate) fn get_full_instructions<'a>(&'a self, model: &'a ModelFamily) -> Cow<'a, str> {
-        let base = self
-            .base_instructions_override
-            .as_deref()
-            .unwrap_or(model.base_instructions.deref());
-        // When there are no custom instructions, add apply_patch_tool_instructions if:
-        // - the model needs special instructions (4.1)
-        // AND
-        // - there is no apply_patch tool present
-        let is_apply_patch_tool_present = self.tools.iter().any(|tool| match tool {
-            ToolSpec::Function(f) => f.name == "apply_patch",
-            ToolSpec::Freeform(f) => f.name == "apply_patch",
-            _ => false,
-        });
-        if self.base_instructions_override.is_none()
-            && model.needs_special_apply_patch_instructions
-            && !is_apply_patch_tool_present
-        {
-            Cow::Owned(format!("{base}\n{APPLY_PATCH_TOOL_INSTRUCTIONS}"))
-        } else {
-            Cow::Borrowed(base)
-        }
-    }
-
     pub(crate) fn get_formatted_input(&self) -> Vec<ResponseItem> {
         let mut input = self.input.clone();
 
@@ -121,9 +98,11 @@ fn reserialize_shell_outputs(items: &mut [ResponseItem]) {
         }
         ResponseItem::FunctionCallOutput { call_id, output } => {
             if shell_call_ids.remove(call_id)
-                && let Some(structured) = parse_structured_shell_output(&output.content)
+                && let Some(structured) = output
+                    .text_content()
+                    .and_then(parse_structured_shell_output)
             {
-                output.content = structured
+                output.body = FunctionCallOutputBody::Text(structured);
             }
         }
         _ => {}
@@ -195,8 +174,13 @@ pub(crate) mod tools {
         LocalShell {},
         // TODO: Understand why we get an error on web_search although the API docs say it's supported.
         // https://platform.openai.com/docs/guides/tools-web-search?api-mode=responses#:~:text=%7B%20type%3A%20%22web_search%22%20%7D%2C
+        // The `external_web_access` field determines whether the web search is over cached or live content.
+        // https://platform.openai.com/docs/guides/tools-web-search#live-internet-access
         #[serde(rename = "web_search")]
-        WebSearch {},
+        WebSearch {
+            #[serde(skip_serializing_if = "Option::is_none")]
+            external_web_access: Option<bool>,
+        },
         #[serde(rename = "custom")]
         Freeform(FreeformTool),
     }
@@ -206,7 +190,7 @@ pub(crate) mod tools {
             match self {
                 ToolSpec::Function(tool) => tool.name.as_str(),
                 ToolSpec::LocalShell {} => "local_shell",
-                ToolSpec::WebSearch {} => "web_search",
+                ToolSpec::WebSearch { .. } => "web_search",
                 ToolSpec::Freeform(tool) => tool.name.as_str(),
             }
         }
@@ -258,76 +242,7 @@ mod tests {
     use codex_api::create_text_param_for_request;
     use pretty_assertions::assert_eq;
 
-    use crate::config::test_config;
-    use crate::models_manager::manager::ModelsManager;
-
     use super::*;
-
-    struct InstructionsTestCase {
-        pub slug: &'static str,
-        pub expects_apply_patch_instructions: bool,
-    }
-    #[test]
-    fn get_full_instructions_no_user_content() {
-        let prompt = Prompt {
-            ..Default::default()
-        };
-        let test_cases = vec![
-            InstructionsTestCase {
-                slug: "gpt-3.5",
-                expects_apply_patch_instructions: true,
-            },
-            InstructionsTestCase {
-                slug: "gpt-4.1",
-                expects_apply_patch_instructions: true,
-            },
-            InstructionsTestCase {
-                slug: "gpt-4o",
-                expects_apply_patch_instructions: true,
-            },
-            InstructionsTestCase {
-                slug: "gpt-5",
-                expects_apply_patch_instructions: true,
-            },
-            InstructionsTestCase {
-                slug: "gpt-5.1",
-                expects_apply_patch_instructions: false,
-            },
-            InstructionsTestCase {
-                slug: "codex-mini-latest",
-                expects_apply_patch_instructions: true,
-            },
-            InstructionsTestCase {
-                slug: "gpt-oss:120b",
-                expects_apply_patch_instructions: false,
-            },
-            InstructionsTestCase {
-                slug: "gpt-5.1-codex",
-                expects_apply_patch_instructions: false,
-            },
-            InstructionsTestCase {
-                slug: "gpt-5.1-codex-max",
-                expects_apply_patch_instructions: false,
-            },
-        ];
-        for test_case in test_cases {
-            let config = test_config();
-            let model_family =
-                ModelsManager::construct_model_family_offline(test_case.slug, &config);
-            let expected = if test_case.expects_apply_patch_instructions {
-                format!(
-                    "{}\n{}",
-                    model_family.clone().base_instructions,
-                    APPLY_PATCH_TOOL_INSTRUCTIONS
-                )
-            } else {
-                model_family.clone().base_instructions
-            };
-
-            let full = prompt.get_full_instructions(&model_family);
-            assert_eq!(full, expected);
-        }
-    }
 
     #[test]
     fn serializes_text_verbosity_when_set() {

@@ -1,3 +1,4 @@
+use codex_protocol::models::FunctionCallOutputBody;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 
@@ -9,6 +10,7 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 
@@ -39,9 +41,10 @@ struct ReadFileArgs {
     indentation: Option<IndentationArgs>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 enum ReadMode {
+    #[default]
     Slice,
     Indentation,
 }
@@ -107,11 +110,7 @@ impl ToolHandler for ReadFileHandler {
             }
         };
 
-        let args: ReadFileArgs = serde_json::from_str(&arguments).map_err(|err| {
-            FunctionCallError::RespondToModel(format!(
-                "failed to parse function arguments: {err:?}"
-            ))
-        })?;
+        let args: ReadFileArgs = parse_arguments(&arguments)?;
 
         let ReadFileArgs {
             file_path,
@@ -148,8 +147,7 @@ impl ToolHandler for ReadFileHandler {
             }
         };
         Ok(ToolOutput::Function {
-            content: collected.join("\n"),
-            content_items: None,
+            body: FunctionCallOutputBody::Text(collected.join("\n")),
             success: Some(true),
         })
     }
@@ -461,12 +459,6 @@ mod defaults {
                 include_header: include_header(),
                 max_lines: None,
             }
-        }
-    }
-
-    impl Default for ReadMode {
-        fn default() -> Self {
-            Self::Slice
         }
     }
 

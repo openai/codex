@@ -1,4 +1,5 @@
 use crate::config_loader::ConfigRequirements;
+use crate::config_loader::ConfigRequirementsToml;
 
 use super::fingerprint::record_origins;
 use super::fingerprint::version_for_toml;
@@ -12,11 +13,14 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use toml::Value as TomlValue;
 
+/// LoaderOverrides overrides managed configuration inputs (primarily for tests).
 #[derive(Debug, Default, Clone)]
 pub struct LoaderOverrides {
     pub managed_config_path: Option<PathBuf>,
+    //TODO(gt): Add a macos_ prefix to this field and remove the target_os check.
     #[cfg(target_os = "macos")]
     pub managed_preferences_base64: Option<String>,
+    pub macos_managed_config_requirements_base64: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -24,6 +28,7 @@ pub struct ConfigLayerEntry {
     pub name: ConfigLayerSource,
     pub config: TomlValue,
     pub version: String,
+    pub disabled_reason: Option<String>,
 }
 
 impl ConfigLayerEntry {
@@ -33,7 +38,26 @@ impl ConfigLayerEntry {
             name,
             config,
             version,
+            disabled_reason: None,
         }
+    }
+
+    pub fn new_disabled(
+        name: ConfigLayerSource,
+        config: TomlValue,
+        disabled_reason: impl Into<String>,
+    ) -> Self {
+        let version = version_for_toml(&config);
+        Self {
+            name,
+            config,
+            version,
+            disabled_reason: Some(disabled_reason.into()),
+        }
+    }
+
+    pub fn is_disabled(&self) -> bool {
+        self.disabled_reason.is_some()
     }
 
     pub fn metadata(&self) -> ConfigLayerMetadata {
@@ -48,6 +72,7 @@ impl ConfigLayerEntry {
             name: self.name.clone(),
             version: self.version.clone(),
             config: serde_json::to_value(&self.config).unwrap_or(JsonValue::Null),
+            disabled_reason: self.disabled_reason.clone(),
         }
     }
 
@@ -83,18 +108,25 @@ pub struct ConfigLayerStack {
     /// Constraints that must be enforced when deriving a [Config] from the
     /// layers.
     requirements: ConfigRequirements,
+
+    /// Raw requirements data as loaded from requirements.toml/MDM/legacy
+    /// sources. This preserves the original allow-lists so they can be
+    /// surfaced via APIs.
+    requirements_toml: ConfigRequirementsToml,
 }
 
 impl ConfigLayerStack {
     pub fn new(
         layers: Vec<ConfigLayerEntry>,
         requirements: ConfigRequirements,
+        requirements_toml: ConfigRequirementsToml,
     ) -> std::io::Result<Self> {
         let user_layer_index = verify_layer_ordering(&layers)?;
         Ok(Self {
             layers,
             user_layer_index,
             requirements,
+            requirements_toml,
         })
     }
 
@@ -106,6 +138,10 @@ impl ConfigLayerStack {
 
     pub fn requirements(&self) -> &ConfigRequirements {
         &self.requirements
+    }
+
+    pub fn requirements_toml(&self) -> &ConfigRequirementsToml {
+        &self.requirements_toml
     }
 
     /// Creates a new [ConfigLayerStack] using the specified values to inject a
@@ -128,6 +164,7 @@ impl ConfigLayerStack {
                     layers,
                     user_layer_index: self.user_layer_index,
                     requirements: self.requirements.clone(),
+                    requirements_toml: self.requirements_toml.clone(),
                 }
             }
             None => {
@@ -148,6 +185,7 @@ impl ConfigLayerStack {
                     layers,
                     user_layer_index: Some(user_layer_index),
                     requirements: self.requirements.clone(),
+                    requirements_toml: self.requirements_toml.clone(),
                 }
             }
         }
@@ -155,7 +193,7 @@ impl ConfigLayerStack {
 
     pub fn effective_config(&self) -> TomlValue {
         let mut merged = TomlValue::Table(toml::map::Map::new());
-        for layer in &self.layers {
+        for layer in self.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, false) {
             merge_toml_values(&mut merged, &layer.config);
         }
         merged
@@ -165,7 +203,7 @@ impl ConfigLayerStack {
         let mut origins = HashMap::new();
         let mut path = Vec::new();
 
-        for layer in &self.layers {
+        for layer in self.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, false) {
             record_origins(&layer.config, &layer.metadata(), &mut path, &mut origins);
         }
 
@@ -175,16 +213,25 @@ impl ConfigLayerStack {
     /// Returns the highest-precedence to lowest-precedence layers, so
     /// `ConfigLayerSource::SessionFlags` would be first, if present.
     pub fn layers_high_to_low(&self) -> Vec<&ConfigLayerEntry> {
-        self.get_layers(ConfigLayerStackOrdering::HighestPrecedenceFirst)
+        self.get_layers(ConfigLayerStackOrdering::HighestPrecedenceFirst, false)
     }
 
     /// Returns the highest-precedence to lowest-precedence layers, so
     /// `ConfigLayerSource::SessionFlags` would be first, if present.
-    pub fn get_layers(&self, ordering: ConfigLayerStackOrdering) -> Vec<&ConfigLayerEntry> {
-        match ordering {
-            ConfigLayerStackOrdering::HighestPrecedenceFirst => self.layers.iter().rev().collect(),
-            ConfigLayerStackOrdering::LowestPrecedenceFirst => self.layers.iter().collect(),
+    pub fn get_layers(
+        &self,
+        ordering: ConfigLayerStackOrdering,
+        include_disabled: bool,
+    ) -> Vec<&ConfigLayerEntry> {
+        let mut layers: Vec<&ConfigLayerEntry> = self
+            .layers
+            .iter()
+            .filter(|layer| include_disabled || !layer.is_disabled())
+            .collect();
+        if ordering == ConfigLayerStackOrdering::HighestPrecedenceFirst {
+            layers.reverse();
         }
+        layers
     }
 }
 
