@@ -1102,9 +1102,8 @@ impl ModelClientSession {
                 turn_metadata_header,
                 compression,
             );
-            let request = self.prepare_websocket_request(&model_info.slug, &api_prompt, &options);
 
-            let connection = match self
+            match self
                 .websocket_connection(
                     otel_manager,
                     client_setup.api_provider,
@@ -1114,7 +1113,7 @@ impl ModelClientSession {
                 )
                 .await
             {
-                Ok(connection) => connection,
+                Ok(_) => {}
                 Err(ApiError::Transport(
                     unauthorized_transport @ TransportError::Http { status, .. },
                 )) if status == StatusCode::UNAUTHORIZED => {
@@ -1122,9 +1121,18 @@ impl ModelClientSession {
                     continue;
                 }
                 Err(err) => return Err(map_api_error(err)),
-            };
+            }
 
-            let stream_result = connection
+            let request = self.prepare_websocket_request(&model_info.slug, &api_prompt, &options);
+
+            let stream_result = self
+                .connection
+                .as_ref()
+                .ok_or_else(|| {
+                    map_api_error(ApiError::Stream(
+                        "websocket connection is unavailable".to_string(),
+                    ))
+                })?
                 .stream_request(request)
                 .await
                 .map_err(map_api_error)?;
