@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,6 +20,7 @@ use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventStage;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::js_repl::JS_REPL_PRAGMA_PREFIX;
+use crate::tools::js_repl::JsExecPollResult;
 use crate::tools::js_repl::JsImageArtifact;
 use crate::tools::js_repl::JsReplArgs;
 use crate::tools::registry::ToolHandler;
@@ -31,6 +33,14 @@ const TOTAL_RAW_LIMIT: usize = 36 * 1024 * 1024;
 
 pub struct JsReplHandler;
 pub struct JsReplResetHandler;
+pub struct JsReplPollHandler;
+
+#[derive(Clone, Debug, Deserialize)]
+struct JsReplPollArgs {
+    exec_id: String,
+    #[serde(default)]
+    yield_time_ms: Option<u64>,
+}
 
 fn join_outputs(stdout: &str, stderr: &str) -> String {
     if stdout.is_empty() {
@@ -181,7 +191,30 @@ impl ToolHandler for JsReplHandler {
                 ));
             }
         };
+        if args.poll && !session.features().enabled(Feature::JsReplPolling) {
+            return Err(FunctionCallError::RespondToModel(
+                "js_repl polling is disabled by feature flag".to_string(),
+            ));
+        }
         let manager = turn.js_repl.manager().await?;
+        if args.poll {
+            let submission = Arc::clone(&manager)
+                .submit(Arc::clone(&session), Arc::clone(&turn), tracker, args)
+                .await?;
+            let content = serde_json::to_string(&serde_json::json!({
+                "exec_id": submission.exec_id,
+                "status": "running",
+            }))
+            .map_err(|err| {
+                FunctionCallError::Fatal(format!(
+                    "failed to serialize js_repl submission result: {err}"
+                ))
+            })?;
+            return Ok(ToolOutput::Function {
+                body: FunctionCallOutputBody::Text(content),
+                success: Some(true),
+            });
+        }
         let started_at = Instant::now();
         let result = manager
             .execute(Arc::clone(&session), Arc::clone(&turn), tracker, args)
@@ -240,6 +273,157 @@ impl ToolHandler for JsReplResetHandler {
     }
 }
 
+#[async_trait]
+impl ToolHandler for JsReplPollHandler {
+    fn kind(&self) -> ToolKind {
+        ToolKind::Function
+    }
+
+    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+        let ToolInvocation {
+            session,
+            turn,
+            payload,
+            ..
+        } = invocation;
+
+        if !session.features().enabled(Feature::JsRepl) {
+            return Err(FunctionCallError::RespondToModel(
+                "js_repl is disabled by feature flag".to_string(),
+            ));
+        }
+        if !session.features().enabled(Feature::JsReplPolling) {
+            return Err(FunctionCallError::RespondToModel(
+                "js_repl polling is disabled by feature flag".to_string(),
+            ));
+        }
+
+        let ToolPayload::Function { arguments } = payload else {
+            return Err(FunctionCallError::RespondToModel(
+                "js_repl_poll expects function payload".to_string(),
+            ));
+        };
+        let args: JsReplPollArgs = parse_arguments(&arguments)?;
+        let manager = turn.js_repl.manager().await?;
+        let result = manager.poll(&args.exec_id, args.yield_time_ms).await?;
+        let output = format_poll_output(&result)?;
+        if result.done {
+            let warnings = if result.artifacts.is_empty() {
+                None
+            } else {
+                let (_, warnings) = encode_artifacts(&result.artifacts);
+                if warnings.is_empty() {
+                    None
+                } else {
+                    Some(warnings.join("\n"))
+                }
+            };
+            let display_output = build_poll_display_output(&result, warnings.as_deref());
+            let duration = result.duration.unwrap_or(Duration::ZERO);
+            emit_js_repl_exec_end(
+                session.as_ref(),
+                turn.as_ref(),
+                &result.exec_id,
+                &display_output,
+                result.error.as_deref(),
+                duration,
+            )
+            .await;
+        }
+        let body = output
+            .content_items
+            .map(FunctionCallOutputBody::ContentItems)
+            .unwrap_or_else(|| FunctionCallOutputBody::Text(output.content));
+        Ok(ToolOutput::Function {
+            body,
+            success: Some(true),
+        })
+    }
+}
+
+struct JsReplPollOutput {
+    content: String,
+    content_items: Option<Vec<FunctionCallOutputContentItem>>,
+}
+
+fn build_poll_display_output(result: &JsExecPollResult, warnings: Option<&str>) -> String {
+    let mut output = String::new();
+    let mut push_section = |text: &str| {
+        if text.is_empty() {
+            return;
+        }
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        output.push_str(text);
+    };
+    if !result.all_logs.is_empty() {
+        push_section(&result.all_logs.join("\n"));
+    }
+    if let Some(text) = result.output.as_deref() {
+        push_section(text);
+    }
+    if let Some(text) = warnings {
+        push_section(text);
+    }
+    output
+}
+
+fn format_poll_output(result: &JsExecPollResult) -> Result<JsReplPollOutput, FunctionCallError> {
+    let status = if result.done {
+        if result.error.is_some() {
+            "error"
+        } else {
+            "completed"
+        }
+    } else {
+        "running"
+    };
+
+    let logs = if result.logs.is_empty() {
+        None
+    } else {
+        Some(result.logs.join("\n"))
+    };
+    let payload = serde_json::json!({
+        "exec_id": result.exec_id,
+        "status": status,
+        "logs": logs,
+        "output": result.output,
+        "error": result.error,
+    });
+    let content = serde_json::to_string(&payload).map_err(|err| {
+        FunctionCallError::Fatal(format!("failed to serialize js_repl poll result: {err}"))
+    })?;
+
+    let mut items = Vec::new();
+    if !result.logs.is_empty() {
+        items.extend(
+            result
+                .logs
+                .iter()
+                .map(|line| FunctionCallOutputContentItem::InputText { text: line.clone() }),
+        );
+    }
+    items.push(FunctionCallOutputContentItem::InputText {
+        text: content.clone(),
+    });
+    if result.done && !result.artifacts.is_empty() {
+        let (mut artifacts, warnings) = encode_artifacts(&result.artifacts);
+        items.append(&mut artifacts);
+        if !warnings.is_empty() {
+            items.push(FunctionCallOutputContentItem::InputText {
+                text: warnings.join("\n"),
+            });
+        }
+    }
+
+    Ok(JsReplPollOutput {
+        content,
+        content_items: Some(items),
+    })
+}
+
 fn parse_freeform_args(input: &str) -> Result<JsReplArgs, FunctionCallError> {
     if input.trim().is_empty() {
         return Err(FunctionCallError::RespondToModel(
@@ -251,6 +435,7 @@ fn parse_freeform_args(input: &str) -> Result<JsReplArgs, FunctionCallError> {
     let mut args = JsReplArgs {
         code: input.to_string(),
         timeout_ms: None,
+        poll: false,
     };
 
     let mut lines = input.splitn(2, '\n');
@@ -263,12 +448,13 @@ fn parse_freeform_args(input: &str) -> Result<JsReplArgs, FunctionCallError> {
     };
 
     let mut timeout_ms: Option<u64> = None;
+    let mut poll: Option<bool> = None;
     let directive = pragma.trim();
     if !directive.is_empty() {
         for token in directive.split_whitespace() {
             let (key, value) = token.split_once('=').ok_or_else(|| {
                 FunctionCallError::RespondToModel(format!(
-                    "js_repl pragma expects space-separated key=value pairs (supported keys: timeout_ms); got `{token}`"
+                    "js_repl pragma expects space-separated key=value pairs (supported keys: timeout_ms, poll); got `{token}`"
                 ))
             })?;
             match key {
@@ -285,9 +471,26 @@ fn parse_freeform_args(input: &str) -> Result<JsReplArgs, FunctionCallError> {
                     })?;
                     timeout_ms = Some(parsed);
                 }
+                "poll" => {
+                    if poll.is_some() {
+                        return Err(FunctionCallError::RespondToModel(
+                            "js_repl pragma specifies poll more than once".to_string(),
+                        ));
+                    }
+                    let parsed = match value.to_ascii_lowercase().as_str() {
+                        "true" => true,
+                        "false" => false,
+                        _ => {
+                            return Err(FunctionCallError::RespondToModel(format!(
+                                "js_repl pragma poll must be true or false; got `{value}`"
+                            )));
+                        }
+                    };
+                    poll = Some(parsed);
+                }
                 _ => {
                     return Err(FunctionCallError::RespondToModel(format!(
-                        "js_repl pragma only supports timeout_ms; got `{key}`"
+                        "js_repl pragma only supports timeout_ms, poll; got `{key}`"
                     )));
                 }
             }
@@ -303,6 +506,7 @@ fn parse_freeform_args(input: &str) -> Result<JsReplArgs, FunctionCallError> {
     reject_json_or_quoted_source(rest)?;
     args.code = rest.to_string();
     args.timeout_ms = timeout_ms;
+    args.poll = poll.unwrap_or(false);
     Ok(args)
 }
 
@@ -330,10 +534,13 @@ fn reject_json_or_quoted_source(code: &str) -> Result<(), FunctionCallError> {
 mod tests {
     use std::time::Duration;
 
+    use super::format_poll_output;
     use super::parse_freeform_args;
     use crate::codex::make_session_and_context_with_rx;
     use crate::protocol::EventMsg;
     use crate::protocol::ExecCommandSource;
+    use crate::tools::js_repl::JsExecPollResult;
+    use codex_protocol::models::FunctionCallOutputContentItem;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -341,6 +548,7 @@ mod tests {
         let args = parse_freeform_args("console.log('ok');").expect("parse args");
         assert_eq!(args.code, "console.log('ok');");
         assert_eq!(args.timeout_ms, None);
+        assert!(!args.poll);
     }
 
     #[test]
@@ -349,6 +557,16 @@ mod tests {
         let args = parse_freeform_args(input).expect("parse args");
         assert_eq!(args.code, "console.log('ok');");
         assert_eq!(args.timeout_ms, Some(15_000));
+        assert!(!args.poll);
+    }
+
+    #[test]
+    fn parse_freeform_args_with_poll() {
+        let input = "// codex-js-repl: poll=true\nconsole.log('ok');";
+        let args = parse_freeform_args(input).expect("parse args");
+        assert_eq!(args.code, "console.log('ok');");
+        assert_eq!(args.timeout_ms, None);
+        assert!(args.poll);
     }
 
     #[test]
@@ -357,7 +575,7 @@ mod tests {
             .expect_err("expected error");
         assert_eq!(
             err.to_string(),
-            "js_repl pragma only supports timeout_ms; got `nope`"
+            "js_repl pragma only supports timeout_ms, poll; got `nope`"
         );
     }
 
@@ -367,7 +585,17 @@ mod tests {
             .expect_err("expected error");
         assert_eq!(
             err.to_string(),
-            "js_repl pragma only supports timeout_ms; got `reset`"
+            "js_repl pragma only supports timeout_ms, poll; got `reset`"
+        );
+    }
+
+    #[test]
+    fn parse_freeform_args_rejects_duplicate_poll() {
+        let err = parse_freeform_args("// codex-js-repl: poll=true poll=false\nconsole.log('ok');")
+            .expect_err("expected error");
+        assert_eq!(
+            err.to_string(),
+            "js_repl pragma specifies poll more than once"
         );
     }
 
@@ -378,6 +606,38 @@ mod tests {
             err.to_string(),
             "js_repl is a freeform tool and expects raw JavaScript source. Resend plain JS only (optional first line `// codex-js-repl: ...`); do not send JSON (`{\"code\":...}`), quoted code, or markdown fences."
         );
+    }
+
+    #[test]
+    fn format_poll_output_includes_logs_as_output_items() {
+        let result = JsExecPollResult {
+            exec_id: "exec-1".to_string(),
+            logs: vec!["line 1".to_string(), "line 2".to_string()],
+            all_logs: Vec::new(),
+            output: None,
+            artifacts: Vec::new(),
+            error: None,
+            done: false,
+            duration: None,
+        };
+        let output = format_poll_output(&result).expect("format poll output");
+        let items = output.content_items.expect("content items");
+        assert_eq!(
+            items[0],
+            FunctionCallOutputContentItem::InputText {
+                text: "line 1".to_string()
+            }
+        );
+        assert_eq!(
+            items[1],
+            FunctionCallOutputContentItem::InputText {
+                text: "line 2".to_string()
+            }
+        );
+        assert!(matches!(
+            items[2],
+            FunctionCallOutputContentItem::InputText { .. }
+        ));
     }
 
     #[tokio::test]

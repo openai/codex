@@ -25,6 +25,7 @@ pub use dynamic::DynamicToolHandler;
 pub use get_memory::GetMemoryHandler;
 pub use grep_files::GrepFilesHandler;
 pub use js_repl::JsReplHandler;
+pub use js_repl::JsReplPollHandler;
 pub use js_repl::JsReplResetHandler;
 pub use list_dir::ListDirHandler;
 pub use mcp::McpHandler;

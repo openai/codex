@@ -157,6 +157,7 @@ impl ToolRouter {
         if source == ToolCallSource::Model
             && turn.tools_config.js_repl_tools_only
             && !matches!(tool_name.as_str(), "js_repl" | "js_repl_reset")
+            && !(turn.tools_config.js_repl_poll_enabled && tool_name == "js_repl_poll")
         {
             let err = FunctionCallError::RespondToModel(
                 "direct tool calls are disabled; use js_repl and codex.tool(...) instead"

@@ -21,6 +21,16 @@ js_repl_tools_only = true
 
 When enabled, direct model tool calls are restricted to `js_repl` and `js_repl_reset`; other tools remain available via `await codex.tool(...)` inside js_repl.
 
+`js_repl_polling` can be enabled to allow async/polled execution:
+
+```toml
+[features]
+js_repl = true
+js_repl_polling = true
+```
+
+When enabled, `js_repl` accepts `poll=true` in the first-line pragma and returns an `exec_id`. Use `js_repl_poll` with that `exec_id` until the response `status` becomes `completed` or `error`.
+
 ## Node runtime
 
 `js_repl` requires a Node version that meets or exceeds `codex-rs/node-version.txt`.
@@ -42,9 +52,17 @@ js_repl_node_path = "/absolute/path/to/node"
 - `js_repl` is a freeform tool: send raw JavaScript source text.
 - Optional first-line pragma:
   - `// codex-js-repl: timeout_ms=15000`
+  - `// codex-js-repl: poll=true timeout_ms=15000`
 - Top-level bindings persist across calls.
 - Top-level static import declarations (for example `import x from "pkg"`) are currently unsupported; use dynamic imports with `await import("pkg")`.
 - Use `js_repl_reset` to clear the kernel state.
+
+### Polling flow
+
+1. Submit with `js_repl` and `poll=true` pragma.
+2. Read `exec_id` from the JSON response.
+3. Call `js_repl_poll` with `{"exec_id":"...","yield_time_ms":1000}`.
+4. Repeat until `status` is `completed` or `error`.
 
 ## Helper APIs inside the kernel
 
