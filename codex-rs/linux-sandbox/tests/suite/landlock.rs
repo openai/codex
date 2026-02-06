@@ -39,7 +39,16 @@ fn create_env_from_core_vars() -> HashMap<String, String> {
 
 #[expect(clippy::print_stdout)]
 async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
-    let output = run_cmd_output(cmd, writable_roots, timeout_ms).await;
+    let output = match run_cmd_output(cmd, writable_roots, timeout_ms).await {
+        Ok(output) => output,
+        Err(err) if is_landlock_unavailable_error(&err) => {
+            println!("Skipping Landlock test because restrictions are unavailable: {err}");
+            return;
+        }
+        Err(err) => {
+            panic!("sandbox execution failed: {err:?}");
+        }
+    };
     if output.exit_code != 0 {
         println!("stdout:\n{}", output.stdout.text);
         println!("stderr:\n{}", output.stderr.text);
@@ -52,7 +61,7 @@ async fn run_cmd_output(
     cmd: &[&str],
     writable_roots: &[PathBuf],
     timeout_ms: u64,
-) -> codex_core::exec::ExecToolCallOutput {
+) -> codex_core::error::Result<codex_core::exec::ExecToolCallOutput> {
     let cwd = std::env::current_dir().expect("cwd should exist");
     let sandbox_cwd = cwd.clone();
     let params = ExecParams {
@@ -89,7 +98,20 @@ async fn run_cmd_output(
         None,
     )
     .await
-    .unwrap()
+}
+
+fn is_landlock_unavailable_error(err: &CodexErr) -> bool {
+    match err {
+        CodexErr::Sandbox(SandboxErr::LandlockRestrict) => true,
+        CodexErr::Sandbox(SandboxErr::Denied { output }) => {
+            output.stderr.text.contains("LandlockRestrict")
+                || output
+                    .stderr
+                    .text
+                    .contains("error applying legacy Linux sandbox restrictions")
+        }
+        _ => false,
+    }
 }
 
 #[tokio::test]
@@ -98,16 +120,28 @@ async fn test_root_read() {
 }
 
 #[tokio::test]
-#[should_panic]
 async fn test_root_write() {
     let tmpfile = NamedTempFile::new().unwrap();
     let tmpfile_path = tmpfile.path().to_string_lossy();
-    run_cmd(
+    match run_cmd_output(
         &["bash", "-lc", &format!("echo blah > {tmpfile_path}")],
         &[],
         SHORT_TIMEOUT_MS,
     )
-    .await;
+    .await
+    {
+        Err(CodexErr::Sandbox(SandboxErr::Denied { .. })) => {}
+        Err(err) if is_landlock_unavailable_error(&err) => {}
+        Ok(output) => {
+            panic!(
+                "expected root write to be denied but command exited {}\nstdout:\n{}\nstderr:\n{}",
+                output.exit_code, output.stdout.text, output.stderr.text
+            );
+        }
+        Err(err) => {
+            panic!("expected sandbox deny for root write, got: {err:?}");
+        }
+    }
 }
 
 #[tokio::test]
@@ -142,12 +176,17 @@ async fn test_writable_root() {
 
 #[tokio::test]
 async fn test_no_new_privs_is_enabled() {
-    let output = run_cmd_output(
+    let output = match run_cmd_output(
         &["bash", "-lc", "grep '^NoNewPrivs:' /proc/self/status"],
         &[],
         SHORT_TIMEOUT_MS,
     )
-    .await;
+    .await
+    {
+        Ok(output) => output,
+        Err(err) if is_landlock_unavailable_error(&err) => return,
+        Err(err) => panic!("unexpected sandbox error: {err:?}"),
+    };
     let line = output
         .stdout
         .text
@@ -158,9 +197,20 @@ async fn test_no_new_privs_is_enabled() {
 }
 
 #[tokio::test]
-#[should_panic(expected = "Sandbox(Timeout")]
 async fn test_timeout() {
-    run_cmd(&["sleep", "2"], &[], 50).await;
+    match run_cmd_output(&["sleep", "2"], &[], 50).await {
+        Err(CodexErr::Sandbox(SandboxErr::Timeout { .. })) => {}
+        Err(err) if is_landlock_unavailable_error(&err) => {}
+        Ok(output) => {
+            panic!(
+                "expected timeout but command exited {}\nstdout:\n{}\nstderr:\n{}",
+                output.exit_code, output.stdout.text, output.stderr.text
+            );
+        }
+        Err(err) => {
+            panic!("expected timeout error, got: {err:?}");
+        }
+    }
 }
 
 /// Helper that runs `cmd` under the Linux sandbox and asserts that the command

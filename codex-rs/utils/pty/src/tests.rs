@@ -72,7 +72,7 @@ async fn collect_output_until_exit(
                 // On Windows (ConPTY in particular), it's possible to observe the exit notification
                 // before the final bytes are drained from the PTY reader thread. Drain for a brief
                 // "quiet" window to make output assertions deterministic.
-                let (quiet_ms, max_ms) = if cfg!(windows) { (200, 2_000) } else { (50, 500) };
+                let (quiet_ms, max_ms) = if cfg!(windows) { (500, 3_000) } else { (50, 500) };
                 let quiet = tokio::time::Duration::from_millis(quiet_ms);
                 let max_deadline =
                     tokio::time::Instant::now() + tokio::time::Duration::from_millis(max_ms);
@@ -107,6 +107,9 @@ async fn pty_python_repl_emits_output_and_exits() -> anyhow::Result<()> {
     writer
         .send(format!("print('hello from pty'){newline}").into_bytes())
         .await?;
+    if cfg!(windows) {
+        tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
+    }
     writer.send(format!("exit(){newline}").into_bytes()).await?;
 
     let timeout_ms = if cfg!(windows) { 10_000 } else { 5_000 };
