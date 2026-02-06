@@ -13,7 +13,6 @@
 //!     that order.
 //! 3.  We do **not** walk past the Git root.
 
-use crate::apps::render_apps_section;
 use crate::config::Config;
 use crate::features::Feature;
 use crate::skills::SkillMetadata;
@@ -68,13 +67,6 @@ pub(crate) async fn get_user_instructions(
             output.push_str("\n\n");
         }
         output.push_str(&skills_section);
-    }
-
-    if config.features.enabled(Feature::Apps) {
-        if !output.is_empty() {
-            output.push_str("\n\n");
-        }
-        output.push_str(render_apps_section());
     }
 
     if config.features.enabled(Feature::ChildAgentsMd) {
@@ -556,20 +548,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn apps_section_renders_without_project_doc() {
+    async fn apps_feature_does_not_emit_user_instructions_by_itself() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let mut cfg = make_config(&tmp, 4096, None).await;
         cfg.features.enable(Feature::Apps);
 
-        let res = get_user_instructions(&cfg, None)
-            .await
-            .expect("instructions expected");
-
-        assert_eq!(res, render_apps_section());
+        let res = get_user_instructions(&cfg, None).await;
+        assert_eq!(res, None);
     }
 
     #[tokio::test]
-    async fn apps_section_is_appended_to_project_doc() {
+    async fn apps_feature_does_not_append_to_project_doc_user_instructions() {
         let tmp = tempfile::tempdir().expect("tempdir");
         fs::write(tmp.path().join("AGENTS.md"), "base doc").unwrap();
 
@@ -579,8 +568,7 @@ mod tests {
         let res = get_user_instructions(&cfg, None)
             .await
             .expect("instructions expected");
-        let expected = format!("base doc\n\n{}", render_apps_section());
-        assert_eq!(res, expected);
+        assert_eq!(res, "base doc");
     }
 
     fn create_skill(codex_home: PathBuf, name: &str, description: &str) {
