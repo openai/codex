@@ -265,6 +265,24 @@ impl ThreadManager {
                 Arc::clone(&self.state.auth_manager),
                 self.agent_control(),
                 dynamic_tools,
+                false,
+            )
+            .await
+    }
+
+    pub async fn start_thread_with_tools_deferred_rollout(
+        &self,
+        config: Config,
+        dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+    ) -> CodexResult<NewThread> {
+        self.state
+            .spawn_thread(
+                config,
+                InitialHistory::New,
+                Arc::clone(&self.state.auth_manager),
+                self.agent_control(),
+                dynamic_tools,
+                true,
             )
             .await
     }
@@ -293,6 +311,7 @@ impl ThreadManager {
                 auth_manager,
                 self.agent_control(),
                 Vec::new(),
+                false,
             )
             .await
     }
@@ -332,6 +351,7 @@ impl ThreadManager {
                 Arc::clone(&self.state.auth_manager),
                 self.agent_control(),
                 Vec::new(),
+                false,
             )
             .await
     }
@@ -401,6 +421,7 @@ impl ThreadManagerState {
             agent_control,
             session_source,
             Vec::new(),
+            false,
         )
         .await
     }
@@ -413,6 +434,7 @@ impl ThreadManagerState {
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+        defer_new_rollout_creation: bool,
     ) -> CodexResult<NewThread> {
         self.spawn_thread_with_source(
             config,
@@ -421,6 +443,7 @@ impl ThreadManagerState {
             agent_control,
             self.session_source.clone(),
             dynamic_tools,
+            defer_new_rollout_creation,
         )
         .await
     }
@@ -433,6 +456,7 @@ impl ThreadManagerState {
         agent_control: AgentControl,
         session_source: SessionSource,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+        defer_new_rollout_creation: bool,
     ) -> CodexResult<NewThread> {
         self.file_watcher.register_config(&config);
         let CodexSpawnOk {
@@ -444,6 +468,7 @@ impl ThreadManagerState {
             Arc::clone(&self.skills_manager),
             Arc::clone(&self.file_watcher),
             initial_history,
+            defer_new_rollout_creation,
             session_source,
             agent_control,
             dynamic_tools,

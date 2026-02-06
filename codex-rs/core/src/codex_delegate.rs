@@ -56,6 +56,7 @@ pub(crate) async fn run_codex_thread_interactive(
         Arc::clone(&parent_session.services.skills_manager),
         Arc::clone(&parent_session.services.file_watcher),
         initial_history.unwrap_or(InitialHistory::New),
+        false,
         SessionSource::SubAgent(SubAgentSource::Review),
         parent_session.services.agent_control.clone(),
         Vec::new(),

@@ -1844,7 +1844,7 @@ impl CodexMessageProcessor {
 
         match self
             .thread_manager
-            .start_thread_with_tools(config, core_dynamic_tools)
+            .start_thread_with_tools_deferred_rollout(config, core_dynamic_tools)
             .await
         {
             Ok(new_conv) => {
