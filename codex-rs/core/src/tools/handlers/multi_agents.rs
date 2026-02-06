@@ -1,11 +1,9 @@
 use crate::agent::AgentStatus;
-use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::config::Constrained;
 use crate::error::CodexErr;
-use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -891,7 +889,7 @@ fn input_preview(items: &[UserInput]) -> String {
     parts.join("\n")
 }
 
-fn build_agent_spawn_config(
+pub(crate) fn build_agent_spawn_config(
     base_instructions: &BaseInstructions,
     turn: &TurnContext,
     child_depth: i32,

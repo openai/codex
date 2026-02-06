@@ -12,6 +12,7 @@ use crate::SandboxState;
 use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
 use crate::agent::agent_status_from_event;
+use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::analytics_client::AppInvocation;
 use crate::analytics_client::InvocationType;
@@ -330,7 +331,7 @@ impl Codex {
         }
 
         if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = session_source
-            && depth >= config.agent_max_depth
+            && exceeds_thread_spawn_depth_limit(depth, config.agent_max_depth)
         {
             config.features.disable(Feature::Collab);
         }
