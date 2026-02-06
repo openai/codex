@@ -133,8 +133,6 @@ export type { TextRange } from "./TextRange";
 export type { Thread } from "./Thread";
 export type { ThreadArchiveParams } from "./ThreadArchiveParams";
 export type { ThreadArchiveResponse } from "./ThreadArchiveResponse";
-export type { ThreadBackgroundTerminalsCleanParams } from "./ThreadBackgroundTerminalsCleanParams";
-export type { ThreadBackgroundTerminalsCleanResponse } from "./ThreadBackgroundTerminalsCleanResponse";
 export type { ThreadCompactStartParams } from "./ThreadCompactStartParams";
 export type { ThreadCompactStartResponse } from "./ThreadCompactStartResponse";
 export type { ThreadForkParams } from "./ThreadForkParams";
