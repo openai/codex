@@ -5,8 +5,7 @@ Agent jobs are designed to be:
 
 1. Durable via SQLite for progress tracking and export.
 2. Bounded by configured concurrency and thread limits.
-3. Observable via explicit status/progress tools.
-4. Exportable to CSV at stage boundaries.
+3. Exportable to CSV on successful completion.
 
 ## Tools
 
@@ -15,6 +14,7 @@ All tools are function-style and gated by the `collab` feature.
 ### `spawn_agents_on_csv`
 
 Create a new job from a CSV input and immediately start it.
+This tool blocks until the job completes and auto-exports on success.
 
 Required args:
 - `csv_path`: path to the CSV file (first row is headers).
@@ -28,35 +28,19 @@ Optional args:
 - `output_csv_path`: destination for CSV export (defaults to `<input>.agent-job-<id>.csv`).
 - `output_schema`: JSON schema for result payloads (best-effort guidance).
 - `max_concurrency`: cap on parallel workers (defaults to 64, then capped by config).
-- `auto_export`: auto-export CSV on successful completion (default true).
-
-### `get_agent_job_status`
-
-Return job status and progress counters. Most flows should prefer `wait_agent_job`
-to deterministically block until completion.
-
-### `wait_agent_job`
-
-Wait for a job to complete, or return after a timeout.
-
-### `export_agent_job_csv`
-
-Export the current job results to CSV using the stored headers and results. You can
-optionally override the destination path.
 
 ### `report_agent_job_result`
 
-Workers must call this exactly once to report a JSON object for their assigned item.
+Worker-only tool used internally for reporting JSON results. Main agents should not call this.
 
 ## Execution Model
 
 1. Jobs are stored in SQLite with per-item state (pending/running/completed/failed).
 2. The job runner spawns subagents up to `max_concurrency`.
 3. The job instruction is rendered per row by substituting `{column_name}` placeholders.
-4. Each worker processes one item and calls `report_agent_job_result`.
+4. Each worker processes one item and reports results through `report_agent_job_result`.
 5. The runner marks items completed after the worker finishes.
-6. If `auto_export` is true, the runner writes a CSV snapshot on successful completion.
-7. CSV export can also be generated manually by a single writer from the SQLite store.
+6. The runner writes a CSV snapshot on successful completion.
 
 ## CSV Output
 
@@ -97,7 +81,6 @@ csv_path: /tmp/security_rank_input_demo.csv
 instruction: read the file (relative to repo root), skim first 200 lines, score security relevance 1-10, output JSON with keys path, score, rationale, signals array.
 output_csv_path: /tmp/security_rank_output_demo.csv
 
-Do NOT call export_agent_job_csv manually.
-Wait for completion and then print the output path and `head -n 6` of the CSV.
+After completion, print the output path and `head -n 6` of the CSV.
 PROMPT
 ```

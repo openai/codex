@@ -18,7 +18,6 @@ use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
-use once_cell::sync::Lazy;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -27,21 +26,13 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
 use tokio::time::Duration;
 use tokio::time::Instant;
 use uuid::Uuid;
 
 pub struct AgentJobsHandler;
 
-const MIN_WAIT_TIMEOUT_MS: i64 = 1_000;
-const DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;
-const MAX_WAIT_TIMEOUT_MS: i64 = 300_000;
 const STATUS_POLL_INTERVAL_MS: u64 = 250;
-
-static ACTIVE_JOB_RUNNERS: Lazy<Mutex<HashMap<String, JoinHandle<()>>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Debug, Deserialize)]
 struct SpawnAgentsOnCsvArgs {
@@ -52,25 +43,6 @@ struct SpawnAgentsOnCsvArgs {
     output_csv_path: Option<String>,
     output_schema: Option<Value>,
     max_concurrency: Option<usize>,
-    auto_export: Option<bool>,
-}
-
-#[derive(Debug, Deserialize)]
-struct JobIdArgs {
-    job_id: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct WaitAgentJobArgs {
-    job_id: String,
-    timeout_ms: Option<i64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ExportAgentJobCsvArgs {
-    job_id: String,
-    #[serde(alias = "path")]
-    output_csv_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -81,37 +53,24 @@ struct ReportAgentJobResultArgs {
 }
 
 #[derive(Debug, Serialize)]
-struct AgentJobToolResult {
+struct SpawnAgentsOnCsvResult {
     job_id: String,
     status: String,
+    output_csv_path: String,
+    total_items: usize,
+    completed_items: usize,
+    failed_items: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentJobProgressUpdate {
+    job_id: String,
     total_items: usize,
     pending_items: usize,
     running_items: usize,
     completed_items: usize,
     failed_items: usize,
-    output_csv_path: String,
-    runner_active: bool,
-}
-
-#[derive(Debug, Serialize)]
-struct SpawnAgentsOnCsvResult {
-    job_id: String,
-    started: bool,
-    output_csv_path: String,
-    total_items: usize,
-}
-
-#[derive(Debug, Serialize)]
-struct WaitAgentJobResult {
-    status: AgentJobToolResult,
-    timed_out: bool,
-}
-
-#[derive(Debug, Serialize)]
-struct ExportAgentJobCsvResult {
-    job_id: String,
-    output_csv_path: String,
-    row_count: usize,
+    eta_seconds: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -123,8 +82,73 @@ struct ReportAgentJobResultToolResult {
 struct JobRunnerOptions {
     max_concurrency: usize,
     spawn_config: Config,
-    child_depth: i32,
-    auto_export: bool,
+}
+
+struct JobProgressEmitter {
+    started_at: Instant,
+    last_emit_at: Instant,
+    last_processed: usize,
+    last_failed: usize,
+}
+
+impl JobProgressEmitter {
+    fn new() -> Self {
+        let now = Instant::now();
+        Self {
+            started_at: now,
+            last_emit_at: now,
+            last_processed: 0,
+            last_failed: 0,
+        }
+    }
+
+    async fn maybe_emit(
+        &mut self,
+        session: &Session,
+        turn: &TurnContext,
+        job_id: &str,
+        progress: &codex_state::AgentJobProgress,
+        force: bool,
+    ) -> anyhow::Result<()> {
+        const EMIT_INTERVAL: Duration = Duration::from_secs(1);
+        let processed = progress.completed_items + progress.failed_items;
+        let should_emit = force
+            || processed != self.last_processed
+            || progress.failed_items != self.last_failed
+            || self.last_emit_at.elapsed() >= EMIT_INTERVAL;
+        if !should_emit {
+            return Ok(());
+        }
+        let elapsed = self.started_at.elapsed().as_secs_f64();
+        let eta_seconds = if processed > 0 && elapsed > 0.0 {
+            let remaining = progress.total_items.saturating_sub(processed) as f64;
+            let rate = processed as f64 / elapsed;
+            if rate > 0.0 {
+                Some((remaining / rate).round() as u64)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let update = AgentJobProgressUpdate {
+            job_id: job_id.to_string(),
+            total_items: progress.total_items,
+            pending_items: progress.pending_items,
+            running_items: progress.running_items,
+            completed_items: progress.completed_items,
+            failed_items: progress.failed_items,
+            eta_seconds,
+        };
+        let payload = serde_json::to_string(&update)?;
+        session
+            .notify_background_event(turn, format!("agent_job_progress:{payload}"))
+            .await;
+        self.last_emit_at = Instant::now();
+        self.last_processed = processed;
+        self.last_failed = progress.failed_items;
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -157,9 +181,6 @@ impl ToolHandler for AgentJobsHandler {
 
         match tool_name.as_str() {
             "spawn_agents_on_csv" => spawn_agents_on_csv::handle(session, turn, arguments).await,
-            "get_agent_job_status" => get_agent_job_status::handle(session, arguments).await,
-            "wait_agent_job" => wait_agent_job::handle(session, arguments).await,
-            "export_agent_job_csv" => export_agent_job_csv::handle(session, turn, arguments).await,
             "report_agent_job_result" => report_agent_job_result::handle(session, arguments).await,
             other => Err(FunctionCallError::RespondToModel(format!(
                 "unsupported agent job tool {other}"
@@ -260,14 +281,13 @@ mod spawn_agents_on_csv {
         let job_name = args
             .job_name
             .unwrap_or_else(|| format!("agent-job-{job_suffix}"));
-        let auto_export = args.auto_export.unwrap_or(true);
-        let job = db
+        let _job = db
             .create_agent_job(
                 &codex_state::AgentJobCreateParams {
                     id: job_id.clone(),
                     name: job_name,
                     instruction: args.instruction,
-                    auto_export,
+                    auto_export: true,
                     output_schema_json: args.output_schema,
                     input_headers: headers,
                     input_csv_path: input_path.display().to_string(),
@@ -280,167 +300,62 @@ mod spawn_agents_on_csv {
                 FunctionCallError::RespondToModel(format!("failed to create agent job: {err}"))
             })?;
 
-        let options =
-            build_runner_options(&session, &turn, args.max_concurrency, Some(auto_export)).await?;
-        let started = start_job_runner(session, job_id.clone(), options).await?;
-
-        let content = serde_json::to_string(&SpawnAgentsOnCsvResult {
-            job_id,
-            started,
-            output_csv_path: job.output_csv_path,
-            total_items: items.len(),
-        })
-        .map_err(|err| {
-            FunctionCallError::Fatal(format!(
-                "failed to serialize spawn_agents_on_csv result: {err}"
-            ))
-        })?;
-        Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(content),
-            success: Some(true),
-        })
-    }
-}
-
-mod get_agent_job_status {
-    use super::*;
-
-    pub async fn handle(
-        session: Arc<Session>,
-        arguments: String,
-    ) -> Result<ToolOutput, FunctionCallError> {
-        let args: JobIdArgs = parse_arguments(arguments.as_str())?;
-        let job_id = args.job_id;
-        let db = required_state_db(&session)?;
-        let status = render_job_status(db, job_id.as_str()).await?;
-        let content = serde_json::to_string(&status).map_err(|err| {
-            FunctionCallError::Fatal(format!(
-                "failed to serialize get_agent_job_status result: {err}"
-            ))
-        })?;
-        Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(content),
-            success: Some(true),
-        })
-    }
-}
-
-mod wait_agent_job {
-    use super::*;
-
-    pub async fn handle(
-        session: Arc<Session>,
-        arguments: String,
-    ) -> Result<ToolOutput, FunctionCallError> {
-        let args: WaitAgentJobArgs = parse_arguments(arguments.as_str())?;
-        let db = required_state_db(&session)?;
-        let timeout_ms = args.timeout_ms.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS);
-        let timeout_ms = match timeout_ms {
-            ms if ms <= 0 => {
-                return Err(FunctionCallError::RespondToModel(
-                    "timeout_ms must be greater than zero".to_string(),
-                ));
-            }
-            ms => ms.clamp(MIN_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS),
-        };
-
-        let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
-        loop {
-            let status = render_job_status(db.clone(), args.job_id.as_str()).await?;
-            if matches!(status.status.as_str(), "completed" | "failed" | "cancelled") {
-                let content = serde_json::to_string(&WaitAgentJobResult {
-                    status,
-                    timed_out: false,
-                })
-                .map_err(|err| {
-                    FunctionCallError::Fatal(format!(
-                        "failed to serialize wait_agent_job result: {err}"
-                    ))
-                })?;
-                return Ok(ToolOutput::Function {
-                    body: FunctionCallOutputBody::Text(content),
-                    success: Some(true),
-                });
-            }
-            if Instant::now() >= deadline {
-                let content = serde_json::to_string(&WaitAgentJobResult {
-                    status,
-                    timed_out: true,
-                })
-                .map_err(|err| {
-                    FunctionCallError::Fatal(format!(
-                        "failed to serialize wait_agent_job timeout result: {err}"
-                    ))
-                })?;
-                return Ok(ToolOutput::Function {
-                    body: FunctionCallOutputBody::Text(content),
-                    success: Some(true),
-                });
-            }
-            tokio::time::sleep(Duration::from_millis(STATUS_POLL_INTERVAL_MS)).await;
+        db.mark_agent_job_running(job_id.as_str())
+            .await
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!(
+                    "failed to transition agent job {job_id} to running: {err}"
+                ))
+            })?;
+        let options = build_runner_options(&session, &turn, args.max_concurrency).await?;
+        if let Err(err) = run_agent_job_loop(
+            session.clone(),
+            turn.clone(),
+            db.clone(),
+            job_id.clone(),
+            options,
+        )
+        .await
+        {
+            let error_message = format!("job runner failed: {err}");
+            let _ = db
+                .mark_agent_job_failed(job_id.as_str(), error_message.as_str())
+                .await;
+            return Err(FunctionCallError::RespondToModel(format!(
+                "agent job {job_id} failed: {err}"
+            )));
         }
-    }
-}
 
-mod export_agent_job_csv {
-    use super::*;
-
-    pub async fn handle(
-        session: Arc<Session>,
-        turn: Arc<TurnContext>,
-        arguments: String,
-    ) -> Result<ToolOutput, FunctionCallError> {
-        let args: ExportAgentJobCsvArgs = parse_arguments(arguments.as_str())?;
-        let job_id = args.job_id;
-        let db = required_state_db(&session)?;
         let job = db
             .get_agent_job(job_id.as_str())
             .await
             .map_err(|err| {
                 FunctionCallError::RespondToModel(format!(
-                    "failed to look up agent job {job_id}: {err}"
+                    "failed to load agent job {job_id}: {err}"
                 ))
             })?
             .ok_or_else(|| {
                 FunctionCallError::RespondToModel(format!("agent job {job_id} not found"))
             })?;
-        let items = db
-            .list_agent_job_items(job_id.as_str(), None, None)
+        let progress = db
+            .get_agent_job_progress(job_id.as_str())
             .await
             .map_err(|err| {
                 FunctionCallError::RespondToModel(format!(
-                    "failed to load items for agent job {job_id}: {err}"
+                    "failed to load agent job progress {job_id}: {err}"
                 ))
             })?;
-        let output_path = args.output_csv_path.map_or_else(
-            || PathBuf::from(job.output_csv_path.clone()),
-            |path| turn.resolve_path(Some(path)),
-        );
-        if let Some(parent) = output_path.parent() {
-            let parent_display = parent.display().to_string();
-            tokio::fs::create_dir_all(parent).await.map_err(|err| {
-                FunctionCallError::RespondToModel(format!(
-                    "failed to create export directory {parent_display}: {err}"
-                ))
-            })?;
-        }
-        let csv_content = render_job_csv(job.input_headers.as_slice(), items.as_slice())?;
-        let output_display = output_path.display().to_string();
-        tokio::fs::write(&output_path, csv_content)
-            .await
-            .map_err(|err| {
-                FunctionCallError::RespondToModel(format!(
-                    "failed to write csv export {output_display}: {err}"
-                ))
-            })?;
-        let content = serde_json::to_string(&ExportAgentJobCsvResult {
+        let content = serde_json::to_string(&SpawnAgentsOnCsvResult {
             job_id,
-            output_csv_path: output_display,
-            row_count: items.len(),
+            status: job.status.as_str().to_string(),
+            output_csv_path: job.output_csv_path,
+            total_items: progress.total_items,
+            completed_items: progress.completed_items,
+            failed_items: progress.failed_items,
         })
         .map_err(|err| {
             FunctionCallError::Fatal(format!(
-                "failed to serialize export_agent_job_csv result: {err}"
+                "failed to serialize spawn_agents_on_csv result: {err}"
             ))
         })?;
         Ok(ToolOutput::Function {
@@ -508,7 +423,6 @@ async fn build_runner_options(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
     requested_concurrency: Option<usize>,
-    requested_auto_export: Option<bool>,
 ) -> Result<JobRunnerOptions, FunctionCallError> {
     let session_source = turn.session_source.clone();
     let child_depth = next_thread_spawn_depth(&session_source);
@@ -524,8 +438,6 @@ async fn build_runner_options(
     Ok(JobRunnerOptions {
         max_concurrency,
         spawn_config,
-        child_depth,
-        auto_export: requested_auto_export.unwrap_or(true),
     })
 }
 
@@ -539,81 +451,15 @@ fn normalize_concurrency(requested: Option<usize>, max_threads: Option<usize>) -
     }
 }
 
-async fn start_job_runner(
-    session: Arc<Session>,
-    job_id: String,
-    options: JobRunnerOptions,
-) -> Result<bool, FunctionCallError> {
-    cleanup_finished_runners().await;
-    let mut runners = ACTIVE_JOB_RUNNERS.lock().await;
-    if let Some(handle) = runners.get(job_id.as_str())
-        && !handle.is_finished()
-    {
-        return Ok(false);
-    }
-    let db = required_state_db(&session)?;
-    let job = db
-        .get_agent_job(job_id.as_str())
-        .await
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!("failed to load agent job {job_id}: {err}"))
-        })?
-        .ok_or_else(|| {
-            FunctionCallError::RespondToModel(format!("agent job {job_id} not found"))
-        })?;
-    let progress = db
-        .get_agent_job_progress(job_id.as_str())
-        .await
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!(
-                "failed to load agent job progress {job_id}: {err}"
-            ))
-        })?;
-    if job.status.is_final() && progress.pending_items == 0 && progress.running_items == 0 {
-        return Ok(false);
-    }
-    db.mark_agent_job_running(job_id.as_str())
-        .await
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!(
-                "failed to transition agent job {job_id} to running: {err}"
-            ))
-        })?;
-    let job_id_for_task = job_id.clone();
-    let handle = tokio::spawn(async move {
-        if let Err(err) =
-            run_agent_job_loop(session, db.clone(), job_id_for_task.clone(), options).await
-        {
-            let error_message = format!("job runner failed: {err}");
-            let _ = db
-                .mark_agent_job_failed(job_id_for_task.as_str(), error_message.as_str())
-                .await;
-        }
-    });
-    runners.insert(job_id, handle);
-    Ok(true)
-}
-
-async fn cleanup_finished_runners() {
-    let mut runners = ACTIVE_JOB_RUNNERS.lock().await;
-    runners.retain(|_, handle| !handle.is_finished());
-}
-
-async fn job_runner_active(job_id: &str) -> bool {
-    cleanup_finished_runners().await;
-    let runners = ACTIVE_JOB_RUNNERS.lock().await;
-    runners
-        .get(job_id)
-        .is_some_and(|handle| !handle.is_finished())
-}
-
 async fn run_agent_job_loop(
     session: Arc<Session>,
+    turn: Arc<TurnContext>,
     db: Arc<codex_state::StateRuntime>,
     job_id: String,
     options: JobRunnerOptions,
 ) -> anyhow::Result<()> {
     let mut active_items: HashMap<ThreadId, String> = HashMap::new();
+    let mut progress_emitter = JobProgressEmitter::new();
     recover_running_items(
         session.clone(),
         db.clone(),
@@ -626,6 +472,10 @@ async fn run_agent_job_loop(
         .get_agent_job(job_id.as_str())
         .await?
         .ok_or_else(|| anyhow::anyhow!("agent job {job_id} was not found"))?;
+    let initial_progress = db.get_agent_job_progress(job_id.as_str()).await?;
+    progress_emitter
+        .maybe_emit(&session, &turn, job_id.as_str(), &initial_progress, true)
+        .await?;
 
     loop {
         let mut progressed = false;
@@ -653,10 +503,9 @@ async fn run_agent_job_loop(
                     .spawn_agent(
                         options.spawn_config.clone(),
                         prompt,
-                        Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                            parent_thread_id: session.conversation_id,
-                            depth: options.child_depth,
-                        })),
+                        Some(SessionSource::SubAgent(SubAgentSource::Other(format!(
+                            "agent_job:{job_id}"
+                        )))),
                     )
                     .await
                 {
@@ -732,6 +581,10 @@ async fn run_agent_job_loop(
             )
             .await?;
             active_items.remove(&thread_id);
+            let progress = db.get_agent_job_progress(job_id.as_str()).await?;
+            progress_emitter
+                .maybe_emit(&session, &turn, job_id.as_str(), &progress, false)
+                .await?;
         }
     }
 
@@ -742,9 +595,7 @@ async fn run_agent_job_loop(
         db.mark_agent_job_failed(job_id.as_str(), message.as_str())
             .await?;
     } else {
-        if options.auto_export
-            && let Err(err) = export_job_csv_snapshot(db.clone(), &job).await
-        {
+        if let Err(err) = export_job_csv_snapshot(db.clone(), &job).await {
             let message = format!("auto-export failed: {err}");
             db.mark_agent_job_failed(job_id.as_str(), message.as_str())
                 .await?;
@@ -752,6 +603,10 @@ async fn run_agent_job_loop(
         }
         db.mark_agent_job_completed(job_id.as_str()).await?;
     }
+    let progress = db.get_agent_job_progress(job_id.as_str()).await?;
+    progress_emitter
+        .maybe_emit(&session, &turn, job_id.as_str(), &progress, true)
+        .await?;
     Ok(())
 }
 
@@ -933,36 +788,6 @@ fn render_instruction_template(instruction: &str, row_json: &Value) -> String {
     rendered
         .replace(OPEN_BRACE_SENTINEL, "{")
         .replace(CLOSE_BRACE_SENTINEL, "}")
-}
-
-async fn render_job_status(
-    db: Arc<codex_state::StateRuntime>,
-    job_id: &str,
-) -> Result<AgentJobToolResult, FunctionCallError> {
-    let job = db
-        .get_agent_job(job_id)
-        .await
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!("failed to fetch agent job {job_id}: {err}"))
-        })?
-        .ok_or_else(|| {
-            FunctionCallError::RespondToModel(format!("agent job {job_id} not found"))
-        })?;
-    let progress = db.get_agent_job_progress(job_id).await.map_err(|err| {
-        FunctionCallError::RespondToModel(format!("failed to fetch progress for {job_id}: {err}"))
-    })?;
-    let runner_active = job_runner_active(job_id).await;
-    Ok(AgentJobToolResult {
-        job_id: job.id,
-        status: job.status.as_str().to_string(),
-        total_items: progress.total_items,
-        pending_items: progress.pending_items,
-        running_items: progress.running_items,
-        completed_items: progress.completed_items,
-        failed_items: progress.failed_items,
-        output_csv_path: job.output_csv_path,
-        runner_active,
-    })
 }
 
 fn default_output_csv_path(input_csv_path: &Path, job_id: &str) -> PathBuf {

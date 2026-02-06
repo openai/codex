@@ -38,9 +38,12 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::num_format::format_with_separators;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
+use serde::Deserialize;
 use shlex::try_join;
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::PathBuf;
+use std::time::Duration;
 use std::time::Instant;
 
 use crate::event_processor::CodexStatus;
@@ -76,6 +79,8 @@ pub(crate) struct EventProcessorWithHumanOutput {
     last_total_token_usage: Option<codex_core::protocol::TokenUsageInfo>,
     final_message: Option<String>,
     last_proposed_plan: Option<String>,
+    progress_active: bool,
+    progress_last_len: usize,
 }
 
 impl EventProcessorWithHumanOutput {
@@ -103,6 +108,8 @@ impl EventProcessorWithHumanOutput {
                 last_total_token_usage: None,
                 final_message: None,
                 last_proposed_plan: None,
+                progress_active: false,
+                progress_last_len: 0,
             }
         } else {
             Self {
@@ -121,9 +128,22 @@ impl EventProcessorWithHumanOutput {
                 last_total_token_usage: None,
                 final_message: None,
                 last_proposed_plan: None,
+                progress_active: false,
+                progress_last_len: 0,
             }
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentJobProgressMessage {
+    job_id: String,
+    total_items: usize,
+    pending_items: usize,
+    running_items: usize,
+    completed_items: usize,
+    failed_items: usize,
+    eta_seconds: Option<u64>,
 }
 
 struct PatchApplyBegin {
@@ -176,6 +196,15 @@ impl EventProcessor for EventProcessorWithHumanOutput {
 
     fn process_event(&mut self, event: Event) -> CodexStatus {
         let Event { id: _, msg } = event;
+        if let EventMsg::BackgroundEvent(BackgroundEventEvent { message }) = &msg
+            && let Some(update) = Self::parse_agent_job_progress(message)
+        {
+            self.render_agent_job_progress(update);
+            return CodexStatus::Running;
+        }
+        if !Self::is_silent_event(&msg) {
+            self.finish_progress_line();
+        }
         match msg {
             EventMsg::Error(ErrorEvent { message, .. }) => {
                 let prefix = "ERROR:".style(self.red);
@@ -802,6 +831,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
     }
 
     fn print_final_output(&mut self) {
+        self.finish_progress_line();
         if let Some(usage_info) = &self.last_total_token_usage {
             eprintln!(
                 "{}\n{}",
@@ -822,6 +852,96 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 println!("{message}");
             }
         }
+    }
+}
+
+impl EventProcessorWithHumanOutput {
+    fn parse_agent_job_progress(message: &str) -> Option<AgentJobProgressMessage> {
+        let payload = message.strip_prefix("agent_job_progress:")?;
+        serde_json::from_str::<AgentJobProgressMessage>(payload).ok()
+    }
+
+    fn is_silent_event(msg: &EventMsg) -> bool {
+        matches!(
+            msg,
+            EventMsg::ThreadNameUpdated(_)
+                | EventMsg::ExecApprovalRequest(_)
+                | EventMsg::ApplyPatchApprovalRequest(_)
+                | EventMsg::TerminalInteraction(_)
+                | EventMsg::ExecCommandOutputDelta(_)
+                | EventMsg::GetHistoryEntryResponse(_)
+                | EventMsg::McpListToolsResponse(_)
+                | EventMsg::ListCustomPromptsResponse(_)
+                | EventMsg::ListSkillsResponse(_)
+                | EventMsg::ListRemoteSkillsResponse(_)
+                | EventMsg::RemoteSkillDownloaded(_)
+                | EventMsg::RawResponseItem(_)
+                | EventMsg::UserMessage(_)
+                | EventMsg::EnteredReviewMode(_)
+                | EventMsg::ExitedReviewMode(_)
+                | EventMsg::AgentMessageDelta(_)
+                | EventMsg::AgentReasoningDelta(_)
+                | EventMsg::AgentReasoningRawContentDelta(_)
+                | EventMsg::ItemStarted(_)
+                | EventMsg::ItemCompleted(_)
+                | EventMsg::AgentMessageContentDelta(_)
+                | EventMsg::PlanDelta(_)
+                | EventMsg::ReasoningContentDelta(_)
+                | EventMsg::ReasoningRawContentDelta(_)
+                | EventMsg::SkillsUpdateAvailable
+                | EventMsg::UndoCompleted(_)
+                | EventMsg::UndoStarted(_)
+                | EventMsg::ThreadRolledBack(_)
+                | EventMsg::RequestUserInput(_)
+                | EventMsg::DynamicToolCallRequest(_)
+        )
+    }
+
+    fn finish_progress_line(&mut self) {
+        if self.progress_active {
+            eprintln!();
+            self.progress_active = false;
+            self.progress_last_len = 0;
+        }
+    }
+
+    fn render_agent_job_progress(&mut self, update: AgentJobProgressMessage) {
+        let total = update.total_items.max(1);
+        let processed = update.completed_items + update.failed_items;
+        let percent = (processed as f64 / total as f64 * 100.0).round() as i64;
+        let bar_width = 28;
+        let filled = ((processed as f64 / total as f64) * bar_width as f64)
+            .round()
+            .clamp(0.0, bar_width as f64) as usize;
+        let mut bar = "#".repeat(filled);
+        bar.push_str(&"-".repeat(bar_width - filled));
+        let job_label = update.job_id.chars().take(8).collect::<String>();
+        let eta = update
+            .eta_seconds
+            .map(|secs| format_duration(Duration::from_secs(secs)))
+            .unwrap_or_else(|| "--".to_string());
+        let line = format!(
+            "agent job {job_label} [{bar}] {processed}/{total} ({percent}%) failed {} running {} pending {} eta {eta}",
+            update.failed_items, update.running_items, update.pending_items
+        );
+        let done = processed >= update.total_items;
+        if done {
+            if self.progress_active {
+                eprint!("\r");
+            }
+            eprintln!("{line}");
+            self.progress_active = false;
+            self.progress_last_len = 0;
+            return;
+        }
+        let mut output = format!("\r{line}");
+        if self.progress_last_len > line.len() {
+            output.push_str(&" ".repeat(self.progress_last_len - line.len()));
+        }
+        eprint!("{output}");
+        let _ = std::io::stderr().flush();
+        self.progress_active = true;
+        self.progress_last_len = line.len();
     }
 }
 

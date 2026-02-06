@@ -518,14 +518,6 @@ fn create_spawn_agents_on_csv_tool() -> ToolSpec {
         },
     );
     properties.insert(
-        "output_schema".to_string(),
-        JsonSchema::Object {
-            properties: BTreeMap::new(),
-            required: None,
-            additional_properties: None,
-        },
-    );
-    properties.insert(
         "max_concurrency".to_string(),
         JsonSchema::Number {
             description: Some(
@@ -535,96 +527,22 @@ fn create_spawn_agents_on_csv_tool() -> ToolSpec {
         },
     );
     properties.insert(
-        "auto_export".to_string(),
-        JsonSchema::Boolean {
-            description: Some(
-                "Whether to auto-export CSV output on successful completion (default true)."
-                    .to_string(),
-            ),
+        "output_schema".to_string(),
+        JsonSchema::Object {
+            properties: BTreeMap::new(),
+            required: None,
+            additional_properties: None,
         },
     );
     ToolSpec::Function(ResponsesApiTool {
         name: "spawn_agents_on_csv".to_string(),
-        description: "Create and start a job that spawns subagents to process each CSV row."
-            .to_string(),
+        description:
+            "Run a batch job that spawns subagents to process each CSV row, blocking until completion and auto-exporting results on success."
+                .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["csv_path".to_string(), "instruction".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-    })
-}
-
-fn create_get_agent_job_status_tool() -> ToolSpec {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "job_id".to_string(),
-        JsonSchema::String {
-            description: Some("Identifier of the job to inspect.".to_string()),
-        },
-    );
-    ToolSpec::Function(ResponsesApiTool {
-        name: "get_agent_job_status".to_string(),
-        description: "Fetch job status and progress counters.".to_string(),
-        strict: false,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["job_id".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-    })
-}
-
-fn create_wait_agent_job_tool() -> ToolSpec {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "job_id".to_string(),
-        JsonSchema::String {
-            description: Some("Identifier of the job to wait on.".to_string()),
-        },
-    );
-    properties.insert(
-        "timeout_ms".to_string(),
-        JsonSchema::Number {
-            description: Some(
-                "Maximum time in milliseconds to wait for job completion.".to_string(),
-            ),
-        },
-    );
-    ToolSpec::Function(ResponsesApiTool {
-        name: "wait_agent_job".to_string(),
-        description: "Wait for an agent job to complete or time out.".to_string(),
-        strict: false,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["job_id".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-    })
-}
-
-fn create_export_agent_job_csv_tool() -> ToolSpec {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "job_id".to_string(),
-        JsonSchema::String {
-            description: Some("Identifier of the job to export.".to_string()),
-        },
-    );
-    properties.insert(
-        "output_csv_path".to_string(),
-        JsonSchema::String {
-            description: Some("Optional output CSV path override.".to_string()),
-        },
-    );
-    ToolSpec::Function(ResponsesApiTool {
-        name: "export_agent_job_csv".to_string(),
-        description: "Export job results to a CSV file.".to_string(),
-        strict: false,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["job_id".to_string()]),
             additional_properties: Some(false.into()),
         },
     })
@@ -654,7 +572,9 @@ fn create_report_agent_job_result_tool() -> ToolSpec {
     );
     ToolSpec::Function(ResponsesApiTool {
         name: "report_agent_job_result".to_string(),
-        description: "Report a worker result for an agent job item.".to_string(),
+        description:
+            "Worker-only tool to report a result for an agent job item. Main agents should not call this."
+                .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -1576,14 +1496,8 @@ pub(crate) fn build_specs(
     if config.collab_tools {
         let agent_jobs_handler = Arc::new(AgentJobsHandler);
         builder.push_spec(create_spawn_agents_on_csv_tool());
-        builder.push_spec(create_get_agent_job_status_tool());
-        builder.push_spec(create_wait_agent_job_tool());
-        builder.push_spec(create_export_agent_job_csv_tool());
         builder.push_spec(create_report_agent_job_result_tool());
         builder.register_handler("spawn_agents_on_csv", agent_jobs_handler.clone());
-        builder.register_handler("get_agent_job_status", agent_jobs_handler.clone());
-        builder.register_handler("wait_agent_job", agent_jobs_handler.clone());
-        builder.register_handler("export_agent_job_csv", agent_jobs_handler.clone());
         builder.register_handler("report_agent_job_result", agent_jobs_handler);
     }
 
@@ -1845,9 +1759,6 @@ mod tests {
                 "wait",
                 "close_agent",
                 "spawn_agents_on_csv",
-                "get_agent_job_status",
-                "wait_agent_job",
-                "export_agent_job_csv",
                 "report_agent_job_result",
             ],
         );

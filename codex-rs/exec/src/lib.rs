@@ -41,6 +41,7 @@ use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::SessionSource;
 use codex_protocol::approvals::ElicitationAction;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
@@ -84,6 +85,7 @@ struct ThreadEventEnvelope {
     thread_id: codex_protocol::ThreadId,
     thread: Arc<codex_core::CodexThread>,
     event: Event,
+    suppress_output: bool,
 }
 
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
@@ -438,7 +440,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<ThreadEventEnvelope>();
     let attached_threads = Arc::new(Mutex::new(HashSet::from([primary_thread_id])));
-    spawn_thread_listener(primary_thread_id, thread.clone(), tx.clone());
+    spawn_thread_listener(primary_thread_id, thread.clone(), tx.clone(), false);
 
     {
         let thread = thread.clone();
@@ -466,7 +468,14 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                         match thread_manager.get_thread(thread_id).await {
                             Ok(thread) => {
                                 attached_threads.lock().await.insert(thread_id);
-                                spawn_thread_listener(thread_id, thread, tx.clone());
+                                let suppress_output =
+                                    is_agent_job_subagent(&thread.config_snapshot().await);
+                                spawn_thread_listener(
+                                    thread_id,
+                                    thread,
+                                    tx.clone(),
+                                    suppress_output,
+                                );
                             }
                             Err(err) => {
                                 warn!("failed to attach listener for thread {thread_id}: {err}")
@@ -520,7 +529,11 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             thread_id,
             thread,
             event,
+            suppress_output,
         } = envelope;
+        if suppress_output && should_suppress_agent_job_event(&event.msg) {
+            continue;
+        }
         if let EventMsg::ElicitationRequest(ev) = &event.msg {
             // Automatically cancel elicitation requests in exec mode.
             thread
@@ -562,6 +575,7 @@ fn spawn_thread_listener(
     thread_id: codex_protocol::ThreadId,
     thread: Arc<codex_core::CodexThread>,
     tx: tokio::sync::mpsc::UnboundedSender<ThreadEventEnvelope>,
+    suppress_output: bool,
 ) {
     tokio::spawn(async move {
         loop {
@@ -574,6 +588,7 @@ fn spawn_thread_listener(
                         thread_id,
                         thread: Arc::clone(&thread),
                         event,
+                        suppress_output,
                     }) {
                         error!("Error sending event: {err:?}");
                         break;
@@ -592,6 +607,29 @@ fn spawn_thread_listener(
             }
         }
     });
+}
+
+fn is_agent_job_subagent(config: &codex_core::ThreadConfigSnapshot) -> bool {
+    match &config.session_source {
+        SessionSource::SubAgent(SubAgentSource::Other(source)) => source.starts_with("agent_job:"),
+        _ => false,
+    }
+}
+
+fn should_suppress_agent_job_event(msg: &EventMsg) -> bool {
+    !matches!(
+        msg,
+        EventMsg::ExecApprovalRequest(_)
+            | EventMsg::ApplyPatchApprovalRequest(_)
+            | EventMsg::RequestUserInput(_)
+            | EventMsg::DynamicToolCallRequest(_)
+            | EventMsg::ElicitationRequest(_)
+            | EventMsg::Error(_)
+            | EventMsg::Warning(_)
+            | EventMsg::DeprecationNotice(_)
+            | EventMsg::StreamError(_)
+            | EventMsg::ShutdownComplete
+    )
 }
 
 async fn resolve_resume_path(
