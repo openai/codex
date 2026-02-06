@@ -742,13 +742,13 @@ async fn run_agent_job_loop(
         db.mark_agent_job_failed(job_id.as_str(), message.as_str())
             .await?;
     } else {
-        if options.auto_export {
-            if let Err(err) = export_job_csv_snapshot(db.clone(), &job).await {
-                let message = format!("auto-export failed: {err}");
-                db.mark_agent_job_failed(job_id.as_str(), message.as_str())
-                    .await?;
-                return Ok(());
-            }
+        if options.auto_export
+            && let Err(err) = export_job_csv_snapshot(db.clone(), &job).await
+        {
+            let message = format!("auto-export failed: {err}");
+            db.mark_agent_job_failed(job_id.as_str(), message.as_str())
+                .await?;
+            return Ok(());
         }
         db.mark_agent_job_completed(job_id.as_str()).await?;
     }
