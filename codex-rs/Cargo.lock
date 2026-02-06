@@ -1239,6 +1239,7 @@ dependencies = [
  "core_test_support",
  "futures",
  "os_info",
+ "owo-colors",
  "pretty_assertions",
  "rmcp",
  "serde",
