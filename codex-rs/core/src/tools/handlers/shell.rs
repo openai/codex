@@ -39,6 +39,7 @@ struct RunExecLikeArgs {
     call_id: String,
     freeform: bool,
     description: Option<String>,
+    display_name: Option<String>,
 }
 
 impl ShellHandler {
@@ -123,6 +124,7 @@ impl ToolHandler for ShellHandler {
                 let params: ShellToolCallParams = parse_arguments(&arguments)?;
                 let prefix_rule = params.prefix_rule.clone();
                 let description = params.description.clone();
+                let display_name = params.display_name.clone();
                 let exec_params = Self::to_exec_params(&params, turn.as_ref());
                 Self::run_exec_like(RunExecLikeArgs {
                     tool_name: tool_name.clone(),
@@ -134,11 +136,13 @@ impl ToolHandler for ShellHandler {
                     call_id,
                     freeform: false,
                     description,
+                    display_name,
                 })
                 .await
             }
             ToolPayload::LocalShell { params } => {
                 let description = params.description.clone();
+                let display_name = params.display_name.clone();
                 let exec_params = Self::to_exec_params(&params, turn.as_ref());
                 Self::run_exec_like(RunExecLikeArgs {
                     tool_name: tool_name.clone(),
@@ -150,6 +154,7 @@ impl ToolHandler for ShellHandler {
                     call_id,
                     freeform: false,
                     description,
+                    display_name,
                 })
                 .await
             }
@@ -203,6 +208,7 @@ impl ToolHandler for ShellCommandHandler {
         let params: ShellCommandToolCallParams = parse_arguments(&arguments)?;
         let prefix_rule = params.prefix_rule.clone();
         let description = params.description.clone();
+        let display_name = params.display_name.clone();
         let exec_params = Self::to_exec_params(&params, session.as_ref(), turn.as_ref());
         ShellHandler::run_exec_like(RunExecLikeArgs {
             tool_name,
@@ -214,6 +220,7 @@ impl ToolHandler for ShellCommandHandler {
             call_id,
             freeform: true,
             description,
+            display_name,
         })
         .await
     }
@@ -231,6 +238,7 @@ impl ShellHandler {
             call_id,
             freeform,
             description,
+            display_name,
         } = args;
 
         let features = session.features();
@@ -285,6 +293,7 @@ impl ShellHandler {
             source,
             freeform,
             description,
+            display_name,
         );
         let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
         emitter.begin(event_ctx).await;

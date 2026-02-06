@@ -2091,6 +2091,8 @@ pub enum ThreadItem {
         command: String,
         /// LLM-provided description of what this command does.
         description: Option<String>,
+        /// LLM-provided short semantic name (e.g., "Git Status", "Run Tests").
+        display_name: Option<String>,
         /// The command's working directory.
         cwd: PathBuf,
         /// Identifier for the underlying PTY process (when available).

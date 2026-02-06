@@ -253,6 +253,14 @@ fn create_exec_command_tool(include_prefix_rule: bool) -> ToolSpec {
                 ),
             },
         ),
+        (
+            "displayName".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "A short semantic name for this action (2-4 words), e.g. 'Git Status', 'Install Dependencies', 'Run Tests', 'Search Code'.".to_string(),
+                ),
+            },
+        ),
     ]);
     properties.extend(create_approval_parameters(include_prefix_rule));
 
@@ -347,6 +355,14 @@ fn create_shell_tool(include_prefix_rule: bool) -> ToolSpec {
                 ),
             },
         ),
+        (
+            "displayName".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "A short semantic name for this action (2-4 words), e.g. 'Git Status', 'Install Dependencies', 'Run Tests', 'Search Code'.".to_string(),
+                ),
+            },
+        ),
     ]);
     properties.extend(create_approval_parameters(include_prefix_rule));
 
@@ -416,6 +432,14 @@ fn create_shell_command_tool(include_prefix_rule: bool) -> ToolSpec {
                 description: Some(
                     "A brief description of what this command does so the user can follow your logic of execution. \
                      Important that it's clear, short, and communicates both action and intent where relevant.".to_string(),
+                ),
+            },
+        ),
+        (
+            "displayName".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "A short semantic name for this action (2-4 words), e.g. 'Git Status', 'Install Dependencies', 'Run Tests', 'Search Code'.".to_string(),
                 ),
             },
         ),

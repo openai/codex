@@ -955,11 +955,13 @@ pub(crate) async fn apply_bespoke_event_handling(
             let cwd = exec_command_begin_event.cwd;
             let process_id = exec_command_begin_event.process_id;
             let description = exec_command_begin_event.description;
+            let display_name = exec_command_begin_event.display_name;
 
             let item = ThreadItem::CommandExecution {
                 id: item_id,
                 command,
                 description,
+                display_name,
                 cwd,
                 process_id,
                 status: CommandExecutionStatus::InProgress,
@@ -1042,6 +1044,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 exit_code,
                 duration,
                 description,
+                display_name,
                 ..
             } = exec_command_end_event;
 
@@ -1067,6 +1070,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 id: call_id,
                 command: shlex_join(&command),
                 description,
+                display_name,
                 cwd,
                 process_id,
                 status,
@@ -1315,6 +1319,7 @@ async fn complete_command_execution_item(
     item_id: String,
     command: String,
     description: Option<String>,
+    display_name: Option<String>,
     cwd: PathBuf,
     process_id: Option<String>,
     command_actions: Vec<V2ParsedCommand>,
@@ -1325,6 +1330,7 @@ async fn complete_command_execution_item(
         id: item_id,
         command,
         description,
+        display_name,
         cwd,
         process_id,
         status,
@@ -1937,6 +1943,7 @@ async fn on_command_execution_request_approval_response(
             item_id.clone(),
             command.clone(),
             None, // description not available in approval response context
+            None, // display_name not available in approval response context
             cwd.clone(),
             None,
             command_actions.clone(),

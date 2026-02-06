@@ -99,6 +99,7 @@ impl SessionTask for UserShellCommandTask {
                     source: ExecCommandSource::UserShell,
                     interaction_input: None,
                     description: None,
+                    display_name: None,
                 }),
             )
             .await;
@@ -166,6 +167,7 @@ impl SessionTask for UserShellCommandTask {
                             duration: Duration::ZERO,
                             formatted_output: aborted_message,
                             description: None,
+                            display_name: None,
                         }),
                     )
                     .await;
@@ -193,6 +195,7 @@ impl SessionTask for UserShellCommandTask {
                                 turn_context.truncation_policy,
                             ),
                             description: None,
+                            display_name: None,
                         }),
                     )
                     .await;
@@ -239,6 +242,7 @@ impl SessionTask for UserShellCommandTask {
                                 turn_context.truncation_policy,
                             ),
                             description: None,
+                            display_name: None,
                         }),
                     )
                     .await;
