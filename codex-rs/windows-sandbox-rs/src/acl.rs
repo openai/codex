@@ -378,7 +378,7 @@ pub unsafe fn ensure_allow_write_aces(path: &Path, sids: &[*mut c_void]) -> Resu
     ensure_allow_mask_aces(path, sids, WRITE_ALLOW_MASK)
 }
 
-/// Adds an allow ACE granting read/write/execute to the given SID on the target path.
+/// Adds an allow ACE granting read/write/execute/delete to the given SID on the target path.
 ///
 /// # Safety
 /// Caller must ensure `psid` points to a valid SID and `path` refers to an existing file or directory.
@@ -398,8 +398,8 @@ pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
     if code != ERROR_SUCCESS {
         return Err(anyhow!("GetNamedSecurityInfoW failed: {}", code));
     }
-    // Already has write? Skip costly DACL rewrite.
-    if dacl_has_write_allow_for_sid(p_dacl, psid) {
+    // Already has the full write mask (including DELETE)? Skip costly DACL rewrite.
+    if dacl_mask_allows(p_dacl, &[psid], WRITE_ALLOW_MASK, true) {
         if !p_sd.is_null() {
             LocalFree(p_sd as HLOCAL);
         }
@@ -415,7 +415,7 @@ pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
         ptstrName: psid as *mut u16,
     };
     let mut explicit: EXPLICIT_ACCESS_W = std::mem::zeroed();
-    explicit.grfAccessPermissions = FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE;
+    explicit.grfAccessPermissions = WRITE_ALLOW_MASK;
     explicit.grfAccessMode = 2; // SET_ACCESS
     explicit.grfInheritance = CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE;
     explicit.Trustee = trustee;
@@ -432,7 +432,7 @@ pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
             std::ptr::null_mut(),
         );
         if code3 == ERROR_SUCCESS {
-            added = !dacl_has_write_allow_for_sid(p_dacl, psid);
+            added = true;
         }
         if !p_new_dacl.is_null() {
             LocalFree(p_new_dacl as HLOCAL);
