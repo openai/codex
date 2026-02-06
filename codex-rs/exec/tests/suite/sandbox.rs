@@ -57,9 +57,69 @@ async fn spawn_command_under_sandbox(
     .await
 }
 
+#[cfg(target_os = "linux")]
+/// Determines whether Linux sandbox tests can run on this host.
+///
+/// These tests require an enforceable filesystem sandbox. We run a tiny command
+/// under the production Landlock path and skip when enforcement is unavailable
+/// (for example on kernels or container profiles where Landlock is not
+/// enforced).
+async fn linux_sandbox_test_env() -> Option<HashMap<String, String>> {
+    let command_cwd = std::env::current_dir().ok()?;
+    let sandbox_cwd = command_cwd.clone();
+    let policy = SandboxPolicy::ReadOnly;
+
+    if can_apply_linux_sandbox_policy(&policy, &command_cwd, sandbox_cwd.as_path(), HashMap::new())
+        .await
+    {
+        return Some(HashMap::new());
+    }
+
+    eprintln!("Skipping test: Landlock is not enforceable on this host.");
+    None
+}
+
+#[cfg(target_os = "linux")]
+/// Returns whether a minimal command can run successfully with the requested
+/// Linux sandbox policy applied.
+///
+/// This is used as a capability probe so sandbox behavior tests only run when
+/// Landlock enforcement is actually active.
+async fn can_apply_linux_sandbox_policy(
+    policy: &SandboxPolicy,
+    command_cwd: &Path,
+    sandbox_cwd: &Path,
+    env: HashMap<String, String>,
+) -> bool {
+    let spawn_result = spawn_command_under_sandbox(
+        vec!["/usr/bin/true".to_string()],
+        command_cwd.to_path_buf(),
+        policy,
+        sandbox_cwd,
+        StdioPolicy::RedirectForShellTool,
+        env,
+    )
+    .await;
+    let Ok(mut child) = spawn_result else {
+        return false;
+    };
+    child
+        .wait()
+        .await
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
 #[tokio::test]
 async fn python_multiprocessing_lock_works_under_sandbox() {
     core_test_support::skip_if_sandbox!();
+    #[cfg(target_os = "linux")]
+    let sandbox_env = match linux_sandbox_test_env().await {
+        Some(env) => env,
+        None => return,
+    };
+    #[cfg(not(target_os = "linux"))]
+    let sandbox_env = HashMap::new();
     #[cfg(target_os = "macos")]
     let writable_roots = Vec::<AbsolutePathBuf>::new();
 
@@ -103,7 +163,7 @@ if __name__ == '__main__':
         &policy,
         sandbox_cwd.as_path(),
         StdioPolicy::Inherit,
-        HashMap::new(),
+        sandbox_env,
     )
     .await
     .expect("should be able to spawn python under sandbox");
@@ -115,6 +175,13 @@ if __name__ == '__main__':
 #[tokio::test]
 async fn python_getpwuid_works_under_sandbox() {
     core_test_support::skip_if_sandbox!();
+    #[cfg(target_os = "linux")]
+    let sandbox_env = match linux_sandbox_test_env().await {
+        Some(env) => env,
+        None => return,
+    };
+    #[cfg(not(target_os = "linux"))]
+    let sandbox_env = HashMap::new();
 
     if std::process::Command::new("python3")
         .arg("--version")
@@ -139,7 +206,7 @@ async fn python_getpwuid_works_under_sandbox() {
         &policy,
         sandbox_cwd.as_path(),
         StdioPolicy::RedirectForShellTool,
-        HashMap::new(),
+        sandbox_env,
     )
     .await
     .expect("should be able to spawn python under sandbox");
@@ -154,6 +221,13 @@ async fn python_getpwuid_works_under_sandbox() {
 #[tokio::test]
 async fn sandbox_distinguishes_command_and_policy_cwds() {
     core_test_support::skip_if_sandbox!();
+    #[cfg(target_os = "linux")]
+    let sandbox_env = match linux_sandbox_test_env().await {
+        Some(env) => env,
+        None => return,
+    };
+    #[cfg(not(target_os = "linux"))]
+    let sandbox_env = HashMap::new();
     let temp = tempfile::tempdir().expect("should be able to create temp dir");
     let sandbox_root = temp.path().join("sandbox");
     let command_root = temp.path().join("command");
@@ -187,7 +261,7 @@ async fn sandbox_distinguishes_command_and_policy_cwds() {
         &policy,
         canonical_sandbox_root.as_path(),
         StdioPolicy::Inherit,
-        HashMap::new(),
+        sandbox_env.clone(),
     )
     .await
     .expect("should spawn command writing to forbidden path");
@@ -218,7 +292,7 @@ async fn sandbox_distinguishes_command_and_policy_cwds() {
         &policy,
         canonical_sandbox_root.as_path(),
         StdioPolicy::Inherit,
-        HashMap::new(),
+        sandbox_env,
     )
     .await
     .expect("should spawn command writing to sandbox root");

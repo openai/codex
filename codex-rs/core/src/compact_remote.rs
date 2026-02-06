@@ -12,6 +12,7 @@ use crate::protocol::RolloutItem;
 use crate::protocol::TurnStartedEvent;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
+use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseItem;
 use tracing::info;
 
@@ -49,8 +50,12 @@ async fn run_remote_compact_task_inner_impl(
     sess.emit_turn_item_started(turn_context, &compaction_item)
         .await;
     let mut history = sess.clone_history().await;
-    let deleted_items =
-        trim_function_call_history_to_fit_context_window(&mut history, turn_context.as_ref());
+    let base_instructions = sess.get_base_instructions().await;
+    let deleted_items = trim_function_call_history_to_fit_context_window(
+        &mut history,
+        turn_context.as_ref(),
+        &base_instructions,
+    );
     if deleted_items > 0 {
         info!(
             turn_id = %turn_context.sub_id,
@@ -71,7 +76,7 @@ async fn run_remote_compact_task_inner_impl(
         input: history.for_prompt(),
         tools: vec![],
         parallel_tool_calls: false,
-        base_instructions: sess.get_base_instructions().await,
+        base_instructions,
         personality: turn_context.personality,
         output_schema: None,
     };
@@ -107,6 +112,7 @@ async fn run_remote_compact_task_inner_impl(
 fn trim_function_call_history_to_fit_context_window(
     history: &mut ContextManager,
     turn_context: &TurnContext,
+    base_instructions: &BaseInstructions,
 ) -> usize {
     let mut deleted_items = 0usize;
     let Some(context_window) = turn_context.model_context_window() else {
@@ -114,7 +120,7 @@ fn trim_function_call_history_to_fit_context_window(
     };
 
     while history
-        .estimate_token_count(turn_context)
+        .estimate_token_count_with_base_instructions(base_instructions)
         .is_some_and(|estimated_tokens| estimated_tokens > context_window)
     {
         let Some(last_item) = history.raw_items().last() else {

@@ -224,6 +224,9 @@ pub struct Config {
     /// - `never`: Never use alternate screen (inline mode, preserves scrollback).
     pub tui_alternate_screen: AltScreenMode,
 
+    /// Ordered list of status line item identifiers for the TUI.
+    pub tui_status_line: Option<Vec<String>>,
+
     /// The directory that should be treated as the current working directory
     /// for the session. All relative paths inside the business-logic layer are
     /// resolved against this path.
@@ -1285,14 +1288,10 @@ fn resolve_web_search_mode(
 
 pub(crate) fn resolve_web_search_mode_for_turn(
     explicit_mode: Option<WebSearchMode>,
-    is_azure_responses_endpoint: bool,
     sandbox_policy: &SandboxPolicy,
 ) -> WebSearchMode {
     if let Some(mode) = explicit_mode {
         return mode;
-    }
-    if is_azure_responses_endpoint {
-        return WebSearchMode::Disabled;
     }
     if matches!(sandbox_policy, SandboxPolicy::DangerFullAccess) {
         WebSearchMode::Live
@@ -1712,6 +1711,7 @@ impl Config {
                 .as_ref()
                 .map(|t| t.alternate_screen)
                 .unwrap_or_default(),
+            tui_status_line: cfg.tui.as_ref().and_then(|t| t.status_line.clone()),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);
@@ -1947,6 +1947,7 @@ persistence = "none"
                 show_tooltips: true,
                 experimental_mode: None,
                 alternate_screen: AltScreenMode::Auto,
+                status_line: None,
             }
         );
     }
@@ -2408,14 +2409,14 @@ trust_level = "trusted"
 
     #[test]
     fn web_search_mode_for_turn_defaults_to_cached_when_unset() {
-        let mode = resolve_web_search_mode_for_turn(None, false, &SandboxPolicy::ReadOnly);
+        let mode = resolve_web_search_mode_for_turn(None, &SandboxPolicy::ReadOnly);
 
         assert_eq!(mode, WebSearchMode::Cached);
     }
 
     #[test]
     fn web_search_mode_for_turn_defaults_to_live_for_danger_full_access() {
-        let mode = resolve_web_search_mode_for_turn(None, false, &SandboxPolicy::DangerFullAccess);
+        let mode = resolve_web_search_mode_for_turn(None, &SandboxPolicy::DangerFullAccess);
 
         assert_eq!(mode, WebSearchMode::Live);
     }
@@ -2424,18 +2425,10 @@ trust_level = "trusted"
     fn web_search_mode_for_turn_prefers_explicit_value() {
         let mode = resolve_web_search_mode_for_turn(
             Some(WebSearchMode::Cached),
-            false,
             &SandboxPolicy::DangerFullAccess,
         );
 
         assert_eq!(mode, WebSearchMode::Cached);
-    }
-
-    #[test]
-    fn web_search_mode_for_turn_disables_for_azure_responses_endpoint() {
-        let mode = resolve_web_search_mode_for_turn(None, true, &SandboxPolicy::DangerFullAccess);
-
-        assert_eq!(mode, WebSearchMode::Disabled);
     }
 
     #[test]
@@ -3897,6 +3890,7 @@ model_verbosity = "high"
                 analytics_enabled: Some(true),
                 feedback_enabled: true,
                 tui_alternate_screen: AltScreenMode::Auto,
+                tui_status_line: None,
                 otel: OtelConfig::default(),
             },
             o3_profile_config
@@ -3983,6 +3977,7 @@ model_verbosity = "high"
             analytics_enabled: Some(true),
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
+            tui_status_line: None,
             otel: OtelConfig::default(),
         };
 
@@ -4084,6 +4079,7 @@ model_verbosity = "high"
             analytics_enabled: Some(false),
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
+            tui_status_line: None,
             otel: OtelConfig::default(),
         };
 
@@ -4171,6 +4167,7 @@ model_verbosity = "high"
             analytics_enabled: Some(true),
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
+            tui_status_line: None,
             otel: OtelConfig::default(),
         };
 
