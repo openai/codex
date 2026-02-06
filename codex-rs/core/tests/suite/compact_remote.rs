@@ -4,6 +4,7 @@ use std::fs;
 
 use anyhow::Result;
 use codex_core::CodexAuth;
+use codex_core::features::Feature;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ItemCompletedEvent;
 use codex_core::protocol::ItemStartedEvent;
