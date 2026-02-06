@@ -112,6 +112,9 @@ Goals:
   - Prefer an ASan-compiled build for crash PoCs.
   - For crash PoCs, reproduce via a standard, shipped target/entrypoint (existing binary/service) rather than adding a synthetic harness that calls internal functions.
   - For crypto/protocol logic bugs, build/run a minimal harness that demonstrates the failure (no ASan required).
+  - Preserve one reusable Docker base image (dependencies + built artifacts) for similar future validations.
+  - Remove transient refinement/test Docker images after validation completes; do not leave extra images behind.
+  - Keep the Dockerfile (and any helper files) as the durable artifact.
 - If you cannot produce a Dockerfile, summarize what you tried and why it failed.
 
 Shared TESTING.md (read first):
@@ -141,6 +144,8 @@ Output JSON (single object, no fences). Keys:
 - dockerfile: string|null — Dockerfile contents if you can produce one
 - docker_build: string|null — exact docker build command to run
 - docker_run: string|null — exact docker run command to run
+- docker_base_image: string|null — reusable image tag to keep (dependencies + built artifacts)
+- docker_cleanup: string|null — exact command to delete transient refinement/test images while keeping `docker_base_image`
 - testing_md_additions: string|null — optional shared prerequisites to append to TESTING.md (no heading)
 - files: [{"path": "...", "contents": "..."}] — optional extra files that should live next to the Dockerfile
 "#;
