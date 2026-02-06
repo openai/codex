@@ -118,6 +118,7 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
         enforce_residency: requirements
             .enforce_residency
             .map(map_residency_requirement_to_api),
+        required_developer_instructions: requirements.additional_developer_instructions,
     }
 }
 
@@ -180,6 +181,7 @@ mod tests {
             mcp_servers: None,
             rules: None,
             enforce_residency: Some(CoreResidencyRequirement::Us),
+            additional_developer_instructions: Some("Follow policy".to_string()),
         };
 
         let mapped = map_requirements_toml_to_api(requirements);
@@ -198,6 +200,10 @@ mod tests {
         assert_eq!(
             mapped.enforce_residency,
             Some(codex_app_server_protocol::ResidencyRequirement::Us),
+        );
+        assert_eq!(
+            mapped.required_developer_instructions,
+            Some("Follow policy".to_string()),
         );
     }
 }

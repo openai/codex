@@ -501,6 +501,7 @@ pub struct ConfigRequirements {
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxMode>>,
     pub enforce_residency: Option<ResidencyRequirement>,
+    pub required_developer_instructions: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

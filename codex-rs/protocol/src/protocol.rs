@@ -1734,6 +1734,8 @@ pub struct TurnContextItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub developer_instructions: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub required_developer_instructions: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub final_output_json_schema: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub truncation_policy: Option<TruncationPolicy>,

@@ -10957,6 +10957,12 @@
                 "type": "null"
               }
             ]
+          },
+          "requiredDeveloperInstructions": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "type": "object"

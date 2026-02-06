@@ -369,6 +369,7 @@ impl Codex {
             collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
+            required_developer_instructions: config.required_developer_instructions.clone(),
             user_instructions,
             personality: config.personality,
             base_instructions,
@@ -518,6 +519,7 @@ pub(crate) struct TurnContext {
     /// instead of `std::env::current_dir()`.
     pub(crate) cwd: PathBuf,
     pub(crate) developer_instructions: Option<String>,
+    pub(crate) required_developer_instructions: Constrained<Option<String>>,
     pub(crate) compact_prompt: Option<String>,
     pub(crate) user_instructions: Option<String>,
     pub(crate) collaboration_mode: CollaborationMode,
@@ -599,6 +601,7 @@ pub(crate) struct SessionConfiguration {
 
     /// Developer instructions that supplement the base instructions.
     developer_instructions: Option<String>,
+    required_developer_instructions: Constrained<Option<String>>,
 
     /// Model instructions that are appended to the base instructions.
     user_instructions: Option<String>,
@@ -809,6 +812,9 @@ impl Session {
             session_source,
             cwd,
             developer_instructions: session_configuration.developer_instructions.clone(),
+            required_developer_instructions: session_configuration
+                .required_developer_instructions
+                .clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
             collaboration_mode: session_configuration.collaboration_mode.clone(),
@@ -2117,8 +2123,14 @@ impl Session {
             )
             .into(),
         );
-        if let Some(developer_instructions) = turn_context.developer_instructions.as_deref() {
-            items.push(DeveloperInstructions::new(developer_instructions.to_string()).into());
+        if let Some(developer_instructions) = Self::merge_developer_instructions(
+            turn_context.developer_instructions.as_deref(),
+            turn_context
+                .required_developer_instructions
+                .get()
+                .as_deref(),
+        ) {
+            items.push(DeveloperInstructions::new(developer_instructions).into());
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
         let (collaboration_mode, base_instructions) = {
@@ -2162,6 +2174,22 @@ impl Session {
             shell.as_ref().clone(),
         )));
         items
+    }
+
+    fn merge_developer_instructions(
+        developer_instructions: Option<&str>,
+        required_developer_instructions: Option<&str>,
+    ) -> Option<String> {
+        match (developer_instructions, required_developer_instructions) {
+            (Some(developer_instructions), Some(required_developer_instructions)) => Some(format!(
+                "{developer_instructions}\n\n{required_developer_instructions}"
+            )),
+            (Some(developer_instructions), None) => Some(developer_instructions.to_string()),
+            (None, Some(required_developer_instructions)) => {
+                Some(required_developer_instructions.to_string())
+            }
+            (None, None) => None,
+        }
     }
 
     pub(crate) async fn persist_rollout_items(&self, items: &[RolloutItem]) {
@@ -3538,6 +3566,7 @@ async fn spawn_review_thread(
         features: parent_turn_context.features.clone(),
         ghost_snapshot: parent_turn_context.ghost_snapshot.clone(),
         developer_instructions: None,
+        required_developer_instructions: Constrained::allow_any(None),
         user_instructions: None,
         compact_prompt: parent_turn_context.compact_prompt.clone(),
         collaboration_mode: parent_turn_context.collaboration_mode.clone(),
@@ -4581,6 +4610,7 @@ async fn try_run_sampling_request(
         summary: turn_context.reasoning_summary,
         user_instructions: turn_context.user_instructions.clone(),
         developer_instructions: turn_context.developer_instructions.clone(),
+        required_developer_instructions: turn_context.required_developer_instructions.get().clone(),
         final_output_json_schema: turn_context.final_output_json_schema.clone(),
         truncation_policy: Some(turn_context.truncation_policy.into()),
     });
@@ -5401,6 +5431,7 @@ mod tests {
             collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
+            required_developer_instructions: config.required_developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
             personality: config.personality,
             base_instructions: config
@@ -5484,6 +5515,7 @@ mod tests {
             collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
+            required_developer_instructions: config.required_developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
             personality: config.personality,
             base_instructions: config
@@ -5757,6 +5789,7 @@ mod tests {
             collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
+            required_developer_instructions: config.required_developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
             personality: config.personality,
             base_instructions: config
@@ -5887,6 +5920,7 @@ mod tests {
             collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
+            required_developer_instructions: config.required_developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
             personality: config.personality,
             base_instructions: config

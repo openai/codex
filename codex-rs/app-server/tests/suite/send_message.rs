@@ -570,6 +570,7 @@ fn append_rollout_turn_context(path: &Path, timestamp: &str, model: &str) -> std
             summary: ReasoningSummary::Auto,
             user_instructions: None,
             developer_instructions: None,
+            required_developer_instructions: None,
             final_output_json_schema: None,
             truncation_policy: None,
         }),

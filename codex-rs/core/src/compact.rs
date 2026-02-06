@@ -105,6 +105,7 @@ async fn run_compact_task_inner(
         summary: turn_context.reasoning_summary,
         user_instructions: turn_context.user_instructions.clone(),
         developer_instructions: turn_context.developer_instructions.clone(),
+        required_developer_instructions: turn_context.required_developer_instructions.get().clone(),
         final_output_json_schema: turn_context.final_output_json_schema.clone(),
         truncation_policy: Some(turn_context.truncation_policy.into()),
     });
