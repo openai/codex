@@ -2803,6 +2803,12 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                         None,
                     )
                 };
+                if previous_context.is_none() {
+                    // Non-deferred sessions can receive overrides before the first turn.
+                    // Capture the current baseline so the first turn can persist diffed
+                    // settings updates (model/cwd/permissions/collaboration/personality).
+                    previous_context = Some(sess.new_default_turn().await);
+                }
                 handlers::override_turn_context(
                     &sess,
                     sub.id.clone(),
