@@ -101,7 +101,7 @@ async fn live_skills_reload_refreshes_skill_cache_after_skill_change() -> Result
         });
     let test = builder.build(&server).await?;
 
-    let skill_path = std::fs::canonicalize(test.codex_home_path().join("skills/demo/SKILL.md"))?;
+    let skill_path = dunce::canonicalize(test.codex_home_path().join("skills/demo/SKILL.md"))?;
 
     submit_skill_turn(&test, skill_path.clone(), "please use $demo").await?;
     let first_request = responses
