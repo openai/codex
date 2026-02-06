@@ -100,9 +100,10 @@ const VALIDATION_REPORT_OUTPUT_MAX_BYTES: usize = 512 * 1024;
 const VALIDATION_WORKER_MAX_CONCURRENCY: usize = 8;
 const VALIDATION_PLAN_CONCURRENCY: usize = VALIDATION_WORKER_MAX_CONCURRENCY;
 const VALIDATION_REFINE_CONCURRENCY: usize = VALIDATION_WORKER_MAX_CONCURRENCY;
+const VALIDATION_REFINE_MAX_FINDINGS: usize = 8;
 const VALIDATION_EXEC_CONCURRENCY: usize = VALIDATION_WORKER_MAX_CONCURRENCY;
 const VALIDATION_AGENT_TIMEOUT_SECS: u64 = 60 * 60;
-const POST_VALIDATION_REFINE_WORKER_TIMEOUT_SECS: u64 = 30 * 60;
+const POST_VALIDATION_REFINE_WORKER_TIMEOUT_SECS: u64 = 15 * 60;
 const VALIDATION_EXEC_TIMEOUT_SECS: u64 = 30 * 60;
 const VALIDATION_PREFLIGHT_TIMEOUT_SECS: u64 = 30 * 60;
 const VALIDATION_CURL_TIMEOUT_SECS: u64 = 60;
@@ -22219,6 +22220,8 @@ struct ValidationRefineOutput {
     dockerfile: Option<String>,
     docker_build: Option<String>,
     docker_run: Option<String>,
+    docker_base_image: Option<String>,
+    docker_cleanup: Option<String>,
     #[serde(default)]
     testing_md_additions: Option<String>,
     #[serde(default)]
@@ -23523,10 +23526,22 @@ async fn run_asan_validation(
         risk_rank: Option<usize>,
     }
 
+    if findings.ids.len() > VALIDATION_REFINE_MAX_FINDINGS {
+        push_progress_log(
+            &progress_sender,
+            &None,
+            &mut logs,
+            format!(
+                "Post-validation refinement limited to top {VALIDATION_REFINE_MAX_FINDINGS} findings by rank."
+            ),
+        );
+    }
+
     let refine_items: Vec<ValidationRefineWorkItem> = findings
         .ids
         .iter()
         .copied()
+        .take(VALIDATION_REFINE_MAX_FINDINGS)
         .filter_map(|id| {
             let index = find_bug_index(&snapshot, id)?;
             let entry = snapshot.bugs.get(index)?;
@@ -23759,7 +23774,26 @@ async fn run_asan_validation(
                             .filter(|s| !s.is_empty())
                             .map(str::to_string)
                             .unwrap_or_else(|| format!("docker run --rm {image_tag}"));
-                        (format!("Build: `{build_cmd}`"), format!("Run: `{run_cmd}`"))
+                        let keep_base_step = parsed
+                            .docker_base_image
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(|image| format!("Keep base image: `{image}`"));
+                        let cleanup_step = parsed
+                            .docker_cleanup
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(|cleanup| {
+                                format!("Cleanup transient Docker images (keep base): `{cleanup}`")
+                            });
+                        (
+                            format!("Build: `{build_cmd}`"),
+                            format!("Run: `{run_cmd}`"),
+                            keep_base_step,
+                            cleanup_step,
+                        )
                     });
 
                     let needs_update = !summary_additions.is_empty()
@@ -23807,12 +23841,29 @@ async fn run_asan_validation(
                         }
                     }
 
-                    if let Some((build_step, run_step)) = docker_steps {
+                    if let Some((build_step, run_step, keep_base_step, cleanup_step)) = docker_steps
+                    {
                         if !validation.repro_steps.iter().any(|s| s == &build_step) {
                             validation.repro_steps.push(build_step);
                         }
                         if !validation.repro_steps.iter().any(|s| s == &run_step) {
                             validation.repro_steps.push(run_step);
+                        }
+                        if let Some(keep_base_step) = keep_base_step
+                            && !validation
+                                .repro_steps
+                                .iter()
+                                .any(|step| step == &keep_base_step)
+                        {
+                            validation.repro_steps.push(keep_base_step);
+                        }
+                        if let Some(cleanup_step) = cleanup_step
+                            && !validation
+                                .repro_steps
+                                .iter()
+                                .any(|step| step == &cleanup_step)
+                        {
+                            validation.repro_steps.push(cleanup_step);
                         }
                     }
 
