@@ -865,6 +865,8 @@ impl EventProcessorWithHumanOutput {
         matches!(
             msg,
             EventMsg::ThreadNameUpdated(_)
+                | EventMsg::TokenCount(_)
+                | EventMsg::TurnStarted(_)
                 | EventMsg::ExecApprovalRequest(_)
                 | EventMsg::ApplyPatchApprovalRequest(_)
                 | EventMsg::TerminalInteraction(_)
