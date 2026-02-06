@@ -788,6 +788,19 @@ pub async fn mount_compact_json_once(server: &MockServer, body: serde_json::Valu
     response_mock
 }
 
+pub async fn mount_compact_response(
+    server: &MockServer,
+    response: ResponseTemplate,
+    max_times: u64,
+) -> ResponseMock {
+    let (mock, response_mock) = compact_mock();
+    mock.respond_with(response)
+        .up_to_n_times(max_times)
+        .mount(server)
+        .await;
+    response_mock
+}
+
 pub async fn mount_models_once(server: &MockServer, body: ModelsResponse) -> ModelsMock {
     let (mock, models_mock) = models_mock();
     mock.respond_with(

@@ -23,6 +23,8 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::body_string_contains;
 
 fn approx_token_count(text: &str) -> i64 {
     i64::try_from(text.len().saturating_add(3) / 4).unwrap_or(i64::MAX)
@@ -224,6 +226,194 @@ async fn remote_compact_runs_automatically() -> Result<()> {
     let follow_up_body = responses_mock.single_request().body_json().to_string();
     assert!(follow_up_body.contains("REMOTE_COMPACTED_SUMMARY"));
     assert!(follow_up_body.contains("ENCRYPTED_COMPACTION_SUMMARY"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_auto_compact_500_fails_turn_before_followup_sampling() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let compact_retries = 2;
+    let second_turn_text = "this turn should fail before sampling";
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(move |config| {
+                config.model_auto_compact_token_limit = Some(200);
+                config.model_provider.request_max_retries = Some(compact_retries);
+                config.model_provider.supports_websockets = false;
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let initial_sampling = mount_sse_once(
+        harness.server(),
+        sse(vec![
+            responses::ev_assistant_message("m1", "initial"),
+            responses::ev_completed_with_tokens("resp-1", 1_000_000),
+        ]),
+    )
+    .await;
+    let follow_up_sampling = responses::mount_sse_once_match(
+        harness.server(),
+        body_string_contains(second_turn_text),
+        sse(vec![
+            responses::ev_assistant_message("m2", "should not run"),
+            responses::ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+    let compact_failure = responses::mount_compact_response(
+        harness.server(),
+        ResponseTemplate::new(500)
+            .insert_header("content-type", "application/json")
+            .set_body_json(serde_json::json!({
+                "error": {"type": "internal_server_error", "message": "synthetic 500"}
+            })),
+        compact_retries + 1,
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "seed turn".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: second_turn_text.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    let EventMsg::Error(error) =
+        wait_for_event(&codex, |event| matches!(event, EventMsg::Error(_))).await
+    else {
+        panic!("expected error event");
+    };
+    assert!(
+        error.message.contains("Error running auto compact task"),
+        "expected auto-compact failure prefix in error message: {}",
+        error.message
+    );
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(initial_sampling.requests().len(), 1);
+    assert!(
+        follow_up_sampling.requests().is_empty(),
+        "follow-up sampling should never run when auto compact fails"
+    );
+    assert_eq!(
+        compact_failure.requests().len(),
+        usize::try_from(compact_retries + 1).expect("retry count fits usize"),
+        "retryable compact failures should use the request retry budget"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_auto_compact_context_error_does_not_retry_or_sample() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let second_turn_text = "this turn should fail before sampling with context error";
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.model_auto_compact_token_limit = Some(200);
+                config.model_provider.request_max_retries = Some(4);
+                config.model_provider.supports_websockets = false;
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let initial_sampling = mount_sse_once(
+        harness.server(),
+        sse(vec![
+            responses::ev_assistant_message("m1", "initial"),
+            responses::ev_completed_with_tokens("resp-1", 1_000_000),
+        ]),
+    )
+    .await;
+    let follow_up_sampling = responses::mount_sse_once_match(
+        harness.server(),
+        body_string_contains(second_turn_text),
+        sse(vec![
+            responses::ev_assistant_message("m2", "should not run"),
+            responses::ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+    let compact_failure = responses::mount_compact_response(
+        harness.server(),
+        ResponseTemplate::new(400)
+            .insert_header("content-type", "application/json")
+            .set_body_json(serde_json::json!({
+                "error": {
+                    "type": "context_length_exceeded",
+                    "message": "Context window exceeded while compacting"
+                }
+            })),
+        10,
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "seed turn".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: second_turn_text.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    let EventMsg::Error(error) =
+        wait_for_event(&codex, |event| matches!(event, EventMsg::Error(_))).await
+    else {
+        panic!("expected error event");
+    };
+    assert!(
+        error.message.contains("Error running auto compact task"),
+        "expected auto-compact failure prefix in error message: {}",
+        error.message
+    );
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(initial_sampling.requests().len(), 1);
+    assert!(
+        follow_up_sampling.requests().is_empty(),
+        "follow-up sampling should never run when auto compact fails"
+    );
+    assert_eq!(
+        compact_failure.requests().len(),
+        1,
+        "non-retryable compact failures should not be retried"
+    );
 
     Ok(())
 }

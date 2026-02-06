@@ -16,38 +16,32 @@ use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseItem;
 use tracing::info;
 
-pub(crate) async fn run_inline_remote_auto_compact_task(
+pub(crate) async fn run_user_requested_remote_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
 ) {
-    run_remote_compact_task_inner(&sess, &turn_context).await;
-}
-
-pub(crate) async fn run_remote_compact_task(sess: Arc<Session>, turn_context: Arc<TurnContext>) {
     let start_event = EventMsg::TurnStarted(TurnStartedEvent {
         model_context_window: turn_context.model_context_window(),
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, start_event).await;
 
-    run_remote_compact_task_inner(&sess, &turn_context).await;
-}
-
-async fn run_remote_compact_task_inner(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) {
-    if let Err(err) = run_remote_compact_task_inner_impl(sess, turn_context).await {
+    if let Err(err) = run_remote_compaction(Arc::clone(&sess), Arc::clone(&turn_context)).await {
         let event = EventMsg::Error(
             err.to_error_event(Some("Error running remote compact task".to_string())),
         );
-        sess.send_event(turn_context, event).await;
+        // This path is for manual `/compact`, where we report the error and keep the session
+        // alive. Auto-compact callers handle the error themselves to fail early.
+        sess.send_event(&turn_context, event).await;
     }
 }
 
-async fn run_remote_compact_task_inner_impl(
-    sess: &Arc<Session>,
-    turn_context: &Arc<TurnContext>,
+pub(crate) async fn run_remote_compaction(
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
 ) -> CodexResult<()> {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
-    sess.emit_turn_item_started(turn_context, &compaction_item)
+    sess.emit_turn_item_started(&turn_context, &compaction_item)
         .await;
     let mut history = sess.clone_history().await;
     let base_instructions = sess.get_base_instructions().await;
@@ -95,7 +89,7 @@ async fn run_remote_compact_task_inner_impl(
         new_history.extend(ghost_snapshots);
     }
     sess.replace_history(new_history.clone()).await;
-    sess.recompute_token_usage(turn_context).await;
+    sess.recompute_token_usage(&turn_context).await;
 
     let compacted_item = CompactedItem {
         message: String::new(),
@@ -104,7 +98,7 @@ async fn run_remote_compact_task_inner_impl(
     sess.persist_rollout_items(&[RolloutItem::Compacted(compacted_item)])
         .await;
 
-    sess.emit_turn_item_completed(turn_context, compaction_item)
+    sess.emit_turn_item_completed(&turn_context, compaction_item)
         .await;
     Ok(())
 }
