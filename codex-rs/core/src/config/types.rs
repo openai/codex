@@ -50,6 +50,10 @@ pub struct McpServerConfig {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
 
+    /// When `true`, `codex exec` exits with an error if this MCP server fails to initialize.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
+
     /// Reason this server was disabled after applying requirements.
     #[serde(skip)]
     pub disabled_reason: Option<McpServerDisabledReason>,
@@ -114,6 +118,8 @@ pub(crate) struct RawMcpServerConfig {
     #[serde(default)]
     pub enabled: Option<bool>,
     #[serde(default)]
+    pub required: Option<bool>,
+    #[serde(default)]
     pub enabled_tools: Option<Vec<String>>,
     #[serde(default)]
     pub disabled_tools: Option<Vec<String>>,
@@ -138,6 +144,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
         };
         let tool_timeout_sec = raw.tool_timeout_sec;
         let enabled = raw.enabled.unwrap_or_else(default_enabled);
+        let required = raw.required.unwrap_or_default();
         let enabled_tools = raw.enabled_tools.clone();
         let disabled_tools = raw.disabled_tools.clone();
         let scopes = raw.scopes.clone();
@@ -192,6 +199,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             startup_timeout_sec,
             tool_timeout_sec,
             enabled,
+            required,
             disabled_reason: None,
             enabled_tools,
             disabled_tools,
@@ -697,6 +705,7 @@ mod tests {
             }
         );
         assert!(cfg.enabled);
+        assert!(!cfg.required);
         assert!(cfg.enabled_tools.is_none());
         assert!(cfg.disabled_tools.is_none());
     }
@@ -803,6 +812,20 @@ mod tests {
         .expect("should deserialize disabled server config");
 
         assert!(!cfg.enabled);
+        assert!(!cfg.required);
+    }
+
+    #[test]
+    fn deserialize_required_server_config() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            command = "echo"
+            required = true
+        "#,
+        )
+        .expect("should deserialize required server config");
+
+        assert!(cfg.required);
     }
 
     #[test]

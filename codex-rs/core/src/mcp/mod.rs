@@ -99,6 +99,7 @@ fn codex_apps_mcp_server_config(config: &Config, auth: Option<&CodexAuth>) -> Mc
             env_http_headers: None,
         },
         enabled: true,
+        required: false,
         disabled_reason: None,
         startup_timeout_sec: Some(Duration::from_secs(30)),
         tool_timeout_sec: None,

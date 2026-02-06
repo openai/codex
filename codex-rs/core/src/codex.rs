@@ -1115,6 +1115,12 @@ impl Session {
             sandbox_cwd: session_configuration.cwd.clone(),
             use_linux_sandbox_bwrap: config.features.enabled(Feature::UseLinuxSandboxBwrap),
         };
+        let mut required_mcp_servers: Vec<String> = mcp_servers
+            .iter()
+            .filter(|(_, server)| server.enabled && server.required)
+            .map(|(name, _)| name.clone())
+            .collect();
+        required_mcp_servers.sort();
         let cancel_token = sess.mcp_startup_cancellation_token().await;
 
         sess.services
@@ -1130,6 +1136,25 @@ impl Session {
                 sandbox_state,
             )
             .await;
+        if !required_mcp_servers.is_empty() {
+            let failures = sess
+                .services
+                .mcp_connection_manager
+                .read()
+                .await
+                .required_startup_failures(&required_mcp_servers)
+                .await;
+            if !failures.is_empty() {
+                let details = failures
+                    .iter()
+                    .map(|failure| format!("{}: {}", failure.server, failure.error))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                return Err(anyhow::anyhow!(
+                    "required MCP servers failed to initialize: {details}"
+                ));
+            }
+        }
 
         // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
         sess.record_initial_history(initial_history).await;

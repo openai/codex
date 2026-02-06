@@ -5,6 +5,7 @@ use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::rollout_path;
 use app_test_support::to_response;
 use chrono::Utc;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SessionSource;
@@ -262,6 +263,44 @@ async fn thread_resume_with_overrides_defers_updated_at_until_turn_start() -> Re
 }
 
 #[tokio::test]
+async fn thread_resume_fails_when_required_mcp_server_fails_to_initialize() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    let rollout = setup_rollout_fixture(codex_home.path(), &server.uri())?;
+    create_config_toml_with_required_broken_mcp(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: rollout.conversation_id,
+            ..Default::default()
+        })
+        .await?;
+    let err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+
+    assert!(
+        err.error
+            .message
+            .contains("required MCP servers failed to initialize"),
+        "unexpected error message: {}",
+        err.error.message
+    );
+    assert!(
+        err.error.message.contains("required_broken"),
+        "unexpected error message: {}",
+        err.error.message
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -476,6 +515,40 @@ base_url = "{server_uri}/v1"
 wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
+"#
+        ),
+    )
+}
+
+fn create_config_toml_with_required_broken_mcp(
+    codex_home: &std::path::Path,
+    server_uri: &str,
+) -> std::io::Result<()> {
+    let config_toml = codex_home.join("config.toml");
+    std::fs::write(
+        config_toml,
+        format!(
+            r#"
+model = "gpt-5.2-codex"
+approval_policy = "never"
+sandbox_mode = "read-only"
+
+model_provider = "mock_provider"
+
+[features]
+remote_models = false
+personality = true
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+
+[mcp_servers.required_broken]
+command = "codex-definitely-not-a-real-binary"
+required = true
 "#
         ),
     )
