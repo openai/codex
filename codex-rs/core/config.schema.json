@@ -175,9 +175,6 @@
             "enable_request_compression": {
               "type": "boolean"
             },
-            "exec_policy": {
-              "type": "boolean"
-            },
             "experimental_use_freeform_apply_patch": {
               "type": "boolean"
             },
@@ -1206,9 +1203,6 @@
           "type": "boolean"
         },
         "enable_request_compression": {
-          "type": "boolean"
-        },
-        "exec_policy": {
           "type": "boolean"
         },
         "experimental_use_freeform_apply_patch": {

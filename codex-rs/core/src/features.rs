@@ -87,8 +87,6 @@ pub enum Feature {
     /// Allow the model to request web searches that fetch cached content.
     /// Takes precedence over `WebSearchRequest`.
     WebSearchCached,
-    /// Gate the execpolicy enforcement for shell/unified exec.
-    ExecPolicy,
     /// Use the bubblewrap-based Linux sandbox pipeline.
     UseLinuxSandboxBwrap,
     /// Allow the model to request approval and propose exec rules.
@@ -468,12 +466,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "apply_patch_freeform",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::ExecPolicy,
-        key: "exec_policy",
-        stage: Stage::UnderDevelopment,
-        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::UseLinuxSandboxBwrap,
