@@ -28,7 +28,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::time::Duration;
 use tokio::time::Instant;
-use tracing::info;
 use uuid::Uuid;
 
 pub struct AgentJobsHandler;
@@ -309,13 +308,13 @@ mod spawn_agents_on_csv {
                 ))
             })?;
         let options = build_runner_options(&session, &turn, args.max_concurrency).await?;
-        info!(
-            job_id = %job_id,
-            requested_concurrency = ?args.max_concurrency,
-            max_threads = ?turn.config.agent_max_threads,
-            effective_concurrency = options.max_concurrency,
-            "agent job concurrency"
+        let requested_concurrency = args.max_concurrency;
+        let max_threads = turn.config.agent_max_threads;
+        let effective_concurrency = options.max_concurrency;
+        let message = format!(
+            "agent job concurrency: job_id={job_id} requested={requested_concurrency:?} max_threads={max_threads:?} effective={effective_concurrency}"
         );
+        let _ = session.notify_background_event(&turn, message).await;
         if let Err(err) = run_agent_job_loop(
             session.clone(),
             turn.clone(),
