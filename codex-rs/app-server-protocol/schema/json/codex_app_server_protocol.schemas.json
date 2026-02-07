@@ -11019,16 +11019,6 @@
                 "type": "null"
               }
             ]
-          },
-          "network": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/NetworkRequirements"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
         "type": "object"
