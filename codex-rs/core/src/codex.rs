@@ -2225,9 +2225,12 @@ impl Session {
             items.push(DeveloperInstructions::new(developer_instructions.to_string()).into());
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
-        let collaboration_mode = {
+        let (collaboration_mode, base_instructions) = {
             let state = self.state.lock().await;
-            state.session_configuration.collaboration_mode.clone()
+            (
+                state.session_configuration.collaboration_mode.clone(),
+                state.session_configuration.base_instructions.clone(),
+            )
         };
         if let Some(collab_instructions) =
             DeveloperInstructions::from_collaboration_mode(&collaboration_mode)
@@ -2237,18 +2240,12 @@ impl Session {
         if self.features.enabled(Feature::Personality)
             && let Some(personality) = turn_context.personality
         {
-            let model_info = &turn_context.model_info;
-            let effective_base_instructions = turn_context
-                .config
-                .base_instructions
-                .clone()
-                .unwrap_or_else(|| model_info.get_model_instructions(turn_context.personality));
+            let model_info = turn_context.model_info.clone();
             let has_baked_personality = model_info.supports_personality()
-                && effective_base_instructions
-                    == model_info.get_model_instructions(Some(personality));
+                && base_instructions == model_info.get_model_instructions(Some(personality));
             if !has_baked_personality
                 && let Some(personality_message) =
-                    Self::personality_message_for(model_info, personality)
+                    Self::personality_message_for(&model_info, personality)
             {
                 items.push(
                     DeveloperInstructions::personality_spec_message(personality_message).into(),

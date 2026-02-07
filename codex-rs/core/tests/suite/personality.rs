@@ -934,6 +934,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
     let developer_texts = request.message_input_texts("developer");
     let personality_text = developer_texts
         .iter()
+        .rev()
         .find(|text| text.contains("<personality_spec>"))
         .expect("expected personality update message in developer input");
 
