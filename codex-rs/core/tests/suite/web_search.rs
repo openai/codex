@@ -44,7 +44,7 @@ async fn web_search_mode_cached_sets_external_web_access_false() {
         .await
         .expect("create test Codex conversation");
 
-    test.submit_turn("hello cached web search")
+    test.submit_turn_with_policy("hello cached web search", SandboxPolicy::ReadOnly)
         .await
         .expect("submit turn");
 
@@ -82,7 +82,7 @@ async fn web_search_mode_takes_precedence_over_legacy_flags() {
         .await
         .expect("create test Codex conversation");
 
-    test.submit_turn("hello cached+live flags")
+    test.submit_turn_with_policy("hello cached+live flags", SandboxPolicy::ReadOnly)
         .await
         .expect("submit turn");
 
