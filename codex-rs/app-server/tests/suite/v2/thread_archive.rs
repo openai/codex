@@ -1,5 +1,6 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
+use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -8,6 +9,9 @@ use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnStartResponse;
+use codex_app_server_protocol::UserInput;
 use codex_core::ARCHIVED_SESSIONS_SUBDIR;
 use codex_core::find_thread_path_by_id_str;
 use std::path::Path;
@@ -18,8 +22,9 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[tokio::test]
 async fn thread_archive_requires_materialized_rollout() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path())?;
+    create_config_toml(codex_home.path(), &server.uri())?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -72,13 +77,34 @@ async fn thread_archive_requires_materialized_rollout() -> Result<()> {
         archive_err.error.message
     );
 
-    // Materialize a rollout file and confirm archive succeeds.
-    std::fs::create_dir_all(
-        rollout_path
-            .parent()
-            .expect("rollout path should have parent directory"),
-    )?;
-    std::fs::write(&rollout_path, "{}\n")?;
+    // Materialize rollout via a real user turn and confirm archive succeeds.
+    let turn_start_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "materialize".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_start_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_start_id)),
+    )
+    .await??;
+    let _: TurnStartResponse = to_response::<TurnStartResponse>(turn_start_response)?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    assert!(
+        rollout_path.exists(),
+        "expected rollout path {} to exist after first user message",
+        rollout_path.display()
+    );
 
     let discovered_path = find_thread_path_by_id_str(codex_home.path(), &thread.id)
         .await?
@@ -116,16 +142,27 @@ async fn thread_archive_requires_materialized_rollout() -> Result<()> {
     Ok(())
 }
 
-fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
+fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
     let config_toml = codex_home.join("config.toml");
-    std::fs::write(config_toml, config_contents())
+    std::fs::write(config_toml, config_contents(server_uri))
 }
 
-fn config_contents() -> &'static str {
-    r#"model = "mock-model"
+fn config_contents(server_uri: &str) -> String {
+    format!(
+        r#"model = "mock-model"
 approval_policy = "never"
 sandbox_mode = "read-only"
+
+model_provider = "mock_provider"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
 "#
+    )
 }
 
 fn assert_paths_match_on_disk(actual: &Path, expected: &Path) -> std::io::Result<()> {
