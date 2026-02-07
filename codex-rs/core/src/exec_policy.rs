@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
@@ -30,6 +32,7 @@ use crate::features::Features;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::sandboxing::ExecApprovalRequirement;
 use shlex::try_join as shlex_try_join;
+use which::which_in;
 
 const PROMPT_CONFLICT_REASON: &str =
     "approval required by policy, but AskForApproval is set to Never";
@@ -96,6 +99,65 @@ pub(crate) struct ExecApprovalRequest<'a> {
     pub(crate) prefix_rule: Option<Vec<String>>,
 }
 
+fn resolve_commands_for_policy(
+    commands: &[Vec<String>],
+    cwd: &Path,
+    env: &HashMap<String, String>,
+) -> Vec<Vec<String>> {
+    let path_env = env
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("PATH"))
+        .map(|(_, value)| OsStr::new(value.as_str()));
+
+    let mut resolved_commands = Vec::with_capacity(commands.len());
+    for command in commands {
+        let Some((program, args)) = command.split_first() else {
+            resolved_commands.push(Vec::new());
+            continue;
+        };
+
+        let program_path = Path::new(program);
+        let resolved_program_path = if program_path.components().count() > 1 {
+            let candidate = if program_path.is_absolute() {
+                program_path.to_path_buf()
+            } else {
+                cwd.join(program_path)
+            };
+            std::fs::canonicalize(&candidate).unwrap_or(candidate)
+        } else {
+            which_in(program, path_env, cwd).unwrap_or_else(|_| program_path.to_path_buf())
+        };
+
+        let resolved_program = resolved_program_path
+            .to_str()
+            .map(str::to_string)
+            .unwrap_or_else(|| program.clone());
+
+        let mut resolved_command = Vec::with_capacity(command.len());
+        resolved_command.push(resolved_program);
+        resolved_command.extend(args.iter().cloned());
+        resolved_commands.push(resolved_command);
+    }
+
+    resolved_commands
+}
+
+fn normalize_program_name_for_heuristics(command: &[String]) -> Vec<String> {
+    let Some((program, args)) = command.split_first() else {
+        return Vec::new();
+    };
+
+    let normalized_program = Path::new(program)
+        .file_name()
+        .and_then(|file_name| file_name.to_str())
+        .unwrap_or(program)
+        .to_string();
+
+    std::iter::once(normalized_program)
+        .chain(args.iter().cloned())
+        .collect()
+}
+
 impl ExecPolicyManager {
     pub(crate) fn new(policy: Arc<Policy>) -> Self {
         Self {
@@ -119,9 +181,22 @@ impl ExecPolicyManager {
         self.policy.load_full()
     }
 
+    #[cfg(test)]
     pub(crate) async fn create_exec_approval_requirement_for_command(
         &self,
         req: ExecApprovalRequest<'_>,
+    ) -> ExecApprovalRequirement {
+        let default_cwd = Path::new(".");
+        let empty_env = HashMap::new();
+        self.create_exec_approval_requirement_for_command_with_context(req, default_cwd, &empty_env)
+            .await
+    }
+
+    pub(crate) async fn create_exec_approval_requirement_for_command_with_context(
+        &self,
+        req: ExecApprovalRequest<'_>,
+        cwd: &Path,
+        env: &HashMap<String, String>,
     ) -> ExecApprovalRequirement {
         let ExecApprovalRequest {
             features,
@@ -132,17 +207,19 @@ impl ExecPolicyManager {
             prefix_rule,
         } = req;
         let exec_policy = self.current();
-        let commands =
+        let parsed_commands =
             parse_shell_lc_plain_commands(command).unwrap_or_else(|| vec![command.to_vec()]);
+        let policy_commands = resolve_commands_for_policy(&parsed_commands, cwd, env);
         let exec_policy_fallback = |cmd: &[String]| {
+            let normalized_for_heuristics = normalize_program_name_for_heuristics(cmd);
             render_decision_for_unmatched_command(
                 approval_policy,
                 sandbox_policy,
-                cmd,
+                &normalized_for_heuristics,
                 sandbox_permissions,
             )
         };
-        let evaluation = exec_policy.check_multiple(commands.iter(), &exec_policy_fallback);
+        let evaluation = exec_policy.check_multiple(policy_commands.iter(), &exec_policy_fallback);
 
         let requested_amendment = derive_requested_execpolicy_amendment(
             features,
@@ -567,6 +644,7 @@ mod tests {
     use codex_protocol::protocol::SandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
     use std::fs;
     use std::path::Path;
     use std::sync::Arc;
@@ -586,6 +664,17 @@ mod tests {
             ConfigRequirementsToml::default(),
         )
         .expect("ConfigLayerStack")
+    }
+
+    #[cfg(unix)]
+    fn write_executable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::write(path, "#!/bin/sh\nexit 0\n").expect("write executable");
+        let metadata = fs::metadata(path).expect("read metadata");
+        let mut permissions = metadata.permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).expect("set executable mode");
     }
 
     #[tokio::test]
@@ -891,6 +980,102 @@ prefix_rule(
             requirement,
             ExecApprovalRequirement::NeedsApproval {
                 reason: Some("`rm` requires approval by policy".to_string()),
+                proposed_execpolicy_amendment: None,
+            }
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn basename_allow_rule_does_not_bypass_when_command_resolves_to_path() {
+        let policy_src = r#"prefix_rule(pattern=["git", "status"], decision="allow")"#;
+        let mut parser = PolicyParser::new();
+        parser
+            .parse("test.rules", policy_src)
+            .expect("parse policy");
+        let policy = Arc::new(parser.build());
+
+        let temp_dir = tempdir().expect("create temp dir");
+        let git_path = temp_dir.path().join("git");
+        write_executable(&git_path);
+        let resolved_git_path = git_path
+            .canonicalize()
+            .expect("canonicalize test executable");
+        let resolved_git_path = resolved_git_path.to_string_lossy().to_string();
+
+        let mut env = HashMap::new();
+        env.insert("PATH".to_string(), temp_dir.path().display().to_string());
+        let command = vec!["git".to_string(), "status".to_string()];
+
+        let requirement = ExecPolicyManager::new(policy)
+            .create_exec_approval_requirement_for_command_with_context(
+                ExecApprovalRequest {
+                    features: &Features::with_defaults(),
+                    command: &command,
+                    approval_policy: AskForApproval::OnRequest,
+                    sandbox_policy: &SandboxPolicy::ReadOnly,
+                    sandbox_permissions: SandboxPermissions::UseDefault,
+                    prefix_rule: None,
+                },
+                temp_dir.path(),
+                &env,
+            )
+            .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+                    resolved_git_path,
+                    "status".to_string(),
+                ])),
+            }
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn resolved_path_allow_rule_bypasses_for_matching_executable() {
+        let temp_dir = tempdir().expect("create temp dir");
+        let git_path = temp_dir.path().join("git");
+        write_executable(&git_path);
+        let resolved_git_path = git_path
+            .canonicalize()
+            .expect("canonicalize test executable");
+        let resolved_git_path = resolved_git_path.to_string_lossy().to_string();
+
+        let policy_src =
+            format!(r#"prefix_rule(pattern=["{resolved_git_path}", "status"], decision="allow")"#);
+        let mut parser = PolicyParser::new();
+        parser
+            .parse("test.rules", &policy_src)
+            .expect("parse policy");
+        let policy = Arc::new(parser.build());
+
+        let mut env = HashMap::new();
+        env.insert("PATH".to_string(), temp_dir.path().display().to_string());
+        let command = vec!["git".to_string(), "status".to_string()];
+
+        let requirement = ExecPolicyManager::new(policy)
+            .create_exec_approval_requirement_for_command_with_context(
+                ExecApprovalRequest {
+                    features: &Features::with_defaults(),
+                    command: &command,
+                    approval_policy: AskForApproval::OnRequest,
+                    sandbox_policy: &SandboxPolicy::ReadOnly,
+                    sandbox_permissions: SandboxPermissions::UseDefault,
+                    prefix_rule: None,
+                },
+                temp_dir.path(),
+                &env,
+            )
+            .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: true,
                 proposed_execpolicy_amendment: None,
             }
         );

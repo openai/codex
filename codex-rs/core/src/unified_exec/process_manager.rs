@@ -494,14 +494,18 @@ impl UnifiedExecProcessManager {
             .session
             .services
             .exec_policy
-            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
-                features: &features,
-                command: &request.command,
-                approval_policy: context.turn.approval_policy,
-                sandbox_policy: &context.turn.sandbox_policy,
-                sandbox_permissions: request.sandbox_permissions,
-                prefix_rule: request.prefix_rule.clone(),
-            })
+            .create_exec_approval_requirement_for_command_with_context(
+                ExecApprovalRequest {
+                    features: &features,
+                    command: &request.command,
+                    approval_policy: context.turn.approval_policy,
+                    sandbox_policy: &context.turn.sandbox_policy,
+                    sandbox_permissions: request.sandbox_permissions,
+                    prefix_rule: request.prefix_rule.clone(),
+                },
+                &cwd,
+                &env,
+            )
             .await;
         let req = UnifiedExecToolRequest::new(
             request.command.clone(),

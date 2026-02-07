@@ -296,14 +296,18 @@ impl ShellHandler {
         let exec_approval_requirement = session
             .services
             .exec_policy
-            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
-                features: &features,
-                command: &exec_params.command,
-                approval_policy: turn.approval_policy,
-                sandbox_policy: &turn.sandbox_policy,
-                sandbox_permissions: exec_params.sandbox_permissions,
-                prefix_rule,
-            })
+            .create_exec_approval_requirement_for_command_with_context(
+                ExecApprovalRequest {
+                    features: &features,
+                    command: &exec_params.command,
+                    approval_policy: turn.approval_policy,
+                    sandbox_policy: &turn.sandbox_policy,
+                    sandbox_permissions: exec_params.sandbox_permissions,
+                    prefix_rule,
+                },
+                &exec_params.cwd,
+                &exec_params.env,
+            )
             .await;
 
         let req = ShellRequest {
