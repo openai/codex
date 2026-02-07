@@ -1096,6 +1096,7 @@ async fn make_chatwidget_manual(
         had_work_activity: false,
         saw_plan_update_this_turn: false,
         saw_plan_item_this_turn: false,
+        last_proposed_plan_text: None,
         plan_delta_buffer: String::new(),
         plan_item_active: false,
         last_separator_elapsed_secs: None,
@@ -1456,6 +1457,7 @@ async fn rate_limit_switch_prompt_popup_snapshot() {
 #[tokio::test]
 async fn plan_implementation_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
     chat.open_plan_implementation_prompt();
 
     let popup = render_bottom_popup(&chat, 80);
@@ -1465,7 +1467,9 @@ async fn plan_implementation_popup_snapshot() {
 #[tokio::test]
 async fn plan_implementation_popup_no_selected_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
     chat.open_plan_implementation_prompt();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
 
     let popup = render_bottom_popup(&chat, 80);
@@ -1489,6 +1493,30 @@ async fn plan_implementation_popup_yes_emits_submit_message_event() {
     };
     assert_eq!(text, PLAN_IMPLEMENTATION_CODING_MESSAGE);
     assert_eq!(collaboration_mode.mode, Some(ModeKind::Default));
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_new_thread_emits_new_session_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
+    let _ = drain_insert_history(&mut rx);
+    chat.open_plan_implementation_prompt();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let event = rx.try_recv().expect("expected AppEvent");
+    let AppEvent::NewSessionWithInitialMessage { text, model } = event else {
+        panic!("expected NewSessionWithInitialMessage, got {event:?}");
+    };
+    assert_eq!(
+        text,
+        format!("{PLAN_IMPLEMENTATION_CODING_MESSAGE}\n\nPlan:\n- Step 1\n- Step 2")
+    );
+    let expected_model = collaboration_modes::default_mode_mask(chat.models_manager.as_ref())
+        .and_then(|mask| mask.model)
+        .unwrap_or_else(|| chat.current_model().to_string());
+    assert_eq!(model, expected_model);
 }
 
 #[tokio::test]

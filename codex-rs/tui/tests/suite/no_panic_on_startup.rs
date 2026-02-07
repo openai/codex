@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 use tokio::select;
 use tokio::time::timeout;
@@ -56,7 +57,20 @@ async fn run_codex_cli(
     codex_home: impl AsRef<Path>,
     cwd: impl AsRef<Path>,
 ) -> anyhow::Result<CodexCliOutput> {
-    let codex_cli = codex_utils_cargo_bin::cargo_bin("codex")?;
+    let codex_cli = match codex_utils_cargo_bin::cargo_bin("codex") {
+        Ok(path) => path,
+        Err(err) => {
+            if codex_utils_cargo_bin::runfiles_available() {
+                return Err(err.into());
+            }
+
+            // `cargo test -p codex-tui` builds the `codex-tui` binary but not the `codex`
+            // binary (owned by `codex-cli`), so build it on-demand for this test.
+            build_codex_cli_bin()
+                .await
+                .map_err(|build_err| anyhow::anyhow!("{err}; {build_err}"))?
+        }
+    };
     let mut env = HashMap::new();
     env.insert(
         "CODEX_HOME".to_string(),
@@ -116,4 +130,42 @@ async fn run_codex_cli(
         exit_code,
         output: output.to_string(),
     })
+}
+
+async fn build_codex_cli_bin() -> anyhow::Result<PathBuf> {
+    let tui_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let codex_rs_dir = tui_dir
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("CARGO_MANIFEST_DIR is missing its parent directory"))?;
+
+    let mut cmd = tokio::process::Command::new("cargo");
+    cmd.args(["build", "-p", "codex-cli", "--bin", "codex"]);
+    if !cfg!(debug_assertions) {
+        cmd.arg("--release");
+    }
+    cmd.current_dir(codex_rs_dir);
+    let status = cmd.status().await?;
+    if !status.success() {
+        anyhow::bail!("cargo build exited with {status}");
+    }
+
+    let target_dir = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| codex_rs_dir.join("target"));
+    let profile_dir = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+
+    let exe = if cfg!(windows) { "codex.exe" } else { "codex" };
+    let candidate = target_dir.join(profile_dir).join(exe);
+    if !candidate.exists() {
+        anyhow::bail!(
+            "expected codex binary at {}, but it does not exist",
+            candidate.display()
+        );
+    }
+
+    Ok(candidate)
 }

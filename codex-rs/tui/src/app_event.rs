@@ -59,6 +59,12 @@ pub(crate) enum AppEvent {
     /// Start a new session.
     NewSession,
 
+    /// Start a new session and immediately submit an initial message.
+    NewSessionWithInitialMessage {
+        text: String,
+        model: String,
+    },
+
     /// Open the resume picker inside the running TUI session.
     OpenResumePicker,
 
