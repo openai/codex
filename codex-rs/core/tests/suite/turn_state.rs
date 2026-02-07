@@ -1,6 +1,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use anyhow::Result;
+use codex_core::features::Feature;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -119,6 +120,111 @@ async fn websocket_turn_state_persists_within_turn_and_resets_after() -> Result<
         Some("ts-1".to_string())
     );
     assert_eq!(handshakes[2].header(TURN_STATE_HEADER), None);
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_v2_reuses_connection_across_turns() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
+        requests: vec![
+            vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-1"),
+            ],
+            vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "done"),
+                ev_completed("resp-2"),
+            ],
+        ],
+        response_headers: Vec::new(),
+        accept_delay: None,
+    }])
+    .await;
+
+    let builder = test_codex();
+    let test = builder
+        .with_config(|config| {
+            config.features.enable(Feature::ResponsesWebsocketsV2);
+        })
+        .build_with_websocket_server(&server)
+        .await?;
+    test.submit_turn("first turn").await?;
+    test.submit_turn("second turn").await?;
+
+    let handshakes = server.handshakes();
+    assert_eq!(handshakes.len(), 1);
+    let requests = server.single_connection();
+    assert_eq!(requests.len(), 2);
+    let second_request = requests[1].body_json();
+    assert_eq!(
+        second_request["previous_response_id"].as_str(),
+        Some("resp-1")
+    );
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_v2_reconnect_after_turn_boundary_does_not_replay_turn_state() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_websocket_server_with_headers(vec![
+        WebSocketConnectionConfig {
+            requests: vec![vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-1"),
+            ]],
+            response_headers: vec![(TURN_STATE_HEADER.to_string(), "ts-1".to_string())],
+            accept_delay: None,
+        },
+        WebSocketConnectionConfig {
+            requests: vec![vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "done"),
+                ev_completed("resp-2"),
+            ]],
+            response_headers: Vec::new(),
+            accept_delay: None,
+        },
+    ])
+    .await;
+
+    let builder = test_codex();
+    let test = builder
+        .with_config(|config| {
+            config.features.enable(Feature::ResponsesWebsocketsV2);
+        })
+        .build_with_websocket_server(&server)
+        .await?;
+    test.submit_turn("first turn").await?;
+    test.submit_turn("second turn").await?;
+
+    let handshakes = server.handshakes();
+    assert_eq!(handshakes.len(), 2);
+    assert_eq!(handshakes[0].header(TURN_STATE_HEADER), None);
+    assert_eq!(handshakes[1].header(TURN_STATE_HEADER), None);
+
+    let connections = server.connections();
+    assert_eq!(connections.len(), 2);
+    let second_connection = connections
+        .get(1)
+        .expect("second websocket connection should exist");
+    let second_request = second_connection
+        .first()
+        .expect("second websocket connection should have a request")
+        .body_json();
+    assert_eq!(
+        second_request["previous_response_id"].as_str(),
+        Some("resp-1")
+    );
 
     server.shutdown().await;
     Ok(())

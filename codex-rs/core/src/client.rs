@@ -142,6 +142,8 @@ struct ModelClientState {
     /// This keeps startup preconnect task tracking and warmed-socket adoption in one lock so
     /// turn-time websocket setup observes a single, coherent state.
     preconnect: Mutex<PreconnectState>,
+    /// Session-scoped websocket v2 state shared across turns.
+    responses_websocket_v2: Mutex<ResponsesWebsocketV2State>,
 }
 
 impl std::fmt::Debug for ModelClientState {
@@ -167,6 +169,7 @@ impl std::fmt::Debug for ModelClientState {
                 &self.disable_websockets.load(Ordering::Relaxed),
             )
             .field("preconnect", &"<opaque>")
+            .field("responses_websocket_v2", &"<opaque>")
             .finish()
     }
 }
@@ -186,7 +189,7 @@ struct CurrentClientSetup {
 /// This bundles the socket with optional sticky-routing state captured during
 /// handshake so they are taken and cleared atomically.
 struct PreconnectedWebSocket {
-    connection: ApiWebSocketConnection,
+    connection: Arc<ApiWebSocketConnection>,
     turn_state: Option<String>,
 }
 
@@ -201,6 +204,13 @@ enum PreconnectState {
     InFlight(JoinHandle<()>),
     /// Startup preconnect finished and produced a one-shot warmed socket.
     Ready(PreconnectedWebSocket),
+}
+
+#[derive(Default)]
+struct ResponsesWebsocketV2State {
+    connection: Option<Arc<ApiWebSocketConnection>>,
+    websocket_last_items: Vec<ResponseItem>,
+    websocket_last_response_id: Option<String>,
 }
 
 /// A session-scoped client for model-provider API calls.
@@ -240,7 +250,7 @@ pub struct ModelClient {
 /// contract and can cause routing bugs.
 pub struct ModelClientSession {
     client: ModelClient,
-    connection: Option<ApiWebSocketConnection>,
+    connection: Option<Arc<ApiWebSocketConnection>>,
     websocket_last_items: Vec<ResponseItem>,
     websocket_last_response_id: Option<String>,
     websocket_last_response_id_rx: Option<oneshot::Receiver<String>>,
@@ -289,6 +299,7 @@ impl ModelClient {
                 beta_features_header,
                 disable_websockets: AtomicBool::new(false),
                 preconnect: Mutex::new(PreconnectState::Idle),
+                responses_websocket_v2: Mutex::new(ResponsesWebsocketV2State::default()),
             }),
         }
     }
@@ -493,6 +504,63 @@ impl ModelClient {
         self.state.enable_responses_websockets_v2
     }
 
+    fn with_shared_v2_state<R>(
+        &self,
+        action: impl FnOnce(&mut ResponsesWebsocketV2State) -> R,
+    ) -> R {
+        let mut state = self
+            .state
+            .responses_websocket_v2
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        action(&mut state)
+    }
+
+    fn shared_v2_connection(&self) -> Option<Arc<ApiWebSocketConnection>> {
+        self.with_shared_v2_state(|state| state.connection.clone())
+    }
+
+    fn set_shared_v2_connection(&self, connection: Option<Arc<ApiWebSocketConnection>>) {
+        self.with_shared_v2_state(|state| {
+            state.connection = connection;
+        });
+    }
+
+    fn shared_v2_request_chain_state(&self) -> (Vec<ResponseItem>, Option<String>) {
+        self.with_shared_v2_state(|state| {
+            (
+                state.websocket_last_items.clone(),
+                state.websocket_last_response_id.clone(),
+            )
+        })
+    }
+
+    fn set_shared_v2_request_chain_state(
+        &self,
+        websocket_last_items: Vec<ResponseItem>,
+        response_id: String,
+    ) {
+        self.with_shared_v2_state(|state| {
+            state.websocket_last_items = websocket_last_items;
+            state.websocket_last_response_id = Some(response_id);
+        });
+    }
+
+    fn clear_shared_v2_request_chain_state(&self) {
+        self.with_shared_v2_state(|state| {
+            state.websocket_last_items.clear();
+            state.websocket_last_response_id = None;
+        });
+    }
+
+    fn clear_shared_v2_state(&self) {
+        self.with_shared_v2_state(|state| {
+            state.connection = None;
+            state.websocket_last_items.clear();
+            state.websocket_last_response_id = None;
+        });
+    }
+
     /// Returns whether websocket transport has been permanently disabled for this session.
     ///
     /// Once set by fallback activation, subsequent turns must stay on HTTP transport.
@@ -612,7 +680,7 @@ impl ModelClient {
             return;
         }
         *state = PreconnectState::Ready(PreconnectedWebSocket {
-            connection,
+            connection: Arc::new(connection),
             turn_state,
         });
     }
@@ -875,6 +943,17 @@ impl ModelClientSession {
         options: &ApiResponsesOptions,
     ) -> ResponsesWsRequest {
         let responses_websockets_v2_enabled = self.client.responses_websockets_v2_enabled();
+        if responses_websockets_v2_enabled
+            && self.websocket_last_items.is_empty()
+            && self.websocket_last_response_id.is_none()
+            && self.websocket_last_response_id_rx.is_none()
+        {
+            let (websocket_last_items, websocket_last_response_id) =
+                self.client.shared_v2_request_chain_state();
+            self.websocket_last_items = websocket_last_items;
+            self.websocket_last_response_id = websocket_last_response_id;
+        }
+
         let incremental_items = self.get_incremental_items(&api_prompt.input);
         if let Some(append_items) = incremental_items {
             if responses_websockets_v2_enabled
@@ -920,6 +999,11 @@ impl ModelClientSession {
         turn_metadata_header: Option<&str>,
         options: &ApiResponsesOptions,
     ) -> std::result::Result<&ApiWebSocketConnection, ApiError> {
+        let responses_websockets_v2_enabled = self.client.responses_websockets_v2_enabled();
+        if responses_websockets_v2_enabled && self.connection.is_none() {
+            self.connection = self.client.shared_v2_connection();
+        }
+
         // Prefer the session-level preconnect slot before creating a new websocket.
         if self.connection.is_none() {
             if let Some(preconnected) = self.try_use_preconnected_websocket() {
@@ -942,24 +1026,36 @@ impl ModelClientSession {
             self.websocket_last_items.clear();
             self.websocket_last_response_id = None;
             self.websocket_last_response_id_rx = None;
+            if responses_websockets_v2_enabled {
+                self.client.clear_shared_v2_request_chain_state();
+            }
             let turn_state = options
                 .turn_state
                 .clone()
                 .unwrap_or_else(|| Arc::clone(&self.turn_state));
-            let new_conn = self
-                .client
-                .connect_websocket(
-                    otel_manager,
-                    api_provider,
-                    api_auth,
-                    Some(turn_state),
-                    turn_metadata_header,
-                )
-                .await?;
+            let new_conn = Arc::new(
+                self.client
+                    .connect_websocket(
+                        otel_manager,
+                        api_provider,
+                        api_auth,
+                        Some(turn_state),
+                        turn_metadata_header,
+                    )
+                    .await?,
+            );
+            if responses_websockets_v2_enabled {
+                self.client
+                    .set_shared_v2_connection(Some(Arc::clone(&new_conn)));
+            }
             self.connection = Some(new_conn);
+        } else if responses_websockets_v2_enabled && let Some(connection) = self.connection.as_ref()
+        {
+            self.client
+                .set_shared_v2_connection(Some(Arc::clone(connection)));
         }
 
-        self.connection.as_ref().ok_or(ApiError::Stream(
+        self.connection.as_deref().ok_or(ApiError::Stream(
             "websocket connection is unavailable".to_string(),
         ))
     }
@@ -1136,16 +1232,33 @@ impl ModelClientSession {
                 .stream_request(request)
                 .await
                 .map_err(map_api_error)?;
+            let responses_websockets_v2_enabled = self.client.responses_websockets_v2_enabled();
+            if responses_websockets_v2_enabled {
+                // Keep chain state completion-driven: an interrupted request should not
+                // leave a mixed {new input, old response_id} pair for the next turn.
+                self.client.clear_shared_v2_request_chain_state();
+            }
             self.websocket_last_items = api_prompt.input.clone();
+            let mut completed_input = Some(self.websocket_last_items.clone());
             let (last_response_id_sender, last_response_id_receiver) = oneshot::channel();
             self.websocket_last_response_id_rx = Some(last_response_id_receiver);
             let mut last_response_id_sender = Some(last_response_id_sender);
+            let client = self.client.clone();
             let stream_result = stream_result.inspect(move |event| {
                 if let Ok(ResponseEvent::Completed { response_id, .. }) = event
                     && !response_id.is_empty()
-                    && let Some(sender) = last_response_id_sender.take()
                 {
-                    let _ = sender.send(response_id.clone());
+                    if let Some(sender) = last_response_id_sender.take() {
+                        let _ = sender.send(response_id.clone());
+                    }
+                    if responses_websockets_v2_enabled
+                        && let Some(completed_input) = completed_input.take()
+                    {
+                        client.set_shared_v2_request_chain_state(
+                            completed_input,
+                            response_id.clone(),
+                        );
+                    }
                 }
             });
 
@@ -1241,6 +1354,7 @@ impl ModelClientSession {
 
             self.connection = None;
             self.websocket_last_items.clear();
+            self.client.clear_shared_v2_state();
             self.client.clear_preconnect();
         }
         activated
