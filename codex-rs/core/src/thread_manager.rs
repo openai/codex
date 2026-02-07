@@ -14,6 +14,7 @@ use crate::error::Result as CodexResult;
 use crate::file_watcher::FileWatcher;
 use crate::file_watcher::FileWatcherEvent;
 use crate::models_manager::manager::ModelsManager;
+use crate::network_proxy::ManagedNetworkProxy;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::SessionConfiguredEvent;
@@ -36,11 +37,61 @@ use tempfile::TempDir;
 use tokio::runtime::Handle;
 #[cfg(any(test, feature = "test-support"))]
 use tokio::runtime::RuntimeFlavor;
+use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::sync::broadcast;
 use tracing::warn;
 
 const THREAD_CREATED_CHANNEL_CAPACITY: usize = 1024;
+
+/// Process-wide proxy runtime owned by a single ThreadManagerState.
+///
+/// This keeps proxy lifecycle in one place:
+/// - one startup gate (prevents duplicate binds),
+/// - one proxy handle.
+struct NetworkProxyRuntime {
+    codex_home: PathBuf,
+    proxy: Mutex<Option<ManagedNetworkProxy>>,
+    start_gate: Mutex<()>,
+}
+
+impl NetworkProxyRuntime {
+    fn new(codex_home: PathBuf) -> Self {
+        Self {
+            codex_home,
+            proxy: Mutex::new(None),
+            start_gate: Mutex::new(()),
+        }
+    }
+
+    async fn ensure_started(&self, enabled: bool) -> CodexResult<()> {
+        if !enabled {
+            return Ok(());
+        }
+
+        // Serialize startup attempts so concurrent thread starts cannot race and bind twice.
+        let _gate = self.start_gate.lock().await;
+        if self.proxy.lock().await.is_some() {
+            return Ok(());
+        }
+
+        let proxy = ManagedNetworkProxy::maybe_start(self.codex_home.as_path(), enabled)
+            .await
+            .map_err(|err| CodexErr::Fatal(format!("failed to start network proxy: {err:#}")))?;
+        *self.proxy.lock().await = proxy;
+        Ok(())
+    }
+
+    async fn shutdown(&self) -> CodexResult<()> {
+        if let Some(mut proxy) = self.proxy.lock().await.take() {
+            proxy
+                .shutdown()
+                .await
+                .map_err(|err| CodexErr::Fatal(format!("failed to stop network proxy: {err:#}")))?;
+        }
+        Ok(())
+    }
+}
 
 fn build_file_watcher(codex_home: PathBuf, skills_manager: Arc<SkillsManager>) -> Arc<FileWatcher> {
     #[cfg(any(test, feature = "test-support"))]
@@ -109,6 +160,7 @@ pub(crate) struct ThreadManagerState {
     models_manager: Arc<ModelsManager>,
     skills_manager: Arc<SkillsManager>,
     file_watcher: Arc<FileWatcher>,
+    network_proxy_runtime: NetworkProxyRuntime,
     session_source: SessionSource,
     #[cfg(any(test, feature = "test-support"))]
     #[allow(dead_code)]
@@ -125,6 +177,7 @@ impl ThreadManager {
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let skills_manager = Arc::new(SkillsManager::new(codex_home.clone()));
         let file_watcher = build_file_watcher(codex_home.clone(), Arc::clone(&skills_manager));
+        let network_proxy_runtime = NetworkProxyRuntime::new(codex_home.clone());
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
@@ -132,6 +185,7 @@ impl ThreadManager {
                 models_manager: Arc::new(ModelsManager::new(codex_home, auth_manager.clone())),
                 skills_manager,
                 file_watcher,
+                network_proxy_runtime,
                 auth_manager,
                 session_source,
                 #[cfg(any(test, feature = "test-support"))]
@@ -165,6 +219,7 @@ impl ThreadManager {
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let skills_manager = Arc::new(SkillsManager::new(codex_home.clone()));
         let file_watcher = build_file_watcher(codex_home.clone(), Arc::clone(&skills_manager));
+        let network_proxy_runtime = NetworkProxyRuntime::new(codex_home.clone());
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
@@ -176,6 +231,7 @@ impl ThreadManager {
                 )),
                 skills_manager,
                 file_watcher,
+                network_proxy_runtime,
                 auth_manager,
                 session_source: SessionSource::Exec,
                 #[cfg(any(test, feature = "test-support"))]
@@ -301,16 +357,12 @@ impl ThreadManager {
     /// as `Arc<CodexThread>`, it is possible that other references to it exist elsewhere.
     /// Returns the thread if the thread was found and removed.
     pub async fn remove_thread(&self, thread_id: &ThreadId) -> Option<Arc<CodexThread>> {
-        self.state.threads.write().await.remove(thread_id)
+        self.state.remove_thread(thread_id).await
     }
 
     /// Closes all threads open in this ThreadManager
     pub async fn remove_and_close_all_threads(&self) -> CodexResult<()> {
-        for thread in self.state.threads.read().await.values() {
-            thread.submit(Op::Shutdown).await?;
-        }
-        self.state.threads.write().await.clear();
-        Ok(())
+        self.state.remove_and_close_all_threads().await
     }
 
     /// Fork an existing thread by taking messages up to the given position (not including
@@ -434,6 +486,11 @@ impl ThreadManagerState {
         session_source: SessionSource,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
     ) -> CodexResult<NewThread> {
+        // Requirements currently control whether proxy wiring is active for this process.
+        let proxy_enabled = proxy_enabled_from_requirements(&config);
+        if let Err(err) = self.ensure_network_proxy_started(proxy_enabled).await {
+            warn!("failed to start network proxy singleton: {err:#}");
+        }
         self.file_watcher.register_config(&config);
         let CodexSpawnOk {
             codex, thread_id, ..
@@ -485,6 +542,46 @@ impl ThreadManagerState {
     pub(crate) fn notify_thread_created(&self, thread_id: ThreadId) {
         let _ = self.thread_created_tx.send(thread_id);
     }
+
+    pub(crate) async fn ensure_network_proxy_started(&self, enabled: bool) -> CodexResult<()> {
+        self.network_proxy_runtime.ensure_started(enabled).await
+    }
+
+    pub(crate) async fn shutdown_network_proxy(&self) -> CodexResult<()> {
+        self.network_proxy_runtime.shutdown().await
+    }
+
+    pub(crate) async fn remove_and_close_all_threads(&self) -> CodexResult<()> {
+        // Clone thread handles first so we don't hold the map lock while awaiting shutdown.
+        let threads = self
+            .threads
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        for thread in threads {
+            thread.submit(Op::Shutdown).await?;
+        }
+        self.threads.write().await.clear();
+
+        if let Err(err) = self.shutdown_network_proxy().await {
+            warn!("failed to stop network proxy singleton: {err:#}");
+        }
+
+        Ok(())
+    }
+}
+
+fn proxy_enabled_from_requirements(config: &Config) -> bool {
+    // Presence of any requirements network block enables proxy wiring; explicit enabled=false
+    // is treated as an opt-out to keep control with requirements authors.
+    config
+        .config_layer_stack
+        .requirements_toml()
+        .network
+        .as_ref()
+        .is_some_and(|network| network.enabled.unwrap_or(true))
 }
 
 /// Return a prefix of `items` obtained by cutting strictly before the nth user message
@@ -613,5 +710,27 @@ mod tests {
             serde_json::to_value(&got_items).unwrap(),
             serde_json::to_value(&expected).unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn network_proxy_runtime_noops_when_network_disabled() {
+        let codex_home = tempfile::tempdir().expect("create codex_home tempdir");
+        let runtime = NetworkProxyRuntime::new(codex_home.path().to_path_buf());
+        runtime
+            .ensure_started(false)
+            .await
+            .expect("disabled network should skip startup");
+        assert!(runtime.proxy.lock().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn network_proxy_runtime_shutdown_noops_without_proxy() {
+        let codex_home = tempfile::tempdir().expect("create codex_home tempdir");
+        let runtime = NetworkProxyRuntime::new(codex_home.path().to_path_buf());
+        runtime
+            .shutdown()
+            .await
+            .expect("shutdown without active proxy should succeed");
+        assert!(runtime.proxy.lock().await.is_none());
     }
 }

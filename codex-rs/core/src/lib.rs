@@ -49,6 +49,7 @@ mod mcp_tool_call;
 mod mentions;
 mod message_history;
 mod model_provider_info;
+mod network_proxy;
 pub mod parse_command;
 pub mod path_utils;
 pub mod personality_migration;
