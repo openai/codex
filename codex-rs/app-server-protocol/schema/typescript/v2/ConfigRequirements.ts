@@ -5,4 +5,4 @@ import type { AskForApproval } from "./AskForApproval";
 import type { ResidencyRequirement } from "./ResidencyRequirement";
 import type { SandboxMode } from "./SandboxMode";
 
-export type ConfigRequirements = { allowedApprovalPolicies: Array<AskForApproval> | null, allowedSandboxModes: Array<SandboxMode> | null, enforceResidency: ResidencyRequirement | null, };
+export type ConfigRequirements = { allowedApprovalPolicies: Array<AskForApproval> | null, allowedSandboxModes: Array<SandboxMode> | null, enforceResidency: ResidencyRequirement | null, requiredDeveloperInstructions: string | null, };

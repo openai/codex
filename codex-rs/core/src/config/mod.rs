@@ -179,6 +179,8 @@ pub struct Config {
 
     /// Developer instructions override injected as a separate message.
     pub developer_instructions: Option<String>,
+    /// Required developer instructions from requirements.
+    pub required_developer_instructions: Constrained<Option<String>>,
 
     /// Compact prompt override.
     pub compact_prompt: Option<String>,
@@ -1629,6 +1631,7 @@ impl Config {
             mcp_servers,
             exec_policy: _,
             enforce_residency,
+            required_developer_instructions,
         } = requirements;
 
         apply_requirement_constrained_value(
@@ -1667,6 +1670,7 @@ impl Config {
             base_instructions,
             personality,
             developer_instructions,
+            required_developer_instructions: required_developer_instructions.value,
             compact_prompt,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
@@ -3981,6 +3985,7 @@ model_verbosity = "high"
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 base_instructions: None,
                 developer_instructions: None,
+                required_developer_instructions: Constrained::allow_any(None),
                 compact_prompt: None,
                 forced_chatgpt_workspace_id: None,
                 forced_login_method: None,
@@ -4069,6 +4074,7 @@ model_verbosity = "high"
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
             developer_instructions: None,
+            required_developer_instructions: Constrained::allow_any(None),
             compact_prompt: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
@@ -4172,6 +4178,7 @@ model_verbosity = "high"
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
             developer_instructions: None,
+            required_developer_instructions: Constrained::allow_any(None),
             compact_prompt: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
@@ -4261,6 +4268,7 @@ model_verbosity = "high"
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
             developer_instructions: None,
+            required_developer_instructions: Constrained::allow_any(None),
             compact_prompt: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
@@ -4815,6 +4823,7 @@ mcp_oauth_callback_port = 5678
             mcp_servers: None,
             rules: None,
             enforce_residency: None,
+            additional_developer_instructions: None,
         };
 
         let config = ConfigBuilder::default()

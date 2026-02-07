@@ -79,6 +79,7 @@ pub struct ConfigRequirements {
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
     pub(crate) exec_policy: Option<Sourced<RequirementsExecPolicy>>,
     pub enforce_residency: ConstrainedWithSource<Option<ResidencyRequirement>>,
+    pub required_developer_instructions: ConstrainedWithSource<Option<String>>,
 }
 
 impl Default for ConfigRequirements {
@@ -95,6 +96,10 @@ impl Default for ConfigRequirements {
             mcp_servers: None,
             exec_policy: None,
             enforce_residency: ConstrainedWithSource::new(Constrained::allow_any(None), None),
+            required_developer_instructions: ConstrainedWithSource::new(
+                Constrained::allow_any(None),
+                None,
+            ),
         }
     }
 }
@@ -125,6 +130,7 @@ pub struct ConfigRequirementsToml {
     pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
     pub rules: Option<RequirementsExecPolicyToml>,
     pub enforce_residency: Option<ResidencyRequirement>,
+    pub additional_developer_instructions: Option<String>,
 }
 
 /// Value paired with the requirement source it came from, for better error
@@ -156,6 +162,7 @@ pub struct ConfigRequirementsWithSources {
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
     pub rules: Option<Sourced<RequirementsExecPolicyToml>>,
     pub enforce_residency: Option<Sourced<ResidencyRequirement>>,
+    pub additional_developer_instructions: Option<Sourced<String>>,
 }
 
 impl ConfigRequirementsWithSources {
@@ -189,6 +196,7 @@ impl ConfigRequirementsWithSources {
                 mcp_servers,
                 rules,
                 enforce_residency,
+                additional_developer_instructions,
             }
         );
     }
@@ -200,6 +208,7 @@ impl ConfigRequirementsWithSources {
             mcp_servers,
             rules,
             enforce_residency,
+            additional_developer_instructions,
         } = self;
         ConfigRequirementsToml {
             allowed_approval_policies: allowed_approval_policies.map(|sourced| sourced.value),
@@ -207,6 +216,8 @@ impl ConfigRequirementsWithSources {
             mcp_servers: mcp_servers.map(|sourced| sourced.value),
             rules: rules.map(|sourced| sourced.value),
             enforce_residency: enforce_residency.map(|sourced| sourced.value),
+            additional_developer_instructions: additional_developer_instructions
+                .map(|sourced| sourced.value),
         }
     }
 }
@@ -251,6 +262,7 @@ impl ConfigRequirementsToml {
             && self.mcp_servers.is_none()
             && self.rules.is_none()
             && self.enforce_residency.is_none()
+            && self.additional_developer_instructions.is_none()
     }
 }
 
@@ -264,6 +276,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             mcp_servers,
             rules,
             enforce_residency,
+            additional_developer_instructions,
         } = toml;
 
         let approval_policy = match allowed_approval_policies {
@@ -380,12 +393,36 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             }
             None => ConstrainedWithSource::new(Constrained::allow_any(None), None),
         };
+        let required_developer_instructions = match additional_developer_instructions {
+            Some(Sourced {
+                value: required_developer_instructions,
+                source: requirement_source,
+            }) => {
+                let required = Some(required_developer_instructions);
+                let requirement_source_for_error = requirement_source.clone();
+                let constrained = Constrained::new(required.clone(), move |candidate| {
+                    if candidate == &required {
+                        Ok(())
+                    } else {
+                        Err(ConstraintError::InvalidValue {
+                            field_name: "required_developer_instructions",
+                            candidate: format!("{candidate:?}"),
+                            allowed: format!("{required:?}"),
+                            requirement_source: requirement_source_for_error.clone(),
+                        })
+                    }
+                })?;
+                ConstrainedWithSource::new(constrained, Some(requirement_source))
+            }
+            None => ConstrainedWithSource::new(Constrained::allow_any(None), None),
+        };
         Ok(ConfigRequirements {
             approval_policy,
             sandbox_policy,
             mcp_servers,
             exec_policy,
             enforce_residency,
+            required_developer_instructions,
         })
     }
 }
@@ -413,6 +450,7 @@ mod tests {
             mcp_servers,
             rules,
             enforce_residency,
+            additional_developer_instructions,
         } = toml;
         ConfigRequirementsWithSources {
             allowed_approval_policies: allowed_approval_policies
@@ -422,6 +460,8 @@ mod tests {
             mcp_servers: mcp_servers.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             rules: rules.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             enforce_residency: enforce_residency
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            additional_developer_instructions: additional_developer_instructions
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
         }
     }
@@ -437,7 +477,9 @@ mod tests {
             SandboxModeRequirement::DangerFullAccess,
         ];
         let enforce_residency = ResidencyRequirement::Us;
+        let required_developer_instructions = "use concise responses".to_string();
         let enforce_source = source.clone();
+        let additional_source = source.clone();
 
         // Intentionally constructed without `..Default::default()` so adding a new field to
         // `ConfigRequirementsToml` forces this test to be updated.
@@ -447,6 +489,7 @@ mod tests {
             mcp_servers: None,
             rules: None,
             enforce_residency: Some(enforce_residency),
+            additional_developer_instructions: Some(required_developer_instructions.clone()),
         };
 
         target.merge_unset_fields(source.clone(), other);
@@ -462,6 +505,10 @@ mod tests {
                 mcp_servers: None,
                 rules: None,
                 enforce_residency: Some(Sourced::new(enforce_residency, enforce_source)),
+                additional_developer_instructions: Some(Sourced::new(
+                    required_developer_instructions,
+                    additional_source,
+                )),
             }
         );
     }
@@ -492,6 +539,7 @@ mod tests {
                 mcp_servers: None,
                 rules: None,
                 enforce_residency: None,
+                additional_developer_instructions: None,
             }
         );
         Ok(())
@@ -530,6 +578,7 @@ mod tests {
                 mcp_servers: None,
                 rules: None,
                 enforce_residency: None,
+                additional_developer_instructions: None,
             }
         );
         Ok(())
@@ -616,6 +665,7 @@ mod tests {
                 allowed_approval_policies = ["on-request"]
                 allowed_sandbox_modes = ["read-only"]
                 enforce_residency = "us"
+                additional_developer_instructions = "follow policy"
             "#,
         )?;
 
@@ -633,6 +683,13 @@ mod tests {
             Some(source_location.clone())
         );
         assert_eq!(requirements.enforce_residency.source, Some(source_location));
+        assert_eq!(
+            requirements
+                .required_developer_instructions
+                .get()
+                .as_deref(),
+            Some("follow policy")
+        );
 
         Ok(())
     }
