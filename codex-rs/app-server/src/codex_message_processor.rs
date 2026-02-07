@@ -1757,25 +1757,31 @@ impl CodexMessageProcessor {
             Ok(new_thread) => {
                 let NewThread {
                     thread_id,
-                    session_configured,
+                    session_configured: _session_configured,
                     ..
                 } = new_thread;
-                let rollout_path = match session_configured.rollout_path {
-                    Some(path) => path,
-                    None => {
+                let rollout_path = match self.resolve_rollout_path(Some(thread_id)).await {
+                    Ok(Some(path)) => path,
+                    Ok(None) => {
                         let error = JSONRPCErrorError {
-                            code: INTERNAL_ERROR_CODE,
-                            message: "rollout path missing for v1 conversation".to_string(),
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: format!(
+                                "thread `{thread_id}` is ephemeral and has no persisted rollout"
+                            ),
                             data: None,
                         };
+                        self.outgoing.send_error(request_id, error).await;
+                        return;
+                    }
+                    Err(error) => {
                         self.outgoing.send_error(request_id, error).await;
                         return;
                     }
                 };
                 let response = NewConversationResponse {
                     conversation_id: thread_id,
-                    model: session_configured.model,
-                    reasoning_effort: session_configured.reasoning_effort,
+                    model: _session_configured.model,
+                    reasoning_effort: _session_configured.reasoning_effort,
                     rollout_path,
                 };
                 self.outgoing.send_response(request_id, response).await;
@@ -1995,29 +2001,22 @@ impl CodexMessageProcessor {
             }
         };
 
-        let rollout_path =
-            match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string()).await
-            {
-                Ok(Some(p)) => p,
-                Ok(None) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("no rollout found for thread id {thread_id}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                    return;
-                }
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("failed to locate thread id {thread_id}: {err}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                    return;
-                }
-            };
+        let rollout_path = match self.resolve_rollout_path(Some(thread_id)).await {
+            Ok(Some(path)) => path,
+            Ok(None) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("no rollout found for thread id {thread_id}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
 
         match self.archive_thread_common(thread_id, &rollout_path).await {
             Ok(()) => {
@@ -2609,13 +2608,8 @@ impl CodexMessageProcessor {
                 }
             };
 
-            let path = match find_thread_path_by_id_str(
-                &self.config.codex_home,
-                &existing_thread_id.to_string(),
-            )
-            .await
-            {
-                Ok(Some(p)) => p,
+            let path = match self.resolve_rollout_path(Some(existing_thread_id)).await {
+                Ok(Some(path)) => path,
                 Ok(None) => {
                     self.send_invalid_request_error(
                         request_id,
@@ -2624,12 +2618,8 @@ impl CodexMessageProcessor {
                     .await;
                     return;
                 }
-                Err(err) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("failed to locate thread id {existing_thread_id}: {err}"),
-                    )
-                    .await;
+                Err(error) => {
+                    self.outgoing.send_error(request_id, error).await;
                     return;
                 }
             };
@@ -2795,13 +2785,8 @@ impl CodexMessageProcessor {
                 }
             };
 
-            match find_thread_path_by_id_str(
-                &self.config.codex_home,
-                &existing_thread_id.to_string(),
-            )
-            .await
-            {
-                Ok(Some(p)) => (p, Some(existing_thread_id)),
+            match self.resolve_rollout_path(Some(existing_thread_id)).await {
+                Ok(Some(path)) => (path, Some(existing_thread_id)),
                 Ok(None) => {
                     self.send_invalid_request_error(
                         request_id,
@@ -2810,12 +2795,8 @@ impl CodexMessageProcessor {
                     .await;
                     return;
                 }
-                Err(err) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("failed to locate thread id {existing_thread_id}: {err}"),
-                    )
-                    .await;
+                Err(error) => {
+                    self.outgoing.send_error(request_id, error).await;
                     return;
                 }
             }
@@ -2991,14 +2972,9 @@ impl CodexMessageProcessor {
                 }
             }
             GetConversationSummaryParams::ThreadId { conversation_id } => {
-                match codex_core::find_thread_path_by_id_str(
-                    &self.config.codex_home,
-                    &conversation_id.to_string(),
-                )
-                .await
-                {
-                    Ok(Some(p)) => p,
-                    _ => {
+                match self.resolve_rollout_path(Some(conversation_id)).await {
+                    Ok(Some(path)) => path,
+                    Ok(None) => {
                         let error = JSONRPCErrorError {
                             code: INVALID_REQUEST_ERROR_CODE,
                             message: format!(
@@ -3006,6 +2982,10 @@ impl CodexMessageProcessor {
                             ),
                             data: None,
                         };
+                        self.outgoing.send_error(request_id, error).await;
+                        return;
+                    }
+                    Err(error) => {
                         self.outgoing.send_error(request_id, error).await;
                         return;
                     }
@@ -3673,24 +3653,8 @@ impl CodexMessageProcessor {
                 }
             }
         } else if let Some(conversation_id) = conversation_id {
-            match find_thread_path_by_id_str(&self.config.codex_home, &conversation_id.to_string())
-                .await
-            {
-                Ok(Some(found_path)) => {
-                    match RolloutRecorder::get_rollout_history(&found_path).await {
-                        Ok(initial_history) => initial_history,
-                        Err(err) => {
-                            self.send_invalid_request_error(
-                                request_id,
-                                format!(
-                                    "failed to load rollout `{}` for conversation {conversation_id}: {err}",
-                                    found_path.display()
-                                ),
-                            ).await;
-                            return;
-                        }
-                    }
-                }
+            let found_path = match self.resolve_rollout_path(Some(conversation_id)).await {
+                Ok(Some(path)) => path,
                 Ok(None) => {
                     self.send_invalid_request_error(
                         request_id,
@@ -3699,10 +3663,21 @@ impl CodexMessageProcessor {
                     .await;
                     return;
                 }
+                Err(error) => {
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
+
+            match RolloutRecorder::get_rollout_history(&found_path).await {
+                Ok(initial_history) => initial_history,
                 Err(err) => {
                     self.send_invalid_request_error(
                         request_id,
-                        format!("failed to locate conversation id {conversation_id}: {err}"),
+                        format!(
+                            "failed to load rollout `{}` for conversation {conversation_id}: {err}",
+                            found_path.display()
+                        ),
                     )
                     .await;
                     return;
@@ -3807,14 +3782,20 @@ impl CodexMessageProcessor {
                 session_configured,
                 ..
             }) => {
-                let rollout_path = match session_configured.rollout_path.clone() {
-                    Some(path) => path,
-                    None => {
+                let rollout_path = match self.resolve_rollout_path(Some(thread_id)).await {
+                    Ok(Some(path)) => path,
+                    Ok(None) => {
                         let error = JSONRPCErrorError {
-                            code: INTERNAL_ERROR_CODE,
-                            message: "rollout path missing for resumed conversation".to_string(),
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: format!(
+                                "thread `{thread_id}` is ephemeral and has no persisted rollout"
+                            ),
                             data: None,
                         };
+                        self.outgoing.send_error(request_id, error).await;
+                        return;
+                    }
+                    Err(error) => {
                         self.outgoing.send_error(request_id, error).await;
                         return;
                     }
@@ -3871,10 +3852,8 @@ impl CodexMessageProcessor {
         let (rollout_path, source_thread_id) = if let Some(path) = path {
             (path, None)
         } else if let Some(conversation_id) = conversation_id {
-            match find_thread_path_by_id_str(&self.config.codex_home, &conversation_id.to_string())
-                .await
-            {
-                Ok(Some(found_path)) => (found_path, Some(conversation_id)),
+            match self.resolve_rollout_path(Some(conversation_id)).await {
+                Ok(Some(path)) => (path, Some(conversation_id)),
                 Ok(None) => {
                     self.send_invalid_request_error(
                         request_id,
@@ -3883,12 +3862,8 @@ impl CodexMessageProcessor {
                     .await;
                     return;
                 }
-                Err(err) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("failed to locate conversation id {conversation_id}: {err}"),
-                    )
-                    .await;
+                Err(error) => {
+                    self.outgoing.send_error(request_id, error).await;
                     return;
                 }
             }
@@ -4014,14 +3989,20 @@ impl CodexMessageProcessor {
             }
         };
 
-        let rollout_path = match session_configured.rollout_path.clone() {
-            Some(path) => path,
-            None => {
+        let rollout_path = match self.resolve_rollout_path(Some(thread_id)).await {
+            Ok(Some(path)) => path,
+            Ok(None) => {
                 let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: "rollout path missing for forked conversation".to_string(),
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!(
+                        "thread `{thread_id}` is ephemeral and has no persisted rollout"
+                    ),
                     data: None,
                 };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+            Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
                 return;
             }
@@ -4793,19 +4774,14 @@ impl CodexMessageProcessor {
         review_request: ReviewRequest,
         display_text: &str,
     ) -> std::result::Result<(), JSONRPCErrorError> {
-        let rollout_path =
-            find_thread_path_by_id_str(&self.config.codex_home, &parent_thread_id.to_string())
-                .await
-                .map_err(|err| JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to locate thread id {parent_thread_id}: {err}"),
-                    data: None,
-                })?
-                .ok_or_else(|| JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("no rollout found for thread id {parent_thread_id}"),
-                    data: None,
-                })?;
+        let rollout_path = self
+            .resolve_rollout_path(Some(parent_thread_id))
+            .await?
+            .ok_or_else(|| JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("no rollout found for thread id {parent_thread_id}"),
+                data: None,
+            })?;
 
         let mut config = self.config.as_ref().clone();
         if let Some(review_model) = &config.review_model {
@@ -5221,9 +5197,12 @@ impl CodexMessageProcessor {
         let thread_id = snapshot.thread_id.clone();
 
         let validated_rollout_path = if include_logs {
-            match conversation_id {
-                Some(conv_id) => self.resolve_rollout_path(conv_id).await,
-                None => None,
+            match self.resolve_rollout_path(conversation_id).await {
+                Ok(path) => path,
+                Err(error) => {
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
             }
         } else {
             None
@@ -5271,10 +5250,35 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn resolve_rollout_path(&self, conversation_id: ThreadId) -> Option<PathBuf> {
-        match self.thread_manager.get_thread(conversation_id).await {
-            Ok(conv) => conv.rollout_path(),
-            Err(_) => None,
+    async fn resolve_rollout_path(
+        &self,
+        conversation_id: Option<ThreadId>,
+    ) -> std::result::Result<Option<PathBuf>, JSONRPCErrorError> {
+        let Some(conversation_id) = conversation_id else {
+            return Ok(None);
+        };
+
+        match self
+            .thread_manager
+            .resolve_rollout_path(conversation_id)
+            .await
+        {
+            Ok(path) => Ok(Some(path)),
+            Err(CodexErr::ThreadNotFound(_)) => Err(JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("no rollout found for thread id {conversation_id}"),
+                data: None,
+            }),
+            Err(CodexErr::InvalidRequest(message)) => Err(JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message,
+                data: None,
+            }),
+            Err(err) => Err(JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: err.to_string(),
+                data: None,
+            }),
         }
     }
 }

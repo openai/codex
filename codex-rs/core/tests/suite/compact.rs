@@ -145,7 +145,6 @@ async fn summarize_context_three_requests_and_instructions() {
     });
     let test = builder.build(&server).await.unwrap();
     let codex = test.codex.clone();
-    let rollout_path = test.session_configured.rollout_path.expect("rollout path");
 
     // 1) Normal user input – should hit server once.
     codex
@@ -276,6 +275,7 @@ async fn summarize_context_three_requests_and_instructions() {
     // Shut down Codex to flush rollout entries before inspecting the file.
     codex.submit(Op::Shutdown).await.unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
+    let rollout_path = test.persisted_rollout_path().await.unwrap();
 
     // Verify rollout contains APITurn entries for each API call and a Compacted entry.
     println!("rollout path: {}", rollout_path.display());
@@ -1466,11 +1466,6 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
     });
     let initial = builder.build(&server).await.unwrap();
     let home = initial.home.clone();
-    let rollout_path = initial
-        .session_configured
-        .rollout_path
-        .clone()
-        .expect("rollout path");
 
     // A single over-limit completion should not auto-compact until the next user message.
     mount_sse_once(
@@ -1482,6 +1477,7 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
     )
     .await;
     initial.submit_turn("OVER_LIMIT_TURN").await.unwrap();
+    let rollout_path = initial.persisted_rollout_path().await.unwrap();
 
     assert!(
         compact_mock.requests().is_empty(),
@@ -1614,7 +1610,6 @@ async fn auto_compact_persists_rollout_entries() {
     });
     let test = builder.build(&server).await.unwrap();
     let codex = test.codex.clone();
-    let session_configured = test.session_configured;
 
     codex
         .submit(Op::UserInput {
@@ -1655,7 +1650,7 @@ async fn auto_compact_persists_rollout_entries() {
     codex.submit(Op::Shutdown).await.unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
 
-    let rollout_path = session_configured.rollout_path.expect("rollout path");
+    let rollout_path = test.persisted_rollout_path().await.unwrap();
     let text = std::fs::read_to_string(&rollout_path).unwrap_or_else(|e| {
         panic!(
             "failed to read rollout file {}: {e}",

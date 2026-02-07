@@ -27,11 +27,6 @@ async fn resume_includes_initial_messages_from_rollout_events() -> Result<()> {
     let initial = builder.build(&server).await?;
     let codex = Arc::clone(&initial.codex);
     let home = initial.home.clone();
-    let rollout_path = initial
-        .session_configured
-        .rollout_path
-        .clone()
-        .expect("rollout path");
 
     let initial_sse = sse(vec![
         ev_response_created("resp-initial"),
@@ -57,6 +52,7 @@ async fn resume_includes_initial_messages_from_rollout_events() -> Result<()> {
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
+    let rollout_path = initial.persisted_rollout_path().await?;
     let resumed = builder.resume(&server, home, rollout_path).await?;
     let initial_messages = resumed
         .session_configured
@@ -90,11 +86,6 @@ async fn resume_includes_initial_messages_from_reasoning_events() -> Result<()> 
     let initial = builder.build(&server).await?;
     let codex = Arc::clone(&initial.codex);
     let home = initial.home.clone();
-    let rollout_path = initial
-        .session_configured
-        .rollout_path
-        .clone()
-        .expect("rollout path");
 
     let initial_sse = sse(vec![
         ev_response_created("resp-initial"),
@@ -116,6 +107,7 @@ async fn resume_includes_initial_messages_from_reasoning_events() -> Result<()> 
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
+    let rollout_path = initial.persisted_rollout_path().await?;
     let resumed = builder.resume(&server, home, rollout_path).await?;
     let initial_messages = resumed
         .session_configured
@@ -152,11 +144,6 @@ async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
     let initial = builder.build(&server).await?;
     let codex = Arc::clone(&initial.codex);
     let home = initial.home.clone();
-    let rollout_path = initial
-        .session_configured
-        .rollout_path
-        .clone()
-        .expect("rollout path");
 
     let initial_sse = sse(vec![
         ev_response_created("resp-initial"),
@@ -182,6 +169,7 @@ async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
         .and_then(|v| v.as_str())
         .unwrap_or_default()
         .to_string();
+    let rollout_path = initial.persisted_rollout_path().await?;
 
     let resumed_mock = mount_sse_sequence(
         &server,
@@ -275,11 +263,6 @@ async fn resume_model_switch_is_not_duplicated_after_pre_turn_override() -> Resu
     let initial = builder.build(&server).await?;
     let codex = Arc::clone(&initial.codex);
     let home = initial.home.clone();
-    let rollout_path = initial
-        .session_configured
-        .rollout_path
-        .clone()
-        .expect("rollout path");
 
     let initial_mock = mount_sse_once(
         &server,
@@ -301,6 +284,7 @@ async fn resume_model_switch_is_not_duplicated_after_pre_turn_override() -> Resu
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
     let _ = initial_mock.single_request();
+    let rollout_path = initial.persisted_rollout_path().await?;
 
     let resumed_mock = mount_sse_once(
         &server,

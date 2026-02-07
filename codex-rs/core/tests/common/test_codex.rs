@@ -255,6 +255,19 @@ impl TestCodex {
         self.cwd_path().join(rel)
     }
 
+    pub async fn persisted_rollout_path(&self) -> Result<PathBuf> {
+        if let Some(path) = self.codex.rollout_path() {
+            return Ok(path);
+        }
+        if let Some(path) = self.session_configured.rollout_path.clone() {
+            return Ok(path);
+        }
+        self.thread_manager
+            .resolve_rollout_path(self.session_configured.session_id)
+            .await
+            .map_err(Into::into)
+    }
+
     pub async fn submit_turn(&self, prompt: &str) -> Result<()> {
         self.submit_turn_with_policies(
             prompt,

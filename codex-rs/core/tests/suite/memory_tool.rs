@@ -21,6 +21,7 @@ async fn get_memory_tool_returns_persisted_thread_memory() -> Result<()> {
         config.features.enable(Feature::MemoryTool);
     });
     let test = builder.build(&server).await?;
+    let _rollout_path = test.persisted_rollout_path().await?;
 
     let db = test.codex.state_db().expect("state db enabled");
     let thread_id = test.session_configured.session_id;
