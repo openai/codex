@@ -14,6 +14,7 @@ use crate::metrics::validation::validate_tag_key;
 use crate::metrics::validation::validate_tag_value;
 use crate::otel_provider::OtelProvider;
 use codex_protocol::ThreadId;
+pub use codex_utils_string::sanitize_metric_tag_value;
 use opentelemetry_sdk::metrics::data::ResourceMetrics;
 use serde::Serialize;
 use std::time::Duration;
@@ -30,12 +31,20 @@ pub enum ToolDecisionSource {
     User,
 }
 
+/// Maps to core AuthMode to avoid a circular dependency on codex-core.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Display)]
+pub enum TelemetryAuthMode {
+    ApiKey,
+    Chatgpt,
+}
+
 #[derive(Debug, Clone)]
 pub struct OtelEventMetadata {
     pub(crate) conversation_id: ThreadId,
     pub(crate) auth_mode: Option<String>,
     pub(crate) account_id: Option<String>,
     pub(crate) account_email: Option<String>,
+    pub(crate) originator: String,
     pub(crate) session_source: String,
     pub(crate) model: String,
     pub(crate) slug: String,
@@ -188,7 +197,7 @@ impl OtelManager {
         if !self.metrics_use_metadata_tags {
             return Ok(Vec::new());
         }
-        let mut tags = Vec::with_capacity(6);
+        let mut tags = Vec::with_capacity(5);
         Self::push_metadata_tag(&mut tags, "auth_mode", self.metadata.auth_mode.as_deref())?;
         Self::push_metadata_tag(
             &mut tags,

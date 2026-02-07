@@ -11,6 +11,7 @@ use crate::tools::registry::ToolKind;
 use crate::tools::spec::JsonSchema;
 use async_trait::async_trait;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::EventMsg;
 use std::collections::BTreeMap;
@@ -88,8 +89,7 @@ impl ToolHandler for PlanHandler {
             handle_update_plan(session.as_ref(), turn.as_ref(), arguments, call_id).await?;
 
         Ok(ToolOutput::Function {
-            content,
-            content_items: None,
+            body: FunctionCallOutputBody::Text(content),
             success: Some(true),
         })
     }

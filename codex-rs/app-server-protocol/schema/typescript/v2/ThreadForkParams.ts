@@ -14,13 +14,11 @@ import type { SandboxMode } from "./SandboxMode";
  *
  * Prefer using thread_id whenever possible.
  */
-export type ThreadForkParams = { threadId: string, 
-/**
+export type ThreadForkParams = {threadId: string, /**
  * [UNSTABLE] Specify the rollout path to fork from.
  * If specified, the thread_id param will be ignored.
  */
-path?: string | null, 
-/**
+path?: string | null, /**
  * Configuration overrides for the forked thread, if any.
  */
-model?: string | null, modelProvider?: string | null, cwd?: string | null, approvalPolicy?: AskForApproval | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, baseInstructions?: string | null, developerInstructions?: string | null, };
+model?: string | null, modelProvider?: string | null, cwd?: string | null, approvalPolicy?: AskForApproval | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, baseInstructions?: string | null, developerInstructions?: string | null};

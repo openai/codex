@@ -14,7 +14,6 @@ use codex_core::ThreadSortKey;
 use codex_core::ThreadsPage;
 use codex_core::find_thread_names_by_ids;
 use codex_core::path_utils;
-use codex_protocol::items::TurnItem;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -37,8 +36,6 @@ use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
 use codex_protocol::ThreadId;
-use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::SessionMetaLine;
 
 const PAGE_SIZE: usize = 25;
 const LOAD_NEAR_THRESHOLD: usize = 5;
@@ -86,6 +83,7 @@ struct PageLoadRequest {
     request_token: usize,
     search_token: Option<usize>,
     default_provider: String,
+    sort_key: ThreadSortKey,
 }
 
 type PageLoader = Arc<dyn Fn(PageLoadRequest) + Send + Sync>;
@@ -99,9 +97,21 @@ enum BackgroundEvent {
 }
 
 /// Interactive session picker that lists recorded rollout files with simple
-/// search and pagination. Shows the session name when available, otherwise the
-/// first user input as the preview, relative time (e.g., "5 seconds ago"), and
-/// the absolute path.
+/// search and pagination.
+///
+/// The picker displays sessions in a table with timestamp columns (created/updated),
+/// git branch, working directory, and conversation preview. Users can toggle
+/// between sorting by creation time and last-updated time using the Tab key.
+///
+/// Sessions are loaded on-demand via cursor-based pagination. The backend
+/// `RolloutRecorder::list_threads` returns pages ordered by the selected sort key,
+/// and the picker deduplicates across pages to handle overlapping windows when
+/// new sessions appear during pagination.
+///
+/// Filtering happens in two layers:
+/// 1. Provider and source filtering at the backend (only interactive CLI sessions
+///    for the current model provider).
+/// 2. Working-directory filtering at the picker (unless `--all` is passed).
 pub async fn run_resume_picker(
     tui: &mut Tui,
     codex_home: &Path,
@@ -160,7 +170,7 @@ async fn run_session_picker(
                 &request.codex_home,
                 PAGE_SIZE,
                 request.cursor.as_ref(),
-                ThreadSortKey::CreatedAt,
+                request.sort_key,
                 INTERACTIVE_SESSION_SOURCES,
                 Some(provider_filter.as_slice()),
                 request.default_provider.as_str(),
@@ -223,6 +233,14 @@ async fn run_session_picker(
     Ok(SessionSelection::StartFresh)
 }
 
+/// Returns the human-readable column header for the given sort key.
+fn sort_key_label(sort_key: ThreadSortKey) -> &'static str {
+    match sort_key {
+        ThreadSortKey::CreatedAt => "Created at",
+        ThreadSortKey::UpdatedAt => "Updated at",
+    }
+}
+
 /// RAII guard that ensures we leave the alt-screen on scope exit.
 struct AltScreenGuard<'a> {
     tui: &'a mut Tui,
@@ -260,6 +278,7 @@ struct PickerState {
     show_all: bool,
     filter_cwd: Option<PathBuf>,
     action: SessionPickerAction,
+    sort_key: ThreadSortKey,
     thread_name_cache: HashMap<ThreadId, Option<String>>,
 }
 
@@ -376,6 +395,7 @@ impl PickerState {
             show_all,
             filter_cwd,
             action,
+            sort_key: ThreadSortKey::CreatedAt,
             thread_name_cache: HashMap::new(),
         }
     }
@@ -432,6 +452,10 @@ impl PickerState {
                     self.request_frame();
                 }
             }
+            KeyCode::Tab => {
+                self.toggle_sort_key();
+                self.request_frame();
+            }
             KeyCode::Backspace => {
                 let mut new_query = self.query.clone();
                 new_query.pop();
@@ -459,13 +483,21 @@ impl PickerState {
         self.all_rows.clear();
         self.filtered_rows.clear();
         self.seen_paths.clear();
-        self.search_state = SearchState::Idle;
         self.selected = 0;
+
+        let search_token = if self.query.is_empty() {
+            self.search_state = SearchState::Idle;
+            None
+        } else {
+            let token = self.allocate_search_token();
+            self.search_state = SearchState::Active { token };
+            Some(token)
+        };
 
         let request_token = self.allocate_request_token();
         self.pagination.loading = LoadingState::Pending(PendingLoad {
             request_token,
-            search_token: None,
+            search_token,
         });
         self.request_frame();
 
@@ -473,8 +505,9 @@ impl PickerState {
             codex_home: self.codex_home.clone(),
             cursor: None,
             request_token,
-            search_token: None,
+            search_token,
             default_provider: self.default_provider.clone(),
+            sort_key: self.sort_key,
         });
     }
 
@@ -745,6 +778,7 @@ impl PickerState {
             request_token,
             search_token,
             default_provider: self.default_provider.clone(),
+            sort_key: self.sort_key,
         });
     }
 
@@ -759,6 +793,19 @@ impl PickerState {
         self.next_search_token = self.next_search_token.wrapping_add(1);
         token
     }
+
+    /// Cycles the sort order between creation time and last-updated time.
+    ///
+    /// Triggers a full reload because the backend must re-sort all sessions.
+    /// The existing `all_rows` are cleared and pagination restarts from the
+    /// beginning with the new sort key.
+    fn toggle_sort_key(&mut self) {
+        self.sort_key = match self.sort_key {
+            ThreadSortKey::CreatedAt => ThreadSortKey::UpdatedAt,
+            ThreadSortKey::UpdatedAt => ThreadSortKey::CreatedAt,
+        };
+        self.start_initial_load();
+    }
 }
 
 fn rows_from_items(items: Vec<ThreadItem>) -> Vec<Row> {
@@ -766,47 +813,31 @@ fn rows_from_items(items: Vec<ThreadItem>) -> Vec<Row> {
 }
 
 fn head_to_row(item: &ThreadItem) -> Row {
-    let created_at = item
-        .created_at
-        .as_deref()
-        .and_then(parse_timestamp_str)
-        .or_else(|| item.head.first().and_then(extract_timestamp));
+    let created_at = item.created_at.as_deref().and_then(parse_timestamp_str);
     let updated_at = item
         .updated_at
         .as_deref()
         .and_then(parse_timestamp_str)
         .or(created_at);
 
-    let (cwd, git_branch, thread_id) = extract_session_meta_from_head(&item.head);
-    let preview = preview_from_head(&item.head)
-        .map(|s| s.trim().to_string())
+    let preview = item
+        .first_user_message
+        .as_deref()
+        .map(str::trim)
         .filter(|s| !s.is_empty())
+        .map(str::to_string)
         .unwrap_or_else(|| String::from("(no message yet)"));
 
     Row {
         path: item.path.clone(),
         preview,
-        thread_id,
+        thread_id: item.thread_id,
         thread_name: None,
         created_at,
         updated_at,
-        cwd,
-        git_branch,
+        cwd: item.cwd.clone(),
+        git_branch: item.git_branch.clone(),
     }
-}
-
-fn extract_session_meta_from_head(
-    head: &[serde_json::Value],
-) -> (Option<PathBuf>, Option<String>, Option<ThreadId>) {
-    for value in head {
-        if let Ok(meta_line) = serde_json::from_value::<SessionMetaLine>(value.clone()) {
-            let cwd = Some(meta_line.meta.cwd);
-            let git_branch = meta_line.git.and_then(|git| git.branch);
-            let thread_id = Some(meta_line.meta.id);
-            return (cwd, git_branch, thread_id);
-        }
-    }
-    (None, None, None)
 }
 
 fn paths_match(a: &Path, b: &Path) -> bool {
@@ -825,23 +856,6 @@ fn parse_timestamp_str(ts: &str) -> Option<DateTime<Utc>> {
         .ok()
 }
 
-fn extract_timestamp(value: &serde_json::Value) -> Option<DateTime<Utc>> {
-    value
-        .get("timestamp")
-        .and_then(|v| v.as_str())
-        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
-        .map(|dt| dt.with_timezone(&Utc))
-}
-
-fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {
-    head.iter()
-        .filter_map(|value| serde_json::from_value::<ResponseItem>(value.clone()).ok())
-        .find_map(|item| match codex_core::parse_turn_item(&item) {
-            Some(TurnItem::UserMessage(user)) => Some(user.message()),
-            _ => None,
-        })
-}
-
 fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
     // Render full-screen overlay
     let height = tui.terminal.size()?.height;
@@ -857,7 +871,15 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         .areas(area);
 
         // Header
-        frame.render_widget_ref(Line::from(vec![state.action.title().bold().cyan()]), header);
+        let header_line: Line = vec![
+            state.action.title().bold().cyan(),
+            "  ".into(),
+            "Sort:".dim(),
+            " ".into(),
+            sort_key_label(state.sort_key).magenta(),
+        ]
+        .into();
+        frame.render_widget_ref(header_line, header);
 
         // Search line
         let q = if state.query.is_empty() {
@@ -870,7 +892,7 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all);
 
         // Column headers and list
-        render_column_headers(frame, columns, &metrics);
+        render_column_headers(frame, columns, &metrics, state.sort_key);
         render_list(frame, list, state, &metrics);
 
         // Hint line
@@ -884,6 +906,9 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
             "    ".dim(),
             key_hint::ctrl(KeyCode::Char('c')).into(),
             " to quit ".dim(),
+            "    ".dim(),
+            key_hint::plain(KeyCode::Tab).into(),
+            " to toggle sort ".dim(),
             "    ".dim(),
             key_hint::plain(KeyCode::Up).into(),
             "/".dim(),
@@ -918,11 +943,13 @@ fn render_list(
     let labels = &metrics.labels;
     let mut y = area.y;
 
+    let visibility = column_visibility(area.width, metrics, state.sort_key);
+    let max_created_width = metrics.max_created_width;
     let max_updated_width = metrics.max_updated_width;
     let max_branch_width = metrics.max_branch_width;
     let max_cwd_width = metrics.max_cwd_width;
 
-    for (idx, (row, (updated_label, branch_label, cwd_label))) in rows[start..end]
+    for (idx, (row, (created_label, updated_label, branch_label, cwd_label))) in rows[start..end]
         .iter()
         .zip(labels[start..end].iter())
         .enumerate()
@@ -930,12 +957,17 @@ fn render_list(
         let is_sel = start + idx == state.selected;
         let marker = if is_sel { "> ".bold() } else { "  ".into() };
         let marker_width = 2usize;
-        let updated_span = if max_updated_width == 0 {
-            None
+        let created_span = if visibility.show_created {
+            Some(Span::from(format!("{created_label:<max_created_width$}")).dim())
         } else {
-            Some(Span::from(format!("{updated_label:<max_updated_width$}")).dim())
+            None
         };
-        let branch_span = if max_branch_width == 0 {
+        let updated_span = if visibility.show_updated {
+            Some(Span::from(format!("{updated_label:<max_updated_width$}")).dim())
+        } else {
+            None
+        };
+        let branch_span = if !visibility.show_branch {
             None
         } else if branch_label.is_empty() {
             Some(
@@ -949,7 +981,7 @@ fn render_list(
         } else {
             Some(Span::from(format!("{branch_label:<max_branch_width$}")).cyan())
         };
-        let cwd_span = if max_cwd_width == 0 {
+        let cwd_span = if !visibility.show_cwd {
             None
         } else if cwd_label.is_empty() {
             Some(
@@ -966,21 +998,31 @@ fn render_list(
 
         let mut preview_width = area.width as usize;
         preview_width = preview_width.saturating_sub(marker_width);
-        if max_updated_width > 0 {
+        if visibility.show_created {
+            preview_width = preview_width.saturating_sub(max_created_width + 2);
+        }
+        if visibility.show_updated {
             preview_width = preview_width.saturating_sub(max_updated_width + 2);
         }
-        if max_branch_width > 0 {
+        if visibility.show_branch {
             preview_width = preview_width.saturating_sub(max_branch_width + 2);
         }
-        if max_cwd_width > 0 {
+        if visibility.show_cwd {
             preview_width = preview_width.saturating_sub(max_cwd_width + 2);
         }
-        let add_leading_gap = max_updated_width == 0 && max_branch_width == 0 && max_cwd_width == 0;
+        let add_leading_gap = !visibility.show_created
+            && !visibility.show_updated
+            && !visibility.show_branch
+            && !visibility.show_cwd;
         if add_leading_gap {
             preview_width = preview_width.saturating_sub(2);
         }
         let preview = truncate_text(row.display_preview(), preview_width);
         let mut spans: Vec<Span> = vec![marker];
+        if let Some(created) = created_span {
+            spans.push(created);
+            spans.push("  ".into());
+        }
         if let Some(updated) = updated_span {
             spans.push(updated);
             spans.push("  ".into());
@@ -1082,26 +1124,44 @@ fn format_updated_label(row: &Row) -> String {
     }
 }
 
+fn format_created_label(row: &Row) -> String {
+    match row.created_at {
+        Some(created) => human_time_ago(created),
+        None => "-".to_string(),
+    }
+}
+
 fn render_column_headers(
     frame: &mut crate::custom_terminal::Frame,
     area: Rect,
     metrics: &ColumnMetrics,
+    sort_key: ThreadSortKey,
 ) {
     if area.height == 0 {
         return;
     }
 
     let mut spans: Vec<Span> = vec!["  ".into()];
-    if metrics.max_updated_width > 0 {
+    let visibility = column_visibility(area.width, metrics, sort_key);
+    if visibility.show_created {
         let label = format!(
             "{text:<width$}",
-            text = "Updated",
+            text = "Created at",
+            width = metrics.max_created_width
+        );
+        spans.push(Span::from(label).bold());
+        spans.push("  ".into());
+    }
+    if visibility.show_updated {
+        let label = format!(
+            "{text:<width$}",
+            text = "Updated at",
             width = metrics.max_updated_width
         );
         spans.push(Span::from(label).bold());
         spans.push("  ".into());
     }
-    if metrics.max_branch_width > 0 {
+    if visibility.show_branch {
         let label = format!(
             "{text:<width$}",
             text = "Branch",
@@ -1110,7 +1170,7 @@ fn render_column_headers(
         spans.push(Span::from(label).bold());
         spans.push("  ".into());
     }
-    if metrics.max_cwd_width > 0 {
+    if visibility.show_cwd {
         let label = format!(
             "{text:<width$}",
             text = "CWD",
@@ -1123,11 +1183,30 @@ fn render_column_headers(
     frame.render_widget_ref(Line::from(spans), area);
 }
 
+/// Pre-computed column widths and formatted labels for all visible rows.
+///
+/// Widths are measured in Unicode display width (not byte length) so columns
+/// align correctly when labels contain non-ASCII characters.
 struct ColumnMetrics {
+    max_created_width: usize,
     max_updated_width: usize,
     max_branch_width: usize,
     max_cwd_width: usize,
-    labels: Vec<(String, String, String)>,
+    /// (created_label, updated_label, branch_label, cwd_label) per row.
+    labels: Vec<(String, String, String, String)>,
+}
+
+/// Determines which columns to render given available terminal width.
+///
+/// When the terminal is narrow, only one timestamp column is shown (whichever
+/// matches the current sort key). Branch and CWD are hidden if their max
+/// widths are zero (no data to show).
+#[derive(Debug, PartialEq, Eq)]
+struct ColumnVisibility {
+    show_created: bool,
+    show_updated: bool,
+    show_branch: bool,
+    show_cwd: bool,
 }
 
 fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
@@ -1150,8 +1229,9 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
         format!("…{tail}")
     }
 
-    let mut labels: Vec<(String, String, String)> = Vec::with_capacity(rows.len());
-    let mut max_updated_width = UnicodeWidthStr::width("Updated");
+    let mut labels: Vec<(String, String, String, String)> = Vec::with_capacity(rows.len());
+    let mut max_created_width = UnicodeWidthStr::width("Created at");
+    let mut max_updated_width = UnicodeWidthStr::width("Updated at");
     let mut max_branch_width = UnicodeWidthStr::width("Branch");
     let mut max_cwd_width = if include_cwd {
         UnicodeWidthStr::width("CWD")
@@ -1160,6 +1240,7 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
     };
 
     for row in rows {
+        let created = format_created_label(row);
         let updated = format_updated_label(row);
         let branch_raw = row.git_branch.clone().unwrap_or_default();
         let branch = right_elide(&branch_raw, 24);
@@ -1173,13 +1254,15 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
         } else {
             String::new()
         };
+        max_created_width = max_created_width.max(UnicodeWidthStr::width(created.as_str()));
         max_updated_width = max_updated_width.max(UnicodeWidthStr::width(updated.as_str()));
         max_branch_width = max_branch_width.max(UnicodeWidthStr::width(branch.as_str()));
         max_cwd_width = max_cwd_width.max(UnicodeWidthStr::width(cwd.as_str()));
-        labels.push((updated, branch, cwd));
+        labels.push((created, updated, branch, cwd));
     }
 
     ColumnMetrics {
+        max_created_width,
         max_updated_width,
         max_branch_width,
         max_cwd_width,
@@ -1187,37 +1270,95 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
     }
 }
 
+/// Computes which columns fit in the available width.
+///
+/// The algorithm reserves at least `MIN_PREVIEW_WIDTH` characters for the
+/// conversation preview. If both timestamp columns don't fit, only the one
+/// matching the current sort key is shown.
+fn column_visibility(
+    area_width: u16,
+    metrics: &ColumnMetrics,
+    sort_key: ThreadSortKey,
+) -> ColumnVisibility {
+    const MIN_PREVIEW_WIDTH: usize = 10;
+
+    let show_branch = metrics.max_branch_width > 0;
+    let show_cwd = metrics.max_cwd_width > 0;
+
+    // Calculate remaining width after all optional columns.
+    let mut preview_width = area_width as usize;
+    preview_width = preview_width.saturating_sub(2); // marker
+    if metrics.max_created_width > 0 {
+        preview_width = preview_width.saturating_sub(metrics.max_created_width + 2);
+    }
+    if metrics.max_updated_width > 0 {
+        preview_width = preview_width.saturating_sub(metrics.max_updated_width + 2);
+    }
+    if show_branch {
+        preview_width = preview_width.saturating_sub(metrics.max_branch_width + 2);
+    }
+    if show_cwd {
+        preview_width = preview_width.saturating_sub(metrics.max_cwd_width + 2);
+    }
+
+    // If preview would be too narrow, hide the non-active timestamp column.
+    let show_both = preview_width >= MIN_PREVIEW_WIDTH;
+    let show_created = if show_both {
+        metrics.max_created_width > 0
+    } else {
+        sort_key == ThreadSortKey::CreatedAt
+    };
+    let show_updated = if show_both {
+        metrics.max_updated_width > 0
+    } else {
+        sort_key == ThreadSortKey::UpdatedAt
+    };
+
+    ColumnVisibility {
+        show_created,
+        show_updated,
+        show_branch,
+        show_cwd,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::Duration;
+    use codex_protocol::ThreadId;
+    use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::RolloutItem;
+    use codex_protocol::protocol::RolloutLine;
+    use codex_protocol::protocol::SessionMeta;
+    use codex_protocol::protocol::SessionMetaLine;
+    use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::UserMessageEvent;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
+    use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::fs::FileTimes;
+    use std::fs::OpenOptions;
+    use std::path::Path;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::Mutex;
 
-    fn head_with_ts_and_user_text(ts: &str, texts: &[&str]) -> Vec<serde_json::Value> {
-        vec![
-            json!({ "timestamp": ts }),
-            json!({
-                "type": "message",
-                "role": "user",
-                "content": texts
-                    .iter()
-                    .map(|t| json!({ "type": "input_text", "text": *t }))
-                    .collect::<Vec<_>>()
-            }),
-        ]
-    }
-
     fn make_item(path: &str, ts: &str, preview: &str) -> ThreadItem {
         ThreadItem {
             path: PathBuf::from(path),
-            head: head_with_ts_and_user_text(ts, &[preview]),
+            thread_id: None,
+            first_user_message: Some(preview.to_string()),
+            cwd: None,
+            git_branch: None,
+            git_sha: None,
+            git_origin_url: None,
+            source: None,
+            model_provider: None,
+            cli_version: None,
             created_at: Some(ts.to_string()),
             updated_at: Some(ts.to_string()),
         }
@@ -1242,40 +1383,120 @@ mod tests {
         }
     }
 
+    fn set_rollout_mtime(path: &Path, updated_at: DateTime<Utc>) {
+        let times = FileTimes::new().set_modified(updated_at.into());
+        OpenOptions::new()
+            .append(true)
+            .open(path)
+            .expect("open rollout")
+            .set_times(times)
+            .expect("set times");
+    }
+
+    #[tokio::test]
+    async fn resume_picker_orders_by_updated_at() {
+        use uuid::Uuid;
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let sessions_root = tempdir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_root).expect("mkdir sessions root");
+
+        let now = Utc::now();
+
+        let write_rollout = |ts: DateTime<Utc>, preview: &str| -> PathBuf {
+            let dir = sessions_root
+                .join(ts.format("%Y").to_string())
+                .join(ts.format("%m").to_string())
+                .join(ts.format("%d").to_string());
+            std::fs::create_dir_all(&dir).expect("mkdir date dirs");
+            let filename = format!(
+                "rollout-{}-{}.jsonl",
+                ts.format("%Y-%m-%dT%H-%M-%S"),
+                Uuid::new_v4()
+            );
+            let path = dir.join(filename);
+            let meta = SessionMeta {
+                id: ThreadId::new(),
+                forked_from_id: None,
+                timestamp: ts.to_rfc3339(),
+                cwd: PathBuf::from("/tmp"),
+                originator: String::from("user"),
+                cli_version: String::from("0.0.0"),
+                source: SessionSource::Cli,
+                model_provider: Some(String::from("openai")),
+                base_instructions: None,
+                dynamic_tools: None,
+            };
+            let meta_line = RolloutLine {
+                timestamp: ts.to_rfc3339(),
+                item: RolloutItem::SessionMeta(SessionMetaLine { meta, git: None }),
+            };
+            let user_line = RolloutLine {
+                timestamp: ts.to_rfc3339(),
+                item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                    message: preview.to_string(),
+                    images: None,
+                    text_elements: Vec::new(),
+                    local_images: Vec::new(),
+                })),
+            };
+            let meta_json = serde_json::to_string(&meta_line).expect("serialize meta");
+            let user_json = serde_json::to_string(&user_line).expect("serialize user");
+            std::fs::write(&path, format!("{meta_json}\n{user_json}\n")).expect("write rollout");
+            path
+        };
+
+        let created_a = now - Duration::minutes(1);
+        let created_b = now - Duration::minutes(2);
+
+        let path_a = write_rollout(created_a, "A (created newer)");
+        let path_b = write_rollout(created_b, "B (created older)");
+
+        set_rollout_mtime(&path_a, now - Duration::minutes(10));
+        set_rollout_mtime(&path_b, now - Duration::seconds(10));
+
+        let page = RolloutRecorder::list_threads(
+            tempdir.path(),
+            PAGE_SIZE,
+            None,
+            ThreadSortKey::UpdatedAt,
+            INTERACTIVE_SESSION_SOURCES,
+            Some(&[String::from("openai")]),
+            "openai",
+        )
+        .await
+        .expect("list threads");
+
+        let rows = rows_from_items(page.items);
+        let previews: Vec<String> = rows.iter().map(|row| row.preview.clone()).collect();
+
+        assert_eq!(
+            previews,
+            vec![
+                "B (created older)".to_string(),
+                "A (created newer)".to_string()
+            ]
+        );
+    }
+
     #[test]
-    fn preview_uses_first_message_input_text() {
-        let head = vec![
-            json!({ "timestamp": "2025-01-01T00:00:00Z" }),
-            json!({
-                "type": "message",
-                "role": "user",
-                "content": [
-                    { "type": "input_text", "text": "# AGENTS.md instructions for project\n\n<INSTRUCTIONS>\nhi\n</INSTRUCTIONS>" },
-                ]
-            }),
-            json!({
-                "type": "message",
-                "role": "user",
-                "content": [
-                    { "type": "input_text", "text": "<environment_context>...</environment_context>" },
-                ]
-            }),
-            json!({
-                "type": "message",
-                "role": "user",
-                "content": [
-                    { "type": "input_text", "text": "real question" },
-                    { "type": "input_image", "image_url": "ignored" }
-                ]
-            }),
-            json!({
-                "type": "message",
-                "role": "user",
-                "content": [ { "type": "input_text", "text": "later text" } ]
-            }),
-        ];
-        let preview = preview_from_head(&head);
-        assert_eq!(preview.as_deref(), Some("real question"));
+    fn head_to_row_uses_first_user_message() {
+        let item = ThreadItem {
+            path: PathBuf::from("/tmp/a.jsonl"),
+            thread_id: None,
+            first_user_message: Some("real question".to_string()),
+            cwd: None,
+            git_branch: None,
+            git_sha: None,
+            git_origin_url: None,
+            source: None,
+            model_provider: None,
+            cli_version: None,
+            created_at: Some("2025-01-01T00:00:00Z".into()),
+            updated_at: Some("2025-01-01T00:00:00Z".into()),
+        };
+        let row = head_to_row(&item);
+        assert_eq!(row.preview, "real question");
     }
 
     #[test]
@@ -1283,13 +1504,29 @@ mod tests {
         // Construct two items with different timestamps and real user text.
         let a = ThreadItem {
             path: PathBuf::from("/tmp/a.jsonl"),
-            head: head_with_ts_and_user_text("2025-01-01T00:00:00Z", &["A"]),
+            thread_id: None,
+            first_user_message: Some("A".to_string()),
+            cwd: None,
+            git_branch: None,
+            git_sha: None,
+            git_origin_url: None,
+            source: None,
+            model_provider: None,
+            cli_version: None,
             created_at: Some("2025-01-01T00:00:00Z".into()),
             updated_at: Some("2025-01-01T00:00:00Z".into()),
         };
         let b = ThreadItem {
             path: PathBuf::from("/tmp/b.jsonl"),
-            head: head_with_ts_and_user_text("2025-01-02T00:00:00Z", &["B"]),
+            thread_id: None,
+            first_user_message: Some("B".to_string()),
+            cwd: None,
+            git_branch: None,
+            git_sha: None,
+            git_origin_url: None,
+            source: None,
+            model_provider: None,
+            cli_version: None,
             created_at: Some("2025-01-02T00:00:00Z".into()),
             updated_at: Some("2025-01-02T00:00:00Z".into()),
         };
@@ -1302,10 +1539,17 @@ mod tests {
 
     #[test]
     fn row_uses_tail_timestamp_for_updated_at() {
-        let head = head_with_ts_and_user_text("2025-01-01T00:00:00Z", &["Hello"]);
         let item = ThreadItem {
             path: PathBuf::from("/tmp/a.jsonl"),
-            head,
+            thread_id: None,
+            first_user_message: Some("Hello".to_string()),
+            cwd: None,
+            git_branch: None,
+            git_sha: None,
+            git_origin_url: None,
+            source: None,
+            model_provider: None,
+            cli_version: None,
             created_at: Some("2025-01-01T00:00:00Z".into()),
             updated_at: Some("2025-01-01T01:00:00Z".into()),
         };
@@ -1409,7 +1653,7 @@ mod tests {
             let area = frame.area();
             let segments =
                 Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(area);
-            render_column_headers(&mut frame, segments[0], &metrics);
+            render_column_headers(&mut frame, segments[0], &metrics, state.sort_key);
             render_list(&mut frame, segments[1], &state, &metrics);
         }
         terminal.flush().expect("flush");
@@ -1552,13 +1796,19 @@ mod tests {
             .areas(area);
 
             frame.render_widget_ref(
-                Line::from(vec!["Resume a previous session".bold().cyan()]),
+                Line::from(vec![
+                    "Resume a previous session".bold().cyan(),
+                    "  ".into(),
+                    "Sort:".dim(),
+                    " ".into(),
+                    "Created at".magenta(),
+                ]),
                 header,
             );
 
             frame.render_widget_ref(Line::from("Type to search".dim()), search);
 
-            render_column_headers(&mut frame, columns, &metrics);
+            render_column_headers(&mut frame, columns, &metrics, state.sort_key);
             render_list(&mut frame, list, &state, &metrics);
 
             let hint_line: Line = vec![
@@ -1570,6 +1820,9 @@ mod tests {
                 "    ".dim(),
                 key_hint::ctrl(KeyCode::Char('c')).into(),
                 " to quit ".dim(),
+                "    ".dim(),
+                key_hint::plain(KeyCode::Tab).into(),
+                " to toggle sort ".dim(),
             ]
             .into();
             frame.render_widget_ref(hint_line, hint);
@@ -1669,7 +1922,7 @@ mod tests {
             let area = frame.area();
             let segments =
                 Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(area);
-            render_column_headers(&mut frame, segments[0], &metrics);
+            render_column_headers(&mut frame, segments[0], &metrics, state.sort_key);
             render_list(&mut frame, segments[1], &state, &metrics);
         }
         terminal.flush().expect("flush");
@@ -1777,6 +2030,85 @@ mod tests {
         let guard = recorded_requests.lock().unwrap();
         assert_eq!(guard.len(), 1);
         assert!(guard[0].search_token.is_none());
+    }
+
+    #[test]
+    fn column_visibility_hides_extra_date_column_when_narrow() {
+        let metrics = ColumnMetrics {
+            max_created_width: 8,
+            max_updated_width: 12,
+            max_branch_width: 0,
+            max_cwd_width: 0,
+            labels: Vec::new(),
+        };
+
+        let created = column_visibility(30, &metrics, ThreadSortKey::CreatedAt);
+        assert_eq!(
+            created,
+            ColumnVisibility {
+                show_created: true,
+                show_updated: false,
+                show_branch: false,
+                show_cwd: false,
+            }
+        );
+
+        let updated = column_visibility(30, &metrics, ThreadSortKey::UpdatedAt);
+        assert_eq!(
+            updated,
+            ColumnVisibility {
+                show_created: false,
+                show_updated: true,
+                show_branch: false,
+                show_cwd: false,
+            }
+        );
+
+        let wide = column_visibility(40, &metrics, ThreadSortKey::CreatedAt);
+        assert_eq!(
+            wide,
+            ColumnVisibility {
+                show_created: true,
+                show_updated: true,
+                show_branch: false,
+                show_cwd: false,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn toggle_sort_key_reloads_with_new_sort() {
+        let recorded_requests: Arc<Mutex<Vec<PageLoadRequest>>> = Arc::new(Mutex::new(Vec::new()));
+        let request_sink = recorded_requests.clone();
+        let loader: PageLoader = Arc::new(move |req: PageLoadRequest| {
+            request_sink.lock().unwrap().push(req);
+        });
+
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+            true,
+            None,
+            SessionPickerAction::Resume,
+        );
+
+        state.start_initial_load();
+        {
+            let guard = recorded_requests.lock().unwrap();
+            assert_eq!(guard.len(), 1);
+            assert_eq!(guard[0].sort_key, ThreadSortKey::CreatedAt);
+        }
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .await
+            .unwrap();
+
+        let guard = recorded_requests.lock().unwrap();
+        assert_eq!(guard.len(), 2);
+        assert_eq!(guard[1].sort_key, ThreadSortKey::UpdatedAt);
     }
 
     #[tokio::test]

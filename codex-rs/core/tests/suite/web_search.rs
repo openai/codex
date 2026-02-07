@@ -1,21 +1,14 @@
 #![allow(clippy::unwrap_used)]
 
-use codex_core::WireApi;
-use codex_core::built_in_model_providers;
 use codex_core::features::Feature;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::WebSearchMode;
-use core_test_support::load_sse_fixture_with_id;
 use core_test_support::responses;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
-
-fn sse_completed(id: &str) -> String {
-    load_sse_fixture_with_id("../fixtures/completed_template.json", id)
-}
 
 #[allow(clippy::expect_used)]
 fn find_web_search_tool(body: &Value) -> &Value {
@@ -27,21 +20,15 @@ fn find_web_search_tool(body: &Value) -> &Value {
         .expect("tools should include a web_search tool")
 }
 
-#[allow(clippy::expect_used)]
-fn has_web_search_tool(body: &Value) -> bool {
-    body["tools"]
-        .as_array()
-        .expect("request body should include tools array")
-        .iter()
-        .any(|tool| tool.get("type").and_then(Value::as_str) == Some("web_search"))
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn web_search_mode_cached_sets_external_web_access_false() {
     skip_if_no_network!();
 
     let server = start_mock_server().await;
-    let sse = sse_completed("resp-1");
+    let sse = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_completed("resp-1"),
+    ]);
     let resp_mock = responses::mount_sse_once(&server, sse).await;
 
     let mut builder = test_codex()
@@ -72,7 +59,10 @@ async fn web_search_mode_takes_precedence_over_legacy_flags() {
     skip_if_no_network!();
 
     let server = start_mock_server().await;
-    let sse = sse_completed("resp-1");
+    let sse = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_completed("resp-1"),
+    ]);
     let resp_mock = responses::mount_sse_once(&server, sse).await;
 
     let mut builder = test_codex()
@@ -104,7 +94,10 @@ async fn web_search_mode_defaults_to_cached_when_unset() {
     skip_if_no_network!();
 
     let server = start_mock_server().await;
-    let sse = sse_completed("resp-1");
+    let sse = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_completed("resp-1"),
+    ]);
     let resp_mock = responses::mount_sse_once(&server, sse).await;
 
     let mut builder = test_codex()
@@ -139,7 +132,16 @@ async fn web_search_mode_updates_between_turns_with_sandbox_policy() {
     let server = start_mock_server().await;
     let resp_mock = responses::mount_sse_sequence(
         &server,
-        vec![sse_completed("resp-1"), sse_completed("resp-2")],
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("resp-2"),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
     )
     .await;
 
@@ -183,47 +185,5 @@ async fn web_search_mode_updates_between_turns_with_sandbox_policy() {
             .and_then(Value::as_bool),
         Some(true),
         "danger-full-access policy should default web_search to live"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn web_search_mode_defaults_to_disabled_for_azure_responses() {
-    skip_if_no_network!();
-
-    let server = start_mock_server().await;
-    let sse = sse_completed("resp-1");
-    let resp_mock = responses::mount_sse_once(&server, sse).await;
-
-    let mut builder = test_codex()
-        .with_model("gpt-5-codex")
-        .with_config(|config| {
-            let base_url = config.model_provider.base_url.clone();
-            let mut provider = built_in_model_providers()["openai"].clone();
-            provider.name = "Azure".to_string();
-            provider.base_url = base_url;
-            provider.wire_api = WireApi::Responses;
-            config.model_provider_id = provider.name.clone();
-            config.model_provider = provider;
-            config.web_search_mode = None;
-            config.features.disable(Feature::WebSearchCached);
-            config.features.disable(Feature::WebSearchRequest);
-        });
-    let test = builder
-        .build(&server)
-        .await
-        .expect("create test Codex conversation");
-
-    test.submit_turn_with_policy(
-        "hello azure default web search",
-        SandboxPolicy::DangerFullAccess,
-    )
-    .await
-    .expect("submit turn");
-
-    let body = resp_mock.single_request().body_json();
-    assert_eq!(
-        has_web_search_tool(&body),
-        false,
-        "azure responses requests should disable web_search by default"
     );
 }

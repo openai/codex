@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use codex_protocol::ThreadId;
+use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ShellCommandToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
 use std::sync::Arc;
@@ -298,7 +299,6 @@ impl ShellHandler {
             .exec_policy
             .create_exec_approval_requirement_for_command_with_context(
                 ExecApprovalRequest {
-                    features: &features,
                     command: &exec_params.command,
                     approval_policy: turn.approval_policy,
                     sandbox_policy: &turn.sandbox_policy,
@@ -333,8 +333,7 @@ impl ShellHandler {
         let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
         let content = emitter.finish(event_ctx, out).await?;
         Ok(ToolOutput::Function {
-            content,
-            content_items: None,
+            body: FunctionCallOutputBody::Text(content),
             success: Some(true),
         })
     }
