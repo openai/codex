@@ -284,9 +284,11 @@ impl RolloutRecorder {
         }
     }
 
-    /// Attempt to create a new [`RolloutRecorder`]. If the sessions directory
-    /// cannot be created or the rollout file cannot be opened we return the
-    /// error so the caller can decide whether to disable persistence.
+    /// Attempt to create a new [`RolloutRecorder`].
+    ///
+    /// For immediate-create sessions, this creates/open the rollout file up
+    /// front. For deferred fresh sessions, this only precomputes path/metadata
+    /// and defers file creation/open until the first user message.
     pub async fn new(
         config: &Config,
         params: RolloutRecorderParams,
