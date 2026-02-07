@@ -1,11 +1,5 @@
 bazel_dep(name = "platforms", version = "1.0.0")
-bazel_dep(name = "toolchains_llvm_bootstrapped", version = "0.3.1")
-archive_override(
-    module_name = "toolchains_llvm_bootstrapped",
-    integrity = "sha256-4/2h4tYSUSptxFVI9G50yJxWGOwHSeTeOGBlaLQBV8g=",
-    strip_prefix = "toolchains_llvm_bootstrapped-d20baf67e04d8e2887e3779022890d1dc5e6b948",
-    urls = ["https://github.com/cerisier/toolchains_llvm_bootstrapped/archive/d20baf67e04d8e2887e3779022890d1dc5e6b948.tar.gz"],
-)
+bazel_dep(name = "toolchains_llvm_bootstrapped", version = "0.4.1")
 
 osx = use_extension("@toolchains_llvm_bootstrapped//toolchain/extension:osx.bzl", "osx")
 osx.framework(name = "ApplicationServices")
@@ -16,8 +10,11 @@ osx.framework(name = "CoreGraphics")
 osx.framework(name = "CoreServices")
 osx.framework(name = "CoreText")
 osx.framework(name = "CFNetwork")
+osx.framework(name = "DriverKit")
+osx.framework(name = "DiskArbitration")
 osx.framework(name = "Foundation")
 osx.framework(name = "ImageIO")
+osx.framework(name = "IOKit")
 osx.framework(name = "Kernel")
 osx.framework(name = "OSLog")
 osx.framework(name = "Security")
@@ -62,6 +59,7 @@ use_repo(rust, "rust_toolchains")
 register_toolchains("@rust_toolchains//:all")
 
 bazel_dep(name = "rules_rs", version = "0.0.23")
+bazel_dep(name = "aws-lc", version = "1.67.0")
 
 crate = use_extension("@rules_rs//rs:extensions.bzl", "crate")
 crate.from_cargo(
@@ -74,6 +72,30 @@ crate.annotation(
     strip_prefix = "matcher",
     version = "0.3.1",
 )
+crate.annotation(
+    build_script_data = [
+        "@aws-lc//:crypto",
+        "@aws-lc//:ssl",
+    ],
+    build_script_env = {
+        "AWS_LC_SYS_NO_JITTER_ENTROPY": "1",
+        "AWS_LC_SYS_PREBUILT_CRYPTO": "$(rootpaths @aws-lc//:crypto)",
+        "AWS_LC_SYS_PREBUILT_SSL": "$(rootpaths @aws-lc//:ssl)",
+        "AWS_LC_SYS_SKIP_MEMCMP_CHECK": "1",
+    },
+    deps = [
+        "@aws-lc//:crypto",
+        "@aws-lc//:ssl",
+    ],
+    patch_args = ["-p1"],
+    patches = [
+        "//patches:aws-lc-sys_skip_memcmp_check.patch",
+        "//patches:aws-lc-sys_prebuilt.patch",
+    ],
+    crate = "aws-lc-sys",
+)
+
+inject_repo(crate, "aws-lc")
 
 bazel_dep(name = "openssl", version = "3.5.4.bcr.0")
 
@@ -84,7 +106,7 @@ crate.annotation(
     build_script_env = {
         "OPENSSL_DIR": "$(execpath @openssl//:gen_dir)",
         "OPENSSL_NO_VENDOR": "1",
-        "OPENSSL_STATIC": "1",
+        "OPENSSL_STATIC": "0",
     },
     crate = "openssl-sys",
     data = ["@openssl//:gen_dir"],

@@ -195,6 +195,7 @@ regex = "1.12.2"
 regex-lite = "0.1.8"
 reqwest = "0.12"
 rmcp = { version = "0.12.0", default-features = false }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 runfiles = { git = "https://github.com/dzbarsky/rules_rust", rev = "b56cbaa8465e74127f1ea216f813cd377295ad81" }
 schemars = "0.8.22"
 seccompiler = "0.5.0"
@@ -227,6 +228,7 @@ tokio = "1"
 tokio-stream = "0.1.18"
 tokio-test = "0.4"
 tokio-tungstenite = { version = "0.28.0", features = ["proxy", "rustls-tls-native-roots"] }
+tungstenite = { version = "0.27.0", features = ["deflate", "proxy"] }
 tokio-util = "0.7.18"
 toml = "0.9.5"
 toml_edit = "0.24.0"
@@ -317,10 +319,11 @@ opt-level = 0
 # ratatui = { path = "../../ratatui" }
 crossterm = { git = "https://github.com/nornagon/crossterm", branch = "nornagon/color-query" }
 ratatui = { git = "https://github.com/nornagon/ratatui", branch = "nornagon-v0.29.0-patch" }
-tokio-tungstenite = { git = "https://github.com/JakkuSakura/tokio-tungstenite", rev = "2ae536b0de793f3ddf31fc2f22d445bf1ef2023d" }
+tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "132f5b39c862e3a970f731d709608b3e6276d5f6" }
+tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "9200079d3b54a1ff51072e24d81fd354f085156f" }
 
 # Uncomment to debug local changes.
 # rmcp = { path = "../../rust-sdk/crates/rmcp" }
 
-[patch."ssh://git@github.com/JakkuSakura/tungstenite-rs.git"]
-tungstenite = { git = "https://github.com/JakkuSakura/tungstenite-rs", rev = "f514de8644821113e5d18a027d6d28a5c8cc0a6e" }
+[patch."ssh://git@github.com/openai-oss-forks/tungstenite-rs.git"]
+tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "9200079d3b54a1ff51072e24d81fd354f085156f" }

@@ -17,8 +17,8 @@ use rama_net::address::ProxyAddress;
 use rama_net::client::EstablishedClientConnection;
 use rama_net::http::RequestContext;
 use rama_tcp::client::service::TcpConnector;
-use rama_tls_boring::client::TlsConnectorDataBuilder;
-use rama_tls_boring::client::TlsConnectorLayer;
+use rama_tls_rustls::client::TlsConnectorDataBuilder;
+use rama_tls_rustls::client::TlsConnectorLayer;
 use tracing::warn;
 
 #[cfg(target_os = "macos")]
@@ -165,7 +165,9 @@ fn build_http_connector() -> BoxService<
 > {
     let transport = TcpConnector::default();
     let proxy = HttpProxyConnectorLayer::optional().into_layer(transport);
-    let tls_config = TlsConnectorDataBuilder::new_http_auto().into_shared_builder();
+    let tls_config = TlsConnectorDataBuilder::new()
+        .with_alpn_protocols_http_auto()
+        .build();
     let tls = TlsConnectorLayer::auto()
         .with_connector_data(tls_config)
         .into_layer(proxy);

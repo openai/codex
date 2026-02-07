@@ -1,0 +1,277 @@
+diff --git a/builder/main.rs b/builder/main.rs
+index 24fc883..d78f270 100644
+--- a/builder/main.rs
++++ b/builder/main.rs
+@@ -15,6 +15,7 @@ use std::fmt::Debug;
+ use std::path::{Path, PathBuf};
+ use std::process::Command;
+ use std::{env, fmt};
++use std::fs;
+ 
+ use cc_builder::CcBuilder;
+ use cmake_builder::CmakeBuilder;
+@@ -244,6 +245,148 @@ impl OutputLib {
+     }
+ }
+ 
++#[derive(Clone)]
++struct PrebuiltLibrary {
++    path: PathBuf,
++    link_name: String,
++    link_type: OutputLibType,
++}
++
++#[derive(Clone)]
++struct PrebuiltLibraries {
++    crypto: PrebuiltLibrary,
++    ssl: Option<PrebuiltLibrary>,
++}
++
++impl PrebuiltLibraries {
++    fn iter(&self) -> impl Iterator<Item = &PrebuiltLibrary> {
++        std::iter::once(&self.crypto).chain(self.ssl.as_ref())
++    }
++
++    fn link_names(&self) -> (String, Option<String>) {
++        (
++            self.crypto.link_name.clone(),
++            self.ssl.as_ref().map(|lib| lib.link_name.clone()),
++        )
++    }
++}
++
++impl PrebuiltLibrary {
++    fn new(path: PathBuf) -> Result<Self, String> {
++        let canonical_path = dunce::canonicalize(&path).unwrap_or(path.clone());
++        let link_type = match canonical_path.extension().and_then(|ext| ext.to_str()) {
++            Some("a") | Some("lib") => OutputLibType::Static,
++            Some("dll") | Some("dylib") | Some("so") => OutputLibType::Dynamic,
++            Some(other) => {
++                emit_warning(format!(
++                    "Unrecognized library extension '{other}', assuming static"
++                ));
++                OutputLibType::Static
++            }
++            None => OutputLibType::Static,
++        };
++        let stem = canonical_path
++            .file_stem()
++            .ok_or_else(|| format!("Missing library file name for {}", path.display()))?
++            .to_string_lossy()
++            .into_owned();
++        let link_name = stem.trim_start_matches("lib").to_string();
++        Ok(Self {
++            path: canonical_path,
++            link_name,
++            link_type,
++        })
++    }
++
++    fn stage_for_linking(&self, out_dir: &Path) -> Result<PathBuf, String> {
++        let extension = self.path.extension().and_then(|ext| ext.to_str());
++        let staged_file_name = match extension {
++            Some("a") => format!("lib{}.a", self.link_name),
++            Some("so") => format!("lib{}.so", self.link_name),
++            Some("dylib") => format!("lib{}.dylib", self.link_name),
++            Some("dll") => format!("{}.dll", self.link_name),
++            Some("lib") => format!("{}.lib", self.link_name),
++            Some(other) => format!("{}.{}", self.link_name, other),
++            None => self.link_name.clone(),
++        };
++        let staged_path = out_dir.join(staged_file_name);
++        fs::copy(&self.path, &staged_path).map_err(|err| {
++            format!(
++                "Failed to stage prebuilt AWS-LC library from {} to {}: {err}",
++                self.path.display(),
++                staged_path.display()
++            )
++        })?;
++        Ok(staged_path)
++    }
++}
++
++struct PrebuiltBuilder {
++    libraries: PrebuiltLibraries,
++    out_dir: PathBuf,
++}
++
++impl PrebuiltBuilder {
++    fn new(libraries: PrebuiltLibraries, out_dir: PathBuf) -> Self {
++        Self { libraries, out_dir }
++    }
++}
++
++fn select_prebuilt_path(var: &str, value: &str) -> Result<PathBuf, String> {
++    let expected = if var.contains("CRYPTO") { "crypto" } else { "ssl" };
++    let mut fallback: Option<PathBuf> = None;
++
++    for entry in value.split_whitespace() {
++        let path = PathBuf::from(entry);
++        if fallback.is_none() {
++            fallback = Some(path.clone());
++        }
++        let file_stem = path.file_stem().and_then(|stem| stem.to_str());
++        let normalized = file_stem.map(|stem| stem.trim_start_matches("lib"));
++        let is_expected = normalized.map_or(false, |stem| stem == expected);
++        let is_pic = entry.contains(".pic.");
++        if is_expected && !is_pic {
++            return Ok(path);
++        }
++    }
++
++    fallback.ok_or_else(|| {
++        format!("AWS_LC_SYS_{var} did not contain any usable library paths: {value}")
++    })
++}
++
++fn prebuilt_library_from_env(var: &str, kind: &str) -> Option<PrebuiltLibrary> {
++    optional_env_crate_target(var).map(|value| {
++        let path = select_prebuilt_path(var, &value).unwrap_or_else(|err| panic!("{err}"));
++        let mut library = PrebuiltLibrary::new(path).unwrap_or_else(|err| panic!("{err}"));
++        library.link_name = format!("aws_lc_sys_prebuilt_{kind}");
++        library
++    })
++}
++
++fn detect_prebuilt_libraries() -> Option<PrebuiltLibraries> {
++    let crypto = prebuilt_library_from_env("PREBUILT_CRYPTO", "crypto");
++    let ssl = prebuilt_library_from_env("PREBUILT_SSL", "ssl");
++
++    if crypto.is_none() && ssl.is_none() {
++        return None;
++    }
++
++    let crypto = crypto.unwrap_or_else(|| {
++        panic!(
++            "AWS_LC_SYS_PREBUILT_SSL is set without AWS_LC_SYS_PREBUILT_CRYPTO. \
++Provide both or unset to fall back to building AWS-LC from source."
++        )
++    });
++
++    if cfg!(feature = "ssl") {
++        let ssl = ssl.unwrap_or_else(|| {
++            panic!(
++                "Feature 'ssl' is enabled, but AWS_LC_SYS_PREBUILT_SSL is not set. \
++Provide both AWS_LC_SYS_PREBUILT_CRYPTO and AWS_LC_SYS_PREBUILT_SSL to use prebuilt libraries."
++            )
++        });
++        Some(PrebuiltLibraries {
++            crypto,
++            ssl: Some(ssl),
++        })
++    } else {
++        Some(PrebuiltLibraries { crypto, ssl: None })
++    }
++}
++
+ const VERSION: &str = env!("CARGO_PKG_VERSION");
+ 
+ fn prefix_string() -> String {
+@@ -469,6 +612,44 @@ trait Builder {
+     fn name(&self) -> &str;
+ }
+ 
++impl Builder for PrebuiltBuilder {
++    fn check_dependencies(&self) -> Result<(), String> {
++        for lib in self.libraries.iter() {
++            if !lib.path.is_file() {
++                return Err(format!(
++                    "Prebuilt AWS-LC library not found at {}",
++                    lib.path.display()
++                ));
++            }
++        }
++        Ok(())
++    }
++
++    fn build(&self) -> Result<(), String> {
++        let staged_dir = self.out_dir.join("prebuilt-libs");
++        fs::create_dir_all(&staged_dir).map_err(|err| {
++            format!(
++                "Failed to create staged prebuilt AWS-LC directory {}: {err}",
++                staged_dir.display()
++            )
++        })?;
++        println!("cargo:rustc-link-search=native={}", staged_dir.display());
++        for lib in self.libraries.iter() {
++            let _ = lib.stage_for_linking(&staged_dir)?;
++            println!(
++                "cargo:rustc-link-lib={}={}",
++                lib.link_type.rust_lib_type(),
++                lib.link_name
++            );
++        }
++        Ok(())
++    }
++
++    fn name(&self) -> &str {
++        "prebuilt"
++    }
++}
++
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+ pub(crate) enum CStdRequested {
+     C99,
+@@ -733,14 +914,21 @@ fn main() {
+ 
+     let manifest_dir = current_dir();
+     let manifest_dir = dunce::canonicalize(Path::new(&manifest_dir)).unwrap();
++    let out_dir = out_dir();
+     let prefix_str = prefix_string();
+-    let prefix = if is_no_prefix() {
++    let prebuilt_libraries = detect_prebuilt_libraries();
++    let prefix = if is_no_prefix() || prebuilt_libraries.is_some() {
+         None
+     } else {
+         Some(prefix_str)
+     };
+ 
+-    let builder = get_builder(&prefix, &manifest_dir, &out_dir());
++    let builder: Box<dyn Builder> = if let Some(ref libraries) = prebuilt_libraries {
++        emit_warning("Using prebuilt AWS-LC libraries provided via AWS_LC_SYS_PREBUILT_*");
++        Box::new(PrebuiltBuilder::new(libraries.clone(), out_dir.clone()))
++    } else {
++        get_builder(&prefix, &manifest_dir, &out_dir)
++    };
+     emit_warning(format!("Building with: {}", builder.name()));
+     emit_warning(format!("Symbol Prefix: {:?}", &prefix));
+ 
+@@ -797,7 +985,7 @@ fn main() {
+                 "External bindgen required, but external bindgen unable to produce SSL bindings.",
+             );
+         } else {
+-            let gen_bindings_path = out_dir().join("bindings.rs");
++            let gen_bindings_path = out_dir.join("bindings.rs");
+             let result = invoke_external_bindgen(&manifest_dir, &prefix, &gen_bindings_path);
+             match result {
+                 Ok(()) => {
+@@ -818,13 +1006,25 @@ fn main() {
+ 
+     println!(
+         "cargo:include={}",
+-        setup_include_paths(&out_dir(), &manifest_dir).display()
++        setup_include_paths(&out_dir, &manifest_dir).display()
+     );
+ 
+     // export the artifact names
+-    println!("cargo:libcrypto={}_crypto", prefix_string());
+-    if cfg!(feature = "ssl") {
+-        println!("cargo:libssl={}_ssl", prefix_string());
++    let (libcrypto_name, libssl_name) = if let Some(ref libraries) = prebuilt_libraries {
++        libraries.link_names()
++    } else {
++        (
++            OutputLib::Crypto.libname(&prefix),
++            if cfg!(feature = "ssl") {
++                Some(OutputLib::Ssl.libname(&prefix))
++            } else {
++                None
++            },
++        )
++    };
++    println!("cargo:libcrypto={libcrypto_name}");
++    if let Some(name) = libssl_name {
++        println!("cargo:libssl={name}");
+     }
+ 
+     println!("cargo:conf={}", OSSL_CONF_DEFINES.join(","));
