@@ -81,7 +81,8 @@ pub struct ConfigRequirements {
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
     pub(crate) exec_policy: Option<Sourced<RequirementsExecPolicy>>,
     pub enforce_residency: ConstrainedWithSource<Option<ResidencyRequirement>>,
-    pub network: Option<Sourced<NetworkRequirementsToml>>,
+    /// Managed network constraints derived from requirements.
+    pub network: Option<Sourced<NetworkRequirements>>,
 }
 
 impl Default for ConfigRequirements {
@@ -137,6 +138,50 @@ pub struct NetworkRequirementsToml {
     pub denied_domains: Option<Vec<String>>,
     pub allow_unix_sockets: Option<Vec<String>>,
     pub allow_local_binding: Option<bool>,
+}
+
+/// Normalized network constraints derived from requirements TOML.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NetworkRequirements {
+    pub enabled: Option<bool>,
+    pub http_port: Option<u16>,
+    pub socks_port: Option<u16>,
+    pub allow_upstream_proxy: Option<bool>,
+    pub dangerously_allow_non_loopback_proxy: Option<bool>,
+    pub dangerously_allow_non_loopback_admin: Option<bool>,
+    pub allowed_domains: Option<Vec<String>>,
+    pub denied_domains: Option<Vec<String>>,
+    pub allow_unix_sockets: Option<Vec<String>>,
+    pub allow_local_binding: Option<bool>,
+}
+
+impl From<NetworkRequirementsToml> for NetworkRequirements {
+    fn from(value: NetworkRequirementsToml) -> Self {
+        let NetworkRequirementsToml {
+            enabled,
+            http_port,
+            socks_port,
+            allow_upstream_proxy,
+            dangerously_allow_non_loopback_proxy,
+            dangerously_allow_non_loopback_admin,
+            allowed_domains,
+            denied_domains,
+            allow_unix_sockets,
+            allow_local_binding,
+        } = value;
+        Self {
+            enabled,
+            http_port,
+            socks_port,
+            allow_upstream_proxy,
+            dangerously_allow_non_loopback_proxy,
+            dangerously_allow_non_loopback_admin,
+            allowed_domains,
+            denied_domains,
+            allow_unix_sockets,
+            allow_local_binding,
+        }
+    }
 }
 
 #[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -494,6 +539,10 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             }
             None => ConstrainedWithSource::new(Constrained::allow_any(None), None),
         };
+        let network = network.map(|sourced_network| {
+            let Sourced { value, source } = sourced_network;
+            Sourced::new(NetworkRequirements::from(value), source)
+        });
         Ok(ConfigRequirements {
             approval_policy,
             sandbox_policy,
