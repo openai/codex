@@ -3303,6 +3303,22 @@ fn render_bug_sections(
         if !artifacts.is_empty() {
             composed.push_str(&format!("- **Artifacts:** {}\n", artifacts.join(", ")));
         }
+        if let Some(dockerfile) = first_validation_dockerfile_artifact(&snapshot.bug.validation) {
+            composed.push_str(&format!("- **Dockerfile:** `{dockerfile}`\n"));
+            let (docker_build, docker_run) =
+                docker_build_and_run_commands(&snapshot.bug.validation.repro_steps);
+            if docker_build.is_some() || docker_run.is_some() {
+                composed.push_str("- **Docker run instructions:**\n");
+                let mut step_index = 1usize;
+                if let Some(docker_build) = docker_build {
+                    composed.push_str(&format!("  {step_index}. `{docker_build}`\n"));
+                    step_index += 1;
+                }
+                if let Some(docker_run) = docker_run {
+                    composed.push_str(&format!("  {step_index}. `{docker_run}`\n"));
+                }
+            }
+        }
         let validation_output = build_validation_output_block(
             &snapshot.bug.validation,
             repo_root,
@@ -6318,8 +6334,12 @@ pub async fn run_security_review(
                 let impact = update.impact.label();
                 let likelihood = update.likelihood.label();
                 let product = update.product;
+                let adjustment = update
+                    .likelihood_adjustment
+                    .map(|reason| format!("; {reason}"))
+                    .unwrap_or_default();
                 let message = format!(
-                    "Severity matrix: bug #{id} updated from {previous} to {computed} (impact {impact} * likelihood {likelihood} = {product})."
+                    "Severity matrix: bug #{id} updated from {previous} to {computed} (impact {impact} * likelihood {likelihood} = {product}{adjustment})."
                 );
                 record(&mut logs, message.clone());
                 aggregated_logs.push(message);
@@ -10056,6 +10076,37 @@ mod risk_rerank_tool_tests {
         assert_eq!(requests.len(), 0);
         assert!(cleaned.contains("/etc/passwd"));
     }
+
+    #[test]
+    fn normalizes_function_style_rerank_tool_calls() {
+        let input = concat!(
+            "function_call name=read_file arguments={\"path\":\"src/lib.rs\",\"start_line\":10,\"end_line\":12}\n",
+            "function_call name=search arguments={\"term\":\"AuthManager\",\"mode\":\"literal\"}\n",
+            "function_call name=grep_files arguments={\"pattern\":\"unsafe\",\"include\":\"*.rs\",\"path\":\"core\",\"limit\":25}",
+        );
+
+        let normalized = merge_function_tool_calls_into_text(input);
+        let lines: Vec<&str> = normalized.lines().collect();
+        assert_eq!(lines[0], "READ: src/lib.rs#L10-L12");
+        assert_eq!(lines[1], "SEARCH: literal:AuthManager");
+        let grep_payload = lines[2].trim_start_matches("GREP_FILES: ");
+        let grep_value: Value = serde_json::from_str(grep_payload).expect("valid GREP_FILES JSON");
+        assert_eq!(
+            grep_value,
+            serde_json::json!({
+                "pattern": "unsafe",
+                "include": "*.rs",
+                "path": "core",
+                "limit": 25,
+            })
+        );
+    }
+
+    #[test]
+    fn leaves_non_tool_lines_unchanged_during_normalization() {
+        let input = "Assistant: done\n{\"id\":1}";
+        assert_eq!(merge_function_tool_calls_into_text(input), input);
+    }
 }
 
 #[cfg(test)]
@@ -10096,7 +10147,6 @@ mod bug_analysis_progress_tests {
 mod bug_dedupe_tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use std::path::Path;
 
     fn make_bug_markdown(title: &str, file: &str) -> String {
         format!(
@@ -10259,6 +10309,52 @@ mod bug_dedupe_tests {
                 "failed to parse taxonomy line: {line}"
             );
         }
+    }
+
+    #[test]
+    fn normalizes_title_with_specific_sqli_category_and_entry_point() {
+        let markdown = r#"- TAXONOMY: {"vuln_class":"injection","cwe_ids":["CWE-89"],"owasp_categories":["A03:2021 - Injection"],"vuln_tag":"sql-injection"}"#;
+        let title = normalize_bug_title_for_dedupe(
+            "Query concatenation allows injection",
+            "High - Unauthorized data access.",
+            "High - Error-based and blind SQL injection through multiple parameters.",
+            Some("sql-injection"),
+            "/foo/bar#L10-L20",
+            markdown,
+        );
+
+        assert!(title.starts_with("CWE-89 error-based/blind sql injection:"));
+        assert!(title.ends_with("in /foo/bar"));
+    }
+
+    #[test]
+    fn normalizes_title_with_dom_xss_category() {
+        let title = normalize_bug_title_for_dedupe(
+            "Unsafe dynamic HTML rendering",
+            "Medium - Script execution in browser context.",
+            "Medium - DOM-based XSS via URL fragment.",
+            Some("xss"),
+            "page.tsx#L30-L45",
+            r#"- TAXONOMY: {"vuln_class":"xss","cwe_ids":["CWE-79"],"owasp_categories":["A03:2021 - Injection"],"vuln_tag":"dom-xss"}"#,
+        );
+
+        assert!(title.starts_with("CWE-79 dom xss:"));
+        assert!(title.ends_with("in page.tsx"));
+    }
+
+    #[test]
+    fn prefers_authorization_bypass_wording_over_improper_authorization() {
+        let title = normalize_bug_title_for_dedupe(
+            "Improper authorization checks in admin handler",
+            "High - Unauthorized access to admin actions.",
+            "Medium - Reachable by authenticated low-privilege users.",
+            Some("improper-authorization"),
+            "api/admin/update#L1-L4",
+            r#"- TAXONOMY: {"vuln_class":"access-control","cwe_ids":["CWE-285"],"owasp_categories":["A01:2021 - Broken Access Control"],"vuln_tag":"improper-authorization"}"#,
+        );
+
+        assert!(title.starts_with("CWE-285 authorization bypass:"));
+        assert!(title.ends_with("in admin handler"));
     }
 
     #[test]
@@ -10994,6 +11090,65 @@ done
         assert!(scenario.contains("#### Exploit scenario"));
         assert!(scenario.contains("PoC artifact"));
     }
+
+    #[test]
+    fn validation_output_prefers_trigger_and_asan_excerpt() {
+        let validation = BugValidationState {
+            status: BugValidationStatus::Passed,
+            output_snippet: Some(
+                [
+                    "=== TRIGGER ===",
+                    "$ ./poc.sh ./target sample.bin",
+                    "INPUT:",
+                    "sample.bin",
+                    "==1234==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x42",
+                    "READ of size 64 at 0x42 thread T0",
+                    "#0 0xabc in parse_frame src/parser.c:42",
+                    "==1234==ABORTING",
+                ]
+                .join("\n"),
+            ),
+            ..BugValidationState::default()
+        };
+
+        let output =
+            build_validation_output_block(&validation, None, None, true).expect("validation");
+
+        assert!(output.contains("Trigger PoC:"));
+        assert!(output.contains("$ ./poc.sh ./target sample.bin"));
+        assert!(output.contains("ASan trace excerpt:"));
+        assert!(output.contains("heap-buffer-overflow"));
+        assert!(!output.contains("== STDERR =="));
+        assert!(!output.contains("== STDOUT =="));
+    }
+
+    #[test]
+    fn dockerfile_and_commands_are_detected_from_validation_data() {
+        let validation = BugValidationState {
+            artifacts: vec![
+                "output/security-review/bug1/Dockerfile".to_string(),
+                "output/security-review/bug1/poc.py".to_string(),
+            ],
+            repro_steps: vec![
+                "Build: `docker build -f output/security-review/bug1/Dockerfile -t bug1 .`"
+                    .to_string(),
+                "Run: `docker run --rm bug1`".to_string(),
+            ],
+            ..BugValidationState::default()
+        };
+
+        assert_eq!(
+            first_validation_dockerfile_artifact(&validation),
+            Some("output/security-review/bug1/Dockerfile".to_string())
+        );
+
+        let (docker_build, docker_run) = docker_build_and_run_commands(&validation.repro_steps);
+        assert_eq!(
+            docker_build,
+            Some("docker build -f output/security-review/bug1/Dockerfile -t bug1 .".to_string())
+        );
+        assert_eq!(docker_run, Some("docker run --rm bug1".to_string()));
+    }
 }
 
 #[cfg(test)]
@@ -11047,6 +11202,42 @@ mod severity_matrix_tests {
         assert_eq!(update.previous, "High");
         assert_eq!(update.product, 3);
         assert_eq!(summary.severity, "Medium");
+    }
+
+    #[test]
+    fn downgrades_when_exploit_requires_admin_system_maintenance_access() {
+        let mut summary = make_bug_summary(
+            "High",
+            "High - Arbitrary code execution in daemon context.",
+            "High - Requires administrator with system-level access to run maintenance scripts.",
+        );
+        let update = apply_severity_matrix(&mut summary).expect("matrix update");
+        assert_eq!(update.previous, "High");
+        assert_eq!(update.likelihood, RiskLevel::Low);
+        assert_eq!(update.product, 3);
+        assert_eq!(summary.severity, "Medium");
+        assert_eq!(
+            update.likelihood_adjustment,
+            Some("downgraded: requires admin/system-level script or maintenance access")
+        );
+    }
+
+    #[test]
+    fn downgrades_mitm_missing_cert_validation_for_custom_cert_deployments() {
+        let mut summary = make_bug_summary(
+            "Medium",
+            "Medium - Session interception risk.",
+            "High - Active/passive MITM if certificate validation is disabled for custom certificates / private CA deployments.",
+        );
+        let update = apply_severity_matrix(&mut summary).expect("matrix update");
+        assert_eq!(update.previous, "Medium");
+        assert_eq!(update.likelihood, RiskLevel::Low);
+        assert_eq!(update.product, 2);
+        assert_eq!(summary.severity, "Low");
+        assert_eq!(
+            update.likelihood_adjustment,
+            Some("downgraded: MITM risk depends on custom-certificate deployment model")
+        );
     }
 
     #[test]
@@ -14427,7 +14618,7 @@ fn is_regex_parse_error(stderr: &str) -> bool {
     lowered.contains("regex parse error") || lowered.contains("error parsing regex")
 }
 
-fn parse_taxonomy_vuln_tag(line: &str) -> Option<String> {
+fn parse_taxonomy_json(line: &str) -> Option<Value> {
     let mut cursor = line.trim();
 
     if let Some(rest) = cursor.strip_prefix('-') {
@@ -14454,13 +14645,506 @@ fn parse_taxonomy_vuln_tag(line: &str) -> Option<String> {
         value
     };
 
-    let taxonomy = serde_json::from_str::<Value>(json).ok()?;
+    serde_json::from_str::<Value>(json).ok()
+}
+
+fn normalize_cwe_label(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let upper = trimmed.to_ascii_uppercase();
+    if let Some(suffix) = upper.strip_prefix("CWE-")
+        && let Ok(id) = suffix.trim().parse::<u32>()
+    {
+        return Some(format!("CWE-{id}"));
+    }
+
+    if let Ok(id) = trimmed.parse::<u32>() {
+        return Some(format!("CWE-{id}"));
+    }
+
+    None
+}
+
+fn parse_taxonomy_vuln_tag(line: &str) -> Option<String> {
+    let taxonomy = parse_taxonomy_json(line)?;
     let tag = taxonomy.get("vuln_tag")?.as_str()?.trim();
     if tag.is_empty() {
         None
     } else {
         Some(tag.to_string())
     }
+}
+
+fn parse_taxonomy_primary_cwe(line: &str) -> Option<String> {
+    let taxonomy = parse_taxonomy_json(line)?;
+    let cwe_ids = taxonomy.get("cwe_ids")?.as_array()?;
+    for entry in cwe_ids {
+        if let Some(value) = entry.as_str()
+            && let Some(normalized) = normalize_cwe_label(value)
+        {
+            return Some(normalized);
+        }
+    }
+
+    None
+}
+
+fn normalize_owasp_category_label(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let mut text = trimmed.to_string();
+    if let Some((_, rest)) = text.split_once('-')
+        && text
+            .chars()
+            .take_while(|ch| !matches!(ch, '-'))
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, ':' | ' '))
+    {
+        text = rest.to_string();
+    }
+
+    let normalized = collapse_inline_whitespace(text.as_str()).to_ascii_lowercase();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    if normalized.contains("broken access control") {
+        return Some("authorization bypass".to_string());
+    }
+    if normalized.contains("identification and authentication")
+        || normalized.contains("authentication failures")
+    {
+        return Some("authentication bypass".to_string());
+    }
+    if normalized.contains("injection") {
+        return Some("injection".to_string());
+    }
+
+    Some(normalized)
+}
+
+fn parse_taxonomy_primary_owasp(line: &str) -> Option<String> {
+    let taxonomy = parse_taxonomy_json(line)?;
+    let categories = taxonomy.get("owasp_categories")?.as_array()?;
+    for entry in categories {
+        if let Some(value) = entry.as_str()
+            && let Some(normalized) = normalize_owasp_category_label(value)
+        {
+            return Some(normalized);
+        }
+    }
+
+    None
+}
+
+fn collapse_inline_whitespace(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn clean_entry_point(raw: &str) -> Option<String> {
+    let trimmed = raw
+        .trim()
+        .trim_matches('`')
+        .trim()
+        .trim_end_matches(['.', ',', ';', ':'])
+        .trim();
+    let collapsed = collapse_inline_whitespace(trimmed);
+    if collapsed.is_empty() {
+        None
+    } else {
+        Some(collapsed)
+    }
+}
+
+fn clean_bug_title(raw_title: &str) -> String {
+    let trimmed = raw_title.trim();
+    let without_id = if let Some(stripped) = trimmed.strip_prefix('[') {
+        if let Some((_, rest)) = stripped.split_once(']')
+            && stripped
+                .split(']')
+                .next()
+                .is_some_and(|id| id.trim().parse::<usize>().is_ok())
+        {
+            rest.trim()
+        } else {
+            trimmed
+        }
+    } else {
+        trimmed
+    };
+
+    collapse_inline_whitespace(without_id)
+}
+
+fn split_title_core_and_entry_point(title: &str) -> (String, Option<String>) {
+    let normalized = clean_bug_title(title);
+    let lowered = normalized.to_ascii_lowercase();
+    if let Some(index) = lowered.rfind(" in ") {
+        let core = normalized[..index].trim();
+        let entry = normalized[index + 4..].trim();
+        if !core.is_empty()
+            && !entry.is_empty()
+            && let Some(cleaned_entry) = clean_entry_point(entry)
+        {
+            return (core.to_string(), Some(cleaned_entry));
+        }
+    }
+
+    (normalized, None)
+}
+
+fn contains_any_phrase(haystack: &str, terms: &[&str]) -> bool {
+    terms.iter().any(|term| haystack.contains(term))
+}
+
+fn normalize_vulnerability_category_tag(vulnerability_tag: &str) -> Option<String> {
+    let trimmed = vulnerability_tag.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let normalized = trimmed.to_ascii_lowercase().replace(['_', '/'], "-");
+    let words = normalized.replace('-', " ");
+
+    if (words.contains("authorization") || words.contains("authz"))
+        && (words.contains("bypass")
+            || words.contains("broken")
+            || words.contains("improper")
+            || words.contains("missing"))
+    {
+        return Some("authorization bypass".to_string());
+    }
+
+    if (words.contains("authentication") || words.contains("authn"))
+        && (words.contains("bypass")
+            || words.contains("broken")
+            || words.contains("improper")
+            || words.contains("missing"))
+    {
+        return Some("authentication bypass".to_string());
+    }
+
+    if words.contains("sql") && words.contains("inject") {
+        return Some("sql injection".to_string());
+    }
+
+    if words.contains("dom") && words.contains("xss") {
+        return Some("dom xss".to_string());
+    }
+
+    if words.contains("sandbox") && words.contains("escape") {
+        return Some("sandbox escape".to_string());
+    }
+
+    let tokens: Vec<String> = normalized
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter_map(|token| {
+            let lower = token.trim().to_ascii_lowercase();
+            if lower.is_empty() {
+                return None;
+            }
+            let normalized = match lower.as_str() {
+                "oob" => "out-of-bounds".to_string(),
+                "uaf" => "use-after-free".to_string(),
+                "rce" => "remote code execution".to_string(),
+                "authn" => "authentication".to_string(),
+                "authz" => "authorization".to_string(),
+                "xss" => "cross-site scripting".to_string(),
+                "xxe" => "xml external entity".to_string(),
+                "sqli" => "sql injection".to_string(),
+                "dos" => "denial of service".to_string(),
+                _ => lower,
+            };
+            Some(normalized)
+        })
+        .collect();
+
+    if tokens.is_empty() {
+        None
+    } else {
+        Some(tokens.join(" "))
+    }
+}
+
+fn classify_memory_overflow_category(
+    title: &str,
+    impact: &str,
+    likelihood: &str,
+    vulnerability_tag: Option<&str>,
+    markdown: &str,
+) -> Option<String> {
+    let mut parts: Vec<String> = vec![
+        title.to_string(),
+        impact.to_string(),
+        likelihood.to_string(),
+    ];
+    if let Some(tag) = vulnerability_tag {
+        parts.push(tag.to_string());
+    }
+    parts.push(markdown.to_string());
+    let haystack = parts.join("\n").to_ascii_lowercase();
+
+    let overflow_terms = [
+        "memory corruption",
+        "out-of-bounds",
+        "oob",
+        "heap-buffer-overflow",
+        "stack-buffer-overflow",
+        "buffer overflow",
+        "buffer over-read",
+        "overread",
+        "write past",
+        "read past",
+    ];
+    if !contains_any_phrase(haystack.as_str(), &overflow_terms) {
+        return None;
+    }
+
+    let stack_terms = ["stack", "stack-buffer-overflow", "stack overflow"];
+    let heap_terms = ["heap", "heap-buffer-overflow", "heap overflow"];
+    let write_terms = [
+        "out-of-bounds write",
+        "oob write",
+        "write past",
+        "write outside",
+        "buffer overflow",
+        "heap-buffer-overflow",
+        "stack-buffer-overflow",
+        "overflow write",
+        "overwrite",
+    ];
+    let read_terms = [
+        "out-of-bounds read",
+        "oob read",
+        "read past",
+        "read outside",
+        "buffer over-read",
+        "overread",
+        "memory read",
+    ];
+    let controllable_terms = [
+        "arbitrary read",
+        "arbitrary write",
+        "read-what-where",
+        "write-what-where",
+        "controlled read",
+        "controlled write",
+        "attacker-controlled",
+        "chosen address",
+        "targeted write",
+        "memory disclosure",
+        "information disclosure",
+        "info leak",
+        "secret exfil",
+        "exfiltrat",
+    ];
+
+    let surface = if contains_any_phrase(haystack.as_str(), &stack_terms) {
+        "stack"
+    } else if contains_any_phrase(haystack.as_str(), &heap_terms) {
+        "heap"
+    } else {
+        "memory"
+    };
+    let has_read = contains_any_phrase(haystack.as_str(), &read_terms);
+    let has_write = contains_any_phrase(haystack.as_str(), &write_terms);
+    let direction = if has_read && has_write {
+        "read/write"
+    } else if has_read {
+        "read"
+    } else if has_write {
+        "write"
+    } else {
+        "read/write"
+    };
+    let controllability = if contains_any_phrase(haystack.as_str(), &controllable_terms) {
+        "controllable"
+    } else {
+        "uncontrollable"
+    };
+
+    Some(format!(
+        "{surface} {direction} overflow with {controllability} memory"
+    ))
+}
+
+fn infer_specific_vulnerability_category(
+    title: &str,
+    impact: &str,
+    likelihood: &str,
+    vulnerability_tag: Option<&str>,
+    markdown: &str,
+) -> Option<String> {
+    let mut parts: Vec<String> = vec![
+        title.to_string(),
+        impact.to_string(),
+        likelihood.to_string(),
+    ];
+    if let Some(tag) = vulnerability_tag {
+        parts.push(tag.to_string());
+    }
+    parts.push(markdown.to_string());
+    let haystack = parts.join("\n").to_ascii_lowercase();
+
+    let has_sql_injection =
+        (haystack.contains("sql") || haystack.contains("sqli")) && haystack.contains("inject");
+    if has_sql_injection {
+        let has_error_based = haystack.contains("error-based") || haystack.contains("error based");
+        let has_blind = haystack.contains("blind");
+        if has_error_based && has_blind {
+            return Some("error-based/blind sql injection".to_string());
+        }
+        if has_error_based {
+            return Some("error-based sql injection".to_string());
+        }
+        if has_blind {
+            return Some("blind sql injection".to_string());
+        }
+        return Some("sql injection".to_string());
+    }
+
+    if (haystack.contains("dom") && haystack.contains("xss"))
+        || haystack.contains("dom-based xss")
+        || haystack.contains("dom based xss")
+    {
+        return Some("dom xss".to_string());
+    }
+
+    if haystack.contains("sandbox") && haystack.contains("escape") {
+        return Some("sandbox escape".to_string());
+    }
+
+    if (haystack.contains("authorization") || haystack.contains("authz"))
+        && (haystack.contains("bypass")
+            || haystack.contains("broken access control")
+            || haystack.contains("improper authorization")
+            || haystack.contains("missing authorization"))
+    {
+        return Some("authorization bypass".to_string());
+    }
+
+    if (haystack.contains("authentication") || haystack.contains("authn"))
+        && (haystack.contains("bypass")
+            || haystack.contains("improper authentication")
+            || haystack.contains("missing authentication")
+            || haystack.contains("identification and authentication"))
+    {
+        return Some("authentication bypass".to_string());
+    }
+
+    None
+}
+
+fn extract_primary_cwe_from_bug_markdown(markdown: &str) -> Option<String> {
+    markdown.lines().find_map(parse_taxonomy_primary_cwe)
+}
+
+fn extract_primary_owasp_from_bug_markdown(markdown: &str) -> Option<String> {
+    markdown.lines().find_map(parse_taxonomy_primary_owasp)
+}
+
+fn category_prefix_for_normalized_title(
+    title: &str,
+    impact: &str,
+    likelihood: &str,
+    vulnerability_tag: Option<&str>,
+    markdown: &str,
+) -> Option<String> {
+    let cwe = extract_primary_cwe_from_bug_markdown(markdown);
+    let owasp = extract_primary_owasp_from_bug_markdown(markdown);
+
+    if let Some(memory_category) =
+        classify_memory_overflow_category(title, impact, likelihood, vulnerability_tag, markdown)
+    {
+        return Some(match cwe {
+            Some(cwe_id) => format!("{cwe_id} {memory_category}"),
+            None => memory_category,
+        });
+    }
+
+    let specific_category = infer_specific_vulnerability_category(
+        title,
+        impact,
+        likelihood,
+        vulnerability_tag,
+        markdown,
+    )
+    .or_else(|| vulnerability_tag.and_then(normalize_vulnerability_category_tag));
+
+    if let Some(category) = specific_category {
+        if let Some(cwe_id) = cwe {
+            return Some(format!("{cwe_id} {category}"));
+        }
+        if let Some(owasp_category) = owasp {
+            if owasp_category == category {
+                return Some(category);
+            }
+            return Some(format!("{owasp_category} {category}"));
+        }
+        return Some(category);
+    }
+
+    owasp.or(cwe)
+}
+
+fn entry_point_from_finding_locations(file_field: &str, markdown: &str) -> Option<String> {
+    let mut locations = preferred_bug_locations_for_reporting(markdown, file_field);
+    if locations.is_empty() {
+        locations = extract_file_locations_for_dedupe(file_field);
+    }
+
+    let first = locations.first()?;
+    let path = first.split('#').next().unwrap_or(first.as_str()).trim();
+    clean_entry_point(path)
+}
+
+fn normalize_bug_title_for_dedupe(
+    title: &str,
+    impact: &str,
+    likelihood: &str,
+    vulnerability_tag: Option<&str>,
+    file_field: &str,
+    markdown: &str,
+) -> String {
+    let (mut core_title, entry_from_title) = split_title_core_and_entry_point(title);
+    if core_title.is_empty() {
+        core_title = "security finding".to_string();
+    }
+
+    let category = category_prefix_for_normalized_title(
+        core_title.as_str(),
+        impact,
+        likelihood,
+        vulnerability_tag,
+        markdown,
+    );
+
+    let mut left = if let Some(category) = category {
+        let category_lower = category.to_ascii_lowercase();
+        if core_title
+            .to_ascii_lowercase()
+            .starts_with(category_lower.as_str())
+        {
+            core_title
+        } else {
+            format!("{category}: {core_title}")
+        }
+    } else {
+        core_title
+    };
+
+    let entry_point =
+        entry_from_title.or_else(|| entry_point_from_finding_locations(file_field, markdown));
+    if let Some(entry_point) = entry_point {
+        left = format!("{left} in {entry_point}");
+    }
+
+    collapse_inline_whitespace(left.as_str())
 }
 
 fn extract_bug_summaries(
@@ -14495,6 +15179,23 @@ fn extract_bug_summaries(
                     }
                 }
             }
+            let normalized_title = normalize_bug_title_for_dedupe(
+                summary.title.as_str(),
+                summary.impact.as_str(),
+                summary.likelihood.as_str(),
+                summary.vulnerability_tag.as_deref(),
+                summary.file.as_str(),
+                markdown.as_str(),
+            );
+            if !normalized_title.is_empty() && normalized_title != summary.title {
+                summary.title = normalized_title.clone();
+                if let Some(updated) =
+                    rewrite_bug_markdown_title(markdown.as_str(), normalized_title.as_str())
+                {
+                    markdown = updated;
+                }
+            }
+
             summary.markdown = markdown.clone();
             details.push(BugDetail {
                 summary_id: summary.id,
@@ -14892,6 +15593,31 @@ fn rewrite_bug_markdown_location(markdown: &str, new_location: &str) -> Option<S
         return Some(out.join("\n"));
     }
     Some(lines.join("\n"))
+}
+
+fn rewrite_bug_markdown_title(markdown: &str, new_title: &str) -> Option<String> {
+    if markdown.trim().is_empty() || new_title.trim().is_empty() {
+        return None;
+    }
+
+    let mut lines: Vec<String> = Vec::new();
+    let mut replaced = false;
+    for line in markdown.lines() {
+        if !replaced && line.trim_start().starts_with("### ") {
+            let indent_len = line.len().saturating_sub(line.trim_start().len());
+            let indent = &line[..indent_len];
+            lines.push(format!("{indent}### {new_title}"));
+            replaced = true;
+        } else {
+            lines.push(line.to_string());
+        }
+    }
+
+    if replaced {
+        Some(lines.join("\n"))
+    } else {
+        None
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -16325,8 +17051,9 @@ fn bug_summary_cmp(a: &BugSummary, b: &BugSummary) -> CmpOrdering {
 
 fn rank_bug_summaries_for_reporting(summaries: &mut [BugSummary]) {
     summaries.sort_by(|a, b| {
-        severity_rank(&a.severity)
-            .cmp(&severity_rank(&b.severity))
+        validation_rank_for_reporting(a.validation.status)
+            .cmp(&validation_rank_for_reporting(b.validation.status))
+            .then_with(|| severity_rank(&a.severity).cmp(&severity_rank(&b.severity)))
             .then_with(|| match (a.risk_score, b.risk_score) {
                 (Some(sa), Some(sb)) => sb.partial_cmp(&sa).unwrap_or(CmpOrdering::Equal),
                 (Some(_), None) => CmpOrdering::Less,
@@ -16925,7 +17652,7 @@ async fn run_risk_rerank_chunk(
             prompt.push_str(&conversation.join("\n\n"));
         }
 
-        let call_output = match call_model(
+        let call_output = match call_model_with_tool_profile(
             client,
             provider,
             auth,
@@ -16935,6 +17662,7 @@ async fn run_risk_rerank_chunk(
             &prompt,
             metrics.clone(),
             0.0,
+            ModelToolProfile::RiskRerank,
         )
         .await
         {
@@ -16971,6 +17699,7 @@ async fn run_risk_rerank_chunk(
         }
 
         let ModelCallOutput { text, reasoning } = call_output;
+        let text = merge_function_tool_calls_into_text(&text);
 
         if !text.trim().is_empty() {
             conversation.push(format!("Assistant:\n{}", text.trim()));
@@ -17509,11 +18238,15 @@ async fn rerank_bugs_by_risk(
             let impact = update.impact.label();
             let likelihood = update.likelihood.label();
             let product = update.product;
+            let adjustment = update
+                .likelihood_adjustment
+                .map(|reason| format!("; {reason}"))
+                .unwrap_or_default();
             append_log(
                 &log_sink,
                 &mut logs,
                 format!(
-                    "Severity matrix: bug #{id} updated from {previous} to {computed} (impact {impact} * likelihood {likelihood} = {product})."
+                    "Severity matrix: bug #{id} updated from {previous} to {computed} (impact {impact} * likelihood {likelihood} = {product}{adjustment})."
                 ),
             );
         }
@@ -17759,6 +18492,14 @@ fn severity_rank(severity: &str) -> usize {
     }
 }
 
+fn validation_rank_for_reporting(status: BugValidationStatus) -> usize {
+    match status {
+        BugValidationStatus::Passed => 0,
+        BugValidationStatus::Pending => 1,
+        BugValidationStatus::Failed | BugValidationStatus::UnableToValidate => 2,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RiskLevel {
     Low,
@@ -17812,11 +18553,127 @@ fn parse_risk_level_prefix(value: &str) -> Option<RiskLevel> {
     }
 }
 
+fn severity_matrix_haystack(summary: &BugSummary) -> String {
+    let mut parts: Vec<String> = vec![
+        summary.title.clone(),
+        summary.impact.clone(),
+        summary.likelihood.clone(),
+        summary.markdown.clone(),
+    ];
+    if let Some(tag) = summary.vulnerability_tag.as_ref() {
+        parts.push(tag.clone());
+    }
+
+    parts.join("\n").to_ascii_lowercase()
+}
+
+fn requires_admin_system_level_access(summary: &BugSummary) -> bool {
+    let haystack = severity_matrix_haystack(summary);
+
+    let privileged_terms = [
+        "requires admin",
+        "administrator",
+        "admin-only",
+        "admin only",
+        "requires root",
+        "root access",
+        "system-level access",
+        "system level access",
+        "privileged attacker",
+        "privileged user",
+    ];
+    let operation_terms = [
+        "run scripts",
+        "execute scripts",
+        "script execution",
+        "maintenance",
+        "maintenance task",
+        "maintenance operation",
+        "ops access",
+        "operator access",
+    ];
+
+    let has_privileged = contains_any_phrase(haystack.as_str(), &privileged_terms);
+    let has_operation = contains_any_phrase(haystack.as_str(), &operation_terms);
+
+    (has_privileged && has_operation)
+        || haystack.contains("administrator with system-level access")
+        || haystack.contains("admin with system level access")
+}
+
+fn is_custom_cert_mitm_cert_validation_case(summary: &BugSummary) -> bool {
+    let haystack = severity_matrix_haystack(summary);
+
+    let mitm_terms = [
+        "mitm",
+        "man-in-the-middle",
+        "active mitm",
+        "passive mitm",
+        "active/passive mitm",
+        "active man-in-the-middle",
+        "passive man-in-the-middle",
+    ];
+    let cert_validation_terms = [
+        "missing cert validation",
+        "missing certificate validation",
+        "certificate validation disabled",
+        "certificate validation is disabled",
+        "does not validate certificates",
+        "does not verify certificate",
+        "hostname verification disabled",
+        "missing hostname verification",
+        "tls verification disabled",
+        "missing tls verification",
+    ];
+    let custom_cert_terms = [
+        "custom cert",
+        "custom certificate",
+        "custom certificates",
+        "private ca",
+        "internal ca",
+        "self-signed",
+        "self signed",
+        "enterprise ca",
+        "custom trust store",
+        "custom truststore",
+    ];
+
+    contains_any_phrase(haystack.as_str(), &mitm_terms)
+        && contains_any_phrase(haystack.as_str(), &cert_validation_terms)
+        && contains_any_phrase(haystack.as_str(), &custom_cert_terms)
+}
+
+fn adjust_likelihood_for_ranking(
+    summary: &BugSummary,
+    likelihood: RiskLevel,
+) -> (RiskLevel, Option<&'static str>) {
+    if likelihood == RiskLevel::Low {
+        return (likelihood, None);
+    }
+
+    if requires_admin_system_level_access(summary) {
+        return (
+            RiskLevel::Low,
+            Some("downgraded: requires admin/system-level script or maintenance access"),
+        );
+    }
+
+    if is_custom_cert_mitm_cert_validation_case(summary) {
+        return (
+            RiskLevel::Low,
+            Some("downgraded: MITM risk depends on custom-certificate deployment model"),
+        );
+    }
+
+    (likelihood, None)
+}
+
 struct SeverityMatrixUpdate {
     previous: String,
     impact: RiskLevel,
     likelihood: RiskLevel,
     product: i64,
+    likelihood_adjustment: Option<&'static str>,
 }
 
 fn apply_severity_matrix(summary: &mut BugSummary) -> Option<SeverityMatrixUpdate> {
@@ -17829,7 +18686,9 @@ fn apply_severity_matrix(summary: &mut BugSummary) -> Option<SeverityMatrixUpdat
     }
 
     let impact = parse_risk_level_prefix(&summary.impact)?;
-    let likelihood = parse_risk_level_prefix(&summary.likelihood)?;
+    let parsed_likelihood = parse_risk_level_prefix(&summary.likelihood)?;
+    let (likelihood, likelihood_adjustment) =
+        adjust_likelihood_for_ranking(summary, parsed_likelihood);
     let product = impact.weight().saturating_mul(likelihood.weight());
     let computed = if product >= 6 {
         "High"
@@ -17851,7 +18710,261 @@ fn apply_severity_matrix(summary: &mut BugSummary) -> Option<SeverityMatrixUpdat
         impact,
         likelihood,
         product,
+        likelihood_adjustment,
     })
+}
+
+fn downgraded_validation_failure_severity(current: &str) -> Option<&'static str> {
+    match current.trim().to_ascii_lowercase().as_str() {
+        "high" => Some("Medium"),
+        "medium" | "med" => Some("Low"),
+        _ => None,
+    }
+}
+
+fn apply_validation_failure_severity_downgrade(
+    entry: &mut BugSnapshot,
+    reason: &str,
+    logs: &mut Vec<String>,
+) -> bool {
+    let Some(next_severity) = downgraded_validation_failure_severity(entry.bug.severity.as_str())
+    else {
+        return false;
+    };
+
+    let previous = entry.bug.severity.clone();
+    entry.bug.severity = next_severity.to_string();
+    if let Some(updated) =
+        rewrite_bug_markdown_severity(entry.original_markdown.as_str(), next_severity)
+    {
+        entry.original_markdown = updated;
+    }
+
+    let reason_text = format!("post-validation rerank: {reason}");
+    entry.bug.risk_reason = Some(match entry.bug.risk_reason.as_deref() {
+        Some(existing) if existing.contains(reason_text.as_str()) => existing.to_string(),
+        Some(existing) if !existing.trim().is_empty() => format!("{existing} | {reason_text}"),
+        _ => reason_text,
+    });
+
+    logs.push(format!(
+        "Post-validation rerank: bug #{} severity {previous} -> {next_severity} ({reason})",
+        entry.bug.summary_id,
+    ));
+    true
+}
+
+fn apply_post_validation_light_rerank(snapshot: &mut SecurityReviewSnapshot) -> Vec<String> {
+    let mut logs: Vec<String> = Vec::new();
+    let mut severity_adjusted = 0usize;
+    let has_validation_signal = snapshot
+        .bugs
+        .iter()
+        .any(|entry| entry.bug.validation.status != BugValidationStatus::Pending);
+
+    for entry in &mut snapshot.bugs {
+        if matches!(
+            entry.bug.validation.status,
+            BugValidationStatus::Failed | BugValidationStatus::UnableToValidate
+        ) && apply_validation_failure_severity_downgrade(
+            entry,
+            "validation attempted but failed",
+            &mut logs,
+        ) {
+            severity_adjusted = severity_adjusted.saturating_add(1);
+        }
+    }
+
+    if !has_validation_signal && severity_adjusted == 0 {
+        return logs;
+    }
+
+    let (mut summaries, details) = snapshot_summaries_and_details(snapshot);
+    rank_bug_summaries_for_reporting(&mut summaries);
+    let (_bugs, snapshots) = build_bug_records(summaries, details);
+    snapshot.bugs = snapshots;
+    snapshot.findings_summary = format_findings_summary(
+        snapshot.bugs.len(),
+        count_files_with_findings_from_snapshots(&snapshot.bugs),
+    );
+
+    logs.push(format!(
+        "Post-validation rerank adjusted ordering for validated findings and applied {severity_adjusted} severity downgrade(s)."
+    ));
+    logs
+}
+
+#[cfg(test)]
+mod post_validation_light_rerank_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn make_bug_snapshot(
+        summary_id: usize,
+        title: &str,
+        status: BugValidationStatus,
+        severity: &str,
+        risk_score: Option<f32>,
+    ) -> BugSnapshot {
+        BugSnapshot {
+            bug: SecurityReviewBug {
+                summary_id,
+                risk_rank: Some(summary_id),
+                risk_score,
+                title: title.to_string(),
+                severity: severity.to_string(),
+                impact: "Medium - test".to_string(),
+                likelihood: "Medium - test".to_string(),
+                recommendation: String::new(),
+                file: "tui/src/security_review.rs#L1-L2".to_string(),
+                blame: None,
+                risk_reason: None,
+                verification_types: Vec::new(),
+                vulnerability_tag: None,
+                validation: BugValidationState {
+                    status,
+                    ..BugValidationState::default()
+                },
+                assignee_github: None,
+            },
+            original_markdown: format!("### test\n- **Severity:** {severity}\n"),
+        }
+    }
+
+    fn make_snapshot(bugs: Vec<BugSnapshot>) -> SecurityReviewSnapshot {
+        SecurityReviewSnapshot {
+            generated_at: OffsetDateTime::now_utc(),
+            findings_summary: "placeholder".to_string(),
+            report_sections_prefix: Vec::new(),
+            bugs,
+        }
+    }
+
+    #[test]
+    fn downgrades_failed_high_to_medium() {
+        let mut snapshot = make_snapshot(vec![make_bug_snapshot(
+            1,
+            "Potential SQL injection",
+            BugValidationStatus::Failed,
+            "High",
+            Some(88.0),
+        )]);
+
+        let logs = apply_post_validation_light_rerank(&mut snapshot);
+        assert_eq!(snapshot.bugs[0].bug.risk_score, Some(88.0));
+        assert_eq!(snapshot.bugs[0].bug.severity, "Medium");
+        assert!(
+            snapshot.bugs[0]
+                .bug
+                .risk_reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("validation attempted but failed")
+        );
+        assert!(
+            snapshot.bugs[0]
+                .original_markdown
+                .contains("- **Severity:** Medium")
+        );
+        assert!(
+            logs.iter()
+                .any(|line| line.contains("severity High -> Medium"))
+        );
+    }
+
+    #[test]
+    fn downgrades_unable_to_validate_medium_to_low() {
+        let mut snapshot = make_snapshot(vec![make_bug_snapshot(
+            2,
+            "Potential SSRF",
+            BugValidationStatus::UnableToValidate,
+            "Medium",
+            Some(40.0),
+        )]);
+
+        let logs = apply_post_validation_light_rerank(&mut snapshot);
+        assert_eq!(snapshot.bugs[0].bug.risk_score, Some(40.0));
+        assert_eq!(snapshot.bugs[0].bug.severity, "Low");
+        assert!(
+            snapshot.bugs[0]
+                .original_markdown
+                .contains("- **Severity:** Low")
+        );
+        assert!(
+            logs.iter()
+                .any(|line| line.contains("severity Medium -> Low"))
+        );
+    }
+
+    #[test]
+    fn keeps_pending_findings_unchanged_without_validation_signal() {
+        let mut snapshot = make_snapshot(vec![make_bug_snapshot(
+            3,
+            "Potential SQL injection",
+            BugValidationStatus::Pending,
+            "High",
+            Some(88.0),
+        )]);
+
+        let logs = apply_post_validation_light_rerank(&mut snapshot);
+        assert_eq!(snapshot.bugs[0].bug.risk_score, Some(88.0));
+        assert_eq!(snapshot.bugs[0].bug.severity, "High");
+        assert!(logs.is_empty());
+    }
+
+    #[test]
+    fn ranks_passed_findings_above_pending_and_failed() {
+        let mut snapshot = make_snapshot(vec![
+            make_bug_snapshot(
+                1,
+                "Pending high",
+                BugValidationStatus::Pending,
+                "High",
+                Some(20.0),
+            ),
+            make_bug_snapshot(
+                2,
+                "Failed high",
+                BugValidationStatus::Failed,
+                "High",
+                Some(90.0),
+            ),
+            make_bug_snapshot(
+                3,
+                "Passed medium",
+                BugValidationStatus::Passed,
+                "Medium",
+                Some(10.0),
+            ),
+        ]);
+
+        let logs = apply_post_validation_light_rerank(&mut snapshot);
+        assert!(
+            logs.iter()
+                .any(|line| line.contains("adjusted ordering for validated findings"))
+        );
+
+        let ordered_ids = snapshot
+            .bugs
+            .iter()
+            .map(|entry| entry.bug.summary_id)
+            .collect::<Vec<_>>();
+        assert_eq!(ordered_ids, vec![3, 1, 2]);
+
+        let ordered_ranks = snapshot
+            .bugs
+            .iter()
+            .map(|entry| entry.bug.risk_rank)
+            .collect::<Vec<_>>();
+        assert_eq!(ordered_ranks, vec![Some(1), Some(2), Some(3)]);
+
+        let failed = snapshot
+            .bugs
+            .iter()
+            .find(|entry| entry.bug.summary_id == 2)
+            .expect("failed finding present");
+        assert_eq!(failed.bug.severity, "Medium");
+    }
 }
 
 #[cfg(test)]
@@ -18340,6 +19453,110 @@ fn parse_search_requests(response: &str) -> (String, Vec<ToolRequest>) {
         }
     }
     (cleaned.join("\n"), requests)
+}
+
+fn merge_function_tool_calls_into_text(text: &str) -> String {
+    fn normalize_lines(start: Option<i64>, end: Option<i64>) -> String {
+        match (start, end) {
+            (Some(s), Some(e)) if s > 0 && e >= s => format!("#L{s}-L{e}"),
+            (Some(s), _) if s > 0 => format!("#L{s}"),
+            _ => String::new(),
+        }
+    }
+
+    let mut merged = String::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        let Some(tool_name) = line_tool_field(trimmed, "name") else {
+            if !merged.is_empty() {
+                merged.push('\n');
+            }
+            merged.push_str(line);
+            continue;
+        };
+
+        let Some(args_str) = line_tool_field(trimmed, "arguments") else {
+            if !merged.is_empty() {
+                merged.push('\n');
+            }
+            merged.push_str(line);
+            continue;
+        };
+
+        let parsed_args = serde_json::from_str::<Value>(args_str).ok();
+        let normalized = match tool_name {
+            "read_file" => parsed_args
+                .as_ref()
+                .and_then(|v| v.as_object())
+                .and_then(|obj| {
+                    let path = obj.get("path")?.as_str()?.trim();
+                    if path.is_empty() {
+                        return None;
+                    }
+                    let start = obj.get("start_line").and_then(Value::as_i64);
+                    let end = obj.get("end_line").and_then(Value::as_i64);
+                    Some(format!("READ: {path}{}", normalize_lines(start, end)))
+                }),
+            "search" => parsed_args
+                .as_ref()
+                .and_then(|v| v.as_object())
+                .and_then(|obj| {
+                    let term = obj
+                        .get("term")
+                        .and_then(Value::as_str)
+                        .or_else(|| obj.get("pattern").and_then(Value::as_str))?
+                        .trim();
+                    if term.is_empty() {
+                        return None;
+                    }
+                    let mode = obj.get("mode").and_then(Value::as_str).unwrap_or("literal");
+                    Some(format!("SEARCH: {mode}:{term}"))
+                }),
+            "grep_files" => parsed_args
+                .as_ref()
+                .and_then(|v| v.as_object())
+                .and_then(|obj| {
+                    let pattern = obj.get("pattern")?.as_str()?.trim();
+                    if pattern.is_empty() {
+                        return None;
+                    }
+                    let mut request = serde_json::json!({ "pattern": pattern });
+                    if let Some(include) = obj.get("include").and_then(Value::as_str)
+                        && !include.trim().is_empty()
+                    {
+                        request["include"] = Value::String(include.trim().to_string());
+                    }
+                    if let Some(path) = obj.get("path").and_then(Value::as_str)
+                        && !path.trim().is_empty()
+                    {
+                        request["path"] = Value::String(path.trim().to_string());
+                    }
+                    if let Some(limit) = obj.get("limit").and_then(Value::as_u64) {
+                        request["limit"] = Value::Number(serde_json::Number::from(limit));
+                    }
+                    Some(format!("GREP_FILES: {request}"))
+                }),
+            _ => None,
+        };
+
+        if !merged.is_empty() {
+            merged.push('\n');
+        }
+        if let Some(normalized) = normalized {
+            merged.push_str(&normalized);
+        } else {
+            merged.push_str(line);
+        }
+    }
+    merged
+}
+
+fn line_tool_field<'a>(line: &'a str, field: &str) -> Option<&'a str> {
+    let prefix = format!("{field}=");
+    let token = line
+        .split_whitespace()
+        .find(|part| part.starts_with(&prefix))?;
+    Some(token.trim_start_matches(&prefix))
 }
 
 struct CollectionState {
@@ -19604,39 +20821,55 @@ fn build_validation_output_block(
         sections.push(format!("Explanation: {summary}"));
     }
 
+    let trigger_excerpt =
+        minimal_trigger_poc_from_repro_steps(&validation.repro_steps).or_else(|| {
+            [snippet.as_deref(), stderr.as_deref(), stdout.as_deref()]
+                .into_iter()
+                .flatten()
+                .find_map(extract_exploit_trigger_excerpt)
+        });
+    if let Some(trigger_excerpt) = trigger_excerpt.as_deref() {
+        sections.push(format!("Trigger PoC:\n{trigger_excerpt}"));
+    }
+
     if expects_asan {
-        let output = snippet
-            .as_deref()
-            .or(stderr.as_deref())
-            .or(stdout.as_deref());
-        if let Some(output) = output {
-            if let Some(trace) = extract_asan_trace_excerpt(output) {
-                sections.push(trace);
-            } else {
-                sections.push(output.to_string());
+        let asan_trace = [snippet.as_deref(), stderr.as_deref(), stdout.as_deref()]
+            .into_iter()
+            .flatten()
+            .find_map(extract_asan_trace_excerpt);
+        if let Some(asan_trace) = asan_trace.as_deref() {
+            sections.push(format!("ASan trace excerpt:\n{asan_trace}"));
+        } else if let Some(output_excerpt) =
+            [snippet.as_deref(), stderr.as_deref(), stdout.as_deref()]
+                .into_iter()
+                .flatten()
+                .find_map(compact_validation_output_excerpt)
+        {
+            let duplicate_trigger = trigger_excerpt
+                .as_deref()
+                .is_some_and(|trigger| trigger.trim() == output_excerpt.trim());
+            if !duplicate_trigger {
+                sections.push(format!("Output excerpt:\n{output_excerpt}"));
             }
         }
-    } else {
-        match (stderr.as_ref(), stdout.as_ref()) {
-            (Some(stderr), Some(stdout)) => {
-                sections.push(format!("== STDERR ==\n{stderr}\n\n== STDOUT ==\n{stdout}"));
-            }
-            _ => {
-                let output = if matches!(validation.status, BugValidationStatus::Passed) {
-                    stdout.as_ref().or(stderr.as_ref())
-                } else {
-                    stderr.as_ref().or(stdout.as_ref())
-                };
-                if let Some(output) = output {
-                    sections.push(output.to_string());
-                }
-            }
+    } else if let Some(output_excerpt) = [snippet.as_deref(), stderr.as_deref(), stdout.as_deref()]
+        .into_iter()
+        .flatten()
+        .find_map(compact_validation_output_excerpt)
+    {
+        let duplicate_trigger = trigger_excerpt
+            .as_deref()
+            .is_some_and(|trigger| trigger.trim() == output_excerpt.trim());
+        if !duplicate_trigger {
+            sections.push(format!("Output excerpt:\n{output_excerpt}"));
         }
     }
 
     if sections.is_empty() {
         if let Some(snippet) = snippet.as_deref() {
-            sections.push(snippet.to_string());
+            if let Some(output_excerpt) = compact_validation_output_excerpt(snippet) {
+                sections.push(format!("Output excerpt:\n{output_excerpt}"));
+            }
         } else if matches!(validation.status, BugValidationStatus::UnableToValidate)
             && let Some(summary) = summary
         {
@@ -19664,6 +20897,114 @@ fn first_validation_poc_artifact(validation: &BugValidationState) -> Option<Stri
             None
         }
     })
+}
+
+fn first_validation_dockerfile_artifact(validation: &BugValidationState) -> Option<String> {
+    validation.artifacts.iter().find_map(|artifact| {
+        let trimmed = artifact.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        if lower == "dockerfile"
+            || lower.ends_with("/dockerfile")
+            || lower.ends_with("\\dockerfile")
+        {
+            Some(trimmed.to_string())
+        } else {
+            None
+        }
+    })
+}
+
+fn command_from_labeled_repro_step(step: &str, label: &str) -> Option<String> {
+    let command = step.trim().strip_prefix(label)?.trim();
+    let command = command.trim_matches('`').trim();
+    (!command.is_empty()).then(|| command.to_string())
+}
+
+fn docker_build_and_run_commands(repro_steps: &[String]) -> (Option<String>, Option<String>) {
+    let mut docker_build: Option<String> = None;
+    let mut docker_run: Option<String> = None;
+
+    for step in repro_steps {
+        let trimmed = step.trim();
+        let lowered = trimmed.to_ascii_lowercase();
+
+        if docker_build.is_none() {
+            if let Some(command) = command_from_labeled_repro_step(trimmed, "Build:")
+                && command.to_ascii_lowercase().contains("docker build")
+            {
+                docker_build = Some(command);
+            } else if lowered.starts_with("$ ") && lowered.contains("docker build") {
+                docker_build = Some(trimmed.trim_start_matches("$ ").trim().to_string());
+            }
+        }
+
+        if docker_run.is_none() {
+            if let Some(command) = command_from_labeled_repro_step(trimmed, "Run:")
+                && command.to_ascii_lowercase().contains("docker run")
+            {
+                docker_run = Some(command);
+            } else if lowered.starts_with("$ ") && lowered.contains("docker run") {
+                docker_run = Some(trimmed.trim_start_matches("$ ").trim().to_string());
+            }
+        }
+
+        if docker_build.is_some() && docker_run.is_some() {
+            break;
+        }
+    }
+
+    (docker_build, docker_run)
+}
+
+fn minimal_trigger_poc_from_repro_steps(repro_steps: &[String]) -> Option<String> {
+    for step in repro_steps {
+        let trimmed = step.trim();
+        if let Some(command) = command_from_labeled_repro_step(trimmed, "Run:") {
+            return Some(format!("$ {command}"));
+        }
+        if trimmed.starts_with("$ ") {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    None
+}
+
+fn compact_validation_output_excerpt(text: &str) -> Option<String> {
+    let max_lines = 24usize;
+    let max_chars = 1_600usize;
+    let mut excerpt_lines: Vec<String> = Vec::new();
+    let mut char_count = 0usize;
+    let mut truncated = false;
+
+    for line in text.lines() {
+        let trimmed = line.trim_end();
+        if trimmed.trim().is_empty() {
+            continue;
+        }
+        if excerpt_lines.len() >= max_lines {
+            truncated = true;
+            break;
+        }
+        if char_count + trimmed.len() > max_chars {
+            truncated = true;
+            break;
+        }
+        excerpt_lines.push(trimmed.to_string());
+        char_count += trimmed.len() + 1;
+    }
+
+    if excerpt_lines.is_empty() {
+        None
+    } else {
+        if truncated {
+            excerpt_lines.push("… (truncated excerpt)".to_string());
+        }
+        Some(excerpt_lines.join("\n"))
+    }
 }
 
 fn extract_exploit_trigger_excerpt(output: &str) -> Option<String> {
@@ -23424,6 +24765,13 @@ async fn run_asan_validation(
         }
     }
 
+    for line in apply_post_validation_light_rerank(&mut snapshot) {
+        if let Some(tx) = progress_sender.as_ref() {
+            tx.send(AppEvent::SecurityReviewLog(line.clone()));
+        }
+        logs.push(line);
+    }
+
     if let Err(err) = write_validation_snapshot_and_reports(&snapshot, &batch, &logs).await {
         if let Some(tx) = progress_sender.as_ref() {
             tx.send(AppEvent::SecurityReviewLog(format!(
@@ -23905,6 +25253,15 @@ async fn run_asan_validation(
         )
         .await;
 
+        if updated {
+            for line in apply_post_validation_light_rerank(&mut snapshot) {
+                if let Some(tx) = progress_sender.as_ref() {
+                    tx.send(AppEvent::SecurityReviewLog(line.clone()));
+                }
+                logs.push(line);
+            }
+        }
+
         if updated
             && let Err(err) = write_validation_snapshot_and_reports(&snapshot, &batch, &logs).await
             && let Some(tx) = progress_sender.as_ref()
@@ -23922,6 +25279,101 @@ async fn run_asan_validation(
 struct ModelCallOutput {
     text: String,
     reasoning: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModelToolProfile {
+    NoTools,
+    RiskRerank,
+}
+
+impl ModelToolProfile {
+    fn responses_tools(self) -> Vec<Value> {
+        match self {
+            Self::NoTools => Vec::new(),
+            Self::RiskRerank => vec![
+                json!({
+                    "type": "function",
+                    "name": "read_file",
+                    "description": "Read a repository file by relative path. Optionally request a line range.",
+                    "strict": false,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "Repository-relative file path."
+                            },
+                            "start_line": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "description": "Optional first line (1-based)."
+                            },
+                            "end_line": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "description": "Optional last line (1-based)."
+                            }
+                        },
+                        "required": ["path"],
+                        "additionalProperties": false
+                    }
+                }),
+                json!({
+                    "type": "function",
+                    "name": "search",
+                    "description": "Search repository contents for a literal or regex pattern.",
+                    "strict": false,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "term": {
+                                "type": "string",
+                                "description": "Search term or regex pattern."
+                            },
+                            "mode": {
+                                "type": "string",
+                                "enum": ["literal", "regex"],
+                                "description": "Search mode."
+                            }
+                        },
+                        "required": ["term"],
+                        "additionalProperties": false
+                    }
+                }),
+                json!({
+                    "type": "function",
+                    "name": "grep_files",
+                    "description": "List matching repository files by pattern.",
+                    "strict": false,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "pattern": {
+                                "type": "string",
+                                "description": "Pattern to match."
+                            },
+                            "include": {
+                                "type": "string",
+                                "description": "Optional glob filter, e.g. *.rs."
+                            },
+                            "path": {
+                                "type": "string",
+                                "description": "Optional relative path scope."
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "description": "Optional maximum number of files."
+                            }
+                        },
+                        "required": ["pattern"],
+                        "additionalProperties": false
+                    }
+                }),
+            ],
+        }
+    }
 }
 
 async fn make_provider_request_builder(
@@ -24076,6 +25528,34 @@ async fn call_model(
     metrics: Arc<ReviewMetrics>,
     temperature: f32,
 ) -> Result<ModelCallOutput, String> {
+    call_model_with_tool_profile(
+        client,
+        provider,
+        auth,
+        model,
+        reasoning_effort,
+        system_prompt,
+        user_prompt,
+        metrics,
+        temperature,
+        ModelToolProfile::NoTools,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn call_model_with_tool_profile(
+    client: &CodexHttpClient,
+    provider: &ModelProviderInfo,
+    auth: &Option<CodexAuth>,
+    model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
+    system_prompt: &str,
+    user_prompt: &str,
+    metrics: Arc<ReviewMetrics>,
+    temperature: f32,
+    tool_profile: ModelToolProfile,
+) -> Result<ModelCallOutput, String> {
     // Ensure multiple retries for transient issues and allow longer recovery when rate limited.
     let default_max_retries = provider.request_max_retries().max(4);
     let rate_limit_max_retries = provider.request_max_retries().max(20);
@@ -24095,6 +25575,7 @@ async fn call_model(
             user_prompt,
             temperature,
             metrics.clone(),
+            tool_profile,
         )
         .await
         {
@@ -24171,6 +25652,7 @@ async fn call_model_attempt(
     user_prompt: &str,
     temperature: f32,
     metrics: Arc<ReviewMetrics>,
+    tool_profile: ModelToolProfile,
 ) -> Result<ModelCallOutput, String> {
     match provider.wire_api {
         WireApi::Responses => {
@@ -24185,11 +25667,12 @@ async fn call_model_attempt(
                 }],
             }];
 
+            let tools = tool_profile.responses_tools();
             let mut payload = json!({
                 "model": model,
                 "instructions": system_prompt,
                 "input": input,
-                "tools": [],
+                "tools": tools,
                 "tool_choice": "auto",
                 "parallel_tool_calls": false,
                 "store": false,
