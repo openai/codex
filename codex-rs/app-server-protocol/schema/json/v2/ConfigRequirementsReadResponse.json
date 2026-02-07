@@ -30,6 +30,15 @@
             "null"
           ]
         },
+        "allowedWebSearchModes": {
+          "items": {
+            "$ref": "#/definitions/WebSearchMode"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "enforceResidency": {
           "anyOf": [
             {
@@ -54,6 +63,14 @@
         "read-only",
         "workspace-write",
         "danger-full-access"
+      ],
+      "type": "string"
+    },
+    "WebSearchMode": {
+      "enum": [
+        "disabled",
+        "cached",
+        "live"
       ],
       "type": "string"
     }

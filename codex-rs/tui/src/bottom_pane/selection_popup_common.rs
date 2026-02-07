@@ -30,6 +30,7 @@ pub(crate) struct GenericDisplayRow {
     pub display_shortcut: Option<KeyBinding>,
     pub match_indices: Option<Vec<usize>>, // indices to bold (char positions)
     pub description: Option<String>,       // optional grey text after the name
+    pub category_tag: Option<String>,      // optional right-side category label
     pub disabled_reason: Option<String>,   // optional disabled message
     pub is_disabled: bool,
     pub wrap_indent: Option<usize>, // optional indent for wrapped lines
@@ -106,15 +107,20 @@ fn line_width(line: &Line<'_>) -> usize {
         .sum()
 }
 
-fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> Line<'static> {
+pub(crate) fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> Line<'static> {
     if max_width == 0 {
         return Line::from(Vec::<Span<'static>>::new());
     }
 
+    let Line {
+        style,
+        alignment,
+        spans,
+    } = line;
     let mut used = 0usize;
     let mut spans_out: Vec<Span<'static>> = Vec::new();
 
-    for span in line.spans {
+    for span in spans {
         let text = span.content.into_owned();
         let style = span.style;
         let span_width = UnicodeWidthStr::width(text.as_str());
@@ -151,10 +157,17 @@ fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> Line<'static
         break;
     }
 
-    Line::from(spans_out)
+    Line {
+        style,
+        alignment,
+        spans: spans_out,
+    }
 }
 
-fn truncate_line_with_ellipsis_if_overflow(line: Line<'static>, max_width: usize) -> Line<'static> {
+pub(crate) fn truncate_line_with_ellipsis_if_overflow(
+    line: Line<'static>,
+    max_width: usize,
+) -> Line<'static> {
     if max_width == 0 {
         return Line::from(Vec::<Span<'static>>::new());
     }
@@ -165,10 +178,18 @@ fn truncate_line_with_ellipsis_if_overflow(line: Line<'static>, max_width: usize
     }
 
     let truncated = truncate_line_to_width(line, max_width.saturating_sub(1));
-    let mut spans = truncated.spans;
+    let Line {
+        style,
+        alignment,
+        mut spans,
+    } = truncated;
     let ellipsis_style = spans.last().map(|span| span.style).unwrap_or_default();
     spans.push(Span::styled("…", ellipsis_style));
-    Line::from(spans)
+    Line {
+        style,
+        alignment,
+        spans,
+    }
 }
 
 /// Computes the shared start column used for descriptions in selection rows.
@@ -316,6 +337,10 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
             full_spans.push(" ".repeat(gap).into());
         }
         full_spans.push(desc.clone().dim());
+    }
+    if let Some(tag) = row.category_tag.as_deref().filter(|tag| !tag.is_empty()) {
+        full_spans.push("  ".into());
+        full_spans.push(tag.to_string().dim());
     }
     Line::from(full_spans)
 }

@@ -36,7 +36,10 @@ async fn collect_tool_identifiers_for_model(model: &str) -> Vec<String> {
         .with_model(model)
         // Keep tool expectations stable when the default web_search mode changes.
         .with_config(|config| {
-            config.web_search_mode = Some(WebSearchMode::Cached);
+            config
+                .web_search_mode
+                .set(WebSearchMode::Cached)
+                .expect("test web_search_mode should satisfy constraints");
             config.features.enable(Feature::CollaborationModes);
         });
     let test = builder

@@ -47,9 +47,10 @@ pub(crate) fn build_command_spec(
 /// the original script:
 ///
 ///   shell -lc "<script>"
-///   => shell -c ". SNAPSHOT && <script>"
+///   => user_shell -c ". SNAPSHOT (best effort); exec shell -c <script>"
 ///
-/// On non-POSIX shells or non-matching commands this is a no-op.
+/// This wrapper script uses POSIX constructs (`if`, `.`, `exec`) so it can
+/// be run by Bash/Zsh/sh. On non-matching commands this is a no-op.
 pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     command: &[String],
     session_shell: &Shell,
@@ -72,10 +73,148 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     }
 
     let snapshot_path = snapshot.path.to_string_lossy();
-    let rewritten_script = format!(". \"{snapshot_path}\" && {}", command[2]);
+    let shell_path = session_shell.shell_path.to_string_lossy();
+    let original_shell = shell_single_quote(&command[0]);
+    let original_script = shell_single_quote(&command[2]);
+    let snapshot_path = shell_single_quote(snapshot_path.as_ref());
+    let trailing_args = command[3..]
+        .iter()
+        .map(|arg| format!(" '{}'", shell_single_quote(arg)))
+        .collect::<String>();
+    let rewritten_script = format!(
+        "if . '{snapshot_path}' >/dev/null 2>&1; then :; fi; exec '{original_shell}' -c '{original_script}'{trailing_args}"
+    );
 
-    let mut rewritten = command.to_vec();
-    rewritten[1] = "-c".to_string();
-    rewritten[2] = rewritten_script;
-    rewritten
+    vec![shell_path.to_string(), "-c".to_string(), rewritten_script]
+}
+
+fn shell_single_quote(input: &str) -> String {
+    input.replace('\'', r#"'"'"'"#)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shell::ShellType;
+    use crate::shell_snapshot::ShellSnapshot;
+    use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use tempfile::tempdir;
+    use tokio::sync::watch;
+
+    fn shell_with_snapshot(
+        shell_type: ShellType,
+        shell_path: &str,
+        snapshot_path: PathBuf,
+    ) -> Shell {
+        let (_tx, shell_snapshot) = watch::channel(Some(Arc::new(ShellSnapshot {
+            path: snapshot_path,
+        })));
+        Shell {
+            shell_type,
+            shell_path: PathBuf::from(shell_path),
+            shell_snapshot,
+        }
+    }
+
+    #[test]
+    fn maybe_wrap_shell_lc_with_snapshot_bootstraps_in_user_shell() {
+        let dir = tempdir().expect("create temp dir");
+        let snapshot_path = dir.path().join("snapshot.sh");
+        std::fs::write(&snapshot_path, "# Snapshot file\n").expect("write snapshot");
+        let session_shell = shell_with_snapshot(ShellType::Zsh, "/bin/zsh", snapshot_path);
+        let command = vec![
+            "/bin/bash".to_string(),
+            "-lc".to_string(),
+            "echo hello".to_string(),
+        ];
+
+        let rewritten = maybe_wrap_shell_lc_with_snapshot(&command, &session_shell);
+
+        assert_eq!(rewritten[0], "/bin/zsh");
+        assert_eq!(rewritten[1], "-c");
+        assert!(rewritten[2].contains("if . '"));
+        assert!(rewritten[2].contains("exec '/bin/bash' -c 'echo hello'"));
+    }
+
+    #[test]
+    fn maybe_wrap_shell_lc_with_snapshot_escapes_single_quotes() {
+        let dir = tempdir().expect("create temp dir");
+        let snapshot_path = dir.path().join("snapshot.sh");
+        std::fs::write(&snapshot_path, "# Snapshot file\n").expect("write snapshot");
+        let session_shell = shell_with_snapshot(ShellType::Zsh, "/bin/zsh", snapshot_path);
+        let command = vec![
+            "/bin/bash".to_string(),
+            "-lc".to_string(),
+            "echo 'hello'".to_string(),
+        ];
+
+        let rewritten = maybe_wrap_shell_lc_with_snapshot(&command, &session_shell);
+
+        assert!(rewritten[2].contains(r#"exec '/bin/bash' -c 'echo '"'"'hello'"'"''"#));
+    }
+
+    #[test]
+    fn maybe_wrap_shell_lc_with_snapshot_uses_bash_bootstrap_shell() {
+        let dir = tempdir().expect("create temp dir");
+        let snapshot_path = dir.path().join("snapshot.sh");
+        std::fs::write(&snapshot_path, "# Snapshot file\n").expect("write snapshot");
+        let session_shell = shell_with_snapshot(ShellType::Bash, "/bin/bash", snapshot_path);
+        let command = vec![
+            "/bin/zsh".to_string(),
+            "-lc".to_string(),
+            "echo hello".to_string(),
+        ];
+
+        let rewritten = maybe_wrap_shell_lc_with_snapshot(&command, &session_shell);
+
+        assert_eq!(rewritten[0], "/bin/bash");
+        assert_eq!(rewritten[1], "-c");
+        assert!(rewritten[2].contains("if . '"));
+        assert!(rewritten[2].contains("exec '/bin/zsh' -c 'echo hello'"));
+    }
+
+    #[test]
+    fn maybe_wrap_shell_lc_with_snapshot_uses_sh_bootstrap_shell() {
+        let dir = tempdir().expect("create temp dir");
+        let snapshot_path = dir.path().join("snapshot.sh");
+        std::fs::write(&snapshot_path, "# Snapshot file\n").expect("write snapshot");
+        let session_shell = shell_with_snapshot(ShellType::Sh, "/bin/sh", snapshot_path);
+        let command = vec![
+            "/bin/bash".to_string(),
+            "-lc".to_string(),
+            "echo hello".to_string(),
+        ];
+
+        let rewritten = maybe_wrap_shell_lc_with_snapshot(&command, &session_shell);
+
+        assert_eq!(rewritten[0], "/bin/sh");
+        assert_eq!(rewritten[1], "-c");
+        assert!(rewritten[2].contains("if . '"));
+        assert!(rewritten[2].contains("exec '/bin/bash' -c 'echo hello'"));
+    }
+
+    #[test]
+    fn maybe_wrap_shell_lc_with_snapshot_preserves_trailing_args() {
+        let dir = tempdir().expect("create temp dir");
+        let snapshot_path = dir.path().join("snapshot.sh");
+        std::fs::write(&snapshot_path, "# Snapshot file\n").expect("write snapshot");
+        let session_shell = shell_with_snapshot(ShellType::Zsh, "/bin/zsh", snapshot_path);
+        let command = vec![
+            "/bin/bash".to_string(),
+            "-lc".to_string(),
+            "printf '%s %s' \"$0\" \"$1\"".to_string(),
+            "arg0".to_string(),
+            "arg1".to_string(),
+        ];
+
+        let rewritten = maybe_wrap_shell_lc_with_snapshot(&command, &session_shell);
+
+        assert!(
+            rewritten[2].contains(
+                r#"exec '/bin/bash' -c 'printf '"'"'%s %s'"'"' "$0" "$1"' 'arg0' 'arg1'"#
+            )
+        );
+    }
 }

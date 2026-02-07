@@ -41,6 +41,7 @@ pub use config_requirements::RequirementSource;
 pub use config_requirements::ResidencyRequirement;
 pub use config_requirements::SandboxModeRequirement;
 pub use config_requirements::Sourced;
+pub use config_requirements::WebSearchModeRequirement;
 pub use diagnostics::ConfigError;
 pub use diagnostics::ConfigLoadError;
 pub use diagnostics::TextPosition;
@@ -144,7 +145,15 @@ pub async fn load_config_layers_state(
     let cli_overrides_layer = if cli_overrides.is_empty() {
         None
     } else {
-        Some(overrides::build_cli_overrides_layer(cli_overrides))
+        let cli_overrides_layer = overrides::build_cli_overrides_layer(cli_overrides);
+        let base_dir = cwd
+            .as_ref()
+            .map(AbsolutePathBuf::as_path)
+            .unwrap_or(codex_home);
+        Some(resolve_relative_paths_in_config_toml(
+            cli_overrides_layer,
+            base_dir,
+        )?)
     };
 
     // Include an entry for the "system" config folder, loading its config.toml,
