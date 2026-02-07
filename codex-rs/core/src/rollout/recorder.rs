@@ -3,9 +3,9 @@
 //! All rollout writes are serialized through that task so item ordering is
 //! preserved and `flush` can wait for prior writes to commit.
 //!
-//! `CreateDeferred` starts without a file/path and buffers rollout items
-//! in-memory. `EnsurePersisted` materializes the file on demand, writes
-//! `SessionMeta` first, then drains buffered items in order.
+//! `RolloutCreateMode::Deferred` starts without a file/path and buffers
+//! rollout items in-memory. `EnsurePersisted` materializes the file on demand,
+//! writes `SessionMeta` first, then drains buffered items in order.
 
 use std::fs::File;
 use std::fs::{self};
@@ -74,6 +74,12 @@ pub struct RolloutRecorder {
     state_db: Option<StateDbHandle>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RolloutCreateMode {
+    Immediate,
+    Deferred,
+}
+
 #[derive(Clone)]
 pub enum RolloutRecorderParams {
     Create {
@@ -82,13 +88,7 @@ pub enum RolloutRecorderParams {
         source: SessionSource,
         base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
-    },
-    CreateDeferred {
-        conversation_id: ThreadId,
-        forked_from_id: Option<ThreadId>,
-        source: SessionSource,
-        base_instructions: BaseInstructions,
-        dynamic_tools: Vec<DynamicToolSpec>,
+        mode: RolloutCreateMode,
     },
     Resume {
         path: PathBuf,
@@ -116,6 +116,7 @@ impl RolloutRecorderParams {
         source: SessionSource,
         base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
+        mode: RolloutCreateMode,
     ) -> Self {
         Self::Create {
             conversation_id,
@@ -123,27 +124,12 @@ impl RolloutRecorderParams {
             source,
             base_instructions,
             dynamic_tools,
+            mode,
         }
     }
 
     pub fn resume(path: PathBuf) -> Self {
         Self::Resume { path }
-    }
-
-    pub fn new_deferred(
-        conversation_id: ThreadId,
-        forked_from_id: Option<ThreadId>,
-        source: SessionSource,
-        base_instructions: BaseInstructions,
-        dynamic_tools: Vec<DynamicToolSpec>,
-    ) -> Self {
-        Self::CreateDeferred {
-            conversation_id,
-            forked_from_id,
-            source,
-            base_instructions,
-            dynamic_tools,
-        }
     }
 }
 
@@ -330,62 +316,59 @@ impl RolloutRecorder {
                 source,
                 base_instructions,
                 dynamic_tools,
-            } => {
-                let LogFileInfo {
-                    file,
-                    path,
-                    conversation_id: session_id,
-                    timestamp,
-                } = create_log_file(config, conversation_id)?;
+                mode,
+            } => match mode {
+                RolloutCreateMode::Immediate => {
+                    let LogFileInfo {
+                        file,
+                        path,
+                        conversation_id: session_id,
+                        timestamp,
+                    } = create_log_file(config, conversation_id)?;
 
-                let meta = create_session_meta(
-                    session_id,
-                    SessionMetaParams {
+                    let meta = create_session_meta(
+                        session_id,
+                        SessionMetaParams {
+                            forked_from_id,
+                            source,
+                            base_instructions,
+                            dynamic_tools,
+                            cwd: config.cwd.clone(),
+                            model_provider_id: config.model_provider_id.clone(),
+                        },
+                        timestamp,
+                    )?;
+
+                    RolloutWriterState {
+                        writer: Some(JsonlWriter {
+                            file: tokio::fs::File::from_std(file),
+                        }),
+                        rollout_path: Some(path),
+                        session_meta: Some(meta),
+                        cwd: config.cwd.clone(),
+                        state_builder,
+                        deferred_create: None,
+                        pending_items: Vec::new(),
+                    }
+                }
+                RolloutCreateMode::Deferred => RolloutWriterState {
+                    writer: None,
+                    rollout_path: None,
+                    session_meta: None,
+                    cwd: config.cwd.clone(),
+                    state_builder,
+                    deferred_create: Some(DeferredRolloutCreate {
+                        codex_home: config.codex_home.clone(),
+                        cwd: config.cwd.clone(),
+                        model_provider_id: config.model_provider_id.clone(),
+                        conversation_id,
                         forked_from_id,
                         source,
                         base_instructions,
                         dynamic_tools,
-                        cwd: config.cwd.clone(),
-                        model_provider_id: config.model_provider_id.clone(),
-                    },
-                    timestamp,
-                )?;
-
-                RolloutWriterState {
-                    writer: Some(JsonlWriter {
-                        file: tokio::fs::File::from_std(file),
                     }),
-                    rollout_path: Some(path),
-                    session_meta: Some(meta),
-                    cwd: config.cwd.clone(),
-                    state_builder,
-                    deferred_create: None,
                     pending_items: Vec::new(),
-                }
-            }
-            RolloutRecorderParams::CreateDeferred {
-                conversation_id,
-                forked_from_id,
-                source,
-                base_instructions,
-                dynamic_tools,
-            } => RolloutWriterState {
-                writer: None,
-                rollout_path: None,
-                session_meta: None,
-                cwd: config.cwd.clone(),
-                state_builder,
-                deferred_create: Some(DeferredRolloutCreate {
-                    codex_home: config.codex_home.clone(),
-                    cwd: config.cwd.clone(),
-                    model_provider_id: config.model_provider_id.clone(),
-                    conversation_id,
-                    forked_from_id,
-                    source,
-                    base_instructions,
-                    dynamic_tools,
-                }),
-                pending_items: Vec::new(),
+                },
             },
             RolloutRecorderParams::Resume { path } => RolloutWriterState {
                 writer: Some(JsonlWriter {

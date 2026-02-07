@@ -179,6 +179,7 @@ use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnDiffEvent;
 use crate::protocol::WarningEvent;
+use crate::rollout::RolloutCreateMode;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
 use crate::rollout::map_session_init_error;
@@ -889,26 +890,22 @@ impl Session {
             } else {
                 let state_db_ctx = state_db::init_if_enabled(&config, None).await;
                 match &initial_history {
-                    InitialHistory::New => {
-                        let rollout_params = RolloutRecorderParams::new_deferred(
-                            conversation_id,
-                            forked_from_id,
-                            session_source.clone(),
-                            BaseInstructions {
-                                text: session_configuration.base_instructions.clone(),
-                            },
-                            session_configuration.dynamic_tools.clone(),
-                        );
+                    InitialHistory::Resumed(resumed_history) => {
                         let rollout_recorder = RolloutRecorder::new(
                             &config,
-                            rollout_params,
+                            RolloutRecorderParams::resume(resumed_history.rollout_path.clone()),
                             state_db_ctx.clone(),
                             state_builder.clone(),
                         )
                         .await?;
                         Ok((Some(rollout_recorder), state_db_ctx))
                     }
-                    InitialHistory::Forked(_) => {
+                    InitialHistory::New | InitialHistory::Forked(_) => {
+                        let mode = if matches!(&initial_history, InitialHistory::New) {
+                            RolloutCreateMode::Deferred
+                        } else {
+                            RolloutCreateMode::Immediate
+                        };
                         let rollout_params = RolloutRecorderParams::new(
                             conversation_id,
                             forked_from_id,
@@ -917,20 +914,11 @@ impl Session {
                                 text: session_configuration.base_instructions.clone(),
                             },
                             session_configuration.dynamic_tools.clone(),
+                            mode,
                         );
                         let rollout_recorder = RolloutRecorder::new(
                             &config,
                             rollout_params,
-                            state_db_ctx.clone(),
-                            state_builder.clone(),
-                        )
-                        .await?;
-                        Ok((Some(rollout_recorder), state_db_ctx))
-                    }
-                    InitialHistory::Resumed(resumed_history) => {
-                        let rollout_recorder = RolloutRecorder::new(
-                            &config,
-                            RolloutRecorderParams::resume(resumed_history.rollout_path.clone()),
                             state_db_ctx.clone(),
                             state_builder.clone(),
                         )
@@ -5423,12 +5411,13 @@ mod tests {
         };
         let recorder = RolloutRecorder::new(
             turn_context.config.as_ref(),
-            RolloutRecorderParams::new_deferred(
+            RolloutRecorderParams::new(
                 session.conversation_id,
                 None,
                 session_source,
                 base_instructions,
                 Vec::new(),
+                RolloutCreateMode::Deferred,
             ),
             session.services.state_db.clone(),
             None,
@@ -5512,12 +5501,13 @@ mod tests {
         };
         let recorder = RolloutRecorder::new(
             turn_context.config.as_ref(),
-            RolloutRecorderParams::new_deferred(
+            RolloutRecorderParams::new(
                 session.conversation_id,
                 None,
                 session_source,
                 base_instructions,
                 Vec::new(),
+                RolloutCreateMode::Deferred,
             ),
             session.services.state_db.clone(),
             None,
