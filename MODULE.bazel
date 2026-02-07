@@ -91,6 +91,7 @@ crate.annotation(
     },
     crate = "aws-lc-sys",
 )
+inject_repo(crate, "toolchains_llvm_bootstrapped")
 
 bazel_dep(name = "openssl", version = "3.5.4.bcr.0")
 
