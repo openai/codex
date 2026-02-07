@@ -27,7 +27,6 @@
 //! back. This avoids duplicate handshakes but means a failed preconnect can consume one retry
 //! budget slot before any turn payload is sent.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
