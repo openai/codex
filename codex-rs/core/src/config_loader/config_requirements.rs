@@ -231,7 +231,7 @@ pub struct ConfigRequirementsToml {
     pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
     pub rules: Option<RequirementsExecPolicyToml>,
     pub enforce_residency: Option<ResidencyRequirement>,
-    #[serde(rename = "experimental_network", alias = "network")]
+    #[serde(rename = "experimental_network")]
     pub network: Option<NetworkRequirementsToml>,
 }
 
