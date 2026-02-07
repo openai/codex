@@ -79,6 +79,13 @@ crate.annotation(
     version = "0.3.1",
 )
 crate.annotation(
+    build_script_data = [
+        "@toolchains_llvm_bootstrapped//runtimes:crt_objects_directory",
+        "@toolchains_llvm_bootstrapped//runtimes:resource_directory",
+        "@toolchains_llvm_bootstrapped//runtimes/glibc:glibc_library_search_directory",
+        "@toolchains_llvm_bootstrapped//runtimes/libcxx:libcxx_library_search_directory",
+        "@toolchains_llvm_bootstrapped//runtimes/libunwind:libunwind_library_search_directory",
+    ],
     build_script_env = {
         "AWS_LC_SYS_NO_JITTER_ENTROPY": "1",
     },
