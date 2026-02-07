@@ -116,7 +116,7 @@ Example (from OpenAI's official VSCode extension):
 - `config/read` — fetch the effective config on disk after resolving config layering.
 - `config/value/write` — write a single config key/value to the user's config.toml on disk.
 - `config/batchWrite` — apply multiple config edits atomically to the user's config.toml on disk.
-- `configRequirements/read` — fetch the loaded requirements allow-lists (`allowedApprovalPolicies`, `allowedSandboxModes`, `allowedWebSearchModes`) and `enforceResidency` from `requirements.toml` and/or MDM (or `null` if none are configured).
+- `configRequirements/read` — fetch loaded requirements constraints from `requirements.toml` and/or MDM (or `null` if none are configured), including allow-lists (`allowedApprovalPolicies`, `allowedSandboxModes`, `allowedWebSearchModes`), `enforceResidency`, and `network` constraints.
 
 ### Example: Start or resume a thread
 
