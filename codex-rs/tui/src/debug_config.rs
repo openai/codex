@@ -70,6 +70,15 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
         ));
     }
 
+    if let Some(modes) = requirements_toml.allowed_web_search_modes.as_ref() {
+        let value = join_or_empty(modes.iter().map(ToString::to_string).collect::<Vec<_>>());
+        requirement_lines.push(requirement_line(
+            "allowed_web_search_modes",
+            value,
+            requirements.web_search_mode.source.as_ref(),
+        ));
+    }
+
     if let Some(servers) = requirements_toml.mcp_servers.as_ref() {
         let value = join_or_empty(servers.keys().cloned().collect::<Vec<_>>());
         requirement_lines.push(requirement_line(
@@ -185,8 +194,10 @@ mod tests {
     use codex_core::config_loader::ResidencyRequirement;
     use codex_core::config_loader::SandboxModeRequirement;
     use codex_core::config_loader::Sourced;
+    use codex_core::config_loader::WebSearchModeRequirement;
     use codex_core::protocol::AskForApproval;
     use codex_core::protocol::SandboxPolicy;
+    use codex_protocol::config_types::WebSearchMode;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use ratatui::text::Line;
     use std::collections::BTreeMap;
@@ -287,10 +298,15 @@ mod tests {
             Constrained::allow_any(Some(ResidencyRequirement::Us)),
             Some(RequirementSource::CloudRequirements),
         );
+        requirements.web_search_mode = ConstrainedWithSource::new(
+            Constrained::allow_any(Some(WebSearchMode::Cached)),
+            Some(RequirementSource::CloudRequirements),
+        );
 
         let requirements_toml = ConfigRequirementsToml {
             allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
             allowed_sandbox_modes: Some(vec![SandboxModeRequirement::ReadOnly]),
+            allowed_web_search_modes: Some(vec![WebSearchModeRequirement::Cached]),
             mcp_servers: Some(BTreeMap::from([(
                 "docs".to_string(),
                 McpServerRequirement {
@@ -331,6 +347,7 @@ mod tests {
                 .as_str(),
             )
         );
+        assert!(rendered.contains("allowed_web_search_modes: cached (source: cloud requirements)"));
         assert!(rendered.contains("mcp_servers: docs (source: MDM managed_config.toml (legacy))"));
         assert!(rendered.contains("enforce_residency: us (source: cloud requirements)"));
         assert!(!rendered.contains("  - rules:"));
