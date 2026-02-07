@@ -123,18 +123,16 @@ pub fn parse_shell_lc_plain_commands(command: &[String]) -> Option<Vec<Vec<Strin
 /// script (`<<`), as long as the script contains exactly one command node.
 pub fn parse_shell_lc_single_command_prefix(command: &[String]) -> Option<Vec<String>> {
     let (_, script) = extract_bash_command(command)?;
-    // Keep this fallback narrow: only apply to here-doc style scripts that are
-    // otherwise rejected by the strict word-only parser.
-    if !script.contains("<<") {
-        return None;
-    }
-
     let tree = try_parse_shell(script)?;
-    if tree.root_node().has_error() {
+    let root = tree.root_node();
+    if root.has_error() {
+        return None;
+    }
+    if !has_named_descendant_kind(root, "heredoc_redirect") {
         return None;
     }
 
-    let command_node = find_single_command_node(tree.root_node())?;
+    let command_node = find_single_command_node(root)?;
     parse_heredoc_command_words(command_node, script)
 }
 
@@ -207,12 +205,17 @@ fn parse_heredoc_command_words(cmd: Node<'_>, src: &str) -> Option<Vec<String>> 
         match child.kind() {
             "command_name" => {
                 let word_node = child.named_child(0)?;
-                if !matches!(word_node.kind(), "word" | "number") {
+                if !matches!(word_node.kind(), "word" | "number")
+                    || !is_literal_word_or_number(word_node)
+                {
                     return None;
                 }
                 words.push(word_node.utf8_text(src.as_bytes()).ok()?.to_owned());
             }
             "word" | "number" => {
+                if !is_literal_word_or_number(child) {
+                    return None;
+                }
                 words.push(child.utf8_text(src.as_bytes()).ok()?.to_owned());
             }
             // Allow shell constructs that attach IO to a single command without
@@ -224,6 +227,28 @@ fn parse_heredoc_command_words(cmd: Node<'_>, src: &str) -> Option<Vec<String>> 
     }
 
     if words.is_empty() { None } else { Some(words) }
+}
+
+fn is_literal_word_or_number(node: Node<'_>) -> bool {
+    if !matches!(node.kind(), "word" | "number") {
+        return false;
+    }
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor).next().is_none()
+}
+
+fn has_named_descendant_kind(node: Node<'_>, kind: &str) -> bool {
+    let mut stack = vec![node];
+    while let Some(current) = stack.pop() {
+        if current.kind() == kind {
+            return true;
+        }
+        let mut cursor = current.walk();
+        for child in current.named_children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    false
 }
 
 fn is_allowed_heredoc_attachment_kind(kind: &str) -> bool {
@@ -506,5 +531,35 @@ mod tests {
             parse_shell_lc_single_command_prefix(&command),
             Some(vec!["python3".to_string()])
         );
+    }
+
+    #[test]
+    fn parse_shell_lc_single_command_prefix_rejects_herestring_with_substitution() {
+        let command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            r#"python3 <<< "$(rm -rf /)""#.to_string(),
+        ];
+        assert_eq!(parse_shell_lc_single_command_prefix(&command), None);
+    }
+
+    #[test]
+    fn parse_shell_lc_single_command_prefix_rejects_arithmetic_shift_non_heredoc_script() {
+        let command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "echo $((1<<2))".to_string(),
+        ];
+        assert_eq!(parse_shell_lc_single_command_prefix(&command), None);
+    }
+
+    #[test]
+    fn parse_shell_lc_single_command_prefix_rejects_heredoc_command_with_word_expansion() {
+        let command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "python3 $((1<<2)) <<'PY'\nprint('hello')\nPY".to_string(),
+        ];
+        assert_eq!(parse_shell_lc_single_command_prefix(&command), None);
     }
 }
