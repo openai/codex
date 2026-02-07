@@ -9,6 +9,7 @@ use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWriteErrorCode;
 use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::NetworkRequirements;
 use codex_app_server_protocol::SandboxMode;
 use codex_core::config::ConfigService;
 use codex_core::config::ConfigServiceError;
@@ -129,6 +130,7 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
         enforce_residency: requirements
             .enforce_residency
             .map(map_residency_requirement_to_api),
+        network: requirements.network.map(map_network_requirements_to_api),
     }
 }
 
@@ -146,6 +148,23 @@ fn map_residency_requirement_to_api(
 ) -> codex_app_server_protocol::ResidencyRequirement {
     match residency {
         CoreResidencyRequirement::Us => codex_app_server_protocol::ResidencyRequirement::Us,
+    }
+}
+
+fn map_network_requirements_to_api(
+    network: codex_core::config_loader::NetworkRequirementsToml,
+) -> NetworkRequirements {
+    NetworkRequirements {
+        enabled: network.enabled,
+        http_port: network.http_port,
+        socks_port: network.socks_port,
+        allow_upstream_proxy: network.allow_upstream_proxy,
+        dangerously_allow_non_loopback_proxy: network.dangerously_allow_non_loopback_proxy,
+        dangerously_allow_non_loopback_admin: network.dangerously_allow_non_loopback_admin,
+        allowed_domains: network.allowed_domains,
+        denied_domains: network.denied_domains,
+        allow_unix_sockets: network.allow_unix_sockets,
+        allow_local_binding: network.allow_local_binding,
     }
 }
 
@@ -174,6 +193,7 @@ fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_core::config_loader::NetworkRequirementsToml as CoreNetworkRequirementsToml;
     use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
     use pretty_assertions::assert_eq;
 
@@ -194,6 +214,18 @@ mod tests {
             mcp_servers: None,
             rules: None,
             enforce_residency: Some(CoreResidencyRequirement::Us),
+            network: Some(CoreNetworkRequirementsToml {
+                enabled: Some(true),
+                http_port: Some(8080),
+                socks_port: Some(1080),
+                allow_upstream_proxy: Some(false),
+                dangerously_allow_non_loopback_proxy: Some(false),
+                dangerously_allow_non_loopback_admin: Some(false),
+                allowed_domains: Some(vec!["api.openai.com".to_string()]),
+                denied_domains: Some(vec!["example.com".to_string()]),
+                allow_unix_sockets: Some(vec!["/tmp/proxy.sock".to_string()]),
+                allow_local_binding: Some(true),
+            }),
         };
 
         let mapped = map_requirements_toml_to_api(requirements);
@@ -217,6 +249,21 @@ mod tests {
             mapped.enforce_residency,
             Some(codex_app_server_protocol::ResidencyRequirement::Us),
         );
+        assert_eq!(
+            mapped.network,
+            Some(NetworkRequirements {
+                enabled: Some(true),
+                http_port: Some(8080),
+                socks_port: Some(1080),
+                allow_upstream_proxy: Some(false),
+                dangerously_allow_non_loopback_proxy: Some(false),
+                dangerously_allow_non_loopback_admin: Some(false),
+                allowed_domains: Some(vec!["api.openai.com".to_string()]),
+                denied_domains: Some(vec!["example.com".to_string()]),
+                allow_unix_sockets: Some(vec!["/tmp/proxy.sock".to_string()]),
+                allow_local_binding: Some(true),
+            }),
+        );
     }
 
     #[test]
@@ -228,6 +275,7 @@ mod tests {
             mcp_servers: None,
             rules: None,
             enforce_residency: None,
+            network: None,
         };
 
         let mapped = map_requirements_toml_to_api(requirements);
