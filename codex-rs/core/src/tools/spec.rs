@@ -29,6 +29,7 @@ pub(crate) struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
+    pub python_tool: bool,
     pub collab_tools: bool,
     pub collaboration_modes_tools: bool,
     pub memory_tools: bool,
@@ -50,12 +51,13 @@ impl ToolsConfig {
             web_search_mode,
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
+        let include_python_tool = features.enabled(Feature::PythonTool);
         let include_collab_tools = features.enabled(Feature::Collab);
         let include_collaboration_modes_tools = features.enabled(Feature::CollaborationModes);
         let include_memory_tools = features.enabled(Feature::MemoryTool);
         let request_rule_enabled = features.enabled(Feature::RequestRule);
 
-        let shell_type = if !features.enabled(Feature::ShellTool) {
+        let shell_type = if include_python_tool || !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
         } else if features.enabled(Feature::UnifiedExec) {
             // If ConPTY not supported (for old Windows versions), fallback on ShellCommand.
@@ -84,6 +86,7 @@ impl ToolsConfig {
             shell_type,
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
+            python_tool: include_python_tool,
             collab_tools: include_collab_tools,
             collaboration_modes_tools: include_collaboration_modes_tools,
             memory_tools: include_memory_tools,
@@ -260,6 +263,64 @@ fn create_exec_command_tool(include_prefix_rule: bool) -> ToolSpec {
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["cmd".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_python_tool(include_prefix_rule: bool) -> ToolSpec {
+    let mut properties = BTreeMap::from([
+        (
+            "code".to_string(),
+            JsonSchema::String {
+                description: Some("Python source code to execute with `python3 -c`.".to_string()),
+            },
+        ),
+        (
+            "args".to_string(),
+            JsonSchema::Array {
+                items: Box::new(JsonSchema::String { description: None }),
+                description: Some(
+                    "Optional command line arguments passed to the script as `sys.argv[1:]`."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "python".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional Python executable path. Defaults to `python3`.".to_string(),
+                ),
+            },
+        ),
+        (
+            "workdir".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional working directory to run the command in; defaults to the turn cwd."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "timeout_ms".to_string(),
+            JsonSchema::Number {
+                description: Some(
+                    "Maximum runtime in milliseconds before the process is terminated.".to_string(),
+                ),
+            },
+        ),
+    ]);
+    properties.extend(create_approval_parameters(include_prefix_rule));
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "python".to_string(),
+        description: "Run a Python snippet in a subprocess and return stdout/stderr.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["code".to_string()]),
             additional_properties: Some(false.into()),
         },
     })
@@ -1259,6 +1320,7 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
     use crate::tools::handlers::PlanHandler;
+    use crate::tools::handlers::PythonHandler;
     use crate::tools::handlers::ReadFileHandler;
     use crate::tools::handlers::RequestUserInputHandler;
     use crate::tools::handlers::ShellCommandHandler;
@@ -1276,6 +1338,7 @@ pub(crate) fn build_specs(
     let apply_patch_handler = Arc::new(ApplyPatchHandler);
     let dynamic_tool_handler = Arc::new(DynamicToolHandler);
     let get_memory_handler = Arc::new(GetMemoryHandler);
+    let python_handler = Arc::new(PythonHandler);
     let view_image_handler = Arc::new(ViewImageHandler);
     let mcp_handler = Arc::new(McpHandler);
     let mcp_resource_handler = Arc::new(McpResourceHandler);
@@ -1318,6 +1381,12 @@ pub(crate) fn build_specs(
         builder.register_handler("container.exec", shell_handler.clone());
         builder.register_handler("local_shell", shell_handler);
         builder.register_handler("shell_command", shell_command_handler);
+    }
+
+    if config.python_tool {
+        builder
+            .push_spec_with_parallel_support(create_python_tool(config.request_rule_enabled), true);
+        builder.register_handler("python", python_handler);
     }
 
     builder.push_spec_with_parallel_support(create_list_mcp_resources_tool(), true);

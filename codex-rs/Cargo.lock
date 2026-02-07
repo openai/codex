@@ -1567,6 +1567,7 @@ dependencies = [
  "landlock",
  "libc",
  "maplit",
+ "monty",
  "multimap",
  "notify",
  "once_cell",
@@ -5157,6 +5158,12 @@ dependencies = [
  "tagptr",
  "uuid",
 ]
+
+[[package]]
+name = "monty"
+version = "0.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "07773618cf354db873984814969d052a0072b1f99e88ca29850259272a8f7ddd"
 
 [[package]]
 name = "moxcms"
