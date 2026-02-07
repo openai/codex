@@ -681,24 +681,41 @@ mod tests {
     }
 
     impl RecordingReporter {
-        fn wait_for_complete(&self, timeout: Duration) -> bool {
+        fn wait_until<T, F>(
+            &self,
+            mutex: &Mutex<T>,
+            cv: &Condvar,
+            timeout: Duration,
+            mut predicate: F,
+        ) -> bool
+        where
+            F: FnMut(&T) -> bool,
+        {
             let deadline = Instant::now() + timeout;
-            let mut completes = self.complete_times.lock().unwrap();
+            let mut state = mutex.lock().unwrap();
             loop {
-                if !completes.is_empty() {
+                if predicate(&state) {
                     return true;
                 }
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 if remaining.is_zero() {
                     return false;
                 }
-                let (next_completes, wait_result) =
-                    self.complete_cv.wait_timeout(completes, remaining).unwrap();
-                completes = next_completes;
+                let (next_state, wait_result) = cv.wait_timeout(state, remaining).unwrap();
+                state = next_state;
                 if wait_result.timed_out() {
-                    return !completes.is_empty();
+                    return predicate(&state);
                 }
             }
+        }
+
+        fn wait_for_complete(&self, timeout: Duration) -> bool {
+            self.wait_until(
+                &self.complete_times,
+                &self.complete_cv,
+                timeout,
+                |completes| !completes.is_empty(),
+            )
         }
         fn clear(&self) {
             self.updates.lock().unwrap().clear();
@@ -710,23 +727,9 @@ mod tests {
         }
 
         fn wait_for_updates_at_least(&self, min_len: usize, timeout: Duration) -> bool {
-            let deadline = Instant::now() + timeout;
-            let mut updates = self.updates.lock().unwrap();
-            loop {
-                if updates.len() >= min_len {
-                    return true;
-                }
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                if remaining.is_zero() {
-                    return false;
-                }
-                let (next_updates, wait_result) =
-                    self.update_cv.wait_timeout(updates, remaining).unwrap();
-                updates = next_updates;
-                if wait_result.timed_out() {
-                    return updates.len() >= min_len;
-                }
-            }
+            self.wait_until(&self.updates, &self.update_cv, timeout, |updates| {
+                updates.len() >= min_len
+            })
         }
 
         fn snapshot(&self) -> FileSearchSnapshot {
