@@ -1,0 +1,16 @@
+diff --git a/builder/cc_builder.rs b/builder/cc_builder.rs
+index af84dc8..f73859e 100644
+--- a/builder/cc_builder.rs
++++ b/builder/cc_builder.rs
+@@ -653,6 +653,11 @@ impl CcBuilder {
+     // This should be kept in alignment with the same check performed by the CMake build.
+     // See: https://github.com/search?q=repo%3Aaws%2Faws-lc%20check_run&type=code
+     fn memcmp_check(&self) {
++        if matches!(env_var_to_bool("AWS_LC_SYS_SKIP_MEMCMP_CHECK"), Some(true)) {
++            emit_warning("Skipping memcmp compiler bug check");
++            return;
++        }
++
+         let basename = "memcmp_invalid_stripped_check";
+         let exec_path = out_dir().join(basename);
+         let memcmp_build = cc::Build::default();

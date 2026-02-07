@@ -79,21 +79,16 @@ crate.annotation(
     version = "0.3.1",
 )
 crate.annotation(
-    build_script_tools = [
-        "@toolchains_llvm_bootstrapped//runtimes:clang_rt_builtins_static",
-        "@toolchains_llvm_bootstrapped//runtimes:crt_objects_directory_for_build_script",
-        "@toolchains_llvm_bootstrapped//runtimes:libc_library_search_directory",
-        "@toolchains_llvm_bootstrapped//runtimes:resource_directory",
-        "@toolchains_llvm_bootstrapped//runtimes/libcxx:libcxx_library_search_directory",
-        "@toolchains_llvm_bootstrapped//runtimes/libunwind:libunwind_library_search_directory",
-    ],
     build_script_env = {
-        "AWS_LC_SYS_CMAKE_BUILDER": "1",
         "AWS_LC_SYS_NO_JITTER_ENTROPY": "1",
+        "AWS_LC_SYS_SKIP_MEMCMP_CHECK": "1",
     },
+    patch_args = ["-p1"],
+    patches = [
+        "//patches:aws-lc-sys_skip_memcmp_check.patch",
+    ],
     crate = "aws-lc-sys",
 )
-inject_repo(crate, "toolchains_llvm_bootstrapped")
 
 bazel_dep(name = "openssl", version = "3.5.4.bcr.0")
 
