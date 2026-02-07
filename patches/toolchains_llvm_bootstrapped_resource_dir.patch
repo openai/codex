@@ -87,7 +87,7 @@ diff --git a/runtimes/BUILD.bazel b/runtimes/BUILD.bazel
 index 5c8a04b..9f5d082 100644
 --- a/runtimes/BUILD.bazel
 +++ b/runtimes/BUILD.bazel
-@@ -157,6 +157,30 @@ alias(
+@@ -157,6 +157,32 @@ alias(
          "@platforms//os:windows": ":crt_objects_directory_windows",
      }),
      visibility = ["//visibility:public"],
