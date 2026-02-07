@@ -26,7 +26,7 @@ diff --git a/builder/cc_builder.rs b/builder/cc_builder.rs
          memcmp_compile_args.push(
              self.manifest_dir
                  .join("aws-lc")
-@@ -725,6 +734,38 @@
+@@ -725,6 +734,40 @@
          }
          let _ = fs::remove_file(exec_path);
      }
@@ -36,14 +36,16 @@ diff --git a/builder/cc_builder.rs b/builder/cc_builder.rs
 +            return;
 +        };
 +
-+        if let Some(path) = arg_str.strip_prefix("bazel-out/") {
-+            *arg = execroot.join(path).into_os_string();
++        if arg_str.starts_with("bazel-out/") {
++            *arg = execroot.join(arg_str).into_os_string();
 +            return;
 +        }
 +
-+        for (full_prefix, output_prefix) in [("-Bbazel-out/", "-B"), ("-Lbazel-out/", "-L")] {
-+            if let Some(path) = arg_str.strip_prefix(full_prefix) {
-+                *arg = format!("{output_prefix}{}", execroot.join(path).display()).into();
++        for flag_prefix in ["-B", "-L"] {
++            if let Some(path) = arg_str.strip_prefix(flag_prefix)
++                && path.starts_with("bazel-out/")
++            {
++                *arg = format!("{flag_prefix}{}", execroot.join(path).display()).into();
 +                return;
 +            }
 +        }
