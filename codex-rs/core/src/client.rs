@@ -1102,7 +1102,7 @@ fn build_api_prompt(prompt: &Prompt, instructions: String, tools_json: Vec<Value
 /// Invalid values are treated as absent so callers can compare and propagate
 /// metadata with the same sanitization path used when constructing headers.
 fn parse_turn_metadata_header(turn_metadata_header: Option<&str>) -> Option<HeaderValue> {
-    turn_metadata_header.map(|value| HeaderValue::from_str(&value).unwrap())
+    turn_metadata_header.and_then(|value| HeaderValue::from_str(value).ok())
 }
 
 /// Builds the extra headers attached to Responses API requests.
