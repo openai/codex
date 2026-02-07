@@ -1,4 +1,11 @@
-//! Persist Codex session rollouts (.jsonl) so sessions can be replayed or inspected later.
+//! Persist Codex session rollouts (.jsonl) via a single background writer task.
+//!
+//! All rollout writes are serialized through that task so item ordering is
+//! preserved and `flush` can wait for prior writes to commit.
+//!
+//! `CreateDeferred` starts without a file/path and buffers rollout items
+//! in-memory. `EnsurePersisted` materializes the file on demand, writes
+//! `SessionMeta` first, then drains buffered items in order.
 
 use std::fs::File;
 use std::fs::{self};
