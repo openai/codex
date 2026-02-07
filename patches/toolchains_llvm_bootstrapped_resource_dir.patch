@@ -11,3 +11,5 @@ index e6dc56c..0f6eca6 100644
      ],
      args = [
          "-resource-dir",
+         "{resource_dir}",
+     ],
