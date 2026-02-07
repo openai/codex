@@ -5175,6 +5175,34 @@ async fn stream_error_updates_status_indicator() {
 }
 
 #[tokio::test]
+async fn stream_error_restores_hidden_status_indicator() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+    chat.on_agent_message_delta("Preamble line\n".to_string());
+    chat.on_commit_tick();
+    drain_insert_history(&mut rx);
+    assert!(!chat.bottom_pane.status_indicator_visible());
+
+    let msg = "Reconnecting... 2/5";
+    let details = "Idle timeout waiting for SSE";
+    chat.handle_codex_event(Event {
+        id: "sub-1".into(),
+        msg: EventMsg::StreamError(StreamErrorEvent {
+            message: msg.to_string(),
+            codex_error_info: Some(CodexErrorInfo::Other),
+            additional_details: Some(details.to_string()),
+        }),
+    });
+
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(status.header(), msg);
+    assert_eq!(status.details(), Some(details));
+}
+
+#[tokio::test]
 async fn warning_event_adds_warning_history_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.handle_codex_event(Event {

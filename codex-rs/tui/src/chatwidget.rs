@@ -2131,6 +2131,7 @@ impl ChatWidget {
         if self.retry_status_header.is_none() {
             self.retry_status_header = Some(self.current_status_header.clone());
         }
+        self.bottom_pane.ensure_status_indicator();
         self.set_status(message, additional_details);
     }
 
