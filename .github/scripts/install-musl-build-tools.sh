@@ -77,6 +77,12 @@ for arg in "\$@"; do
       fi
       continue
       ;;
+    -Wp,-U_FORTIFY_SOURCE)
+      # aws-lc-sys emits this GCC preprocessor forwarding form in debug
+      # builds, but zig cc expects the define flag directly.
+      args+=("-U_FORTIFY_SOURCE")
+      continue
+      ;;
   esac
   args+=("\${arg}")
 done
@@ -103,6 +109,10 @@ for arg in "\$@"; do
       if [[ "\${arg}" == "-target" ]]; then
         skip_next=1
       fi
+      continue
+      ;;
+    -Wp,-U_FORTIFY_SOURCE)
+      args+=("-U_FORTIFY_SOURCE")
       continue
       ;;
   esac

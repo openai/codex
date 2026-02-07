@@ -39,6 +39,7 @@ type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 const X_MODELS_ETAG_HEADER: &str = "x-models-etag";
 const X_REASONING_INCLUDED_HEADER: &str = "x-reasoning-included";
+static RUSTLS_PROVIDER_INSTALLED: OnceLock<()> = OnceLock::new();
 
 pub struct ResponsesWebsocketConnection {
     stream: Arc<Mutex<Option<WsStream>>>,
@@ -165,6 +166,7 @@ async fn connect_websocket(
     headers: HeaderMap,
     turn_state: Option<Arc<OnceLock<String>>>,
 ) -> Result<(WsStream, bool, Option<String>), ApiError> {
+    ensure_rustls_crypto_provider();
     info!("connecting to websocket: {url}");
 
     let mut request = url
@@ -208,6 +210,12 @@ async fn connect_websocket(
     Ok((stream, reasoning_included, models_etag))
 }
 
+fn ensure_rustls_crypto_provider() {
+    let _ = RUSTLS_PROVIDER_INSTALLED.get_or_init(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
 fn websocket_config() -> WebSocketConfig {
     let mut extensions = ExtensionsConfig::default();
     extensions.permessage_deflate = Some(DeflateConfig::default());
@@ -215,17 +223,6 @@ fn websocket_config() -> WebSocketConfig {
     let mut config = WebSocketConfig::default();
     config.extensions = extensions;
     config
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn websocket_config_enables_permessage_deflate() {
-        let config = websocket_config();
-        assert!(config.extensions.permessage_deflate.is_some());
-    }
 }
 
 fn map_ws_error(err: WsError, url: &Url) -> ApiError {
@@ -352,4 +349,15 @@ async fn run_websocket_response_stream(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn websocket_config_enables_permessage_deflate() {
+        let config = websocket_config();
+        assert!(config.extensions.permessage_deflate.is_some());
+    }
 }

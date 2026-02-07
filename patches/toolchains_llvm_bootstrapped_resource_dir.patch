@@ -1,0 +1,13 @@
+diff --git a/toolchain/args/BUILD.bazel b/toolchain/args/BUILD.bazel
+index e6dc56c..0f6eca6 100644
+--- a/toolchain/args/BUILD.bazel
++++ b/toolchain/args/BUILD.bazel
+@@ -17,8 +17,8 @@ cc_args(
+     name = "resource_dir",
+     actions = [
++        "@rules_cc//cc/toolchains/actions:compile_actions",
+         "@rules_cc//cc/toolchains/actions:link_actions",
+-        # We may need it for other actions too?
+     ],
+     args = [
+         "-resource-dir",
