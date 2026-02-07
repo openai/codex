@@ -315,7 +315,7 @@ impl Codex {
         // Resolve base instructions for the session. Priority order:
         // 1. config.base_instructions override
         // 2. conversation history => session_meta.base_instructions
-        // 3. base_intructions for current model
+        // 3. base_instructions for current model
         let model_info = models_manager.get_model_info(model.as_str(), &config).await;
         let base_instructions = config
             .base_instructions
@@ -1227,11 +1227,14 @@ impl Session {
         }
     }
 
-    /// Lazily instantiate the rollout recorder when deferred creation is enabled.
+    /// Ensure the rollout recorder is backed by a persisted rollout file.
+    ///
+    /// For deferred recorders this materializes the rollout path on demand; for
+    /// already-persisted recorders this is a no-op.
     ///
     /// This is idempotent and concurrency-safe:
-    /// - If a recorder already exists, it returns immediately.
-    /// - If initialization fails, pending creation params are restored so a
+    /// - If there is no recorder (ephemeral), it returns immediately.
+    /// - If persistence fails, pending creation params are restored so a
     ///   later turn can retry.
     async fn ensure_rollout_initialized_for_turn(&self) -> std::io::Result<()> {
         let recorder = {
