@@ -240,6 +240,12 @@ pub(crate) async fn exit_review_mode(
             }],
         )
         .await;
+
+    // Review turns can run before any regular user turn, so explicitly
+    // materialize rollout persistence after recording this synthetic user
+    // message.
+    session.ensure_rollout_materialized().await;
+
     session
         .send_event(
             ctx.as_ref(),
