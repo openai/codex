@@ -30,6 +30,9 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::trace;
+use tungstenite::extensions::ExtensionsConfig;
+use tungstenite::extensions::compression::deflate::DeflateConfig;
+use tungstenite::protocol::WebSocketConfig;
 use url::Url;
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -170,7 +173,9 @@ async fn connect_websocket(
         .map_err(|err| ApiError::Stream(format!("failed to build websocket request: {err}")))?;
     request.headers_mut().extend(headers);
 
-    let response = tokio_tungstenite::connect_async(request).await;
+    let response =
+        tokio_tungstenite::connect_async_with_config(request, Some(websocket_config()), false)
+            .await;
 
     let (stream, response) = match response {
         Ok((stream, response)) => {
@@ -201,6 +206,26 @@ async fn connect_websocket(
         let _ = turn_state.set(header_value.to_string());
     }
     Ok((stream, reasoning_included, models_etag))
+}
+
+fn websocket_config() -> WebSocketConfig {
+    let mut extensions = ExtensionsConfig::default();
+    extensions.permessage_deflate = Some(DeflateConfig::default());
+
+    let mut config = WebSocketConfig::default();
+    config.extensions = extensions;
+    config
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn websocket_config_enables_permessage_deflate() {
+        let config = websocket_config();
+        assert!(config.extensions.permessage_deflate.is_some());
+    }
 }
 
 fn map_ws_error(err: WsError, url: &Url) -> ApiError {
