@@ -21,6 +21,13 @@ pub use runtime::StateRuntime;
 ///
 /// Most consumers should prefer [`StateRuntime`].
 pub use extract::apply_rollout_item;
+pub use model::AgentJob;
+pub use model::AgentJobCreateParams;
+pub use model::AgentJobItem;
+pub use model::AgentJobItemCreateParams;
+pub use model::AgentJobItemStatus;
+pub use model::AgentJobProgress;
+pub use model::AgentJobStatus;
 pub use model::Anchor;
 pub use model::BackfillState;
 pub use model::BackfillStats;

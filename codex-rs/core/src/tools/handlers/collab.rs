@@ -1,10 +1,8 @@
 use crate::agent::AgentStatus;
-use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::error::CodexErr;
-use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -585,10 +583,10 @@ fn collab_agent_error(agent_id: ThreadId, err: CodexErr) -> FunctionCallError {
     }
 }
 
-fn build_agent_spawn_config(
+pub(crate) fn build_agent_spawn_config(
     base_instructions: &BaseInstructions,
     turn: &TurnContext,
-    child_depth: i32,
+    _child_depth: i32,
 ) -> Result<Config, FunctionCallError> {
     let base_config = turn.config.clone();
     let mut config = (*base_config).clone();
@@ -614,11 +612,6 @@ fn build_agent_spawn_config(
         .map_err(|err| {
             FunctionCallError::RespondToModel(format!("sandbox_policy is invalid: {err}"))
         })?;
-
-    // If the new agent will be at max depth:
-    if exceeds_thread_spawn_depth_limit(child_depth + 1) {
-        config.features.disable(Feature::Collab);
-    }
 
     Ok(config)
 }

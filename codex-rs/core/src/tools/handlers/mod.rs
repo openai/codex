@@ -1,3 +1,4 @@
+pub(crate) mod agent_jobs;
 pub mod apply_patch;
 pub(crate) mod collab;
 mod dynamic;
