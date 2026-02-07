@@ -613,6 +613,7 @@ mod tests {
     use codex_protocol::protocol::SandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
+    #[cfg(unix)]
     use std::collections::HashMap;
     use std::fs;
     use std::path::Path;
@@ -974,7 +975,6 @@ prefix_rule(
         let requirement = ExecPolicyManager::new(policy)
             .create_exec_approval_requirement_for_command_with_context(
                 ExecApprovalRequest {
-                    features: &Features::with_defaults(),
                     command: &command,
                     approval_policy: AskForApproval::OnRequest,
                     sandbox_policy: &SandboxPolicy::ReadOnly,
@@ -1024,7 +1024,6 @@ prefix_rule(
         let requirement = ExecPolicyManager::new(policy)
             .create_exec_approval_requirement_for_command_with_context(
                 ExecApprovalRequest {
-                    features: &Features::with_defaults(),
                     command: &command,
                     approval_policy: AskForApproval::OnRequest,
                     sandbox_policy: &SandboxPolicy::ReadOnly,
