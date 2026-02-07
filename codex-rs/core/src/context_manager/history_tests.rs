@@ -182,7 +182,7 @@ fn non_last_reasoning_tokens_ignore_entries_after_last_user() {
 }
 
 #[test]
-fn usage_breakdown_counts_all_items_added_since_last_usage() {
+fn usage_breakdown_counts_all_items_after_last_model_generated_item() {
     let mut history = create_history_with_items(vec![assistant_msg("already counted by API")]);
     history.update_token_info(
         &TokenUsage {
@@ -225,7 +225,7 @@ fn usage_breakdown_counts_all_items_added_since_last_usage() {
 }
 
 #[test]
-fn usage_breakdown_counts_no_added_items_when_nothing_changed_since_last_usage() {
+fn usage_breakdown_counts_no_items_after_last_model_generated_item() {
     let mut history = create_history_with_items(vec![assistant_msg("already counted by API")]);
     history.update_token_info(
         &TokenUsage {
@@ -250,7 +250,7 @@ fn usage_breakdown_counts_no_added_items_when_nothing_changed_since_last_usage()
 }
 
 #[test]
-fn total_token_usage_includes_all_items_added_since_last_usage() {
+fn total_token_usage_includes_all_items_after_last_model_generated_item() {
     let mut history = create_history_with_items(vec![assistant_msg("already counted by API")]);
     history.update_token_info(
         &TokenUsage {

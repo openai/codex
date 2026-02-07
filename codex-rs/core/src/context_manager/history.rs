@@ -26,8 +26,6 @@ pub(crate) struct ContextManager {
     /// The oldest items are at the beginning of the vector.
     items: Vec<ResponseItem>,
     token_info: Option<TokenUsageInfo>,
-    /// Number of history items present when `last_token_usage` was last updated.
-    last_usage_items_len: usize,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -43,7 +41,6 @@ impl ContextManager {
         Self {
             items: Vec::new(),
             token_info: TokenUsageInfo::new_or_append(&None, &None, None),
-            last_usage_items_len: 0,
         }
     }
 
@@ -52,9 +49,7 @@ impl ContextManager {
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
-        let has_info = info.is_some();
         self.token_info = info;
-        self.last_usage_items_len = if has_info { self.items.len() } else { 0 };
     }
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
@@ -64,7 +59,6 @@ impl ContextManager {
                 self.token_info = Some(TokenUsageInfo::full_context_window(context_window));
             }
         }
-        self.last_usage_items_len = self.items.len();
     }
 
     /// `items` is ordered from oldest to newest.
@@ -222,7 +216,6 @@ impl ContextManager {
             &Some(usage.clone()),
             model_context_window,
         );
-        self.last_usage_items_len = self.items.len();
     }
 
     fn get_non_last_reasoning_items_tokens(&self) -> i64 {
@@ -252,21 +245,27 @@ impl ContextManager {
             })
     }
 
-    fn items_added_since_last_usage(&self) -> &[ResponseItem] {
-        let start = self.last_usage_items_len.min(self.items.len());
+    // These are local items added after the most recent model-emitted item.
+    // They are not reflected in `last_token_usage.total_tokens`.
+    fn items_after_last_model_generated_item(&self) -> &[ResponseItem] {
+        let start = self
+            .items
+            .iter()
+            .rposition(is_model_generated_item)
+            .map_or(0, |index| index.saturating_add(1));
         &self.items[start..]
     }
 
-    fn get_items_added_since_last_usage_tokens(&self) -> i64 {
-        self.items_added_since_last_usage()
+    fn get_items_after_last_model_generated_tokens(&self) -> i64 {
+        self.items_after_last_model_generated_item()
             .iter()
             .fold(0i64, |acc, item| {
                 acc.saturating_add(estimate_item_token_count(item))
             })
     }
 
-    fn get_items_added_since_last_usage_bytes(&self) -> usize {
-        self.items_added_since_last_usage()
+    fn get_items_after_last_model_generated_bytes(&self) -> usize {
+        self.items_after_last_model_generated_item()
             .iter()
             .fold(0usize, |acc, item| {
                 acc.saturating_add(
@@ -285,13 +284,14 @@ impl ContextManager {
             .as_ref()
             .map(|info| info.last_token_usage.total_tokens)
             .unwrap_or(0);
-        let items_added_since_last_usage_tokens = self.get_items_added_since_last_usage_tokens();
+        let items_after_last_model_generated_tokens =
+            self.get_items_after_last_model_generated_tokens();
         if server_reasoning_included {
-            last_tokens.saturating_add(items_added_since_last_usage_tokens)
+            last_tokens.saturating_add(items_after_last_model_generated_tokens)
         } else {
             last_tokens
                 .saturating_add(self.get_non_last_reasoning_items_tokens())
-                .saturating_add(items_added_since_last_usage_tokens)
+                .saturating_add(items_after_last_model_generated_tokens)
         }
     }
 
@@ -312,9 +312,9 @@ impl ContextManager {
                     .unwrap_or(usize::MAX)
             },
             estimated_tokens_of_items_added_since_last_successful_api_response: self
-                .get_items_added_since_last_usage_tokens(),
+                .get_items_after_last_model_generated_tokens(),
             estimated_bytes_of_items_added_since_last_successful_api_response: self
-                .get_items_added_since_last_usage_bytes(),
+                .get_items_after_last_model_generated_bytes(),
         }
     }
 
@@ -417,6 +417,22 @@ fn estimate_item_token_count(item: &ResponseItem) -> i64 {
             let serialized = serde_json::to_string(item).unwrap_or_default();
             i64::try_from(approx_token_count(&serialized)).unwrap_or(i64::MAX)
         }
+    }
+}
+
+fn is_model_generated_item(item: &ResponseItem) -> bool {
+    match item {
+        ResponseItem::Message { role, .. } => role == "assistant",
+        ResponseItem::Reasoning { .. }
+        | ResponseItem::FunctionCall { .. }
+        | ResponseItem::WebSearchCall { .. }
+        | ResponseItem::CustomToolCall { .. }
+        | ResponseItem::LocalShellCall { .. }
+        | ResponseItem::Compaction { .. } => true,
+        ResponseItem::FunctionCallOutput { .. }
+        | ResponseItem::CustomToolCallOutput { .. }
+        | ResponseItem::GhostSnapshot { .. }
+        | ResponseItem::Other => false,
     }
 }
 
