@@ -10988,6 +10988,15 @@
               "null"
             ]
           },
+          "allowedWebSearchModes": {
+            "items": {
+              "$ref": "#/definitions/v2/WebSearchMode"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "enforceResidency": {
             "anyOf": [
               {

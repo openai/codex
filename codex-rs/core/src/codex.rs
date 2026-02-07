@@ -733,10 +733,22 @@ impl Session {
             session_configuration.collaboration_mode.reasoning_effort();
         per_turn_config.model_reasoning_summary = session_configuration.model_reasoning_summary;
         per_turn_config.personality = session_configuration.personality;
-        per_turn_config.web_search_mode = Some(resolve_web_search_mode_for_turn(
-            per_turn_config.web_search_mode,
+        let resolved_web_search_mode = resolve_web_search_mode_for_turn(
+            &per_turn_config.web_search_mode,
             session_configuration.sandbox_policy.get(),
-        ));
+        );
+        if let Err(err) = per_turn_config
+            .web_search_mode
+            .set(Some(resolved_web_search_mode))
+        {
+            let fallback_value = per_turn_config.web_search_mode.value();
+            tracing::warn!(
+                error = %err,
+                ?resolved_web_search_mode,
+                ?fallback_value,
+                "resolved web_search_mode is disallowed by requirements; keeping constrained value"
+            );
+        }
         per_turn_config.features = config.features.clone();
         per_turn_config
     }
@@ -794,7 +806,7 @@ impl Session {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &per_turn_config.features,
-            web_search_mode: per_turn_config.web_search_mode,
+            web_search_mode: per_turn_config.web_search_mode.value(),
         });
 
         let cwd = session_configuration.cwd.clone();
@@ -3521,7 +3533,18 @@ async fn spawn_review_thread(
     let mut per_turn_config = (*config).clone();
     per_turn_config.model = Some(model.clone());
     per_turn_config.features = review_features.clone();
-    per_turn_config.web_search_mode = Some(review_web_search_mode);
+    if let Err(err) = per_turn_config
+        .web_search_mode
+        .set(Some(review_web_search_mode))
+    {
+        let fallback_value = per_turn_config.web_search_mode.value();
+        tracing::warn!(
+            error = %err,
+            ?review_web_search_mode,
+            ?fallback_value,
+            "review web_search_mode is disallowed by requirements; keeping constrained value"
+        );
+    }
 
     let otel_manager = parent_turn_context
         .otel_manager

@@ -329,7 +329,7 @@ pub struct Config {
     pub include_apply_patch_tool: bool,
 
     /// Explicit or feature-derived web search mode.
-    pub web_search_mode: Option<WebSearchMode>,
+    pub web_search_mode: Constrained<Option<WebSearchMode>>,
 
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
@@ -1331,17 +1331,25 @@ fn resolve_web_search_mode(
 }
 
 pub(crate) fn resolve_web_search_mode_for_turn(
-    explicit_mode: Option<WebSearchMode>,
+    web_search_mode: &Constrained<Option<WebSearchMode>>,
     sandbox_policy: &SandboxPolicy,
 ) -> WebSearchMode {
-    if let Some(mode) = explicit_mode {
+    if let Some(mode) = web_search_mode.value() {
         return mode;
     }
-    if matches!(sandbox_policy, SandboxPolicy::DangerFullAccess) {
-        WebSearchMode::Live
+
+    let (preferred, alternate) = if matches!(sandbox_policy, SandboxPolicy::DangerFullAccess) {
+        (WebSearchMode::Live, WebSearchMode::Cached)
     } else {
-        WebSearchMode::Cached
+        (WebSearchMode::Cached, WebSearchMode::Live)
+    };
+    for mode in [preferred, alternate, WebSearchMode::Disabled] {
+        let candidate = Some(mode);
+        if web_search_mode.can_set(&candidate).is_ok() {
+            return mode;
+        }
     }
+    WebSearchMode::Disabled
 }
 
 impl Config {
@@ -1626,6 +1634,7 @@ impl Config {
         let ConfigRequirements {
             approval_policy: mut constrained_approval_policy,
             sandbox_policy: mut constrained_sandbox_policy,
+            web_search_mode: mut constrained_web_search_mode,
             mcp_servers,
             exec_policy: _,
             enforce_residency,
@@ -1643,6 +1652,14 @@ impl Config {
             &mut constrained_sandbox_policy,
             &mut startup_warnings,
         )?;
+        if web_search_mode.is_some() {
+            apply_requirement_constrained_value(
+                "web_search_mode",
+                web_search_mode,
+                &mut constrained_web_search_mode,
+                &mut startup_warnings,
+            )?;
+        }
 
         let mcp_servers = constrain_mcp_servers(cfg.mcp_servers.clone(), mcp_servers.as_ref())
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
@@ -1722,7 +1739,7 @@ impl Config {
             forced_chatgpt_workspace_id,
             forced_login_method,
             include_apply_patch_tool: include_apply_patch_tool_flag,
-            web_search_mode,
+            web_search_mode: constrained_web_search_mode.value,
             use_experimental_unified_exec_tool,
             ghost_snapshot,
             features,
@@ -2463,24 +2480,26 @@ trust_level = "trusted"
 
     #[test]
     fn web_search_mode_for_turn_defaults_to_cached_when_unset() {
-        let mode = resolve_web_search_mode_for_turn(None, &SandboxPolicy::ReadOnly);
+        let web_search_mode = Constrained::allow_any(None);
+        let mode = resolve_web_search_mode_for_turn(&web_search_mode, &SandboxPolicy::ReadOnly);
 
         assert_eq!(mode, WebSearchMode::Cached);
     }
 
     #[test]
     fn web_search_mode_for_turn_defaults_to_live_for_danger_full_access() {
-        let mode = resolve_web_search_mode_for_turn(None, &SandboxPolicy::DangerFullAccess);
+        let web_search_mode = Constrained::allow_any(None);
+        let mode =
+            resolve_web_search_mode_for_turn(&web_search_mode, &SandboxPolicy::DangerFullAccess);
 
         assert_eq!(mode, WebSearchMode::Live);
     }
 
     #[test]
     fn web_search_mode_for_turn_prefers_explicit_value() {
-        let mode = resolve_web_search_mode_for_turn(
-            Some(WebSearchMode::Cached),
-            &SandboxPolicy::DangerFullAccess,
-        );
+        let web_search_mode = Constrained::allow_any(Some(WebSearchMode::Cached));
+        let mode =
+            resolve_web_search_mode_for_turn(&web_search_mode, &SandboxPolicy::DangerFullAccess);
 
         assert_eq!(mode, WebSearchMode::Cached);
     }
@@ -3983,7 +4002,7 @@ model_verbosity = "high"
                 forced_chatgpt_workspace_id: None,
                 forced_login_method: None,
                 include_apply_patch_tool: false,
-                web_search_mode: None,
+                web_search_mode: Constrained::allow_any(None),
                 use_experimental_unified_exec_tool: !cfg!(windows),
                 ghost_snapshot: GhostSnapshotConfig::default(),
                 features: Features::with_defaults(),
@@ -4071,7 +4090,7 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
-            web_search_mode: None,
+            web_search_mode: Constrained::allow_any(None),
             use_experimental_unified_exec_tool: !cfg!(windows),
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
@@ -4174,7 +4193,7 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
-            web_search_mode: None,
+            web_search_mode: Constrained::allow_any(None),
             use_experimental_unified_exec_tool: !cfg!(windows),
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
@@ -4263,7 +4282,7 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
-            web_search_mode: None,
+            web_search_mode: Constrained::allow_any(None),
             use_experimental_unified_exec_tool: !cfg!(windows),
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
@@ -4305,6 +4324,74 @@ model_verbosity = "high"
         )?;
 
         assert!(config.did_user_set_custom_approval_policy_or_sandbox_mode);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() -> anyhow::Result<()>
+    {
+        let fixture = create_test_fixture()?;
+
+        let requirements_toml = crate::config_loader::ConfigRequirementsToml {
+            allowed_approval_policies: None,
+            allowed_sandbox_modes: None,
+            allowed_web_search_modes: Some(vec![
+                crate::config_loader::WebSearchModeRequirement::Cached,
+            ]),
+            mcp_servers: None,
+            rules: None,
+            enforce_residency: None,
+        };
+        let requirement_source = crate::config_loader::RequirementSource::Unknown;
+        let requirement_source_for_error = requirement_source.clone();
+        let allowed = vec![WebSearchMode::Disabled, WebSearchMode::Cached];
+        let constrained = Constrained::new(Some(WebSearchMode::Cached), move |candidate| {
+            if candidate
+                .is_some_and(|mode| matches!(mode, WebSearchMode::Cached | WebSearchMode::Disabled))
+            {
+                Ok(())
+            } else {
+                Err(ConstraintError::InvalidValue {
+                    field_name: "web_search_mode",
+                    candidate: format!("{candidate:?}"),
+                    allowed: format!("{allowed:?}"),
+                    requirement_source: requirement_source_for_error.clone(),
+                })
+            }
+        })?;
+        let requirements = crate::config_loader::ConfigRequirements {
+            web_search_mode: crate::config_loader::ConstrainedWithSource::new(
+                constrained,
+                Some(requirement_source),
+            ),
+            ..Default::default()
+        };
+        let config_layer_stack = crate::config_loader::ConfigLayerStack::new(
+            Vec::new(),
+            requirements,
+            requirements_toml,
+        )
+        .expect("config layer stack");
+
+        let config = Config::load_config_with_layer_stack(
+            fixture.cfg.clone(),
+            ConfigOverrides {
+                cwd: Some(fixture.cwd()),
+                ..Default::default()
+            },
+            fixture.codex_home(),
+            config_layer_stack,
+        )?;
+
+        assert!(
+            !config
+                .startup_warnings
+                .iter()
+                .any(|warning| warning.contains("Configured value for `web_search_mode`")),
+            "{:?}",
+            config.startup_warnings
+        );
 
         Ok(())
     }
@@ -4810,6 +4897,7 @@ mcp_oauth_callback_port = 5678
             allowed_sandbox_modes: Some(vec![
                 crate::config_loader::SandboxModeRequirement::ReadOnly,
             ]),
+            allowed_web_search_modes: None,
             mcp_servers: None,
             rules: None,
             enforce_residency: None,
@@ -4824,6 +4912,38 @@ mcp_oauth_callback_port = 5678
             .build()
             .await?;
         assert_eq!(*config.sandbox_policy.get(), SandboxPolicy::ReadOnly);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn requirements_web_search_mode_overrides_danger_full_access_default()
+    -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            r#"sandbox_mode = "danger-full-access"
+"#,
+        )?;
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cloud_requirements(CloudRequirementsLoader::new(async {
+                Some(crate::config_loader::ConfigRequirementsToml {
+                    allowed_web_search_modes: Some(vec![
+                        crate::config_loader::WebSearchModeRequirement::Cached,
+                    ]),
+                    ..Default::default()
+                })
+            }))
+            .build()
+            .await?;
+
+        assert_eq!(config.web_search_mode.value(), None);
+        assert_eq!(
+            resolve_web_search_mode_for_turn(&config.web_search_mode, config.sandbox_policy.get()),
+            WebSearchMode::Cached,
+        );
         Ok(())
     }
 
