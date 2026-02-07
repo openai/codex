@@ -274,7 +274,6 @@ impl Codex {
         let (tx_event, rx_event) = async_channel::unbounded();
 
         let loaded_skills = skills_manager.skills_for_config(&config);
-        let defer_new_rollout_creation = matches!(&conversation_history, InitialHistory::New);
 
         for err in &loaded_skills.errors {
             error!(
@@ -315,7 +314,7 @@ impl Codex {
         // Resolve base instructions for the session. Priority order:
         // 1. config.base_instructions override
         // 2. conversation history => session_meta.base_instructions
-        // 3. base_intructions for current model
+        // 3. base_instructions for current model
         let model_info = models_manager.get_model_info(model.as_str(), &config).await;
         let base_instructions = config
             .base_instructions
@@ -400,7 +399,6 @@ impl Codex {
             tx_event.clone(),
             agent_status_tx.clone(),
             conversation_history,
-            defer_new_rollout_creation,
             session_source_clone,
             skills_manager,
             file_watcher,
@@ -513,7 +511,6 @@ pub(crate) struct Session {
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) services: SessionServices,
-    defer_new_rollout_creation: bool,
     next_internal_sub_id: AtomicU64,
 }
 
@@ -855,7 +852,6 @@ impl Session {
         tx_event: Sender<Event>,
         agent_status: watch::Sender<AgentStatus>,
         initial_history: InitialHistory,
-        defer_new_rollout_creation: bool,
         session_source: SessionSource,
         skills_manager: Arc<SkillsManager>,
         file_watcher: Arc<FileWatcher>,
@@ -915,9 +911,6 @@ impl Session {
                             state_builder.clone(),
                         )
                         .await?;
-                        if !defer_new_rollout_creation {
-                            rollout_recorder.ensure_persisted().await?;
-                        }
                         Ok((Some(rollout_recorder), state_db_ctx))
                     }
                     InitialHistory::Forked(_) => {
@@ -1124,7 +1117,6 @@ impl Session {
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
             services,
-            defer_new_rollout_creation,
             next_internal_sub_id: AtomicU64::new(0),
         });
 
@@ -1322,21 +1314,13 @@ impl Session {
         let turn_context = self.new_default_turn().await;
         match conversation_history {
             InitialHistory::New => {
-                if self.defer_new_rollout_creation {
-                    // Defer initial context persistence until the first turn starts.
-                    // This lets turn/start overrides be reflected in the seeded context.
-                    self.flush_rollout().await;
-                } else {
-                    // Build and record initial items (user instructions + environment context)
-                    let items = self.build_initial_context(&turn_context).await;
-                    self.record_conversation_items(&turn_context, &items).await;
-                    {
-                        let mut state = self.state.lock().await;
-                        state.initial_context_seeded = true;
-                    }
-                    // Ensure initial items are visible to immediate readers (e.g., tests, forks).
-                    self.flush_rollout().await;
+                {
+                    let mut state = self.state.lock().await;
+                    state.initial_context_seeded = false;
                 }
+                // Defer initial context persistence until the first turn starts.
+                // This lets turn/start overrides be reflected in the seeded context.
+                self.flush_rollout().await;
             }
             InitialHistory::Resumed(resumed_history) => {
                 let rollout_items = resumed_history.history;
@@ -2762,14 +2746,17 @@ impl Session {
 }
 
 async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiver<Submission>) {
-    // Non-deferred sessions persist an initial baseline at thread start, so we
-    // keep the default turn context for first-turn diffing.
-    // Deferred sessions seed initial context on first turn with the current
-    // settings, so a baseline here would duplicate first-turn updates.
-    let mut previous_context: Option<Arc<TurnContext>> = if sess.defer_new_rollout_creation {
-        None
-    } else {
+    // If initial context has already been persisted, keep a baseline turn context
+    // for first-turn diffing. Otherwise we defer seeding until first turn and must
+    // start without a baseline to avoid duplicate update items.
+    let initial_context_seeded = {
+        let state = sess.state.lock().await;
+        state.initial_context_seeded
+    };
+    let mut previous_context: Option<Arc<TurnContext>> = if initial_context_seeded {
         Some(sess.new_default_turn().await)
+    } else {
+        None
     };
 
     // To break out of this loop, send Op::Shutdown.
@@ -5272,8 +5259,7 @@ mod tests {
 
     #[tokio::test]
     async fn record_initial_history_new_defers_initial_context_until_first_turn() {
-        let (mut session, turn_context) = make_session_and_context().await;
-        session.defer_new_rollout_creation = true;
+        let (session, turn_context) = make_session_and_context().await;
         {
             let mut state = session.state.lock().await;
             state.initial_context_seeded = false;
@@ -6137,7 +6123,6 @@ mod tests {
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
             services,
-            defer_new_rollout_creation: false,
             next_internal_sub_id: AtomicU64::new(0),
         };
 
@@ -6270,7 +6255,6 @@ mod tests {
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
             services,
-            defer_new_rollout_creation: false,
             next_internal_sub_id: AtomicU64::new(0),
         });
 
