@@ -870,9 +870,10 @@ impl Session {
         }
 
         let forked_from_id = initial_history.forked_from_id();
+        let defer_until_first_user_message = matches!(&initial_history, InitialHistory::New);
 
         let (conversation_id, rollout_params) = match &initial_history {
-            InitialHistory::New => {
+            InitialHistory::New | InitialHistory::Forked(_) => {
                 let conversation_id = ThreadId::default();
                 (
                     conversation_id,
@@ -884,23 +885,7 @@ impl Session {
                             text: session_configuration.base_instructions.clone(),
                         },
                         session_configuration.dynamic_tools.clone(),
-                        true,
-                    ),
-                )
-            }
-            InitialHistory::Forked(_) => {
-                let conversation_id = ThreadId::default();
-                (
-                    conversation_id,
-                    RolloutRecorderParams::new(
-                        conversation_id,
-                        forked_from_id,
-                        session_source,
-                        BaseInstructions {
-                            text: session_configuration.base_instructions.clone(),
-                        },
-                        session_configuration.dynamic_tools.clone(),
-                        false,
+                        defer_until_first_user_message,
                     ),
                 )
             }
