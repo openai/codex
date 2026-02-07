@@ -4,16 +4,20 @@ use crate::Prompt;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::context_manager::ContextManager;
+use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::context_manager::is_codex_generated_item;
+use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::protocol::CompactedItem;
 use crate::protocol::EventMsg;
 use crate::protocol::RolloutItem;
 use crate::protocol::TurnStartedEvent;
+use codex_api::CompactionInput as ApiCompactionInput;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseItem;
+use tracing::error;
 use tracing::info;
 
 pub(crate) async fn run_inline_remote_auto_compact_task(
@@ -90,7 +94,7 @@ async fn run_remote_compact_task_inner_impl(
         output_schema: None,
     };
 
-    let mut new_history = sess
+    let compact_result = sess
         .services
         .model_client
         .compact_conversation_history(
@@ -98,7 +102,25 @@ async fn run_remote_compact_task_inner_impl(
             &turn_context.model_info,
             &turn_context.otel_manager,
         )
-        .await?;
+        .await;
+    let mut new_history = match compact_result {
+        Ok(history) => history,
+        Err(err) => {
+            let total_usage_breakdown = sess.get_total_token_usage_breakdown().await;
+            let compact_request_metrics = build_compact_request_metrics(
+                &turn_context.model_info.slug,
+                &prompt.input,
+                &prompt.base_instructions.text,
+            );
+            log_remote_compact_failure(
+                turn_context,
+                &compact_request_metrics,
+                total_usage_breakdown,
+                &err,
+            );
+            return Err(err);
+        }
+    };
     new_history = sess
         .process_compacted_history(turn_context, new_history)
         .await;
@@ -119,6 +141,66 @@ async fn run_remote_compact_task_inner_impl(
     sess.emit_turn_item_completed(turn_context, compaction_item)
         .await;
     Ok(())
+}
+
+#[derive(Debug)]
+struct CompactRequestMetrics {
+    failing_compaction_request_body_json: String,
+    failing_compaction_request_body_bytes: usize,
+}
+
+fn build_compact_request_metrics(
+    model: &str,
+    input: &[ResponseItem],
+    instructions: &str,
+) -> CompactRequestMetrics {
+    let payload = ApiCompactionInput {
+        model,
+        input,
+        instructions,
+    };
+    let failing_compaction_request_body_json = serde_json::to_string(&payload)
+        .unwrap_or_else(|err| format!("{{\"compact_request_serialization_error\":\"{err}\"}}"));
+    let failing_compaction_request_body_bytes = failing_compaction_request_body_json.len();
+
+    CompactRequestMetrics {
+        failing_compaction_request_body_json,
+        failing_compaction_request_body_bytes,
+    }
+}
+
+fn compact_error_status_code(err: &CodexErr) -> Option<u16> {
+    match err {
+        CodexErr::InvalidRequest(_) => Some(400),
+        CodexErr::UnexpectedStatus(status) => Some(status.status.as_u16()),
+        CodexErr::ContextWindowExceeded => Some(400),
+        _ => None,
+    }
+}
+
+fn log_remote_compact_failure(
+    turn_context: &TurnContext,
+    metrics: &CompactRequestMetrics,
+    total_usage_breakdown: TotalTokenUsageBreakdown,
+    err: &CodexErr,
+) {
+    error!(
+        turn_id = %turn_context.sub_id,
+        failing_compaction_request_body_json = %metrics.failing_compaction_request_body_json,
+        "remote compaction request payload before failure"
+    );
+    error!(
+        turn_id = %turn_context.sub_id,
+        compact_error_status = ?compact_error_status_code(err),
+        last_api_response_total_tokens = total_usage_breakdown.last_api_response_total_tokens,
+        last_api_response_total_bytes_estimate = total_usage_breakdown.last_api_response_total_bytes_estimate,
+        estimated_tokens_of_items_added_since_last_successful_api_response = total_usage_breakdown.estimated_tokens_of_items_added_since_last_successful_api_response,
+        estimated_bytes_of_items_added_since_last_successful_api_response = total_usage_breakdown.estimated_bytes_of_items_added_since_last_successful_api_response,
+        model_context_window_tokens = ?turn_context.model_context_window(),
+        failing_compaction_request_body_bytes = metrics.failing_compaction_request_body_bytes,
+        compact_error = %err,
+        "remote compaction failed"
+    );
 }
 
 fn trim_function_call_history_to_fit_context_window(

@@ -6,6 +6,7 @@ use std::collections::HashSet;
 
 use crate::codex::SessionConfiguration;
 use crate::context_manager::ContextManager;
+use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
@@ -98,6 +99,10 @@ impl SessionState {
     pub(crate) fn get_total_token_usage(&self, server_reasoning_included: bool) -> i64 {
         self.history
             .get_total_token_usage(server_reasoning_included)
+    }
+
+    pub(crate) fn get_total_token_usage_breakdown(&self) -> TotalTokenUsageBreakdown {
+        self.history.get_total_token_usage_breakdown()
     }
 
     pub(crate) fn set_server_reasoning_included(&mut self, included: bool) {
