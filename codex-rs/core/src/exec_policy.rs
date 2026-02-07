@@ -548,6 +548,8 @@ mod tests {
     use crate::config_loader::ConfigLayerStack;
     use crate::config_loader::ConfigRequirements;
     use crate::config_loader::ConfigRequirementsToml;
+    use crate::features::Feature;
+    use crate::features::Features;
     use codex_app_server_protocol::ConfigLayerSource;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::SandboxPolicy;
@@ -1026,6 +1028,8 @@ prefix_rule(
             "cargo-insta".to_string(),
         ];
         let manager = ExecPolicyManager::default();
+        let mut features = Features::with_defaults();
+        features.enable(Feature::RequestRule);
 
         let requirement = manager
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
