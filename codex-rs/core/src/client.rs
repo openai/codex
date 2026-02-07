@@ -522,6 +522,17 @@ impl ModelClient {
 
     fn set_shared_v2_connection(&self, connection: Option<Arc<ApiWebSocketConnection>>) {
         self.with_shared_v2_state(|state| {
+            let connection_changed = match (&state.connection, &connection) {
+                (Some(existing), Some(new_connection)) => !Arc::ptr_eq(existing, new_connection),
+                (None, Some(_)) | (Some(_), None) => true,
+                (None, None) => false,
+            };
+            if connection_changed {
+                // Response chaining state is scoped to a single backend websocket connection.
+                // When the connection changes, start the next request as a full create.
+                state.websocket_last_items.clear();
+                state.websocket_last_response_id = None;
+            }
             state.connection = connection;
         });
     }

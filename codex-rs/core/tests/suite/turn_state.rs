@@ -221,9 +221,14 @@ async fn websocket_v2_reconnect_after_turn_boundary_does_not_replay_turn_state()
         .first()
         .expect("second websocket connection should have a request")
         .body_json();
-    assert_eq!(
-        second_request["previous_response_id"].as_str(),
-        Some("resp-1")
+    assert_eq!(second_request.get("previous_response_id"), None);
+    let second_input_len = second_request["input"]
+        .as_array()
+        .map(Vec::len)
+        .unwrap_or(0);
+    assert!(
+        second_input_len > 1,
+        "reconnect should send full input items, got {second_input_len}"
     );
 
     server.shutdown().await;
