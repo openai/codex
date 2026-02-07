@@ -1222,6 +1222,10 @@
       "default": null,
       "description": "Settings for app-specific controls."
     },
+    "apps_mcp_url": {
+      "description": "Optional override for the Codex Apps MCP endpoint URL.",
+      "type": "string"
+    },
     "chatgpt_base_url": {
       "description": "Base URL for requests to ChatGPT (as opposed to the OpenAI API).",
       "type": "string"

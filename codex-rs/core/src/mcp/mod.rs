@@ -30,6 +30,8 @@ const MCP_TOOL_NAME_PREFIX: &str = "mcp";
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
 pub(crate) const CODEX_APPS_MCP_SERVER_NAME: &str = "codex_apps";
 const CODEX_CONNECTORS_TOKEN_ENV_VAR: &str = "CODEX_CONNECTORS_TOKEN";
+const DEFAULT_CODEX_APPS_MCP_URL: &str =
+    "https://connectorsapi.gateway.unified-0.api.openai.com/v1/connectors/mcp/";
 
 fn codex_apps_mcp_bearer_token_env_var() -> Option<String> {
     match env::var(CODEX_CONNECTORS_TOKEN_ENV_VAR) {
@@ -65,21 +67,13 @@ fn codex_apps_mcp_http_headers(auth: Option<&CodexAuth>) -> Option<HashMap<Strin
     }
 }
 
-fn codex_apps_mcp_url(base_url: &str) -> String {
-    let mut base_url = base_url.trim_end_matches('/').to_string();
-    if (base_url.starts_with("https://chatgpt.com")
-        || base_url.starts_with("https://chat.openai.com"))
-        && !base_url.contains("/backend-api")
-    {
-        base_url = format!("{base_url}/backend-api");
-    }
-    if base_url.contains("/backend-api") {
-        format!("{base_url}/wham/apps")
-    } else if base_url.contains("/api/codex") {
-        format!("{base_url}/apps")
-    } else {
-        format!("{base_url}/api/codex/apps")
-    }
+fn codex_apps_mcp_url(configured_url: Option<&str>) -> String {
+    let base_url = configured_url
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .unwrap_or(DEFAULT_CODEX_APPS_MCP_URL)
+        .trim_end_matches('/');
+    format!("{base_url}/")
 }
 
 fn codex_apps_mcp_server_config(config: &Config, auth: Option<&CodexAuth>) -> McpServerConfig {
@@ -89,7 +83,7 @@ fn codex_apps_mcp_server_config(config: &Config, auth: Option<&CodexAuth>) -> Mc
     } else {
         codex_apps_mcp_http_headers(auth)
     };
-    let url = codex_apps_mcp_url(&config.chatgpt_base_url);
+    let url = codex_apps_mcp_url(config.apps_mcp_url.as_deref());
 
     McpServerConfig {
         transport: McpServerTransportConfig::StreamableHttp {
@@ -384,5 +378,25 @@ mod tests {
         expected.insert("beta".to_string(), expected_beta);
 
         assert_eq!(group_tools_by_server(&tools), expected);
+    }
+
+    #[test]
+    fn codex_apps_mcp_url_defaults_to_internal_endpoint() {
+        assert_eq!(
+            codex_apps_mcp_url(None),
+            "https://connectorsapi.gateway.unified-0.api.openai.com/v1/connectors/mcp/"
+        );
+    }
+
+    #[test]
+    fn codex_apps_mcp_url_normalizes_custom_value() {
+        assert_eq!(
+            codex_apps_mcp_url(Some("https://example.com/custom/path")),
+            "https://example.com/custom/path/"
+        );
+        assert_eq!(
+            codex_apps_mcp_url(Some("https://example.com/custom/path/")),
+            "https://example.com/custom/path/"
+        );
     }
 }
