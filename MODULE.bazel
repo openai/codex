@@ -81,7 +81,6 @@ crate.annotation(
 crate.annotation(
     build_script_env = {
         "AWS_LC_SYS_NO_JITTER_ENTROPY": "1",
-        "AWS_LC_SYS_SKIP_MEMCMP_CHECK": "1",
     },
     patch_args = ["-p1"],
     patches = [

@@ -1,16 +1,67 @@
 diff --git a/builder/cc_builder.rs b/builder/cc_builder.rs
-index af84dc8..f73859e 100644
 --- a/builder/cc_builder.rs
 +++ b/builder/cc_builder.rs
-@@ -653,6 +653,11 @@ impl CcBuilder {
-     // This should be kept in alignment with the same check performed by the CMake build.
-     // See: https://github.com/search?q=repo%3Aaws%2Faws-lc%20check_run&type=code
-     fn memcmp_check(&self) {
-+        if matches!(env_var_to_bool("AWS_LC_SYS_SKIP_MEMCMP_CHECK"), Some(true)) {
-+            emit_warning("Skipping memcmp compiler bug check");
+@@ -26,7 +26,7 @@
+ };
+ use std::cell::Cell;
+ use std::collections::HashMap;
+-use std::path::PathBuf;
++use std::path::{Path, PathBuf};
+ 
+ #[non_exhaustive]
+ #[derive(PartialEq, Eq)]
+@@ -672,6 +672,15 @@
+             }
+         }
+ 
++        if let Some(execroot) = Self::bazel_execroot(self.manifest_dir.as_path()) {
++            // In Bazel build-script sandboxes, `cc` can pass `bazel-out/...` args
++            // relative to the execroot while the process runs from elsewhere.
++            // Normalize those args to absolute paths so this check can still link.
++            for arg in &mut memcmp_compile_args {
++                Self::rewrite_bazel_execroot_arg(execroot.as_path(), arg);
++            }
++        }
++
+         memcmp_compile_args.push(
+             self.manifest_dir
+                 .join("aws-lc")
+@@ -725,6 +734,38 @@
+         }
+         let _ = fs::remove_file(exec_path);
+     }
++
++    fn rewrite_bazel_execroot_arg(execroot: &Path, arg: &mut std::ffi::OsString) {
++        let Some(arg_str) = arg.to_str() else {
++            return;
++        };
++
++        if let Some(path) = arg_str.strip_prefix("bazel-out/") {
++            *arg = execroot.join(path).into_os_string();
 +            return;
 +        }
 +
-         let basename = "memcmp_invalid_stripped_check";
-         let exec_path = out_dir().join(basename);
-         let memcmp_build = cc::Build::default();
++        for (full_prefix, output_prefix) in [("-Bbazel-out/", "-B"), ("-Lbazel-out/", "-L")] {
++            if let Some(path) = arg_str.strip_prefix(full_prefix) {
++                *arg = format!("{output_prefix}{}", execroot.join(path).display()).into();
++                return;
++            }
++        }
++    }
++
++    fn bazel_execroot(path: &Path) -> Option<PathBuf> {
++        let mut prefix = PathBuf::new();
++        for component in path.components() {
++            if component.as_os_str() == "bazel-out" {
++                return Some(prefix);
++            }
++
++            prefix.push(component.as_os_str());
++        }
++
++        None
++    }
++
+     fn run_compiler_checks(&self, cc_build: &mut cc::Build) {
+         if self.compiler_check("stdalign_check", Vec::<&'static str>::new()) {
+             cc_build.define("AWS_LC_STDALIGN_AVAILABLE", Some("1"));
