@@ -62,6 +62,7 @@ use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_otel::OtelManager;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -1316,6 +1317,52 @@ impl App {
                     app_event_tx: self.app_event_tx.clone(),
                     // New sessions start without prefilled message content.
                     initial_user_message: None,
+                    enhanced_keys_supported: self.enhanced_keys_supported,
+                    auth_manager: self.auth_manager.clone(),
+                    models_manager: self.server.get_models_manager(),
+                    feedback: self.feedback.clone(),
+                    is_first_run: false,
+                    feedback_audience: self.feedback_audience,
+                    model: Some(model),
+                    status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
+                    otel_manager: self.otel_manager.clone(),
+                };
+                self.chat_widget = ChatWidget::new(init, self.server.clone());
+                self.reset_thread_event_state();
+                if let Some(summary) = summary {
+                    let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
+                    if let Some(command) = summary.resume_command {
+                        let spans = vec!["To continue this session, run ".into(), command.cyan()];
+                        lines.push(spans.into());
+                    }
+                    self.chat_widget.add_plain_history_lines(lines);
+                }
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::NewSessionWithInitialMessage { text, model } => {
+                let model = if model.trim().is_empty() {
+                    self.chat_widget.current_model().to_string()
+                } else {
+                    model
+                };
+                let summary = session_summary(
+                    self.chat_widget.token_usage(),
+                    self.chat_widget.thread_id(),
+                    self.chat_widget.thread_name(),
+                );
+                self.shutdown_current_thread().await;
+                if let Err(err) = self.server.remove_and_close_all_threads().await {
+                    tracing::warn!(error = %err, "failed to close all threads");
+                }
+                let mut config = self.config.clone();
+                // Ensure the implementation thread starts in Default mode, even if the user
+                // configured the TUI to start in Plan mode.
+                config.experimental_mode = Some(ModeKind::Default);
+                let init = crate::chatwidget::ChatWidgetInit {
+                    config,
+                    frame_requester: tui.frame_requester(),
+                    app_event_tx: self.app_event_tx.clone(),
+                    initial_user_message: Some(text.into()),
                     enhanced_keys_supported: self.enhanced_keys_supported,
                     auth_manager: self.auth_manager.clone(),
                     models_manager: self.server.get_models_manager(),

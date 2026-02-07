@@ -149,6 +149,7 @@ use tracing::debug;
 const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
 const PLAN_IMPLEMENTATION_TITLE: &str = "Implement this plan?";
 const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
+const PLAN_IMPLEMENTATION_YES_NEW_THREAD: &str = "Yes, implement in new thread";
 const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
 const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
 
@@ -591,6 +592,8 @@ pub(crate) struct ChatWidget {
     saw_plan_update_this_turn: bool,
     // Whether the current turn emitted a proposed plan item.
     saw_plan_item_this_turn: bool,
+    // Most recently completed proposed plan item text for this session.
+    last_proposed_plan_text: Option<String>,
     // Incremental buffer for streamed plan content.
     plan_delta_buffer: String,
     // True while a plan item is streaming.
@@ -1221,6 +1224,12 @@ impl ChatWidget {
         } else {
             text
         };
+        let trimmed_plan = plan_text.trim();
+        self.last_proposed_plan_text = if trimmed_plan.is_empty() {
+            None
+        } else {
+            Some(trimmed_plan.to_string())
+        };
         // Plan commit ticks can hide the status row; remember whether we streamed plan output so
         // completion can restore it once stream queues are idle.
         let should_restore_after_stream = self.plan_stream_controller.is_some();
@@ -1403,7 +1412,15 @@ impl ChatWidget {
 
     fn open_plan_implementation_prompt(&mut self) {
         let default_mask = collaboration_modes::default_mode_mask(self.models_manager.as_ref());
-        let (implement_actions, implement_disabled_reason) = match default_mask {
+        let current_model = self.current_model().to_string();
+        let plan_text = self
+            .last_proposed_plan_text
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(ToString::to_string);
+
+        let (implement_actions, implement_disabled_reason) = match default_mask.clone() {
             Some(mask) => {
                 let user_text = PLAN_IMPLEMENTATION_CODING_MESSAGE.to_string();
                 let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
@@ -1417,6 +1434,24 @@ impl ChatWidget {
             None => (Vec::new(), Some("Default mode unavailable".to_string())),
         };
 
+        let (implement_new_thread_actions, implement_new_thread_disabled_reason) =
+            match (default_mask, plan_text) {
+                (Some(mask), Some(plan_text)) => {
+                    let model = mask.model.clone().unwrap_or_else(|| current_model.clone());
+                    let user_text =
+                        format!("{PLAN_IMPLEMENTATION_CODING_MESSAGE}\n\nPlan:\n{plan_text}");
+                    let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                        tx.send(AppEvent::NewSessionWithInitialMessage {
+                            text: user_text.clone(),
+                            model: model.clone(),
+                        });
+                    })];
+                    (actions, None)
+                }
+                (Some(_), None) => (Vec::new(), Some("Plan text unavailable".to_string())),
+                (None, _) => (Vec::new(), Some("Default mode unavailable".to_string())),
+            };
+
         let items = vec![
             SelectionItem {
                 name: PLAN_IMPLEMENTATION_YES.to_string(),
@@ -1425,6 +1460,18 @@ impl ChatWidget {
                 is_current: false,
                 actions: implement_actions,
                 disabled_reason: implement_disabled_reason,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: PLAN_IMPLEMENTATION_YES_NEW_THREAD.to_string(),
+                description: Some(
+                    "Start a fresh thread and begin implementation with the plan.".to_string(),
+                ),
+                selected_description: None,
+                is_current: false,
+                actions: implement_new_thread_actions,
+                disabled_reason: implement_new_thread_disabled_reason,
                 dismiss_on_select: true,
                 ..Default::default()
             },
@@ -2640,6 +2687,7 @@ impl ChatWidget {
             had_work_activity: false,
             saw_plan_update_this_turn: false,
             saw_plan_item_this_turn: false,
+            last_proposed_plan_text: None,
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             last_separator_elapsed_secs: None,
@@ -2793,6 +2841,7 @@ impl ChatWidget {
             forked_from: None,
             saw_plan_update_this_turn: false,
             saw_plan_item_this_turn: false,
+            last_proposed_plan_text: None,
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             queued_user_messages: VecDeque::new(),
@@ -2955,6 +3004,7 @@ impl ChatWidget {
             had_work_activity: false,
             saw_plan_update_this_turn: false,
             saw_plan_item_this_turn: false,
+            last_proposed_plan_text: None,
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             last_separator_elapsed_secs: None,
