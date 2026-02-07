@@ -32,6 +32,19 @@ use mcp_test_support::format_with_current_shell;
 // Allow ample time on slower CI or under load to avoid flakes.
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
+fn find_python() -> Option<String> {
+    for candidate in ["python3", "python"] {
+        if let Ok(output) = std::process::Command::new(candidate)
+            .arg("--version")
+            .output()
+            && output.status.success()
+        {
+            return Some(candidate.to_string());
+        }
+    }
+    None
+}
+
 /// Test that a shell command that is not on the "trusted" list triggers an
 /// elicitation request to the MCP and that sending the approval runs the
 /// command, as expected.
@@ -63,13 +76,18 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
         .path()
         .join(created_filename);
 
+    let Some(python) = find_python() else {
+        println!("Skipping test because python is unavailable in this environment.");
+        return Ok(());
+    };
+
     let shell_command = vec![
-        "python3".to_string(),
+        python.clone(),
         "-c".to_string(),
         format!("import pathlib; pathlib.Path('{created_filename}').touch()"),
     ];
     let expected_shell_command = format_with_current_shell(&format!(
-        "python3 -c \"import pathlib; pathlib.Path('{created_filename}').touch()\""
+        "{python} -c \"import pathlib; pathlib.Path('{created_filename}').touch()\""
     ));
 
     let McpHandle {
