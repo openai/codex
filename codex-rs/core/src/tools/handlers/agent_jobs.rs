@@ -644,20 +644,18 @@ async fn run_agent_job_loop(
     }
 
     let progress = db.get_agent_job_progress(job_id.as_str()).await?;
-    if progress.failed_items > 0 {
-        let failed_items = progress.failed_items;
-        let message = format!("job completed with {failed_items} failed items");
+    if let Err(err) = export_job_csv_snapshot(db.clone(), &job).await {
+        let message = format!("auto-export failed: {err}");
         db.mark_agent_job_failed(job_id.as_str(), message.as_str())
             .await?;
-    } else {
-        if let Err(err) = export_job_csv_snapshot(db.clone(), &job).await {
-            let message = format!("auto-export failed: {err}");
-            db.mark_agent_job_failed(job_id.as_str(), message.as_str())
-                .await?;
-            return Ok(());
-        }
-        db.mark_agent_job_completed(job_id.as_str()).await?;
+        return Ok(());
     }
+    if progress.failed_items > 0 {
+        let failed_items = progress.failed_items;
+        let message = format!("agent job completed with {failed_items} failed items");
+        let _ = session.notify_background_event(&turn, message).await;
+    }
+    db.mark_agent_job_completed(job_id.as_str()).await?;
     let progress = db.get_agent_job_progress(job_id.as_str()).await?;
     progress_emitter
         .maybe_emit(&session, &turn, job_id.as_str(), &progress, true)
