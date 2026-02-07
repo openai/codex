@@ -5,7 +5,12 @@ use crate::context::ToolContext;
 use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
+use cocode_protocol::ApprovalRequest;
 use cocode_protocol::ConcurrencySafety;
+use cocode_protocol::PermissionResult;
+use cocode_protocol::RiskSeverity;
+use cocode_protocol::RiskType;
+use cocode_protocol::SecurityRisk;
 use cocode_protocol::ToolOutput;
 use cocode_shell::BackgroundProcess;
 use serde_json::Value;
@@ -130,6 +135,122 @@ impl Tool for BashTool {
 
     fn max_result_size_chars(&self) -> i32 {
         30_000
+    }
+
+    async fn check_permission(&self, input: &Value, _ctx: &ToolContext) -> PermissionResult {
+        let command = match input.get("command").and_then(|v| v.as_str()) {
+            Some(cmd) => cmd,
+            None => return PermissionResult::Passthrough,
+        };
+
+        // Read-only commands are always allowed
+        if is_read_only_command(command) {
+            return PermissionResult::Allowed;
+        }
+
+        // Run security analysis using cocode-shell-parser
+        let (_, analysis) = cocode_shell_parser::parse_and_analyze(command);
+
+        if analysis.has_risks() {
+            // Allow-phase risks → Deny immediately (injection vectors)
+            let allow_phase_risks =
+                analysis.risks_by_phase(cocode_shell_parser::security::RiskPhase::Allow);
+            if !allow_phase_risks.is_empty() {
+                let risk_msgs: Vec<String> = allow_phase_risks
+                    .iter()
+                    .map(|r| format!("{}: {}", r.kind, r.message))
+                    .collect();
+                return PermissionResult::Denied {
+                    reason: format!(
+                        "Command blocked due to security risks: {}",
+                        risk_msgs.join("; ")
+                    ),
+                };
+            }
+
+            // Ask-phase risks → NeedsApproval with risk details
+            let ask_phase_risks =
+                analysis.risks_by_phase(cocode_shell_parser::security::RiskPhase::Ask);
+            if !ask_phase_risks.is_empty() {
+                let risks: Vec<SecurityRisk> = ask_phase_risks
+                    .iter()
+                    .map(|r| SecurityRisk {
+                        risk_type: match r.kind {
+                            cocode_shell_parser::security::RiskKind::NetworkExfiltration => {
+                                RiskType::Network
+                            }
+                            cocode_shell_parser::security::RiskKind::PrivilegeEscalation => {
+                                RiskType::Elevated
+                            }
+                            cocode_shell_parser::security::RiskKind::FileSystemTampering => {
+                                RiskType::Destructive
+                            }
+                            cocode_shell_parser::security::RiskKind::SensitiveRedirect => {
+                                RiskType::SensitiveFile
+                            }
+                            cocode_shell_parser::security::RiskKind::CodeExecution => {
+                                RiskType::SystemConfig
+                            }
+                            _ => RiskType::Unknown,
+                        },
+                        severity: match r.level {
+                            cocode_shell_parser::security::RiskLevel::Low => RiskSeverity::Low,
+                            cocode_shell_parser::security::RiskLevel::Medium => {
+                                RiskSeverity::Medium
+                            }
+                            cocode_shell_parser::security::RiskLevel::High => RiskSeverity::High,
+                            cocode_shell_parser::security::RiskLevel::Critical => {
+                                RiskSeverity::Critical
+                            }
+                        },
+                        message: r.message.clone(),
+                    })
+                    .collect();
+
+                let description = if command.len() > 120 {
+                    format!("{}...", &command[..120])
+                } else {
+                    command.to_string()
+                };
+
+                return PermissionResult::NeedsApproval {
+                    request: ApprovalRequest {
+                        request_id: format!(
+                            "bash-security-{}",
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_nanos())
+                                .unwrap_or(0)
+                        ),
+                        tool_name: "Bash".to_string(),
+                        description,
+                        risks,
+                        allow_remember: true,
+                    },
+                };
+            }
+        }
+
+        // Non-read-only command with no detected risks → still needs approval
+        PermissionResult::NeedsApproval {
+            request: ApprovalRequest {
+                request_id: format!(
+                    "bash-cmd-{}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_nanos())
+                        .unwrap_or(0)
+                ),
+                tool_name: "Bash".to_string(),
+                description: if command.len() > 120 {
+                    format!("{}...", &command[..120])
+                } else {
+                    command.to_string()
+                },
+                risks: vec![],
+                allow_remember: true,
+            },
+        }
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {

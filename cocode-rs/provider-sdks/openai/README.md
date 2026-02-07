@@ -10,7 +10,7 @@ Reference: [openai-python](https://github.com/openai/openai-python) @ `722d3fffb
 - **Streaming** - Full SSE streaming with 53 event types
 - **Embeddings API** - Generate text embeddings
 - **Multi-turn Conversations** - Continue conversations with `previous_response_id`
-- **11 Built-in Tool Types** - Web search, file search, code interpreter, computer use, and more
+- **12 Built-in Tool Types** - Web search, file search, code interpreter, computer use, custom tools, and more
 - **16 Output Item Types** - Full coverage of response output variants
 - **Extended Thinking** - Reasoning mode with configurable token budgets
 - **Prompt Caching** - Cache system prompts for improved latency
@@ -232,7 +232,7 @@ if response.has_function_calls() {
 
 ### Built-in Tools
 
-The SDK supports 11 built-in tool types with fluent builder APIs:
+The SDK supports 12 built-in tool types with fluent builder APIs:
 
 ```rust
 use openai_sdk::{Tool, UserLocation, RankingOptions};
@@ -283,6 +283,17 @@ let editor = Tool::text_editor();
 
 // Apply Patch
 let patch = Tool::apply_patch();
+
+// Custom Tool (with Lark grammar)
+let custom = Tool::custom_with_grammar(
+    "apply_patch",
+    "Apply file patches",
+    "lark",
+    include_str!("grammar.lark"),
+);
+
+// Custom Tool (unconstrained text)
+let custom_text = Tool::custom_text("my_tool", "Process free-form input");
 ```
 
 ### Tool Choice
@@ -458,6 +469,9 @@ InputContentBlock::McpCallOutput {
     output: Some("MCP result...".into()),
     error: None,
 }
+
+// Custom tool call output
+InputContentBlock::custom_tool_call_output("call_xyz", "Tool result...")
 ```
 
 ### Embeddings API

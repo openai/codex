@@ -5,8 +5,13 @@ use crate::context::ToolContext;
 use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
+use cocode_protocol::ApprovalRequest;
 use cocode_protocol::ConcurrencySafety;
 use cocode_protocol::ContextModifier;
+use cocode_protocol::PermissionResult;
+use cocode_protocol::RiskSeverity;
+use cocode_protocol::RiskType;
+use cocode_protocol::SecurityRisk;
 use cocode_protocol::ToolOutput;
 use serde_json::Value;
 use tokio::fs;
@@ -86,6 +91,64 @@ impl Tool for ReadTool {
 
     fn max_result_size_chars(&self) -> i32 {
         100_000
+    }
+
+    async fn check_permission(&self, input: &Value, ctx: &ToolContext) -> PermissionResult {
+        let file_path = match input.get("file_path").and_then(|v| v.as_str()) {
+            Some(fp) => fp,
+            None => return PermissionResult::Passthrough,
+        };
+
+        let path = ctx.resolve_path(file_path);
+
+        // Locked directory → Deny
+        if crate::sensitive_files::is_locked_directory(&path) {
+            return PermissionResult::Denied {
+                reason: format!(
+                    "Reading locked directory is not allowed: {}",
+                    path.display()
+                ),
+            };
+        }
+
+        // Sensitive file → NeedsApproval
+        if crate::sensitive_files::is_sensitive_file(&path) {
+            return PermissionResult::NeedsApproval {
+                request: ApprovalRequest {
+                    request_id: format!("sensitive-read-{}", path.display()),
+                    tool_name: self.name().to_string(),
+                    description: format!("Reading sensitive file: {}", path.display()),
+                    risks: vec![SecurityRisk {
+                        risk_type: RiskType::SensitiveFile,
+                        severity: RiskSeverity::Medium,
+                        message: format!(
+                            "File '{}' may contain credentials or sensitive configuration",
+                            path.display()
+                        ),
+                    }],
+                    allow_remember: true,
+                },
+            };
+        }
+
+        // Outside working directory → NeedsApproval
+        if crate::sensitive_files::is_outside_cwd(&path, &ctx.cwd) {
+            return PermissionResult::NeedsApproval {
+                request: ApprovalRequest {
+                    request_id: format!("outside-cwd-read-{}", path.display()),
+                    tool_name: self.name().to_string(),
+                    description: format!(
+                        "Reading file outside working directory: {}",
+                        path.display()
+                    ),
+                    risks: vec![],
+                    allow_remember: true,
+                },
+            };
+        }
+
+        // In working directory → Allowed
+        PermissionResult::Allowed
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {

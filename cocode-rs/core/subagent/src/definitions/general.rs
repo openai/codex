@@ -12,6 +12,7 @@ pub fn general_agent() -> AgentDefinition {
         disallowed_tools: vec![],
         identity: Some(ExecutionIdentity::Inherit),
         max_turns: None,
+        permission_mode: None,
     }
 }
 

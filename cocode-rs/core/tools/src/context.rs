@@ -4,8 +4,11 @@
 //! needed for tool execution, including permissions, event channels,
 //! and cancellation support.
 
+use crate::permission_rules::PermissionRuleEvaluator;
+use async_trait::async_trait;
 use cocode_hooks::HookRegistry;
 use cocode_lsp::LspServerManager;
+use cocode_protocol::ApprovalRequest;
 use cocode_protocol::LoopEvent;
 use cocode_protocol::PermissionMode;
 use cocode_protocol::RoleSelections;
@@ -45,6 +48,12 @@ pub struct SpawnAgentInput {
     /// ensuring it's unaffected by subsequent changes to the parent's settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_selections: Option<RoleSelections>,
+    /// Permission mode override for the subagent.
+    ///
+    /// When set (from `AgentDefinition.permission_mode`), the subagent uses
+    /// this mode instead of inheriting from the parent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<cocode_protocol::PermissionMode>,
 }
 
 /// Result of spawning a subagent.
@@ -70,6 +79,19 @@ pub type SpawnAgentFn = Arc<
         + Send
         + Sync,
 >;
+
+/// Trait for requesting user permission approval.
+///
+/// This trait decouples the tools crate from the executor crate,
+/// allowing `WorkerPermissionQueue` (in cocode-executor) to be used
+/// without creating a circular dependency.
+#[async_trait]
+pub trait PermissionRequester: Send + Sync {
+    /// Request permission for an operation.
+    ///
+    /// Returns `true` if approved, `false` if denied or timed out.
+    async fn request_permission(&self, request: ApprovalRequest, worker_id: &str) -> bool;
+}
 
 /// Information about an invoked skill.
 ///
@@ -318,6 +340,16 @@ pub struct ToolContext {
     /// When set, spawned subagents will inherit these selections,
     /// ensuring they're unaffected by subsequent changes to the parent's settings.
     pub parent_selections: Option<RoleSelections>,
+    /// Optional permission requester for interactive approval flow.
+    ///
+    /// When set, the executor can route `NeedsApproval` results to the
+    /// UI/TUI for user confirmation instead of denying immediately.
+    pub permission_requester: Option<Arc<dyn PermissionRequester>>,
+    /// Optional permission rule evaluator for pre-configured rules.
+    ///
+    /// When set, rules are evaluated before the tool's own `check_permission()`
+    /// to allow, deny, or delegate based on project/user/policy configuration.
+    pub permission_evaluator: Option<PermissionRuleEvaluator>,
 }
 
 impl ToolContext {
@@ -345,6 +377,8 @@ impl ToolContext {
             invoked_skills: Arc::new(Mutex::new(Vec::new())),
             session_dir: None,
             parent_selections: None,
+            permission_requester: None,
+            permission_evaluator: None,
         }
     }
 
@@ -436,6 +470,18 @@ impl ToolContext {
     /// Set the session directory for persisting large tool results.
     pub fn with_session_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.session_dir = Some(dir.into());
+        self
+    }
+
+    /// Set the permission requester for interactive approval flow.
+    pub fn with_permission_requester(mut self, requester: Arc<dyn PermissionRequester>) -> Self {
+        self.permission_requester = Some(requester);
+        self
+    }
+
+    /// Set the permission rule evaluator.
+    pub fn with_permission_evaluator(mut self, evaluator: PermissionRuleEvaluator) -> Self {
+        self.permission_evaluator = Some(evaluator);
         self
     }
 
@@ -584,6 +630,8 @@ impl std::fmt::Debug for ToolContext {
             .field("lsp_manager", &self.lsp_manager.is_some())
             .field("skill_manager", &self.skill_manager.is_some())
             .field("session_dir", &self.session_dir)
+            .field("permission_requester", &self.permission_requester.is_some())
+            .field("permission_evaluator", &self.permission_evaluator.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -611,6 +659,8 @@ pub struct ToolContextBuilder {
     invoked_skills: Arc<Mutex<Vec<InvokedSkill>>>,
     session_dir: Option<PathBuf>,
     parent_selections: Option<RoleSelections>,
+    permission_requester: Option<Arc<dyn PermissionRequester>>,
+    permission_evaluator: Option<PermissionRuleEvaluator>,
 }
 
 impl ToolContextBuilder {
@@ -638,6 +688,8 @@ impl ToolContextBuilder {
             invoked_skills: Arc::new(Mutex::new(Vec::new())),
             session_dir: None,
             parent_selections: None,
+            permission_requester: None,
+            permission_evaluator: None,
         }
     }
 
@@ -748,6 +800,18 @@ impl ToolContextBuilder {
         self
     }
 
+    /// Set the permission requester for interactive approval flow.
+    pub fn permission_requester(mut self, requester: Arc<dyn PermissionRequester>) -> Self {
+        self.permission_requester = Some(requester);
+        self
+    }
+
+    /// Set the permission rule evaluator.
+    pub fn permission_evaluator(mut self, evaluator: PermissionRuleEvaluator) -> Self {
+        self.permission_evaluator = Some(evaluator);
+        self
+    }
+
     /// Build the context.
     pub fn build(self) -> ToolContext {
         ToolContext {
@@ -772,6 +836,8 @@ impl ToolContextBuilder {
             invoked_skills: self.invoked_skills,
             session_dir: self.session_dir,
             parent_selections: self.parent_selections,
+            permission_requester: self.permission_requester,
+            permission_evaluator: self.permission_evaluator,
         }
     }
 }

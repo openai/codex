@@ -174,6 +174,10 @@ pub struct StreamingToolExecutor {
     /// When spawning subagents, these selections are passed to ensure
     /// subagents are unaffected by changes to the parent's model settings.
     parent_selections: Option<cocode_protocol::RoleSelections>,
+    /// Optional permission requester for interactive approval flow.
+    permission_requester: Option<Arc<dyn crate::context::PermissionRequester>>,
+    /// Optional permission rule evaluator.
+    permission_evaluator: Option<crate::permission_rules::PermissionRuleEvaluator>,
 }
 
 impl StreamingToolExecutor {
@@ -199,6 +203,8 @@ impl StreamingToolExecutor {
             spawn_agent_fn: None,
             skill_manager: None,
             parent_selections: None,
+            permission_requester: None,
+            permission_evaluator: None,
         }
     }
 
@@ -251,6 +257,24 @@ impl StreamingToolExecutor {
     /// subsequent changes to the parent's model settings.
     pub fn with_parent_selections(mut self, selections: cocode_protocol::RoleSelections) -> Self {
         self.parent_selections = Some(selections);
+        self
+    }
+
+    /// Set the permission requester for interactive approval flow.
+    pub fn with_permission_requester(
+        mut self,
+        requester: Arc<dyn crate::context::PermissionRequester>,
+    ) -> Self {
+        self.permission_requester = Some(requester);
+        self
+    }
+
+    /// Set the permission rule evaluator.
+    pub fn with_permission_evaluator(
+        mut self,
+        evaluator: crate::permission_rules::PermissionRuleEvaluator,
+    ) -> Self {
+        self.permission_evaluator = Some(evaluator);
         self
     }
 
@@ -666,6 +690,16 @@ impl StreamingToolExecutor {
             builder = builder.parent_selections(selections.clone());
         }
 
+        // Add permission requester for interactive approval flow
+        if let Some(ref requester) = self.permission_requester {
+            builder = builder.permission_requester(requester.clone());
+        }
+
+        // Add permission rule evaluator
+        if let Some(ref evaluator) = self.permission_evaluator {
+            builder = builder.permission_evaluator(evaluator.clone());
+        }
+
         builder.build()
     }
 
@@ -833,6 +867,200 @@ async fn execute_tool(
     }
 }
 
+/// Check if a tool name is an edit/write tool (for AcceptEdits mode).
+fn is_edit_tool(name: &str) -> bool {
+    matches!(name, "Edit" | "Write" | "NotebookEdit" | "ApplyPatch")
+}
+
+/// Check if a tool name is read-only or a plan mode control tool.
+fn is_read_only_or_plan_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "Read"
+            | "Glob"
+            | "Grep"
+            | "TaskOutput"
+            | "EnterPlanMode"
+            | "ExitPlanMode"
+            | "AskUserQuestion"
+            | "Lsp"
+    )
+}
+
+/// Extract file_path from tool input if present.
+fn extract_file_path(input: &Value) -> Option<std::path::PathBuf> {
+    input
+        .get("file_path")
+        .and_then(|v| v.as_str())
+        .map(std::path::PathBuf::from)
+}
+
+/// Build a default approval request for a tool that needs user approval.
+fn default_approval_request(name: &str, input: &Value) -> cocode_protocol::ApprovalRequest {
+    let description = if let Some(path) = extract_file_path(input) {
+        format!("{name}: {}", path.display())
+    } else if let Some(cmd) = input.get("command").and_then(|v| v.as_str()) {
+        let truncated = if cmd.len() > 80 {
+            format!("{}...", &cmd[..80])
+        } else {
+            cmd.to_string()
+        };
+        format!("{name}: {truncated}")
+    } else {
+        format!("Execute tool: {name}")
+    };
+
+    cocode_protocol::ApprovalRequest {
+        request_id: format!(
+            "default-{name}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ),
+        tool_name: name.to_string(),
+        description,
+        risks: vec![],
+        allow_remember: true,
+    }
+}
+
+/// Extract command string from Bash tool input.
+fn extract_command_input(name: &str, input: &Value) -> Option<String> {
+    if name == "Bash" {
+        input
+            .get("command")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+    } else {
+        None
+    }
+}
+
+/// Full permission pipeline (5 stages) aligned with Claude Code v2.1.7.
+///
+/// 1. Check DENY rules (all sources) → if match → Deny
+/// 2. Check ASK rules (all sources) → if match → NeedsApproval
+/// 3. Tool-specific check_permission() → returns allow/deny/ask/passthrough
+/// 4. Check ALLOW rules (all sources) → if match → Allow
+/// 5. Default behavior: reads → Allow, writes → NeedsApproval
+async fn check_permission_pipeline(
+    tool: &dyn crate::tool::Tool,
+    name: &str,
+    input: &Value,
+    ctx: &ToolContext,
+) -> cocode_protocol::PermissionResult {
+    let file_path = extract_file_path(input);
+    let command_input = extract_command_input(name, input);
+
+    if let Some(ref evaluator) = ctx.permission_evaluator {
+        // Stage 1: Check DENY rules
+        if let Some(decision) = evaluator.evaluate_behavior(
+            name,
+            file_path.as_deref(),
+            crate::permission_rules::RuleAction::Deny,
+            command_input.as_deref(),
+        ) {
+            return decision.result;
+        }
+
+        // Stage 2: Check ASK rules
+        if let Some(decision) = evaluator.evaluate_behavior(
+            name,
+            file_path.as_deref(),
+            crate::permission_rules::RuleAction::Ask,
+            command_input.as_deref(),
+        ) {
+            // ASK rule matched — the tool must ask for approval
+            return cocode_protocol::PermissionResult::NeedsApproval {
+                request: cocode_protocol::ApprovalRequest {
+                    request_id: format!("rule-ask-{name}"),
+                    tool_name: name.to_string(),
+                    description: decision.reason,
+                    risks: vec![],
+                    allow_remember: true,
+                },
+            };
+        }
+    }
+
+    // Stage 3: Tool-specific check
+    let tool_result = tool.check_permission(input, ctx).await;
+    if !tool_result.is_passthrough() {
+        return tool_result;
+    }
+
+    if let Some(ref evaluator) = ctx.permission_evaluator {
+        // Stage 4: Check ALLOW rules
+        if let Some(decision) = evaluator.evaluate_behavior(
+            name,
+            file_path.as_deref(),
+            crate::permission_rules::RuleAction::Allow,
+            command_input.as_deref(),
+        ) {
+            if decision.result.is_allowed() {
+                return cocode_protocol::PermissionResult::Allowed;
+            }
+        }
+    }
+
+    // Stage 5: Default behavior
+    if tool.is_read_only() {
+        cocode_protocol::PermissionResult::Allowed
+    } else {
+        cocode_protocol::PermissionResult::NeedsApproval {
+            request: default_approval_request(name, input),
+        }
+    }
+}
+
+/// Apply permission mode on top of pipeline result.
+///
+/// Converts results based on the current mode:
+/// - Bypass: everything → Allowed
+/// - DontAsk: NeedsApproval → Denied
+/// - AcceptEdits: edit/write NeedsApproval → Allowed
+/// - Plan: non-read-only → Denied
+fn apply_permission_mode(
+    result: cocode_protocol::PermissionResult,
+    mode: PermissionMode,
+    tool_name: &str,
+) -> cocode_protocol::PermissionResult {
+    match mode {
+        PermissionMode::Bypass => cocode_protocol::PermissionResult::Allowed,
+        PermissionMode::DontAsk => match result {
+            cocode_protocol::PermissionResult::NeedsApproval { request } => {
+                cocode_protocol::PermissionResult::Denied {
+                    reason: format!(
+                        "DontAsk mode: permission prompt suppressed for '{}': {}",
+                        tool_name, request.description
+                    ),
+                }
+            }
+            other => other,
+        },
+        PermissionMode::AcceptEdits if is_edit_tool(tool_name) => match result {
+            cocode_protocol::PermissionResult::NeedsApproval { .. } => {
+                cocode_protocol::PermissionResult::Allowed
+            }
+            other => other,
+        },
+        PermissionMode::Plan if !is_read_only_or_plan_tool(tool_name) => {
+            // In plan mode, deny all non-read-only tools (unless already allowed/denied)
+            match result {
+                cocode_protocol::PermissionResult::Allowed
+                | cocode_protocol::PermissionResult::NeedsApproval { .. } => {
+                    cocode_protocol::PermissionResult::Denied {
+                        reason: "Plan mode: only read-only tools allowed".to_string(),
+                    }
+                }
+                other => other,
+            }
+        }
+        _ => result,
+    }
+}
+
 /// Inner tool execution logic (without timeout).
 async fn execute_tool_inner(
     registry: &ToolRegistry,
@@ -857,8 +1085,12 @@ async fn execute_tool_inner(
         .build());
     }
 
-    // Check permission
-    let permission = tool.check_permission(&input, ctx).await;
+    // Run the full permission pipeline
+    let pipeline_result = check_permission_pipeline(tool.as_ref(), name, &input, ctx).await;
+
+    // Apply permission mode on top
+    let permission = apply_permission_mode(pipeline_result, ctx.permission_mode, name);
+
     match permission {
         cocode_protocol::PermissionResult::Allowed => {}
         cocode_protocol::PermissionResult::Denied { reason } => {
@@ -867,14 +1099,36 @@ async fn execute_tool_inner(
             );
         }
         cocode_protocol::PermissionResult::NeedsApproval { request } => {
-            // Approval flow not yet implemented - deny with informative message
-            return Err(crate::error::tool_error::PermissionDeniedSnafu {
-                message: format!(
-                    "Tool '{}' requires approval: {}. Approval flow not yet implemented.",
-                    name, request.description
-                ),
+            // Check ApprovalStore first
+            let pattern = &request.description;
+            if ctx.is_approved(name, pattern).await {
+                // Already approved for this pattern
+            } else if let Some(requester) = &ctx.permission_requester {
+                // Use the permission requester for interactive approval
+                let worker_id = ctx.call_id.clone();
+                let approved = requester
+                    .request_permission(request.clone(), &worker_id)
+                    .await;
+                if !approved {
+                    return Err(crate::error::tool_error::PermissionDeniedSnafu {
+                        message: format!("User denied permission for tool '{name}'"),
+                    }
+                    .build());
+                }
+                // Store approval for future calls with the same pattern
+                if request.allow_remember {
+                    ctx.approve_pattern(name, pattern).await;
+                }
+            } else {
+                // No permission requester available - deny
+                return Err(crate::error::tool_error::PermissionDeniedSnafu {
+                    message: format!("Tool '{name}' requires approval: {}", request.description),
+                }
+                .build());
             }
-            .build());
+        }
+        cocode_protocol::PermissionResult::Passthrough => {
+            // Should not happen after pipeline — treat as allowed
         }
     }
 

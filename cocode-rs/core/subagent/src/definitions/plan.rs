@@ -13,6 +13,7 @@ pub fn plan_agent() -> AgentDefinition {
         disallowed_tools: vec!["Task".to_string(), "Edit".to_string(), "Write".to_string()],
         identity: Some(ExecutionIdentity::Role(ModelRole::Plan)),
         max_turns: None,
+        permission_mode: None,
     }
 }
 

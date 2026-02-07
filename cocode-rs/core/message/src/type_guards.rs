@@ -66,6 +66,7 @@ pub fn extract_tool_result(
             tool_use_id,
             content,
             is_error,
+            ..
         } => Some((tool_use_id, content, *is_error)),
         _ => None,
     }

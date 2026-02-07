@@ -980,6 +980,7 @@ name = "cocode-executor"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "cocode-api",
  "cocode-context",

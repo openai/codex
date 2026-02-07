@@ -72,6 +72,7 @@ mod tests {
             disallowed_tools: disallowed.into_iter().map(String::from).collect(),
             identity: None,
             max_turns: None,
+            permission_mode: None,
         }
     }
 

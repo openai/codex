@@ -62,6 +62,7 @@ pub async fn run(
     max_turns: Option<i32>,
     config: &ConfigManager,
     verbose: bool,
+    system_prompt_suffix: Option<String>,
 ) -> anyhow::Result<()> {
     // Initialize logging for REPL mode (stderr)
     let _ = init_repl_logging(config, verbose);
@@ -94,6 +95,11 @@ pub async fn run(
 
     // Create session state
     let mut state = SessionState::new(session, config).await?;
+
+    // Set system prompt suffix if provided
+    if let Some(suffix) = system_prompt_suffix {
+        state.set_system_prompt_suffix(suffix);
+    }
 
     // Handle initial prompt (non-interactive mode)
     if let Some(prompt) = initial_prompt {

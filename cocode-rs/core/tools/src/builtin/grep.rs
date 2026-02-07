@@ -5,7 +5,9 @@ use crate::context::ToolContext;
 use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
+use cocode_protocol::ApprovalRequest;
 use cocode_protocol::ConcurrencySafety;
+use cocode_protocol::PermissionResult;
 use cocode_protocol::ToolOutput;
 use globset::Glob;
 use regex::Regex;
@@ -149,6 +151,49 @@ impl Tool for GrepTool {
 
     fn max_result_size_chars(&self) -> i32 {
         20_000
+    }
+
+    async fn check_permission(&self, input: &Value, ctx: &ToolContext) -> PermissionResult {
+        let search_path = input
+            .get("path")
+            .and_then(|v| v.as_str())
+            .map(|p| ctx.resolve_path(p))
+            .unwrap_or_else(|| ctx.cwd.clone());
+
+        // Sensitive directory targets → NeedsApproval
+        if crate::sensitive_files::is_sensitive_directory(&search_path) {
+            return PermissionResult::NeedsApproval {
+                request: ApprovalRequest {
+                    request_id: format!("grep-sensitive-{}", search_path.display()),
+                    tool_name: self.name().to_string(),
+                    description: format!(
+                        "Searching sensitive directory: {}",
+                        search_path.display()
+                    ),
+                    risks: vec![],
+                    allow_remember: true,
+                },
+            };
+        }
+
+        // Outside working directory → NeedsApproval
+        if crate::sensitive_files::is_outside_cwd(&search_path, &ctx.cwd) {
+            return PermissionResult::NeedsApproval {
+                request: ApprovalRequest {
+                    request_id: format!("grep-outside-cwd-{}", search_path.display()),
+                    tool_name: self.name().to_string(),
+                    description: format!(
+                        "Searching outside working directory: {}",
+                        search_path.display()
+                    ),
+                    risks: vec![],
+                    allow_remember: true,
+                },
+            };
+        }
+
+        // In working directory → Allowed
+        PermissionResult::Allowed
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {

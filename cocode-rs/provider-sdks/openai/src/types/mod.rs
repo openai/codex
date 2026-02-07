@@ -8,6 +8,7 @@ mod stream_events;
 mod usage;
 
 // Common types
+pub use common::CustomToolInputFormat;
 pub use common::FunctionDefinition;
 pub use common::Metadata;
 pub use common::RankingOptions;

@@ -135,6 +135,7 @@ impl Tool for TaskTool {
             run_in_background,
             allowed_tools,
             parent_selections: ctx.parent_selections.clone(),
+            permission_mode: None, // Resolved by driver from AgentDefinition
         };
 
         // Spawn the agent

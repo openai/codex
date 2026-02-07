@@ -12,6 +12,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::ApprovalRequest;
+use crate::PermissionDecision;
 
 // ============================================================================
 // Compaction Types (defined before LoopEvent to avoid forward references)
@@ -155,6 +156,13 @@ pub enum LoopEvent {
         request_id: String,
         /// Whether the user approved.
         approved: bool,
+    },
+    /// A permission check was evaluated.
+    PermissionChecked {
+        /// Tool that was checked.
+        tool: String,
+        /// The decision result.
+        decision: PermissionDecision,
     },
 
     // ========== Agent Events ==========

@@ -267,6 +267,66 @@ impl ToolRegistry {
         self.mcp_tools.clear();
         self.aliases.clear();
     }
+
+    /// Calculate total chars of MCP tool descriptions.
+    ///
+    /// This accounts for the qualified name, description, and serialized input schema
+    /// of each MCP tool. Used to determine if auto-search mode should be enabled.
+    pub fn mcp_description_chars(&self) -> i32 {
+        self.mcp_tools
+            .values()
+            .map(|t| {
+                let name_len = t.qualified_name().len();
+                let desc_len = t.description.as_deref().map(|d| d.len()).unwrap_or(0);
+                let schema_len = serde_json::to_string(&t.input_schema)
+                    .map(|s| s.len())
+                    .unwrap_or(0);
+                (name_len + desc_len + schema_len) as i32
+            })
+            .sum()
+    }
+
+    /// Check if MCP tool definitions should be deferred to auto-search mode.
+    ///
+    /// Returns `true` if the total MCP tool description size exceeds the threshold
+    /// configured in `McpAutoSearchConfig` for the given context window.
+    pub fn should_enable_auto_search(
+        &self,
+        context_window: i32,
+        config: &cocode_protocol::McpAutoSearchConfig,
+    ) -> bool {
+        config.should_use_auto_search(
+            context_window,
+            self.mcp_description_chars(),
+            true, // has_tool_calling
+        )
+    }
+
+    /// Get a snapshot of all MCP tool metadata for use by MCPSearch.
+    ///
+    /// Returns a cloned vector of all MCP tool info entries. This snapshot
+    /// is passed to the `McpSearchTool` for keyword-based discovery.
+    pub fn mcp_tool_snapshot(&self) -> Vec<McpToolInfo> {
+        self.mcp_tools.values().cloned().collect()
+    }
+
+    /// Remove MCP tool definitions from the active set (keep metadata for search).
+    ///
+    /// When auto-search mode is enabled, MCP tools are removed from the
+    /// executable tools map so they are not sent as tool definitions in API
+    /// requests. The metadata is kept in `mcp_tools` for search.
+    ///
+    /// Returns the qualified names of the removed tools.
+    pub fn defer_mcp_tool_definitions(&mut self) -> Vec<String> {
+        let mcp_tool_names: Vec<String> = self.mcp_tools.keys().cloned().collect();
+
+        // Remove from executable tools map (keep in mcp_tools for metadata)
+        for name in &mcp_tool_names {
+            self.tools.remove(name);
+        }
+
+        mcp_tool_names
+    }
 }
 
 impl std::fmt::Debug for ToolRegistry {
@@ -404,5 +464,116 @@ mod tests {
 
         let names = registry.tool_names();
         assert_eq!(names, vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn test_mcp_description_chars() {
+        let mut registry = ToolRegistry::new();
+
+        // Empty registry should return 0
+        assert_eq!(registry.mcp_description_chars(), 0);
+
+        let tools = vec![McpToolInfo {
+            server: "".to_string(),
+            name: "tool1".to_string(),
+            description: Some("A test tool".to_string()),
+            input_schema: serde_json::json!({"type": "object"}),
+        }];
+        registry.register_mcp_server("srv", tools);
+
+        let chars = registry.mcp_description_chars();
+        assert!(chars > 0);
+    }
+
+    #[test]
+    fn test_should_enable_auto_search() {
+        let mut registry = ToolRegistry::new();
+        let config = cocode_protocol::McpAutoSearchConfig::default();
+
+        // No MCP tools => should not enable
+        assert!(!registry.should_enable_auto_search(200_000, &config));
+
+        // Add many MCP tools with large descriptions to exceed threshold
+        // Threshold for 200k context: 0.1 * 200000 * 2.5 = 50000 chars
+        let large_desc = "x".repeat(5000);
+        let tools: Vec<McpToolInfo> = (0..15)
+            .map(|i| McpToolInfo {
+                server: "".to_string(),
+                name: format!("tool_{i}"),
+                description: Some(large_desc.clone()),
+                input_schema: serde_json::json!({"type": "object", "properties": {}}),
+            })
+            .collect();
+        registry.register_mcp_server("big_server", tools);
+
+        // Should exceed 50k chars threshold
+        assert!(registry.mcp_description_chars() >= 50000);
+        assert!(registry.should_enable_auto_search(200_000, &config));
+    }
+
+    #[test]
+    fn test_mcp_tool_snapshot() {
+        let mut registry = ToolRegistry::new();
+
+        let tools = vec![
+            McpToolInfo {
+                server: "".to_string(),
+                name: "tool_a".to_string(),
+                description: Some("Tool A".to_string()),
+                input_schema: serde_json::json!({}),
+            },
+            McpToolInfo {
+                server: "".to_string(),
+                name: "tool_b".to_string(),
+                description: Some("Tool B".to_string()),
+                input_schema: serde_json::json!({}),
+            },
+        ];
+        registry.register_mcp_server("srv", tools);
+
+        let snapshot = registry.mcp_tool_snapshot();
+        assert_eq!(snapshot.len(), 2);
+        // All entries should have server set to "srv"
+        for info in &snapshot {
+            assert_eq!(info.server, "srv");
+        }
+    }
+
+    #[test]
+    fn test_defer_mcp_tool_definitions() {
+        let mut registry = ToolRegistry::new();
+
+        // Register a builtin tool
+        registry.register(TestTool {
+            name: "builtin".to_string(),
+        });
+
+        // Register MCP tools (info only)
+        let tools = vec![McpToolInfo {
+            server: "".to_string(),
+            name: "mcp_tool".to_string(),
+            description: Some("An MCP tool".to_string()),
+            input_schema: serde_json::json!({}),
+        }];
+        registry.register_mcp_server("srv", tools);
+
+        // Also put a matching entry in the tools map to simulate executable registration
+        registry.register(TestTool {
+            name: "mcp__srv_mcp_tool".to_string(),
+        });
+
+        assert!(registry.get("mcp__srv_mcp_tool").is_some());
+
+        let deferred = registry.defer_mcp_tool_definitions();
+        assert!(deferred.contains(&"mcp__srv_mcp_tool".to_string()));
+
+        // Tool should be removed from executable set
+        assert!(registry.get("mcp__srv_mcp_tool").is_none());
+
+        // But metadata should still be available
+        assert!(registry.is_mcp_tool("mcp__srv_mcp_tool"));
+
+        // Builtin tool should not be affected
+        assert!(registry.get("builtin").is_some());
     }
 }

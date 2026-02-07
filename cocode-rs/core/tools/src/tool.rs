@@ -142,10 +142,11 @@ pub trait Tool: Send + Sync {
 
     /// Check if the tool has permission to execute.
     ///
-    /// Default implementation always allows. Override for tools that
-    /// need user permission (e.g., file writes, shell commands).
+    /// Default returns `Passthrough` so the pipeline's Stage 5 applies
+    /// default behavior (read-only → Allow, writes → NeedsApproval).
+    /// Override to add tool-specific checks (e.g., sensitive files, security analysis).
     async fn check_permission(&self, _input: &Value, _ctx: &ToolContext) -> PermissionResult {
-        PermissionResult::Allowed
+        PermissionResult::Passthrough
     }
 
     /// Execute the tool with the given input.

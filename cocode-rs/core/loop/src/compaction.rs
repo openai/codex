@@ -1986,22 +1986,24 @@ mod tests {
     #[test]
     fn test_threshold_status_auto_compact() {
         let config = CompactConfig::default();
-        // Above auto-compact threshold
-        // target = 200000 - 13000 = 187000
-        let status = ThresholdStatus::calculate(190000, 200000, &config);
+        // With default config (80% effective_context_window_percent):
+        // auto_compact_target = 200000 * 0.80 = 160000
+        // blocking_limit = 200000 - 13000 = 187000
+        // So 170000 is between auto-compact target (160000) and blocking limit (187000)
+        let status = ThresholdStatus::calculate(170000, 200000, &config);
 
         assert!(status.is_above_warning_threshold);
         assert!(status.is_above_error_threshold);
         assert!(status.is_above_auto_compact_threshold);
+        assert!(!status.is_at_blocking_limit);
         assert_eq!(status.status_description(), "auto-compact");
     }
 
     #[test]
     fn test_threshold_status_blocking() {
         let config = CompactConfig::default();
-        // At blocking limit
-        // blocking = 200000 - 3000 = 197000
-        let status = ThresholdStatus::calculate(198000, 200000, &config);
+        // blocking_limit = 200000 - 13000 = 187000
+        let status = ThresholdStatus::calculate(190000, 200000, &config);
 
         assert!(status.is_at_blocking_limit);
         assert_eq!(status.status_description(), "blocking");

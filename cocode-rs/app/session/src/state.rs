@@ -8,8 +8,10 @@ use std::sync::Arc;
 use cocode_api::ApiClient;
 use cocode_api::ModelHub;
 use cocode_config::ConfigManager;
+use cocode_context::ContextInjection;
 use cocode_context::ConversationContext;
 use cocode_context::EnvironmentInfo;
+use cocode_context::InjectionPosition;
 use cocode_hooks::HookRegistry;
 use cocode_loop::AgentLoop;
 use cocode_loop::CompactionConfig;
@@ -160,6 +162,9 @@ pub struct SessionState {
     /// 1. Injected as `<system-reminder>User sent: {message}</system-reminder>` for steering
     /// 2. Executed as new user turns after the current turn completes
     queued_commands: Vec<QueuedCommandInfo>,
+
+    /// Optional suffix appended to the end of the system prompt.
+    system_prompt_suffix: Option<String>,
 }
 
 impl SessionState {
@@ -248,6 +253,7 @@ impl SessionState {
             context_window,
             provider_type,
             queued_commands: Vec::new(),
+            system_prompt_suffix: None,
         })
     }
 
@@ -296,6 +302,7 @@ impl SessionState {
         let context = ConversationContext::builder()
             .environment(environment)
             .tool_names(self.tool_registry.tool_names())
+            .injections(self.build_suffix_injections())
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build context: {e}"))?;
 
@@ -594,6 +601,29 @@ impl SessionState {
     }
 
     // ==========================================================
+    // System Prompt Suffix API
+    // ==========================================================
+
+    /// Set a suffix to append to the end of the system prompt.
+    pub fn set_system_prompt_suffix(&mut self, suffix: String) {
+        self.system_prompt_suffix = Some(suffix);
+    }
+
+    /// Build context injections from the system prompt suffix.
+    fn build_suffix_injections(&self) -> Vec<ContextInjection> {
+        self.system_prompt_suffix
+            .as_ref()
+            .map(|suffix| {
+                vec![ContextInjection {
+                    label: "system-prompt-suffix".to_string(),
+                    content: suffix.clone(),
+                    position: InjectionPosition::EndOfPrompt,
+                }]
+            })
+            .unwrap_or_default()
+    }
+
+    // ==========================================================
     // Queued Commands API
     // ==========================================================
 
@@ -695,6 +725,7 @@ impl SessionState {
         let context = ConversationContext::builder()
             .environment(environment)
             .tool_names(self.tool_registry.tool_names())
+            .injections(self.build_suffix_injections())
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build context: {e}"))?;
 

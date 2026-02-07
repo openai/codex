@@ -9,17 +9,20 @@ use serde::Serialize;
 ///
 /// This determines how the apply_patch tool is exposed to the model:
 /// - `Function`: JSON function tool (default) - model provides structured JSON input
-/// - `Freeform`: Grammar-based freeform tool - model outputs patch text directly
+/// - `Freeform`: String-schema function tool - model outputs patch text directly
+/// - `Shell`: No tool sent; model uses shell to invoke apply_patch via prompt instructions
 ///
-/// Freeform mode is designed for GPT-5 which has native support for the apply_patch grammar.
+/// Configured per-model via `ModelInfo.apply_patch_tool_type`.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ApplyPatchToolType {
-    /// JSON function tool (default).
+    /// JSON function tool with "input" parameter (default, for gpt-oss).
     #[default]
     Function,
-    /// Freeform grammar tool (for GPT-5).
+    /// String-schema function tool (for GPT-5.2+, codex models).
     Freeform,
+    /// Shell-based, prompt instructions only (for GPT-5, o3, o4-mini).
+    Shell,
 }
 
 /// Default maximum number of concurrent tool executions.
@@ -87,14 +90,6 @@ pub struct ToolConfig {
     /// persisted to disk with a preview kept in context.
     #[serde(default = "default_true")]
     pub enable_result_persistence: bool,
-
-    /// Type of apply_patch tool to use, if enabled.
-    ///
-    /// - `None`: Disabled - use Edit tool instead (default)
-    /// - `Some(Function)`: JSON function tool
-    /// - `Some(Freeform)`: Grammar-based freeform tool (for GPT-5)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub apply_patch_tool_type: Option<ApplyPatchToolType>,
 }
 
 impl Default for ToolConfig {
@@ -105,7 +100,6 @@ impl Default for ToolConfig {
             max_result_size: DEFAULT_MAX_RESULT_SIZE,
             result_preview_size: DEFAULT_RESULT_PREVIEW_SIZE,
             enable_result_persistence: true,
-            apply_patch_tool_type: None,
         }
     }
 }
@@ -188,26 +182,20 @@ mod tests {
 
     #[test]
     fn test_apply_patch_tool_type_serde() {
-        // Default is None (disabled)
-        let json = r#"{}"#;
-        let config: ToolConfig = serde_json::from_str(json).unwrap();
-        assert!(config.apply_patch_tool_type.is_none());
+        // Function
+        let json = r#""function""#;
+        let t: ApplyPatchToolType = serde_json::from_str(json).unwrap();
+        assert_eq!(t, ApplyPatchToolType::Function);
 
-        // Function mode
-        let json = r#"{"apply_patch_tool_type": "function"}"#;
-        let config: ToolConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(
-            config.apply_patch_tool_type,
-            Some(ApplyPatchToolType::Function)
-        );
+        // Freeform
+        let json = r#""freeform""#;
+        let t: ApplyPatchToolType = serde_json::from_str(json).unwrap();
+        assert_eq!(t, ApplyPatchToolType::Freeform);
 
-        // Freeform mode
-        let json = r#"{"apply_patch_tool_type": "freeform"}"#;
-        let config: ToolConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(
-            config.apply_patch_tool_type,
-            Some(ApplyPatchToolType::Freeform)
-        );
+        // Shell
+        let json = r#""shell""#;
+        let t: ApplyPatchToolType = serde_json::from_str(json).unwrap();
+        assert_eq!(t, ApplyPatchToolType::Shell);
     }
 
     #[test]

@@ -13,8 +13,13 @@ use cocode_file_encoding::normalize_line_endings;
 use cocode_file_encoding::preserve_trailing_newline;
 use cocode_file_encoding::write_with_format_async;
 use cocode_plan_mode::is_safe_file;
+use cocode_protocol::ApprovalRequest;
 use cocode_protocol::ConcurrencySafety;
 use cocode_protocol::ContextModifier;
+use cocode_protocol::PermissionResult;
+use cocode_protocol::RiskSeverity;
+use cocode_protocol::RiskType;
+use cocode_protocol::SecurityRisk;
 use cocode_protocol::ToolOutput;
 use serde_json::Value;
 use tokio::fs;
@@ -70,6 +75,99 @@ impl Tool for WriteTool {
 
     fn is_read_only(&self) -> bool {
         false
+    }
+
+    async fn check_permission(&self, input: &Value, ctx: &ToolContext) -> PermissionResult {
+        if let Some(path_str) = input.get("file_path").and_then(|v| v.as_str()) {
+            let path = ctx.resolve_path(path_str);
+
+            // Locked directory → Deny
+            if crate::sensitive_files::is_locked_directory(&path) {
+                return PermissionResult::Denied {
+                    reason: format!(
+                        "Writing to locked directory is not allowed: {}",
+                        path.display()
+                    ),
+                };
+            }
+
+            // Plan mode: only plan file allowed
+            if ctx.is_plan_mode {
+                if let Some(ref plan_file) = ctx.plan_file_path {
+                    if path != *plan_file {
+                        return PermissionResult::Denied {
+                            reason: format!(
+                                "Plan mode: cannot write to '{}'. Only the plan file can be modified.",
+                                path.display()
+                            ),
+                        };
+                    }
+                }
+            }
+
+            // Sensitive file → NeedsApproval (high severity)
+            if crate::sensitive_files::is_sensitive_file(&path) {
+                return PermissionResult::NeedsApproval {
+                    request: ApprovalRequest {
+                        request_id: format!("sensitive-write-{}", path.display()),
+                        tool_name: self.name().to_string(),
+                        description: format!("Modifying sensitive file: {}", path.display()),
+                        risks: vec![SecurityRisk {
+                            risk_type: RiskType::SensitiveFile,
+                            severity: RiskSeverity::High,
+                            message: format!(
+                                "File '{}' may contain credentials or sensitive configuration",
+                                path.display()
+                            ),
+                        }],
+                        allow_remember: true,
+                    },
+                };
+            }
+
+            // Sensitive directory (.git/, .vscode/, .idea/) → NeedsApproval
+            if crate::sensitive_files::is_sensitive_directory(&path) {
+                return PermissionResult::NeedsApproval {
+                    request: ApprovalRequest {
+                        request_id: format!("sensitive-dir-write-{}", path.display()),
+                        tool_name: self.name().to_string(),
+                        description: format!("Writing to sensitive directory: {}", path.display()),
+                        risks: vec![SecurityRisk {
+                            risk_type: RiskType::SystemConfig,
+                            severity: RiskSeverity::Medium,
+                            message: format!(
+                                "Directory '{}' contains project configuration",
+                                path.display()
+                            ),
+                        }],
+                        allow_remember: true,
+                    },
+                };
+            }
+        }
+
+        // All writes default to NeedsApproval
+        PermissionResult::NeedsApproval {
+            request: ApprovalRequest {
+                request_id: format!(
+                    "write-{}",
+                    input
+                        .get("file_path")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown")
+                ),
+                tool_name: self.name().to_string(),
+                description: format!(
+                    "Write: {}",
+                    input
+                        .get("file_path")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown")
+                ),
+                risks: vec![],
+                allow_remember: true,
+            },
+        }
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {

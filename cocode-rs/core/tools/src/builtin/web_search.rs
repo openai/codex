@@ -5,7 +5,9 @@ use crate::context::ToolContext;
 use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
+use cocode_protocol::ApprovalRequest;
 use cocode_protocol::ConcurrencySafety;
+use cocode_protocol::PermissionResult;
 use cocode_protocol::ToolOutput;
 use serde_json::Value;
 
@@ -64,6 +66,27 @@ impl Tool for WebSearchTool {
 
     fn concurrency_safety(&self) -> ConcurrencySafety {
         ConcurrencySafety::Safe
+    }
+
+    fn is_read_only(&self) -> bool {
+        false // Network access requires approval
+    }
+
+    async fn check_permission(&self, input: &Value, _ctx: &ToolContext) -> PermissionResult {
+        let query = match input.get("query").and_then(|v| v.as_str()) {
+            Some(q) => q,
+            None => return PermissionResult::Passthrough,
+        };
+
+        PermissionResult::NeedsApproval {
+            request: ApprovalRequest {
+                request_id: format!("websearch-{}", query.len()),
+                tool_name: self.name().to_string(),
+                description: format!("Web search: {query}"),
+                risks: vec![],
+                allow_remember: true,
+            },
+        }
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
@@ -147,6 +170,6 @@ mod tests {
         let tool = WebSearchTool::new();
         assert_eq!(tool.name(), "WebSearch");
         assert!(tool.is_concurrent_safe());
-        assert!(tool.is_read_only());
+        assert!(!tool.is_read_only()); // Network access requires approval
     }
 }

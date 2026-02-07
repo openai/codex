@@ -223,6 +223,7 @@ impl Model for AnthropicModel {
                             tool_use_id,
                             content,
                             is_error,
+                            ..
                         } = block
                         {
                             tool_results.push(ant::ContentBlockParam::ToolResult {
@@ -256,7 +257,11 @@ impl Model for AnthropicModel {
 
         // Convert tools
         if let Some(tools) = &request.tools {
-            let ant_tools: Vec<_> = tools.iter().map(convert_tool_to_ant).collect();
+            let ant_tools: Vec<_> = tools
+                .iter()
+                .filter(|t| t.custom_format.is_none())
+                .map(convert_tool_to_ant)
+                .collect();
             params = params.tools(ant_tools);
         }
 
@@ -334,6 +339,7 @@ impl Model for AnthropicModel {
                             tool_use_id,
                             content,
                             is_error,
+                            ..
                         } = block
                         {
                             tool_results.push(ant::ContentBlockParam::ToolResult {
@@ -365,7 +371,11 @@ impl Model for AnthropicModel {
         }
 
         if let Some(tools) = &request.tools {
-            let ant_tools: Vec<_> = tools.iter().map(convert_tool_to_ant).collect();
+            let ant_tools: Vec<_> = tools
+                .iter()
+                .filter(|t| t.custom_format.is_none())
+                .map(convert_tool_to_ant)
+                .collect();
             params = params.tools(ant_tools);
         }
 

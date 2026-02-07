@@ -255,6 +255,7 @@ mod tests {
             name: "test_tool".to_string(),
             description: Some("A test tool".to_string()),
             parameters: serde_json::json!({"type": "object"}),
+            custom_format: None,
         }];
 
         let request = RequestBuilder::new(ctx)

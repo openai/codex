@@ -294,7 +294,11 @@ impl Model for ZaiModel {
 
         // Convert tools
         if let Some(tools) = &request.tools {
-            let zai_tools: Vec<_> = tools.iter().map(convert_tool_to_zai).collect();
+            let zai_tools: Vec<_> = tools
+                .iter()
+                .filter(|t| t.custom_format.is_none())
+                .map(convert_tool_to_zai)
+                .collect();
             params = params.tools(zai_tools);
         }
 

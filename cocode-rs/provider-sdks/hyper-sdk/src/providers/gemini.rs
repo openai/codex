@@ -477,6 +477,7 @@ fn convert_content_block_to_part(block: &ContentBlock) -> gem::Part {
             tool_use_id,
             content,
             is_error,
+            ..
         } => {
             // Create a function_response part
             // Note: For JSON content, we preserve the structure and add is_error
@@ -511,6 +512,7 @@ fn convert_content_block_to_part(block: &ContentBlock) -> gem::Part {
 fn convert_tools_to_gemini(tools: &[ToolDefinition]) -> Vec<gem::Tool> {
     let declarations: Vec<gem::FunctionDeclaration> = tools
         .iter()
+        .filter(|tool| tool.custom_format.is_none())
         .map(|tool| {
             let mut fd = gem::FunctionDeclaration::new(&tool.name);
             if let Some(desc) = &tool.description {

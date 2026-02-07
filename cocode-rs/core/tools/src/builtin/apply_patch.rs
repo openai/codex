@@ -5,6 +5,7 @@
 //! with a more powerful batch-editing capability.
 
 use super::prompts;
+use crate::ToolDefinition;
 use crate::context::FileReadState;
 use crate::context::ToolContext;
 use crate::error::Result;
@@ -16,7 +17,6 @@ use cocode_apply_patch::MaybeApplyPatchVerified;
 use cocode_apply_patch::apply_patch as execute_patch;
 use cocode_apply_patch::maybe_parse_apply_patch_verified;
 use cocode_plan_mode::is_safe_file;
-use cocode_protocol::ApplyPatchToolType;
 use cocode_protocol::ConcurrencySafety;
 use cocode_protocol::ContextModifier;
 use cocode_protocol::ToolOutput;
@@ -31,41 +31,47 @@ use serde_json::Value;
 /// - Updating file contents with context-aware patches
 /// - Moving/renaming files
 ///
-/// # Modes
-///
-/// - **Function mode** (default): Model provides JSON with an `input` field
-///   containing the patch content.
-/// - **Freeform mode**: Model outputs the patch directly without JSON wrapping.
-///   This is designed for GPT-5 which has native support for the apply_patch grammar.
-pub struct ApplyPatchTool {
-    tool_type: ApplyPatchToolType,
-}
+/// The handler auto-detects input format (JSON object vs raw string).
+/// Which tool **definition** is sent to a model is decided by
+/// `select_tools_for_model()` based on `ModelInfo.apply_patch_tool_type`.
+#[derive(Default)]
+pub struct ApplyPatchTool;
 
 impl ApplyPatchTool {
-    /// Create a new ApplyPatchTool with the specified mode.
-    pub fn new(tool_type: ApplyPatchToolType) -> Self {
-        Self { tool_type }
+    pub fn new() -> Self {
+        Self
     }
 
-    /// Create a JSON function mode tool (default).
-    pub fn json() -> Self {
-        Self::new(ApplyPatchToolType::Function)
+    /// Get the Function variant tool definition (JSON schema with "input" field).
+    pub fn function_definition() -> ToolDefinition {
+        ToolDefinition::full(
+            "apply_patch",
+            prompts::APPLY_PATCH_DESCRIPTION,
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "input": {
+                        "type": "string",
+                        "description": "The entire contents of the apply_patch command"
+                    }
+                },
+                "required": ["input"]
+            }),
+        )
     }
 
-    /// Create a freeform mode tool (for GPT-5).
-    pub fn freeform() -> Self {
-        Self::new(ApplyPatchToolType::Freeform)
-    }
-
-    /// Check if this is freeform mode.
-    fn is_freeform(&self) -> bool {
-        matches!(self.tool_type, ApplyPatchToolType::Freeform)
-    }
-}
-
-impl Default for ApplyPatchTool {
-    fn default() -> Self {
-        Self::json()
+    /// Get the Freeform variant tool definition (custom tool with Lark grammar).
+    pub fn freeform_definition() -> ToolDefinition {
+        let lark_grammar = include_str!("tool_apply_patch.lark");
+        ToolDefinition::custom(
+            "apply_patch",
+            prompts::APPLY_PATCH_FREEFORM_DESCRIPTION,
+            serde_json::json!({
+                "type": "grammar",
+                "syntax": "lark",
+                "definition": lark_grammar
+            }),
+        )
     }
 }
 
@@ -76,32 +82,20 @@ impl Tool for ApplyPatchTool {
     }
 
     fn description(&self) -> &str {
-        if self.is_freeform() {
-            prompts::APPLY_PATCH_FREEFORM_DESCRIPTION
-        } else {
-            prompts::APPLY_PATCH_DESCRIPTION
-        }
+        prompts::APPLY_PATCH_DESCRIPTION
     }
 
     fn input_schema(&self) -> Value {
-        if self.is_freeform() {
-            // Freeform: model outputs patch text directly
-            serde_json::json!({
-                "type": "string",
-                "description": "The patch content in apply_patch format"
-            })
-        } else {
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "input": {
-                        "type": "string",
-                        "description": "The entire contents of the apply_patch command"
-                    }
-                },
-                "required": ["input"]
-            })
-        }
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "input": {
+                    "type": "string",
+                    "description": "The entire contents of the apply_patch command"
+                }
+            },
+            "required": ["input"]
+        })
     }
 
     fn concurrency_safety(&self) -> ConcurrencySafety {
@@ -132,18 +126,12 @@ impl Tool for ApplyPatchTool {
         // Reference: codex-rs/core/src/tools/handlers/apply_patch.rs
         //            codex-rs/core/src/tools/runtimes/apply_patch.rs
 
-        // 1. Extract patch content based on mode
-        let patch_input = if self.is_freeform() {
-            input
-                .as_str()
-                .ok_or_else(|| {
-                    tool_error::InvalidInputSnafu {
-                        message: "Freeform input must be a string",
-                    }
-                    .build()
-                })?
-                .to_string()
+        // 1. Extract patch content: auto-detect JSON object vs string input
+        let patch_input = if input.is_string() {
+            // Freeform mode: direct string input
+            input.as_str().unwrap().to_string()
         } else {
+            // Function mode: JSON object with "input" field
             input["input"]
                 .as_str()
                 .ok_or_else(|| {
@@ -261,37 +249,42 @@ mod tests {
 
     #[test]
     fn test_tool_properties() {
-        let tool = ApplyPatchTool::json();
+        let tool = ApplyPatchTool::new();
         assert_eq!(tool.name(), "apply_patch");
         assert!(!tool.is_concurrent_safe());
         assert!(!tool.is_read_only());
     }
 
     #[test]
-    fn test_tool_modes() {
-        let json_tool = ApplyPatchTool::json();
-        assert!(!json_tool.is_freeform());
-
-        let freeform_tool = ApplyPatchTool::freeform();
-        assert!(freeform_tool.is_freeform());
-
-        let default_tool = ApplyPatchTool::default();
-        assert!(!default_tool.is_freeform());
-    }
-
-    #[test]
-    fn test_input_schema_json_mode() {
-        let tool = ApplyPatchTool::json();
+    fn test_input_schema() {
+        let tool = ApplyPatchTool::new();
         let schema = tool.input_schema();
         assert_eq!(schema["type"], "object");
         assert!(schema["properties"]["input"].is_object());
     }
 
     #[test]
-    fn test_input_schema_freeform_mode() {
-        let tool = ApplyPatchTool::freeform();
-        let schema = tool.input_schema();
-        assert_eq!(schema["type"], "string");
+    fn test_function_definition() {
+        let def = ApplyPatchTool::function_definition();
+        assert_eq!(def.name, "apply_patch");
+        assert_eq!(def.parameters["type"], "object");
+        assert!(def.parameters["properties"]["input"].is_object());
+    }
+
+    #[test]
+    fn test_freeform_definition() {
+        let def = ApplyPatchTool::freeform_definition();
+        assert_eq!(def.name, "apply_patch");
+        assert!(def.custom_format.is_some());
+        let format = def.custom_format.unwrap();
+        assert_eq!(format["type"], "grammar");
+        assert_eq!(format["syntax"], "lark");
+        assert!(
+            format["definition"]
+                .as_str()
+                .unwrap()
+                .contains("Begin Patch")
+        );
     }
 
     #[tokio::test]
@@ -299,7 +292,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let new_file = dir.path().join("hello.txt");
 
-        let tool = ApplyPatchTool::json();
+        let tool = ApplyPatchTool::new();
         let mut ctx = make_context(dir.path().to_path_buf());
 
         let patch = format!(
@@ -322,7 +315,7 @@ mod tests {
         let file = dir.path().join("update.txt");
         fs::write(&file, "foo\nbar\n").unwrap();
 
-        let tool = ApplyPatchTool::json();
+        let tool = ApplyPatchTool::new();
         let mut ctx = make_context(dir.path().to_path_buf());
 
         let patch = format!(
@@ -344,7 +337,7 @@ mod tests {
         let file = dir.path().join("delete.txt");
         fs::write(&file, "to be deleted").unwrap();
 
-        let tool = ApplyPatchTool::json();
+        let tool = ApplyPatchTool::new();
         let mut ctx = make_context(dir.path().to_path_buf());
 
         let patch = format!(
@@ -364,7 +357,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let new_file = dir.path().join("freeform.txt");
 
-        let tool = ApplyPatchTool::freeform();
+        let tool = ApplyPatchTool::new();
         let mut ctx = make_context(dir.path().to_path_buf());
 
         let patch = format!(
@@ -372,7 +365,7 @@ mod tests {
             new_file.display()
         );
 
-        // In freeform mode, input is the patch string directly
+        // Auto-detect: string input is treated as freeform
         let input = serde_json::Value::String(patch);
         let result = tool.execute(input, &mut ctx).await.unwrap();
 
@@ -389,7 +382,7 @@ mod tests {
         let plan_file = dir.path().join("plan.md");
         fs::write(&plan_file, "# Plan").unwrap();
 
-        let tool = ApplyPatchTool::json();
+        let tool = ApplyPatchTool::new();
         let mut ctx = make_context(dir.path().to_path_buf()).with_plan_mode(true, Some(plan_file));
 
         let patch = format!(
@@ -412,7 +405,7 @@ mod tests {
         let plan_file = dir.path().join("plan.md");
         fs::write(&plan_file, "# Plan\nold content\n").unwrap();
 
-        let tool = ApplyPatchTool::json();
+        let tool = ApplyPatchTool::new();
         let mut ctx =
             make_context(dir.path().to_path_buf()).with_plan_mode(true, Some(plan_file.clone()));
 
@@ -433,7 +426,7 @@ mod tests {
     async fn test_invalid_patch_returns_error() {
         let dir = TempDir::new().unwrap();
 
-        let tool = ApplyPatchTool::json();
+        let tool = ApplyPatchTool::new();
         let mut ctx = make_context(dir.path().to_path_buf());
 
         let input = serde_json::json!({ "input": "not a valid patch" });
@@ -447,7 +440,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let file = dir.path().join("modified.txt");
 
-        let tool = ApplyPatchTool::json();
+        let tool = ApplyPatchTool::new();
         let mut ctx = make_context(dir.path().to_path_buf());
 
         let patch = format!(
@@ -463,7 +456,7 @@ mod tests {
         let has_file_read = result
             .modifiers
             .iter()
-            .any(|m| matches!(m, ContextModifier::FileRead { path, .. } if path == &file));
+            .any(|m| matches!(m, ContextModifier::FileRead { path, .. } if *path == file));
         assert!(has_file_read);
     }
 }

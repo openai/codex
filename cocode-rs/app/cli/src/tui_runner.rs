@@ -99,6 +99,7 @@ pub async fn run_tui(
     title: Option<String>,
     config: &ConfigManager,
     verbose: bool,
+    system_prompt_suffix: Option<String>,
 ) -> anyhow::Result<()> {
     // Initialize file logging for TUI mode
     let _logging_guard = init_tui_logging(config, verbose);
@@ -145,6 +146,7 @@ pub async fn run_tui(
         model_name,
         title,
         cwd,
+        system_prompt_suffix,
     ));
 
     // Run the TUI (blocks until exit)
@@ -165,6 +167,7 @@ async fn run_agent_driver(
     model_name: String,
     title: Option<String>,
     working_dir: PathBuf,
+    system_prompt_suffix: Option<String>,
 ) {
     info!("Agent driver started");
 
@@ -200,6 +203,11 @@ async fn run_agent_driver(
             return;
         }
     };
+
+    // Set system prompt suffix if provided
+    if let Some(suffix) = system_prompt_suffix {
+        state.set_system_prompt_suffix(suffix);
+    }
 
     let plan_file = working_dir.join(".cocode/plan.md");
 

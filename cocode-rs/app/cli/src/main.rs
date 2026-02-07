@@ -38,6 +38,10 @@ struct Cli {
     /// Disable TUI mode (use simple REPL instead)
     #[arg(long, global = true)]
     no_tui: bool,
+
+    /// Append additional text to the end of the system prompt.
+    #[arg(long, global = true)]
+    system_prompt_suffix: Option<String>,
 }
 
 /// Config subcommands
@@ -139,6 +143,7 @@ async fn cli_main(_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
                 &config,
                 cli.no_tui,
                 cli.verbose,
+                cli.system_prompt_suffix,
             )
             .await
         }
@@ -157,11 +162,21 @@ async fn cli_main(_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
                     &config,
                     true, // Force no-tui for single prompt
                     cli.verbose,
+                    cli.system_prompt_suffix,
                 )
                 .await
             } else {
                 // Interactive mode: start chat (use TUI by default)
-                run_interactive(None, None, None, &config, cli.no_tui, cli.verbose).await
+                run_interactive(
+                    None,
+                    None,
+                    None,
+                    &config,
+                    cli.no_tui,
+                    cli.verbose,
+                    cli.system_prompt_suffix,
+                )
+                .await
             }
         }
     }
@@ -175,12 +190,21 @@ async fn run_interactive(
     config: &ConfigManager,
     no_tui: bool,
     verbose: bool,
+    system_prompt_suffix: Option<String>,
 ) -> anyhow::Result<()> {
     // For single prompt or explicit --no-tui, use REPL mode
     if initial_prompt.is_some() || no_tui {
-        return commands::chat::run(initial_prompt, title, max_turns, config, verbose).await;
+        return commands::chat::run(
+            initial_prompt,
+            title,
+            max_turns,
+            config,
+            verbose,
+            system_prompt_suffix,
+        )
+        .await;
     }
 
     // Interactive mode: use TUI
-    tui_runner::run_tui(title, config, verbose).await
+    tui_runner::run_tui(title, config, verbose, system_prompt_suffix).await
 }

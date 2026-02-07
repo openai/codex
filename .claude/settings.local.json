@@ -113,7 +113,9 @@
       "Bash(do echo -n \"$dep: \")",
       "Bash(if grep -q \"$dep\" /Users/linyuzhi/codespace/myagent/worktrees/codex-feat-sqllite/cocode-rs/retrieval/Cargo.toml)",
       "Bash(then echo \"FOUND IN CARGO.TOML\")",
-      "Bash(else echo \"not in Cargo.toml\")"
+      "Bash(else echo \"not in Cargo.toml\")",
+      "Bash(for dir in common core provider-sdks utils mcp exec features app lsp retrieval)",
+      "Bash(do echo \"=== $dir ===\" ls -d /Users/linyuzhi/codespace/myagent/codex/cocode-rs/$dir/*/src)"
     ],
     "deny": [],
     "ask": []

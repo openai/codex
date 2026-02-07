@@ -105,6 +105,12 @@ pub enum PermissionResult {
         /// The approval request to present to the user.
         request: ApprovalRequest,
     },
+    /// No rule matched — fall through to defaults.
+    ///
+    /// Tools return this from `check_permission()` when they have no
+    /// opinion, letting the pipeline apply default behavior
+    /// (reads → Allow, writes → NeedsApproval).
+    Passthrough,
 }
 
 impl PermissionResult {
@@ -121,6 +127,115 @@ impl PermissionResult {
     /// Check if the operation needs approval.
     pub fn needs_approval(&self) -> bool {
         matches!(self, PermissionResult::NeedsApproval { .. })
+    }
+
+    /// Check if no rule matched (passthrough to defaults).
+    pub fn is_passthrough(&self) -> bool {
+        matches!(self, PermissionResult::Passthrough)
+    }
+}
+
+/// A permission decision with additional context about why the decision was made.
+///
+/// This wraps `PermissionResult` with metadata about which rule matched
+/// and from which source, enabling debugging and audit logging.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionDecision {
+    /// The permission result.
+    pub result: PermissionResult,
+    /// Human-readable reason for the decision.
+    pub reason: String,
+    /// The source of the rule that matched (if applicable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<RuleSource>,
+    /// The pattern that matched (if applicable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matched_pattern: Option<String>,
+}
+
+impl PermissionDecision {
+    /// Create an allowed decision with a reason.
+    pub fn allowed(reason: impl Into<String>) -> Self {
+        Self {
+            result: PermissionResult::Allowed,
+            reason: reason.into(),
+            source: None,
+            matched_pattern: None,
+        }
+    }
+
+    /// Create a denied decision with a reason.
+    pub fn denied(reason: impl Into<String>) -> Self {
+        let reason = reason.into();
+        Self {
+            result: PermissionResult::Denied {
+                reason: reason.clone(),
+            },
+            reason,
+            source: None,
+            matched_pattern: None,
+        }
+    }
+
+    /// Set the rule source.
+    pub fn with_source(mut self, source: RuleSource) -> Self {
+        self.source = Some(source);
+        self
+    }
+
+    /// Set the matched pattern.
+    pub fn with_pattern(mut self, pattern: impl Into<String>) -> Self {
+        self.matched_pattern = Some(pattern.into());
+        self
+    }
+
+    /// Check if the operation is allowed.
+    pub fn is_allowed(&self) -> bool {
+        self.result.is_allowed()
+    }
+}
+
+/// Source of a permission rule, ordered by priority (highest first).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RuleSource {
+    /// Policy-level rules (highest priority).
+    Policy,
+    /// Project-level settings (.claude/settings.json in project).
+    Project,
+    /// Local settings (.claude/settings.local.json).
+    Local,
+    /// User-level settings (~/.claude/settings.json).
+    User,
+    /// CLI flag overrides.
+    Flag,
+    /// CLI argument overrides.
+    Cli,
+    /// Per-command overrides.
+    Command,
+    /// Session-level approvals (lowest priority).
+    Session,
+}
+
+impl RuleSource {
+    /// Get the source as a string.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RuleSource::Policy => "policy",
+            RuleSource::Project => "project",
+            RuleSource::Local => "local",
+            RuleSource::User => "user",
+            RuleSource::Flag => "flag",
+            RuleSource::Cli => "cli",
+            RuleSource::Command => "command",
+            RuleSource::Session => "session",
+        }
+    }
+}
+
+impl std::fmt::Display for RuleSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
     }
 }
 
@@ -289,6 +404,7 @@ mod tests {
         assert!(PermissionResult::Allowed.is_allowed());
         assert!(!PermissionResult::Allowed.is_denied());
         assert!(!PermissionResult::Allowed.needs_approval());
+        assert!(!PermissionResult::Allowed.is_passthrough());
 
         let denied = PermissionResult::Denied {
             reason: "test".to_string(),
@@ -309,6 +425,9 @@ mod tests {
         assert!(!needs_approval.is_allowed());
         assert!(!needs_approval.is_denied());
         assert!(needs_approval.needs_approval());
+
+        assert!(PermissionResult::Passthrough.is_passthrough());
+        assert!(!PermissionResult::Passthrough.is_allowed());
     }
 
     #[test]
@@ -320,6 +439,45 @@ mod tests {
         assert!(RiskSeverity::Critical.at_least(RiskSeverity::Low));
         assert!(RiskSeverity::Medium.at_least(RiskSeverity::Medium));
         assert!(!RiskSeverity::Low.at_least(RiskSeverity::High));
+    }
+
+    #[test]
+    fn test_permission_decision_constructors() {
+        let allowed = PermissionDecision::allowed("bypass mode");
+        assert!(allowed.is_allowed());
+        assert_eq!(allowed.reason, "bypass mode");
+
+        let denied = PermissionDecision::denied("read-only command");
+        assert!(!denied.is_allowed());
+    }
+
+    #[test]
+    fn test_permission_decision_with_source() {
+        let decision = PermissionDecision::allowed("matched rule")
+            .with_source(RuleSource::Project)
+            .with_pattern("Edit:src/**/*.rs");
+        assert_eq!(decision.source, Some(RuleSource::Project));
+        assert_eq!(
+            decision.matched_pattern.as_deref(),
+            Some("Edit:src/**/*.rs")
+        );
+    }
+
+    #[test]
+    fn test_rule_source_ordering() {
+        assert!(RuleSource::Policy < RuleSource::Project);
+        assert!(RuleSource::Project < RuleSource::Local);
+        assert!(RuleSource::Local < RuleSource::User);
+        assert!(RuleSource::Command < RuleSource::Session);
+    }
+
+    #[test]
+    fn test_permission_decision_serde() {
+        let decision = PermissionDecision::allowed("test reason").with_source(RuleSource::Project);
+        let json = serde_json::to_string(&decision).unwrap();
+        let parsed: PermissionDecision = serde_json::from_str(&json).unwrap();
+        assert!(parsed.is_allowed());
+        assert_eq!(parsed.source, Some(RuleSource::Project));
     }
 
     #[test]

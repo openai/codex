@@ -233,6 +233,7 @@ fn content_block_to_json(block: &ContentBlock) -> Value {
             tool_use_id,
             content,
             is_error,
+            ..
         } => serde_json::json!({
             "type": "tool_result",
             "tool_use_id": tool_use_id,

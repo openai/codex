@@ -14,6 +14,10 @@ pub struct ToolDefinition {
     pub description: Option<String>,
     /// JSON Schema for the tool's parameters.
     pub parameters: Value,
+    /// Custom tool format (OpenAI-only). When set, sent as `type: "custom"` tool.
+    /// Non-OpenAI providers ignore this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_format: Option<Value>,
 }
 
 impl ToolDefinition {
@@ -23,6 +27,7 @@ impl ToolDefinition {
             name: name.into(),
             description: None,
             parameters,
+            custom_format: None,
         }
     }
 
@@ -42,6 +47,24 @@ impl ToolDefinition {
             name: name.into(),
             description: Some(description.into()),
             parameters,
+            custom_format: None,
+        }
+    }
+
+    /// Create a custom tool definition (OpenAI-only).
+    ///
+    /// The `custom_format` value is sent as the `format` field of an OpenAI
+    /// `type: "custom"` tool. Non-OpenAI providers silently skip custom tools.
+    pub fn custom(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        custom_format: Value,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            description: Some(description.into()),
+            parameters: Value::Null,
+            custom_format: Some(custom_format),
         }
     }
 }

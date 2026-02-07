@@ -1,6 +1,6 @@
 //! Built-in tools for the agent.
 //!
-//! This module provides the standard set of 18 built-in tools:
+//! This module provides the standard set of 19 built-in tools:
 //! - [`ReadTool`] - Read file contents
 //! - [`GlobTool`] - Pattern-based file search
 //! - [`GrepTool`] - Content search with regex
@@ -18,6 +18,7 @@
 //! - [`WebSearchTool`] - Search the web
 //! - [`SkillTool`] - Execute named skills (slash commands)
 //! - [`LspTool`] - Language Server Protocol operations (feature-gated)
+//! - [`McpSearchTool`] - Search MCP tools by keyword (dynamic, for auto-search mode)
 //! - [`ApplyPatchTool`] - Apply multi-file patches (optional, for GPT-5)
 //!
 //! ## Utilities
@@ -36,6 +37,7 @@ mod glob;
 mod grep;
 mod kill_shell;
 mod lsp;
+pub mod mcp_search;
 mod notebook_edit;
 pub mod path_extraction;
 mod read;
@@ -57,6 +59,7 @@ pub use glob::GlobTool;
 pub use grep::GrepTool;
 pub use kill_shell::KillShellTool;
 pub use lsp::LspTool;
+pub use mcp_search::McpSearchTool;
 pub use notebook_edit::NotebookEditTool;
 pub use read::ReadTool;
 pub use skill::SkillTool;
@@ -68,21 +71,13 @@ pub use web_search::WebSearchTool;
 pub use write::WriteTool;
 
 use crate::registry::ToolRegistry;
-use cocode_protocol::ToolConfig;
 
 /// Register all built-in tools with a registry.
 ///
-/// By default, registers all standard tools. If `tool_config` specifies an
-/// `apply_patch_tool_type`, the ApplyPatch tool is registered with that mode.
+/// All tools including `apply_patch` are always registered. Which tool
+/// definitions are sent to a model is decided at request time by
+/// `select_tools_for_model()` based on `ModelInfo.apply_patch_tool_type`.
 pub fn register_builtin_tools(registry: &mut ToolRegistry) {
-    register_builtin_tools_with_config(registry, &ToolConfig::default());
-}
-
-/// Register all built-in tools with a registry, using the provided config.
-///
-/// If `tool_config.apply_patch_tool_type` is set, the ApplyPatch tool is
-/// registered with the specified mode. Otherwise, only the Edit tool is used.
-pub fn register_builtin_tools_with_config(registry: &mut ToolRegistry, tool_config: &ToolConfig) {
     registry.register(ReadTool::new());
     registry.register(GlobTool::new());
     registry.register(GrepTool::new());
@@ -101,11 +96,7 @@ pub fn register_builtin_tools_with_config(registry: &mut ToolRegistry, tool_conf
     registry.register(SkillTool::new());
     registry.register(LspTool::new());
     registry.register(NotebookEditTool::new());
-
-    // Conditionally register apply_patch tool based on config
-    if let Some(apply_patch_type) = tool_config.apply_patch_tool_type {
-        registry.register(ApplyPatchTool::new(apply_patch_type));
-    }
+    registry.register(ApplyPatchTool::new());
 }
 
 /// Get a list of built-in tool names.

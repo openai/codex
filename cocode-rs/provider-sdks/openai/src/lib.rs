@@ -77,6 +77,7 @@ pub use error::OpenAIError;
 pub use error::Result;
 
 // Common types
+pub use types::CustomToolInputFormat;
 pub use types::FunctionDefinition;
 pub use types::Metadata;
 pub use types::RankingOptions;

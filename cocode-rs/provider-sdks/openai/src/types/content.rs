@@ -170,6 +170,17 @@ pub enum InputContentBlock {
         #[serde(skip_serializing_if = "Option::is_none")]
         output: Option<String>,
     },
+    /// Custom tool call output.
+    #[serde(rename = "custom_tool_call_output")]
+    CustomToolCallOutput {
+        /// ID of the custom tool call this is responding to.
+        call_id: String,
+        /// Output from the custom tool.
+        output: String,
+        /// Unique ID (optional).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
     /// Item reference (reference previous conversation items by ID).
     ItemReference {
         /// ID of the item to reference.
@@ -385,6 +396,15 @@ impl InputContentBlock {
         Self::ApplyPatchCallOutput {
             call_id: call_id.into(),
             output,
+        }
+    }
+
+    /// Create a custom tool call output content block.
+    pub fn custom_tool_call_output(call_id: impl Into<String>, output: impl Into<String>) -> Self {
+        Self::CustomToolCallOutput {
+            call_id: call_id.into(),
+            output: output.into(),
+            id: None,
         }
     }
 
@@ -704,6 +724,31 @@ mod tests {
         let json = serde_json::to_string(&logprobs).unwrap();
         assert!(json.contains(r#""token":"Hello""#));
         assert!(json.contains(r#""logprob":-0.5"#));
+    }
+
+    #[test]
+    fn test_custom_tool_call_output_serialization() {
+        let block = InputContentBlock::custom_tool_call_output("call-custom-1", "patch applied");
+        let json = serde_json::to_string(&block).unwrap();
+        assert!(json.contains(r#""type":"custom_tool_call_output""#));
+        assert!(json.contains(r#""call_id":"call-custom-1""#));
+        assert!(json.contains(r#""output":"patch applied""#));
+        assert!(!json.contains(r#""id""#)); // id is None, should be skipped
+
+        // Roundtrip
+        let parsed: InputContentBlock = serde_json::from_str(&json).unwrap();
+        if let InputContentBlock::CustomToolCallOutput {
+            call_id,
+            output,
+            id,
+        } = parsed
+        {
+            assert_eq!(call_id, "call-custom-1");
+            assert_eq!(output, "patch applied");
+            assert!(id.is_none());
+        } else {
+            panic!("Expected CustomToolCallOutput variant");
+        }
     }
 
     #[test]

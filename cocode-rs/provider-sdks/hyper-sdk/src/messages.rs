@@ -87,6 +87,10 @@ pub enum ContentBlock {
         /// Whether this represents an error.
         #[serde(default)]
         is_error: bool,
+        /// Whether this result is for a custom tool (vs a function tool).
+        /// OpenAI requires `custom_tool_call_output` for custom tools.
+        #[serde(default)]
+        is_custom: bool,
     },
     /// Thinking/reasoning content (for extended thinking models).
     Thinking {
@@ -141,7 +145,7 @@ impl ContentBlock {
         }
     }
 
-    /// Create a tool result content block.
+    /// Create a tool result content block (for function tools).
     pub fn tool_result(
         tool_use_id: impl Into<String>,
         content: ToolResultContent,
@@ -151,6 +155,24 @@ impl ContentBlock {
             tool_use_id: tool_use_id.into(),
             content,
             is_error,
+            is_custom: false,
+        }
+    }
+
+    /// Create a custom tool result content block.
+    ///
+    /// Custom tool results use `custom_tool_call_output` when sent to OpenAI,
+    /// instead of `function_call_output`.
+    pub fn custom_tool_result(
+        tool_use_id: impl Into<String>,
+        content: ToolResultContent,
+        is_error: bool,
+    ) -> Self {
+        ContentBlock::ToolResult {
+            tool_use_id: tool_use_id.into(),
+            content,
+            is_error,
+            is_custom: true,
         }
     }
 

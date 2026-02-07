@@ -54,6 +54,21 @@ pub enum ResponseStatus {
     Queued,
 }
 
+/// Input format for custom tools (discriminated by `type`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum CustomToolInputFormat {
+    /// Unconstrained free-form text.
+    Text,
+    /// A grammar-based format.
+    Grammar {
+        /// The grammar definition string.
+        definition: String,
+        /// The syntax: "lark" or "regex".
+        syntax: String,
+    },
+}
+
 /// Tool definition - supports both function tools and built-in tools.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -149,9 +164,12 @@ pub enum Tool {
     Custom {
         /// Custom tool name.
         name: String,
-        /// Tool schema.
+        /// Tool description.
         #[serde(skip_serializing_if = "Option::is_none")]
-        schema: Option<serde_json::Value>,
+        description: Option<String>,
+        /// Input format constraint.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        format: Option<CustomToolInputFormat>,
     },
 }
 
@@ -282,6 +300,41 @@ impl Tool {
     /// Create an apply patch tool.
     pub fn apply_patch() -> Self {
         Self::ApplyPatch
+    }
+
+    /// Create a custom tool with grammar format.
+    pub fn custom_with_grammar(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        syntax: impl Into<String>,
+        definition: impl Into<String>,
+    ) -> Self {
+        Self::Custom {
+            name: name.into(),
+            description: Some(description.into()),
+            format: Some(CustomToolInputFormat::Grammar {
+                syntax: syntax.into(),
+                definition: definition.into(),
+            }),
+        }
+    }
+
+    /// Create a custom tool with unconstrained text format.
+    pub fn custom_text(name: impl Into<String>, description: impl Into<String>) -> Self {
+        Self::Custom {
+            name: name.into(),
+            description: Some(description.into()),
+            format: Some(CustomToolInputFormat::Text),
+        }
+    }
+
+    /// Create a custom tool with no format constraint.
+    pub fn custom(name: impl Into<String>) -> Self {
+        Self::Custom {
+            name: name.into(),
+            description: None,
+            format: None,
+        }
     }
 
     /// Set strict mode for function tools.
@@ -670,5 +723,65 @@ mod tests {
         } else {
             panic!("Expected ImageGeneration variant");
         }
+    }
+
+    #[test]
+    fn test_custom_tool_serialization() {
+        // Custom tool with grammar format
+        let tool = Tool::custom_with_grammar(
+            "apply_patch",
+            "Apply a unified diff",
+            "lark",
+            "start: line+",
+        );
+        let json = serde_json::to_string(&tool).unwrap();
+        assert!(json.contains(r#""type":"custom""#));
+        assert!(json.contains(r#""name":"apply_patch""#));
+        assert!(json.contains(r#""description":"Apply a unified diff""#));
+        assert!(json.contains(r#""type":"grammar""#));
+        assert!(json.contains(r#""syntax":"lark""#));
+        assert!(json.contains(r#""definition":"start: line+""#));
+
+        // Roundtrip
+        let parsed: Tool = serde_json::from_str(&json).unwrap();
+        if let Tool::Custom {
+            name,
+            description,
+            format,
+        } = parsed
+        {
+            assert_eq!(name, "apply_patch");
+            assert_eq!(description, Some("Apply a unified diff".to_string()));
+            if let Some(CustomToolInputFormat::Grammar { syntax, definition }) = format {
+                assert_eq!(syntax, "lark");
+                assert_eq!(definition, "start: line+");
+            } else {
+                panic!("Expected Grammar format");
+            }
+        } else {
+            panic!("Expected Custom variant");
+        }
+
+        // Custom tool with text format
+        let text_tool = Tool::custom_text("my_tool", "A text tool");
+        let json = serde_json::to_string(&text_tool).unwrap();
+        assert!(json.contains(r#""type":"custom""#));
+        assert!(json.contains(r#""format":{"type":"text"}"#));
+
+        // Roundtrip
+        let parsed: Tool = serde_json::from_str(&json).unwrap();
+        if let Tool::Custom { format, .. } = parsed {
+            assert!(matches!(format, Some(CustomToolInputFormat::Text)));
+        } else {
+            panic!("Expected Custom variant");
+        }
+
+        // Custom tool with no format
+        let bare_tool = Tool::custom("bare_tool");
+        let json = serde_json::to_string(&bare_tool).unwrap();
+        assert!(json.contains(r#""type":"custom""#));
+        assert!(json.contains(r#""name":"bare_tool""#));
+        assert!(!json.contains(r#""format""#));
+        assert!(!json.contains(r#""description""#));
     }
 }

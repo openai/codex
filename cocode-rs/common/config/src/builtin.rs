@@ -16,6 +16,7 @@ const OUTPUT_STYLE_LEARNING: &str = include_str!("../output_style_learning.md");
 
 use crate::types::ProviderConfig;
 use crate::types::ProviderType;
+use cocode_protocol::ApplyPatchToolType;
 use cocode_protocol::Capability;
 use cocode_protocol::ConfigShellToolType;
 use cocode_protocol::ModelInfo;
@@ -379,6 +380,7 @@ fn init_builtin_models() -> HashMap<String, ModelInfo> {
                 ThinkingLevel::medium(),
                 ThinkingLevel::high(),
             ]),
+            apply_patch_tool_type: Some(ApplyPatchToolType::Shell),
             ..Default::default()
         },
     );
@@ -410,6 +412,7 @@ fn init_builtin_models() -> HashMap<String, ModelInfo> {
                 ThinkingLevel::xhigh(),
             ]),
             shell_type: Some(ConfigShellToolType::ShellCommand),
+            apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             ..Default::default()
         },
     );
@@ -442,6 +445,7 @@ fn init_builtin_models() -> HashMap<String, ModelInfo> {
                 ThinkingLevel::xhigh(),
             ]),
             shell_type: Some(ConfigShellToolType::ShellCommand),
+            apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             ..Default::default()
         },
     );
@@ -634,6 +638,32 @@ mod tests {
         let gpt52 = get_model_defaults("gpt-5.2").unwrap();
         let levels = gpt52.supported_thinking_levels.unwrap();
         assert!(levels.iter().any(|l| l.effort == ReasoningEffort::XHigh));
+    }
+
+    #[test]
+    fn test_apply_patch_tool_type() {
+        ensure_initialized();
+
+        let gpt5 = get_model_defaults("gpt-5").unwrap();
+        assert_eq!(gpt5.apply_patch_tool_type, Some(ApplyPatchToolType::Shell));
+
+        let gpt52 = get_model_defaults("gpt-5.2").unwrap();
+        assert_eq!(
+            gpt52.apply_patch_tool_type,
+            Some(ApplyPatchToolType::Freeform)
+        );
+
+        let codex = get_model_defaults("gpt-5.2-codex").unwrap();
+        assert_eq!(
+            codex.apply_patch_tool_type,
+            Some(ApplyPatchToolType::Freeform)
+        );
+
+        let gemini = get_model_defaults("gemini-3-pro").unwrap();
+        assert_eq!(gemini.apply_patch_tool_type, None);
+
+        let gemini_flash = get_model_defaults("gemini-3-flash").unwrap();
+        assert_eq!(gemini_flash.apply_patch_tool_type, None);
     }
 
     #[test]

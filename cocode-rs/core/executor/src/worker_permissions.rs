@@ -37,8 +37,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use async_trait::async_trait;
 use cocode_protocol::ApprovalRequest;
 use cocode_protocol::LoopEvent;
+use cocode_tools::PermissionRequester;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::Mutex;
@@ -570,6 +572,17 @@ impl WorkerPermissionQueue {
 impl Default for WorkerPermissionQueue {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ============================================================================
+// PermissionRequester impl
+// ============================================================================
+
+#[async_trait]
+impl PermissionRequester for WorkerPermissionQueue {
+    async fn request_permission(&self, request: ApprovalRequest, worker_id: &str) -> bool {
+        self.request_permission(request, worker_id).await
     }
 }
 

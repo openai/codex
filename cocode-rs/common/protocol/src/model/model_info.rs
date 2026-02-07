@@ -97,9 +97,10 @@ pub struct ModelInfo {
 
     /// Apply patch tool type for this model.
     ///
-    /// - `None`: Use Edit tool (default for Claude and most models)
-    /// - `Some(Function)`: JSON function tool
-    /// - `Some(Freeform)`: Grammar-based freeform tool (for GPT-5)
+    /// - `None`: No apply_patch tool (default for Claude, Gemini, non-OpenAI)
+    /// - `Some(Function)`: JSON function tool with "input" parameter (for gpt-oss)
+    /// - `Some(Freeform)`: String-schema function tool (for GPT-5.2+, codex models)
+    /// - `Some(Shell)`: Shell-based, prompt instructions only (for GPT-5, o3, o4-mini)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
 

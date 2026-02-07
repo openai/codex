@@ -665,14 +665,9 @@ pub enum OutputItem {
         /// Call ID.
         call_id: String,
         /// Tool name.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        name: Option<String>,
-        /// Tool arguments.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        arguments: Option<String>,
-        /// Tool output.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        output: Option<String>,
+        name: String,
+        /// Tool input (free-form text).
+        input: String,
         /// Status of the call.
         #[serde(skip_serializing_if = "Option::is_none")]
         status: Option<String>,
@@ -1636,6 +1631,26 @@ impl Response {
                 } = item
                 {
                     Some((call_id.as_str(), prompt.as_deref(), result.as_ref()))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Get all custom tool calls from the response.
+    pub fn custom_tool_calls(&self) -> Vec<(&str, &str, &str)> {
+        self.output
+            .iter()
+            .filter_map(|item| {
+                if let OutputItem::CustomToolCall {
+                    call_id,
+                    name,
+                    input,
+                    ..
+                } = item
+                {
+                    Some((call_id.as_str(), name.as_str(), input.as_str()))
                 } else {
                     None
                 }

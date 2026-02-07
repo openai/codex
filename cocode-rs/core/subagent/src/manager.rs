@@ -464,6 +464,7 @@ mod tests {
             disallowed_tools: vec![],
             identity: None,
             max_turns: None,
+            permission_mode: None,
         }
     }
 

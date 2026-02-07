@@ -98,14 +98,17 @@ pub mod context;
 pub mod error;
 pub mod executor;
 pub mod mcp_tool;
+pub mod permission_rules;
 pub mod registry;
 pub mod result_persistence;
+pub mod sensitive_files;
 pub mod tool;
 
 // Re-export main types at crate root
 pub use context::ApprovalStore;
 pub use context::FileReadState;
 pub use context::FileTracker;
+pub use context::PermissionRequester;
 pub use context::SpawnAgentFn;
 pub use context::SpawnAgentInput;
 pub use context::SpawnAgentResult;
@@ -117,6 +120,9 @@ pub use executor::ExecutorConfig;
 pub use executor::StreamingToolExecutor;
 pub use executor::ToolExecutionResult;
 pub use mcp_tool::McpToolWrapper;
+pub use permission_rules::PermissionRule;
+pub use permission_rules::PermissionRuleEvaluator;
+pub use permission_rules::RuleAction;
 pub use registry::McpToolInfo;
 pub use registry::ToolRegistry;
 pub use tool::Tool;
@@ -143,7 +149,6 @@ pub mod prelude {
     pub use crate::ToolOutput;
     pub use crate::builtin::builtin_tool_names;
     pub use crate::builtin::register_builtin_tools;
-    pub use crate::builtin::register_builtin_tools_with_config;
     pub use crate::context::ToolContext;
     pub use crate::error::Result;
     pub use crate::error::ToolError;

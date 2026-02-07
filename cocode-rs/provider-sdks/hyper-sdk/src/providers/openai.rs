@@ -231,22 +231,29 @@ impl Model for OpenAIModel {
                     input_messages.push(oai::InputMessage::assistant(content_blocks));
                 }
                 Role::Tool => {
-                    // Extract tool result
+                    // Extract tool result — route custom vs function tools
                     for block in &msg.content {
                         if let ContentBlock::ToolResult {
                             tool_use_id,
                             content,
                             is_error,
+                            is_custom,
                         } = block
                         {
                             let output = content.to_text();
-                            input_messages.push(oai::InputMessage::user(vec![
+                            let content_block = if *is_custom {
+                                oai::InputContentBlock::custom_tool_call_output(
+                                    tool_use_id,
+                                    &output,
+                                )
+                            } else {
                                 oai::InputContentBlock::function_call_output(
                                     tool_use_id,
                                     &output,
                                     Some(*is_error),
-                                ),
-                            ]));
+                                )
+                            };
+                            input_messages.push(oai::InputMessage::user(vec![content_block]));
                         }
                     }
                 }
@@ -359,16 +366,23 @@ impl Model for OpenAIModel {
                             tool_use_id,
                             content,
                             is_error,
+                            is_custom,
                         } = block
                         {
                             let output = content.to_text();
-                            input_messages.push(oai::InputMessage::user(vec![
+                            let content_block = if *is_custom {
+                                oai::InputContentBlock::custom_tool_call_output(
+                                    tool_use_id,
+                                    &output,
+                                )
+                            } else {
                                 oai::InputContentBlock::function_call_output(
                                     tool_use_id,
                                     &output,
                                     Some(*is_error),
-                                ),
-                            ]));
+                                )
+                            };
+                            input_messages.push(oai::InputMessage::user(vec![content_block]));
                         }
                     }
                 }
@@ -511,12 +525,23 @@ fn convert_content_to_oai(content: &[ContentBlock]) -> Vec<oai::InputContentBloc
 }
 
 fn convert_tool_to_oai(tool: &ToolDefinition) -> Result<oai::Tool, String> {
-    oai::Tool::function(
-        &tool.name,
-        tool.description.clone(),
-        tool.parameters.clone(),
-    )
-    .map_err(|e| e.to_string())
+    if let Some(format_value) = &tool.custom_format {
+        // Custom tool — OpenAI-specific
+        let format: oai::CustomToolInputFormat = serde_json::from_value(format_value.clone())
+            .map_err(|e| format!("Invalid custom tool format: {e}"))?;
+        Ok(oai::Tool::Custom {
+            name: tool.name.clone(),
+            description: tool.description.clone(),
+            format: Some(format),
+        })
+    } else {
+        oai::Tool::function(
+            &tool.name,
+            tool.description.clone(),
+            tool.parameters.clone(),
+        )
+        .map_err(|e| e.to_string())
+    }
 }
 
 fn convert_tool_choice_to_oai(choice: &crate::tools::ToolChoice) -> oai::ToolChoice {
@@ -580,6 +605,18 @@ fn convert_oai_response(response: oai::Response) -> Result<GenerateResponse, Hyp
                 let args: serde_json::Value =
                     serde_json::from_str(arguments).unwrap_or(serde_json::Value::Null);
                 content.push(ContentBlock::tool_use(call_id, name, args));
+            }
+            oai::OutputItem::CustomToolCall {
+                call_id,
+                name,
+                input,
+                ..
+            } => {
+                content.push(ContentBlock::tool_use(
+                    call_id,
+                    name,
+                    serde_json::Value::String(input.clone()),
+                ));
             }
             oai::OutputItem::Reasoning {
                 content: reasoning, ..
@@ -696,10 +733,8 @@ fn convert_stream_event_stateful(
         }
         oai::ResponseStreamEvent::OutputItemAdded {
             item, output_index, ..
-        } => {
-            // Extract function call info and track it
-            if let oai::OutputItem::FunctionCall { call_id, name, .. } = item {
-                // Track tool call info for FunctionCallArgumentsDone
+        } => match item {
+            oai::OutputItem::FunctionCall { call_id, name, .. } => {
                 state
                     .tool_calls
                     .insert(output_index as i64, (call_id.clone(), name.clone()));
@@ -708,10 +743,19 @@ fn convert_stream_event_stateful(
                     id: call_id,
                     name,
                 })
-            } else {
-                Ok(StreamEvent::Ignored)
             }
-        }
+            oai::OutputItem::CustomToolCall { call_id, name, .. } => {
+                state
+                    .tool_calls
+                    .insert(output_index as i64, (call_id.clone(), name.clone()));
+                Ok(StreamEvent::ToolCallStart {
+                    index: output_index as i64,
+                    id: call_id,
+                    name,
+                })
+            }
+            _ => Ok(StreamEvent::Ignored),
+        },
         oai::ResponseStreamEvent::ResponseCompleted { response, .. } => {
             let finish_reason = match response.stop_reason {
                 Some(oai::StopReason::EndTurn) => FinishReason::Stop,
@@ -748,6 +792,36 @@ fn convert_stream_event_stateful(
                 Some(usage),
                 finish_reason,
             ))
+        }
+        oai::ResponseStreamEvent::CustomToolCallInputDelta {
+            item_id,
+            output_index,
+            delta,
+            ..
+        } => Ok(StreamEvent::ToolCallDelta {
+            index: output_index as i64,
+            id: item_id,
+            arguments_delta: delta,
+        }),
+        oai::ResponseStreamEvent::CustomToolCallInputDone {
+            item_id,
+            output_index,
+            input,
+            ..
+        } => {
+            let name = state
+                .tool_calls
+                .get(&(output_index as i64))
+                .map(|(_, n)| n.clone())
+                .unwrap_or_default();
+            Ok(StreamEvent::ToolCallDone {
+                index: output_index as i64,
+                tool_call: crate::tools::ToolCall::new(
+                    item_id,
+                    name,
+                    serde_json::Value::String(input),
+                ),
+            })
         }
         oai::ResponseStreamEvent::Error { code, message, .. } => Err(HyperError::ProviderError {
             code: code.unwrap_or_else(|| "unknown".to_string()),

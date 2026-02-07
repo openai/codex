@@ -1,3 +1,4 @@
+use cocode_protocol::PermissionMode;
 use cocode_protocol::execution::ExecutionIdentity;
 use serde::Deserialize;
 use serde::Serialize;
@@ -38,6 +39,15 @@ pub struct AgentDefinition {
     /// Override the maximum number of turns for this agent.
     #[serde(default)]
     pub max_turns: Option<i32>,
+
+    /// Override the permission mode for this subagent.
+    ///
+    /// When set, the subagent uses this permission mode instead of
+    /// inheriting the parent's mode. For example, a "guide" agent
+    /// that only reads docs might use `DontAsk` to auto-deny unknown
+    /// operations, while a "bash" agent uses `Default`.
+    #[serde(default)]
+    pub permission_mode: Option<PermissionMode>,
 }
 
 #[cfg(test)]
@@ -66,6 +76,7 @@ mod tests {
             disallowed_tools: vec!["Edit".to_string()],
             identity: Some(ExecutionIdentity::Role(ModelRole::Main)),
             max_turns: Some(10),
+            permission_mode: None,
         };
         let json = serde_json::to_string(&def).expect("serialize");
         let back: AgentDefinition = serde_json::from_str(&json).expect("deserialize");
@@ -89,6 +100,7 @@ mod tests {
             disallowed_tools: vec![],
             identity: Some(ExecutionIdentity::Role(ModelRole::Explore)),
             max_turns: None,
+            permission_mode: None,
         };
         assert!(matches!(
             def.identity,

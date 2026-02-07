@@ -12,6 +12,7 @@ pub fn statusline_agent() -> AgentDefinition {
         disallowed_tools: vec![],
         identity: Some(ExecutionIdentity::Inherit),
         max_turns: Some(5),
+        permission_mode: None,
     }
 }
 

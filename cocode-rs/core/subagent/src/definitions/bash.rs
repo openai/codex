@@ -11,6 +11,7 @@ pub fn bash_agent() -> AgentDefinition {
         disallowed_tools: vec![],
         identity: Some(ExecutionIdentity::Inherit),
         max_turns: Some(10),
+        permission_mode: None,
     }
 }
 

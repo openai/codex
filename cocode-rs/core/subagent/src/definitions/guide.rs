@@ -12,6 +12,7 @@ pub fn guide_agent() -> AgentDefinition {
         disallowed_tools: vec![],
         identity: Some(ExecutionIdentity::Inherit),
         max_turns: Some(15),
+        permission_mode: Some(cocode_protocol::PermissionMode::DontAsk),
     }
 }
 

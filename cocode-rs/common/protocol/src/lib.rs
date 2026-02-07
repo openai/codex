@@ -77,10 +77,12 @@ pub use sandbox::SandboxMode;
 pub use permission::ApprovalRequest;
 pub use permission::PermissionBehavior;
 pub use permission::PermissionCheckResult;
+pub use permission::PermissionDecision;
 pub use permission::PermissionMode;
 pub use permission::PermissionResult;
 pub use permission::RiskSeverity;
 pub use permission::RiskType;
+pub use permission::RuleSource;
 pub use permission::SecurityRisk;
 
 // Loop config types

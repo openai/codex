@@ -13,6 +13,7 @@ pub fn explore_agent() -> AgentDefinition {
         disallowed_tools: vec![],
         identity: Some(ExecutionIdentity::Role(ModelRole::Explore)),
         max_turns: Some(20),
+        permission_mode: None,
     }
 }
 

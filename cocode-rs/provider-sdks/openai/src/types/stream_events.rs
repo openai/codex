@@ -796,7 +796,7 @@ pub enum ResponseStreamEvent {
     // Custom tool events
     // ========================================================================
     /// Emitted when there is a custom tool input delta.
-    #[serde(rename = "response.custom_tool_call.input_delta")]
+    #[serde(rename = "response.custom_tool_call_input.delta")]
     CustomToolCallInputDelta {
         /// Sequence number for ordering.
         sequence_number: i32,
@@ -809,7 +809,7 @@ pub enum ResponseStreamEvent {
     },
 
     /// Emitted when custom tool input is complete.
-    #[serde(rename = "response.custom_tool_call.input_done")]
+    #[serde(rename = "response.custom_tool_call_input.done")]
     CustomToolCallInputDone {
         /// Sequence number for ordering.
         sequence_number: i32,
@@ -1099,8 +1099,8 @@ impl ResponseStreamEvent {
             Self::ImageGenCallGenerating { .. } => "response.image_generation_call.generating",
             Self::ImageGenCallPartialImage { .. } => "response.image_generation_call.partial_image",
             Self::ImageGenCallCompleted { .. } => "response.image_generation_call.completed",
-            Self::CustomToolCallInputDelta { .. } => "response.custom_tool_call.input_delta",
-            Self::CustomToolCallInputDone { .. } => "response.custom_tool_call.input_done",
+            Self::CustomToolCallInputDelta { .. } => "response.custom_tool_call_input.delta",
+            Self::CustomToolCallInputDone { .. } => "response.custom_tool_call_input.done",
             Self::OutputTextAnnotationAdded { .. } => "response.output_text.annotation.added",
             Self::Error { .. } => "error",
         }

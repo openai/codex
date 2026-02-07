@@ -5,7 +5,9 @@ use crate::context::ToolContext;
 use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
+use cocode_protocol::ApprovalRequest;
 use cocode_protocol::ConcurrencySafety;
+use cocode_protocol::PermissionResult;
 use cocode_protocol::ToolOutput;
 use serde_json::Value;
 
@@ -63,8 +65,57 @@ impl Tool for WebFetchTool {
         ConcurrencySafety::Safe
     }
 
+    fn is_read_only(&self) -> bool {
+        false // Network access requires approval
+    }
+
     fn max_result_size_chars(&self) -> i32 {
         MAX_RESULT_CHARS
+    }
+
+    async fn check_permission(&self, input: &Value, _ctx: &ToolContext) -> PermissionResult {
+        let url = match input.get("url").and_then(|v| v.as_str()) {
+            Some(u) => u,
+            None => return PermissionResult::Passthrough,
+        };
+
+        // Extract hostname from URL
+        let hostname = url
+            .strip_prefix("https://")
+            .or_else(|| url.strip_prefix("http://"))
+            .and_then(|rest| rest.split('/').next())
+            .unwrap_or(url);
+
+        // Preapproved hosts that don't need permission
+        const PREAPPROVED_HOSTS: &[&str] = &[
+            "docs.rs",
+            "crates.io",
+            "doc.rust-lang.org",
+            "docs.python.org",
+            "developer.mozilla.org",
+            "en.wikipedia.org",
+            "stackoverflow.com",
+            "github.com",
+            "raw.githubusercontent.com",
+        ];
+
+        if PREAPPROVED_HOSTS
+            .iter()
+            .any(|h| hostname == *h || hostname.ends_with(&format!(".{h}")))
+        {
+            return PermissionResult::Allowed;
+        }
+
+        // All other domains → NeedsApproval
+        PermissionResult::NeedsApproval {
+            request: ApprovalRequest {
+                request_id: format!("webfetch-{hostname}"),
+                tool_name: self.name().to_string(),
+                description: format!("Fetch URL: {url}"),
+                risks: vec![],
+                allow_remember: true,
+            },
+        }
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
@@ -143,7 +194,7 @@ mod tests {
         let tool = WebFetchTool::new();
         assert_eq!(tool.name(), "WebFetch");
         assert!(tool.is_concurrent_safe());
-        assert!(tool.is_read_only());
+        assert!(!tool.is_read_only()); // Network access requires approval
         assert_eq!(tool.max_result_size_chars(), 100_000);
     }
 }

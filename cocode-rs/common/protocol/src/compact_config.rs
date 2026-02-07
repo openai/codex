@@ -45,7 +45,9 @@ pub const DEFAULT_WARNING_THRESHOLD_OFFSET: i32 = 20000;
 pub const DEFAULT_ERROR_THRESHOLD_OFFSET: i32 = 20000;
 
 /// Hard blocking limit offset.
-pub const DEFAULT_MIN_BLOCKING_OFFSET: i32 = 3000;
+///
+/// Claude Code uses `context_limit - 13000` as the blocking threshold.
+pub const DEFAULT_MIN_BLOCKING_OFFSET: i32 = 13000;
 
 // ============================================================================
 // Micro-Compact Constants
@@ -719,8 +721,8 @@ impl Default for CompactConfig {
             disable_compact: false,
             disable_auto_compact: false,
             disable_micro_compact: false,
-            // Overrides
-            effective_context_window_percent: None,
+            // Overrides — Claude Code triggers auto-compact at 80% context usage
+            effective_context_window_percent: Some(80),
             blocking_limit_override: None,
             // Session memory
             session_memory_min_tokens: DEFAULT_SESSION_MEMORY_MIN_TOKENS,
@@ -1000,8 +1002,8 @@ mod tests {
         assert!(!config.disable_compact);
         assert!(!config.disable_auto_compact);
         assert!(!config.disable_micro_compact);
-        // Overrides
-        assert!(config.effective_context_window_percent.is_none());
+        // Overrides — default is 80% (matching Claude Code)
+        assert_eq!(config.effective_context_window_percent, Some(80));
         assert!(config.blocking_limit_override.is_none());
         // Session memory
         assert_eq!(
@@ -1121,25 +1123,24 @@ mod tests {
 
     #[test]
     fn test_auto_compact_target() {
-        let config = CompactConfig::default();
         let available = 200000;
 
-        // Without override, target = available - min_tokens_to_preserve
+        // Default has 80%, so target = 80% of 200000 = 160000
+        let config = CompactConfig::default();
         let target = config.auto_compact_target(available);
-        assert_eq!(target, available - DEFAULT_MIN_TOKENS_TO_PRESERVE);
-
-        // With override
-        let mut config_with_override = CompactConfig::default();
-        config_with_override.effective_context_window_percent = Some(80);
-        let target = config_with_override.auto_compact_target(available);
-        // 80% of 200000 = 160000, capped at 200000 - 13000 = 187000
         assert_eq!(target, 160000);
 
-        // High percentage should be capped
+        // Without percentage override, target = available - min_tokens_to_preserve
+        let mut config_no_pct = CompactConfig::default();
+        config_no_pct.effective_context_window_percent = None;
+        let target = config_no_pct.auto_compact_target(available);
+        assert_eq!(target, available - DEFAULT_MIN_TOKENS_TO_PRESERVE);
+
+        // High percentage should be capped at available - min_tokens_to_preserve
         let mut config_high_pct = CompactConfig::default();
         config_high_pct.effective_context_window_percent = Some(99);
         let target = config_high_pct.auto_compact_target(available);
-        // 99% = 198000, but capped at 187000
+        // 99% = 198000, but capped at 200000 - 13000 = 187000
         assert_eq!(target, 187000);
     }
 

@@ -1889,7 +1889,7 @@ All configuration constants from Claude Code v2.1.7 implementation:
 | Constant | Value | Description |
 |----------|-------|-------------|
 | `MAX_OUTPUT_TOKEN_RECOVERY` | 3 | Max retry attempts for output token exhaustion |
-| `BLOCKING_LIMIT_OFFSET` | 13000 | Offset from context limit for blocking check |
+| `DEFAULT_MIN_BLOCKING_OFFSET` | 13000 | Offset from context limit for blocking check (in `CompactConfig`) |
 | `WARNING_OFFSET` | 20000 (`c97`) | Offset for context warning threshold |
 | `ERROR_OFFSET` | 20000 (`p97`) | Offset for context error threshold |
 
