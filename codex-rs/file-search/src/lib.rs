@@ -139,19 +139,6 @@ impl Drop for FileSearchSession {
 }
 
 pub fn create_session(
-    search_directory: &Path,
-    options: FileSearchOptions,
-    reporter: Arc<dyn SessionReporter>,
-) -> anyhow::Result<FileSearchSession> {
-    create_session_inner(
-        vec![search_directory.to_path_buf()],
-        options,
-        reporter,
-        None,
-    )
-}
-
-fn create_session_inner(
     search_directories: Vec<PathBuf>,
     options: FileSearchOptions,
     reporter: Arc<dyn SessionReporter>,
@@ -291,7 +278,7 @@ pub fn run(
     cancel_flag: Option<Arc<AtomicBool>>,
 ) -> anyhow::Result<FileSearchResults> {
     let reporter = Arc::new(RunReporter::default());
-    let session = create_session_inner(roots, options, reporter.clone(), cancel_flag)?;
+    let session = create_session(roots, options, reporter.clone(), cancel_flag)?;
 
     session.update_query(pattern_text);
 
@@ -771,8 +758,13 @@ mod tests {
     fn session_scanned_file_count_is_monotonic_across_queries() {
         let dir = create_temp_tree(200);
         let reporter = Arc::new(RecordingReporter::default());
-        let session = create_session(dir.path(), FileSearchOptions::default(), reporter.clone())
-            .expect("session");
+        let session = create_session(
+            vec![dir.path().to_path_buf()],
+            FileSearchOptions::default(),
+            reporter.clone(),
+            None,
+        )
+        .expect("session");
 
         session.update_query("file-00");
         thread::sleep(Duration::from_millis(20));
@@ -791,8 +783,13 @@ mod tests {
     fn session_streams_updates_before_walk_complete() {
         let dir = create_temp_tree(600);
         let reporter = Arc::new(RecordingReporter::default());
-        let session = create_session(dir.path(), FileSearchOptions::default(), reporter.clone())
-            .expect("session");
+        let session = create_session(
+            vec![dir.path().to_path_buf()],
+            FileSearchOptions::default(),
+            reporter.clone(),
+            None,
+        )
+        .expect("session");
 
         session.update_query("file-0");
         let completed = reporter.wait_for_complete(Duration::from_secs(5));
@@ -808,8 +805,13 @@ mod tests {
         fs::write(dir.path().join("alpha.txt"), "alpha").unwrap();
         fs::write(dir.path().join("beta.txt"), "beta").unwrap();
         let reporter = Arc::new(RecordingReporter::default());
-        let session = create_session(dir.path(), FileSearchOptions::default(), reporter.clone())
-            .expect("session");
+        let session = create_session(
+            vec![dir.path().to_path_buf()],
+            FileSearchOptions::default(),
+            reporter.clone(),
+            None,
+        )
+        .expect("session");
 
         session.update_query("alpha");
         assert!(reporter.wait_for_complete(Duration::from_secs(5)));
@@ -834,7 +836,7 @@ mod tests {
         fs::write(dir.path().join("alpha.txt"), "alpha").unwrap();
         fs::write(dir.path().join("beta.txt"), "beta").unwrap();
         let reporter = Arc::new(RecordingReporter::default());
-        let session = create_session_inner(
+        let session = create_session(
             vec![dir.path().to_path_buf()],
             FileSearchOptions::default(),
             reporter.clone(),
@@ -863,7 +865,7 @@ mod tests {
         let cancel_flag = Arc::new(AtomicBool::new(false));
 
         let reporter_a = Arc::new(RecordingReporter::default());
-        let session_a = create_session_inner(
+        let session_a = create_session(
             vec![root_a.path().to_path_buf()],
             FileSearchOptions::default(),
             reporter_a,
@@ -872,7 +874,7 @@ mod tests {
         .expect("session_a");
 
         let reporter_b = Arc::new(RecordingReporter::default());
-        let session_b = create_session_inner(
+        let session_b = create_session(
             vec![root_b.path().to_path_buf()],
             FileSearchOptions::default(),
             reporter_b.clone(),
@@ -894,8 +896,13 @@ mod tests {
     fn session_emits_updates_when_query_changes() {
         let dir = create_temp_tree(200);
         let reporter = Arc::new(RecordingReporter::default());
-        let session = create_session(dir.path(), FileSearchOptions::default(), reporter.clone())
-            .expect("session");
+        let session = create_session(
+            vec![dir.path().to_path_buf()],
+            FileSearchOptions::default(),
+            reporter.clone(),
+            None,
+        )
+        .expect("session");
 
         session.update_query("zzzzzzzz");
         let completed = reporter.wait_for_complete(Duration::from_secs(5));
