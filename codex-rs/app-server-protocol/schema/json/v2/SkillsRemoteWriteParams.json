@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "hazelnutId": {
+      "type": "string"
+    },
+    "isPreload": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "hazelnutId",
+    "isPreload"
+  ],
+  "title": "SkillsRemoteWriteParams",
+  "type": "object"
+}

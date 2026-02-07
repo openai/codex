@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 
@@ -29,7 +30,7 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
                         ResponseItem::FunctionCallOutput {
                             call_id: call_id.clone(),
                             output: FunctionCallOutputPayload {
-                                content: "aborted".to_string(),
+                                body: FunctionCallOutputBody::Text("aborted".to_string()),
                                 ..Default::default()
                             },
                         },
@@ -76,7 +77,7 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
                             ResponseItem::FunctionCallOutput {
                                 call_id: call_id.clone(),
                                 output: FunctionCallOutputPayload {
-                                    content: "aborted".to_string(),
+                                    body: FunctionCallOutputBody::Text("aborted".to_string()),
                                     ..Default::default()
                                 },
                             },

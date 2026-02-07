@@ -26,18 +26,30 @@ use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::bottom_pane::StatusLineItem;
+use crate::bottom_pane::StatusLineSetupView;
+use crate::status::RateLimitWindowDisplay;
+use crate::status::format_directory_display;
+use crate::status::format_tokens_compact;
+use crate::text_formatting::proper_join;
 use crate::version::CODEX_CLI_VERSION;
+use codex_app_server_protocol::ConfigLayerSource;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
 use codex_core::config::Config;
 use codex_core::config::ConstraintResult;
 use codex_core::config::types::Notifications;
+use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::features::FEATURES;
 use codex_core::features::Feature;
+use codex_core::find_thread_name_by_id;
 use codex_core::git_info::current_branch_name;
+use codex_core::git_info::get_git_repo_root;
 use codex_core::git_info::local_git_branches;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
@@ -93,6 +105,7 @@ use codex_core::skills::model::SkillMetadata;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_otel::OtelManager;
+use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
@@ -144,6 +157,7 @@ use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::CollaborationModeIndicator;
+use crate::bottom_pane::ColumnWidthMode;
 use crate::bottom_pane::DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED;
 use crate::bottom_pane::ExperimentalFeatureItem;
 use crate::bottom_pane::ExperimentalFeaturesView;
@@ -196,6 +210,9 @@ mod skills;
 use self::skills::collect_tool_mentions;
 use self::skills::find_app_mentions;
 use self::skills::find_skill_mentions_with_tool_mentions;
+use crate::streaming::chunking::AdaptiveChunkingPolicy;
+use crate::streaming::commit_tick::CommitTickScope;
+use crate::streaming::commit_tick::run_commit_tick;
 use crate::streaming::controller::PlanStreamController;
 use crate::streaming::controller::StreamController;
 
@@ -385,6 +402,8 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) is_first_run: bool,
     pub(crate) feedback_audience: FeedbackAudience,
     pub(crate) model: Option<String>,
+    // Shared latch so we only warn once about invalid status-line item IDs.
+    pub(crate) status_line_invalid_items_warned: Arc<AtomicBool>,
     pub(crate) otel_manager: OtelManager,
 }
 
@@ -468,7 +487,7 @@ pub(crate) struct ChatWidget {
     /// where the overlay may briefly treat new tail content as already cached.
     active_cell_revision: u64,
     config: Config,
-    /// The unmasked collaboration mode settings (always Custom mode).
+    /// The unmasked collaboration mode settings (always Default mode).
     ///
     /// Masks are applied on top of this base mode to derive the effective mode.
     current_collaboration_mode: CollaborationMode,
@@ -485,6 +504,7 @@ pub(crate) struct ChatWidget {
     rate_limit_warnings: RateLimitWarningState,
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
     rate_limit_poller: Option<JoinHandle<()>>,
+    adaptive_chunking: AdaptiveChunkingPolicy,
     // Stream lifecycle controller
     stream_controller: Option<StreamController>,
     // Stream lifecycle controller for proposed plan output.
@@ -568,13 +588,26 @@ pub(crate) struct ChatWidget {
     // This lets the separator show per-chunk work time (since the previous separator) rather than
     // the total task-running time reported by the status indicator.
     last_separator_elapsed_secs: Option<u64>,
-
+    // Runtime metrics accumulated across delta snapshots for the active turn.
+    turn_runtime_metrics: RuntimeMetricsSummary,
     last_rendered_width: std::cell::Cell<Option<usize>>,
     // Feedback sink for /feedback
     feedback: codex_feedback::CodexFeedback,
     feedback_audience: FeedbackAudience,
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
+    // Current working directory (if known)
+    current_cwd: Option<PathBuf>,
+    // Shared latch so we only warn once about invalid status-line item IDs.
+    status_line_invalid_items_warned: Arc<AtomicBool>,
+    // Cached git branch name for the status line (None if unknown).
+    status_line_branch: Option<String>,
+    // CWD used to resolve the cached branch; change resets branch state.
+    status_line_branch_cwd: Option<PathBuf>,
+    // True while an async branch lookup is in flight.
+    status_line_branch_pending: bool,
+    // True once we've attempted a branch lookup for the current CWD.
+    status_line_branch_lookup_complete: bool,
     external_editor_state: ExternalEditorState,
 }
 
@@ -769,6 +802,7 @@ impl ChatWidget {
         {
             self.add_boxed_history(cell);
         }
+        self.adaptive_chunking.reset();
     }
 
     /// Update the status indicator header and details.
@@ -783,6 +817,146 @@ impl ChatWidget {
     /// updates the status indicator header and clears any existing details.
     fn set_status_header(&mut self, header: String) {
         self.set_status(header, None);
+    }
+
+    /// Sets the currently rendered footer status-line value and schedules a redraw.
+    pub(crate) fn set_status_line(&mut self, status_line: Option<Line<'static>>) {
+        self.bottom_pane.set_status_line(status_line);
+        self.request_redraw();
+    }
+
+    /// Recomputes footer status-line content from config and current runtime state.
+    ///
+    /// This method is the status-line orchestrator: it parses configured item identifiers,
+    /// warns once per session about invalid items, updates whether status-line mode is enabled,
+    /// schedules async git-branch lookup when needed, and renders only values that are currently
+    /// available.
+    ///
+    /// The omission behavior is intentional. If selected items are unavailable (for example before
+    /// a session id exists or before branch lookup completes), those items are skipped without
+    /// placeholders so the line remains compact and stable.
+    pub(crate) fn refresh_status_line(&mut self) {
+        let (items, invalid_items) = self.status_line_items_with_invalids();
+        if self.thread_id.is_some()
+            && !invalid_items.is_empty()
+            && self
+                .status_line_invalid_items_warned
+                .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        {
+            let label = if invalid_items.len() == 1 {
+                "item"
+            } else {
+                "items"
+            };
+            let message = format!(
+                "Ignored invalid status line {label}: {}.",
+                proper_join(invalid_items.as_slice())
+            );
+            self.on_warning(message);
+        }
+        if !items.contains(&StatusLineItem::GitBranch) {
+            self.status_line_branch = None;
+            self.status_line_branch_pending = false;
+            self.status_line_branch_lookup_complete = false;
+        }
+        let enabled = !items.is_empty();
+        self.bottom_pane.set_status_line_enabled(enabled);
+        if !enabled {
+            self.set_status_line(None);
+            return;
+        }
+
+        let cwd = self.status_line_cwd().to_path_buf();
+        self.sync_status_line_branch_state(&cwd);
+
+        if items.contains(&StatusLineItem::GitBranch) && !self.status_line_branch_lookup_complete {
+            self.request_status_line_branch(cwd);
+        }
+
+        let mut parts = Vec::new();
+        for item in items {
+            if let Some(value) = self.status_line_value_for_item(&item) {
+                parts.push(value);
+            }
+        }
+
+        let line = if parts.is_empty() {
+            None
+        } else {
+            Some(Line::from(parts.join(" · ")))
+        };
+        self.set_status_line(line);
+    }
+
+    /// Records that status-line setup was canceled.
+    ///
+    /// Cancellation is intentionally side-effect free for config state; the existing configuration
+    /// remains active and no persistence is attempted.
+    pub(crate) fn cancel_status_line_setup(&self) {
+        tracing::info!("Status line setup canceled by user");
+    }
+
+    /// Applies status-line item selection from the setup view to in-memory config.
+    ///
+    /// An empty selection is normalized to `None` so the status line is fully disabled and the
+    /// behavior matches an unset `tui.status_line` config value.
+    pub(crate) fn setup_status_line(&mut self, items: Vec<StatusLineItem>) {
+        tracing::info!("status line setup confirmed with items: {items:#?}");
+        let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
+        self.config.tui_status_line = if ids.is_empty() { None } else { Some(ids) };
+        self.refresh_status_line();
+    }
+
+    /// Stores async git-branch lookup results for the current status-line cwd.
+    ///
+    /// Results are dropped when they target an out-of-date cwd to avoid rendering stale branch
+    /// names after directory changes.
+    pub(crate) fn set_status_line_branch(&mut self, cwd: PathBuf, branch: Option<String>) {
+        if self.status_line_branch_cwd.as_ref() != Some(&cwd) {
+            self.status_line_branch_pending = false;
+            return;
+        }
+        self.status_line_branch = branch;
+        self.status_line_branch_pending = false;
+        self.status_line_branch_lookup_complete = true;
+    }
+
+    /// Forces a new git-branch lookup when `GitBranch` is part of the configured status line.
+    fn request_status_line_branch_refresh(&mut self) {
+        let (items, _) = self.status_line_items_with_invalids();
+        if items.is_empty() || !items.contains(&StatusLineItem::GitBranch) {
+            return;
+        }
+        let cwd = self.status_line_cwd().to_path_buf();
+        self.sync_status_line_branch_state(&cwd);
+        self.request_status_line_branch(cwd);
+    }
+
+    fn collect_runtime_metrics_delta(&mut self) {
+        if let Some(delta) = self.otel_manager.runtime_metrics_summary() {
+            self.apply_runtime_metrics_delta(delta);
+        }
+    }
+
+    fn apply_runtime_metrics_delta(&mut self, delta: RuntimeMetricsSummary) {
+        let should_log_timing = has_websocket_timing_metrics(delta);
+        self.turn_runtime_metrics.merge(delta);
+        if should_log_timing {
+            self.log_websocket_timing_totals(delta);
+        }
+    }
+
+    fn log_websocket_timing_totals(&mut self, delta: RuntimeMetricsSummary) {
+        if let Some(label) = history_cell::runtime_metrics_label(delta.responses_api_summary()) {
+            self.add_plain_history_lines(vec![
+                vec!["• ".dim(), format!("WebSocket timing: {label}").dark_gray()].into(),
+            ]);
+        }
+    }
+
+    fn refresh_runtime_metrics(&mut self) {
+        self.collect_runtime_metrics_delta();
     }
 
     fn restore_retry_status_header_if_present(&mut self) {
@@ -801,7 +975,9 @@ impl ChatWidget {
         self.thread_name = event.thread_name.clone();
         self.forked_from = event.forked_from_id;
         self.current_rollout_path = event.rollout_path.clone();
+        self.current_cwd = Some(event.cwd.clone());
         let initial_messages = event.initial_messages.clone();
+        let forked_from_id = event.forked_from_id;
         let model_for_header = event.model.clone();
         self.session_header.set_model(&model_for_header);
         self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
@@ -837,9 +1013,56 @@ impl ChatWidget {
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
         }
+        if let Some(forked_from_id) = forked_from_id {
+            self.emit_forked_thread_event(forked_from_id);
+        }
         if !self.suppress_session_configured_redraw {
             self.request_redraw();
         }
+    }
+
+    fn emit_forked_thread_event(&self, forked_from_id: ThreadId) {
+        let app_event_tx = self.app_event_tx.clone();
+        let codex_home = self.config.codex_home.clone();
+        tokio::spawn(async move {
+            let forked_from_id_text = forked_from_id.to_string();
+            let send_name_and_id = |name: String| {
+                let line: Line<'static> = vec![
+                    "• ".dim(),
+                    "Thread forked from ".into(),
+                    name.cyan(),
+                    " (".into(),
+                    forked_from_id_text.clone().cyan(),
+                    ")".into(),
+                ]
+                .into();
+                app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    PlainHistoryCell::new(vec![line]),
+                )));
+            };
+            let send_id_only = || {
+                let line: Line<'static> = vec![
+                    "• ".dim(),
+                    "Thread forked from ".into(),
+                    forked_from_id_text.clone().cyan(),
+                ]
+                .into();
+                app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    PlainHistoryCell::new(vec![line]),
+                )));
+            };
+
+            match find_thread_name_by_id(&codex_home, &forked_from_id).await {
+                Ok(Some(name)) if !name.trim().is_empty() => {
+                    send_name_and_id(name);
+                }
+                Ok(_) => send_id_only(),
+                Err(err) => {
+                    tracing::warn!("Failed to read forked thread name: {err}");
+                    send_id_only();
+                }
+            }
+        });
     }
 
     fn on_thread_name_updated(&mut self, event: codex_core::protocol::ThreadNameUpdatedEvent) {
@@ -943,6 +1166,7 @@ impl ChatWidget {
             && controller.push(&delta)
         {
             self.app_event_tx.send(AppEvent::StartCommitAnimation);
+            self.run_catch_up_commit_tick();
         }
         self.request_redraw();
     }
@@ -1020,7 +1244,9 @@ impl ChatWidget {
         self.saw_plan_item_this_turn = false;
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
+        self.adaptive_chunking.reset();
         self.plan_stream_controller = None;
+        self.turn_runtime_metrics = RuntimeMetricsSummary::default();
         self.otel_manager.reset_runtime_metrics();
         self.bottom_pane.clear_quit_shortcut_hint();
         self.quit_shortcut_expires_at = None;
@@ -1044,19 +1270,28 @@ impl ChatWidget {
         }
         self.flush_unified_exec_wait_streak();
         if !from_replay {
-            let runtime_metrics = self.otel_manager.runtime_metrics_summary();
-            if runtime_metrics.is_some() {
-                let elapsed_seconds = self
-                    .bottom_pane
-                    .status_widget()
-                    .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds);
+            self.collect_runtime_metrics_delta();
+            let runtime_metrics =
+                (!self.turn_runtime_metrics.is_empty()).then_some(self.turn_runtime_metrics);
+            let show_work_separator = self.needs_final_message_separator && self.had_work_activity;
+            if show_work_separator || runtime_metrics.is_some() {
+                let elapsed_seconds = if show_work_separator {
+                    self.bottom_pane
+                        .status_widget()
+                        .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds)
+                        .map(|current| self.worked_elapsed_from(current))
+                } else {
+                    None
+                };
                 self.add_to_history(history_cell::FinalMessageSeparator::new(
                     elapsed_seconds,
                     runtime_metrics,
                 ));
             }
+            self.turn_runtime_metrics = RuntimeMetricsSummary::default();
             self.needs_final_message_separator = false;
             self.had_work_activity = false;
+            self.request_status_line_branch_refresh();
         }
         // Mark task stopped and request redraw now that all content is in history.
         self.agent_turn_running = false;
@@ -1114,8 +1349,8 @@ impl ChatWidget {
     }
 
     fn open_plan_implementation_prompt(&mut self) {
-        let code_mask = collaboration_modes::code_mask(self.models_manager.as_ref());
-        let (implement_actions, implement_disabled_reason) = match code_mask {
+        let default_mask = collaboration_modes::default_mode_mask(self.models_manager.as_ref());
+        let (implement_actions, implement_disabled_reason) = match default_mask {
             Some(mask) => {
                 let user_text = PLAN_IMPLEMENTATION_CODING_MESSAGE.to_string();
                 let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
@@ -1126,13 +1361,13 @@ impl ChatWidget {
                 })];
                 (actions, None)
             }
-            None => (Vec::new(), Some("Code mode unavailable".to_string())),
+            None => (Vec::new(), Some("Default mode unavailable".to_string())),
         };
 
         let items = vec![
             SelectionItem {
                 name: PLAN_IMPLEMENTATION_YES.to_string(),
-                description: Some("Switch to Code and start coding.".to_string()),
+                description: Some("Switch to Default and start coding.".to_string()),
                 selected_description: None,
                 is_current: false,
                 actions: implement_actions,
@@ -1270,6 +1505,7 @@ impl ChatWidget {
         } else {
             self.rate_limit_snapshot = None;
         }
+        self.refresh_status_line();
     }
     /// Finalize any active exec as failed and stop/clear agent-turn UI state.
     ///
@@ -1286,7 +1522,10 @@ impl ChatWidget {
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
         self.clear_unified_exec_processes();
+        self.adaptive_chunking.reset();
         self.stream_controller = None;
+        self.plan_stream_controller = None;
+        self.request_status_line_branch_refresh();
         self.maybe_show_pending_rate_limit_prompt();
     }
 
@@ -1404,16 +1643,7 @@ impl ChatWidget {
         }
 
         if let Some(combined) = self.drain_queued_messages_for_restore() {
-            let combined_local_image_paths = combined
-                .local_images
-                .iter()
-                .map(|img| img.path.clone())
-                .collect();
-            self.bottom_pane.set_composer_text(
-                combined.text,
-                combined.text_elements,
-                combined_local_image_paths,
-            );
+            self.restore_user_message_to_composer(combined);
             self.refresh_queued_user_messages();
         }
 
@@ -1476,6 +1706,18 @@ impl ChatWidget {
         Some(combined)
     }
 
+    fn restore_user_message_to_composer(&mut self, user_message: UserMessage) {
+        let UserMessage {
+            text,
+            local_images,
+            text_elements,
+            mention_paths: _,
+        } = user_message;
+        let local_image_paths = local_images.into_iter().map(|img| img.path).collect();
+        self.bottom_pane
+            .set_composer_text(text, text_elements, local_image_paths);
+    }
+
     fn on_plan_update(&mut self, update: UpdatePlanArgs) {
         self.saw_plan_update_this_turn = true;
         self.add_to_history(history_cell::new_plan_update(update));
@@ -1518,6 +1760,8 @@ impl ChatWidget {
     fn on_exec_command_begin(&mut self, ev: ExecCommandBeginEvent) {
         self.flush_answer_stream_with_separator();
         if is_unified_exec_source(ev.source) {
+            // Unified exec may be parsed as Unknown; keep the working indicator visible regardless.
+            self.bottom_pane.ensure_status_indicator();
             self.track_unified_exec_process_begin(&ev);
             if !is_standard_tool_call(&ev.parsed_cmd) {
                 return;
@@ -1790,6 +2034,7 @@ impl ChatWidget {
 
     fn on_turn_diff(&mut self, unified_diff: String) {
         debug!("TurnDiffEvent: {unified_diff}");
+        self.refresh_status_line();
     }
 
     fn on_deprecation_notice(&mut self, event: DeprecationNoticeEvent) {
@@ -1838,31 +2083,53 @@ impl ChatWidget {
         self.set_status(message, additional_details);
     }
 
-    /// Periodic tick to commit at most one queued line to history with a small delay,
-    /// animating the output.
+    /// Periodic tick for stream commits. In smooth mode this preserves one-line pacing, while
+    /// catch-up mode drains larger batches to reduce queue lag.
     pub(crate) fn on_commit_tick(&mut self) {
-        let mut has_controller = false;
-        let mut all_idle = true;
-        if let Some(controller) = self.stream_controller.as_mut() {
-            has_controller = true;
-            let (cell, is_idle) = controller.on_commit_tick();
-            if let Some(cell) = cell {
-                self.bottom_pane.hide_status_indicator();
-                self.add_boxed_history(cell);
-            }
-            all_idle &= is_idle;
+        self.run_commit_tick();
+    }
+
+    /// Runs a regular periodic commit tick.
+    fn run_commit_tick(&mut self) {
+        self.run_commit_tick_with_scope(CommitTickScope::AnyMode);
+    }
+
+    /// Runs an opportunistic commit tick only if catch-up mode is active.
+    fn run_catch_up_commit_tick(&mut self) {
+        self.run_commit_tick_with_scope(CommitTickScope::CatchUpOnly);
+    }
+
+    /// Runs a commit tick for the current stream queue snapshot.
+    ///
+    /// `scope` controls whether this call may commit in smooth mode or only when catch-up
+    /// is currently active. While lines are actively streaming we hide the status row to avoid
+    /// duplicate "in progress" affordances, but once all stream controllers go idle for this
+    /// turn we restore the status row if the task is still running so users keep a live
+    /// spinner/shimmer signal between preamble output and subsequent tool activity.
+    fn run_commit_tick_with_scope(&mut self, scope: CommitTickScope) {
+        let now = Instant::now();
+        let outcome = run_commit_tick(
+            &mut self.adaptive_chunking,
+            self.stream_controller.as_mut(),
+            self.plan_stream_controller.as_mut(),
+            scope,
+            now,
+        );
+        for cell in outcome.cells {
+            self.bottom_pane.hide_status_indicator();
+            self.add_boxed_history(cell);
         }
-        if let Some(controller) = self.plan_stream_controller.as_mut() {
-            has_controller = true;
-            let (cell, is_idle) = controller.on_commit_tick();
-            if let Some(cell) = cell {
-                self.bottom_pane.hide_status_indicator();
-                self.add_boxed_history(cell);
+
+        if outcome.has_controller && outcome.all_idle {
+            if self.bottom_pane.is_task_running() {
+                self.bottom_pane.ensure_status_indicator();
+                self.set_status_header(self.current_status_header.clone());
             }
-            all_idle &= is_idle;
-        }
-        if has_controller && all_idle {
             self.app_event_tx.send(AppEvent::StopCommitAnimation);
+        }
+
+        if self.agent_turn_running {
+            self.refresh_runtime_metrics();
         }
     }
 
@@ -1930,6 +2197,7 @@ impl ChatWidget {
             && controller.push(&delta)
         {
             self.app_event_tx.send(AppEvent::StartCommitAnimation);
+            self.run_catch_up_commit_tick();
         }
         self.request_redraw();
     }
@@ -2204,6 +2472,7 @@ impl ChatWidget {
             is_first_run,
             feedback_audience,
             model,
+            status_line_invalid_items_warned,
             otel_manager,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
@@ -2223,19 +2492,20 @@ impl ChatWidget {
             .as_ref()
             .and_then(|mask| mask.model.clone())
             .unwrap_or_else(|| model_for_header.clone());
-        let fallback_custom = Settings {
+        let fallback_default = Settings {
             model: header_model.clone(),
             reasoning_effort: None,
             developer_instructions: None,
         };
-        // Collaboration modes start in Custom mode (not activated).
+        // Collaboration modes start in Default mode.
         let current_collaboration_mode = CollaborationMode {
-            mode: ModeKind::Custom,
-            settings: fallback_custom,
+            mode: ModeKind::Default,
+            settings: fallback_default,
         };
 
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
 
+        let current_cwd = Some(config.cwd.clone());
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -2268,6 +2538,7 @@ impl ChatWidget {
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             rate_limit_poller: None,
+            adaptive_chunking: AdaptiveChunkingPolicy::default(),
             stream_controller: None,
             plan_stream_controller: None,
             running_commands: HashMap::new(),
@@ -2302,10 +2573,17 @@ impl ChatWidget {
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             last_separator_elapsed_secs: None,
+            turn_runtime_metrics: RuntimeMetricsSummary::default(),
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             feedback_audience,
             current_rollout_path: None,
+            current_cwd,
+            status_line_invalid_items_warned,
+            status_line_branch: None,
+            status_line_branch_cwd: None,
+            status_line_branch_pending: false,
+            status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
         };
 
@@ -2313,6 +2591,13 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+        widget.bottom_pane.set_status_line_enabled(
+            widget
+                .config
+                .tui_status_line
+                .as_ref()
+                .is_some_and(|items| !items.is_empty()),
+        );
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
@@ -2350,6 +2635,7 @@ impl ChatWidget {
             is_first_run,
             feedback_audience,
             model,
+            status_line_invalid_items_warned,
             otel_manager,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
@@ -2368,18 +2654,19 @@ impl ChatWidget {
             .as_ref()
             .and_then(|mask| mask.model.clone())
             .unwrap_or_else(|| model_for_header.clone());
-        let fallback_custom = Settings {
+        let fallback_default = Settings {
             model: header_model.clone(),
             reasoning_effort: None,
             developer_instructions: None,
         };
-        // Collaboration modes start in Custom mode (not activated).
+        // Collaboration modes start in Default mode.
         let current_collaboration_mode = CollaborationMode {
-            mode: ModeKind::Custom,
-            settings: fallback_custom,
+            mode: ModeKind::Default,
+            settings: fallback_default,
         };
 
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
+        let current_cwd = Some(config.cwd.clone());
 
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
@@ -2413,6 +2700,7 @@ impl ChatWidget {
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             rate_limit_poller: None,
+            adaptive_chunking: AdaptiveChunkingPolicy::default(),
             stream_controller: None,
             plan_stream_controller: None,
             running_commands: HashMap::new(),
@@ -2447,10 +2735,17 @@ impl ChatWidget {
             needs_final_message_separator: false,
             had_work_activity: false,
             last_separator_elapsed_secs: None,
+            turn_runtime_metrics: RuntimeMetricsSummary::default(),
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             feedback_audience,
             current_rollout_path: None,
+            current_cwd,
+            status_line_invalid_items_warned,
+            status_line_branch: None,
+            status_line_branch_cwd: None,
+            status_line_branch_pending: false,
+            status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
         };
 
@@ -2458,6 +2753,13 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+        widget.bottom_pane.set_status_line_enabled(
+            widget
+                .config
+                .tui_status_line
+                .as_ref()
+                .is_some_and(|items| !items.is_empty()),
+        );
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
@@ -2481,10 +2783,11 @@ impl ChatWidget {
             auth_manager,
             models_manager,
             feedback,
+            is_first_run: _,
             feedback_audience,
             model,
+            status_line_invalid_items_warned,
             otel_manager,
-            ..
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
         let mut rng = rand::rng();
@@ -2501,18 +2804,19 @@ impl ChatWidget {
             .and_then(|mask| mask.model.clone())
             .unwrap_or(header_model);
 
+        let current_cwd = Some(session_configured.cwd.clone());
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
 
-        let fallback_custom = Settings {
+        let fallback_default = Settings {
             model: header_model.clone(),
             reasoning_effort: None,
             developer_instructions: None,
         };
-        // Collaboration modes start in Custom mode (not activated).
+        // Collaboration modes start in Default mode.
         let current_collaboration_mode = CollaborationMode {
-            mode: ModeKind::Custom,
-            settings: fallback_custom,
+            mode: ModeKind::Default,
+            settings: fallback_default,
         };
 
         let mut widget = Self {
@@ -2547,6 +2851,7 @@ impl ChatWidget {
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             rate_limit_poller: None,
+            adaptive_chunking: AdaptiveChunkingPolicy::default(),
             stream_controller: None,
             plan_stream_controller: None,
             running_commands: HashMap::new(),
@@ -2581,10 +2886,17 @@ impl ChatWidget {
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             last_separator_elapsed_secs: None,
+            turn_runtime_metrics: RuntimeMetricsSummary::default(),
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             feedback_audience,
             current_rollout_path: None,
+            current_cwd,
+            status_line_invalid_items_warned,
+            status_line_branch: None,
+            status_line_branch_cwd: None,
+            status_line_branch_pending: false,
+            status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
         };
 
@@ -2592,6 +2904,13 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+        widget.bottom_pane.set_status_line_enabled(
+            widget
+                .config
+                .tui_status_line
+                .as_ref()
+                .is_some_and(|items| !items.is_empty()),
+        );
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
@@ -2687,16 +3006,7 @@ impl ChatWidget {
             } if !self.queued_user_messages.is_empty() => {
                 // Prefer the most recently queued item.
                 if let Some(user_message) = self.queued_user_messages.pop_back() {
-                    let local_image_paths = user_message
-                        .local_images
-                        .iter()
-                        .map(|img| img.path.clone())
-                        .collect();
-                    self.bottom_pane.set_composer_text(
-                        user_message.text,
-                        user_message.text_elements,
-                        local_image_paths,
-                    );
+                    self.restore_user_message_to_composer(user_message);
                     self.refresh_queued_user_messages();
                     self.request_redraw();
                 }
@@ -2714,8 +3024,8 @@ impl ChatWidget {
                         text_elements,
                         mention_paths: self.bottom_pane.take_mention_paths(),
                     };
-                    if self.is_session_configured() {
-                        // Submitted is only emitted when steer is enabled (Enter sends immediately).
+                    if self.is_session_configured() && !self.is_plan_streaming_in_tui() {
+                        // Submitted is only emitted when steer is enabled.
                         // Reset any reasoning header only when we are actually submitting a turn.
                         self.reasoning_buffer.clear();
                         self.full_reasoning_buffer.clear();
@@ -2851,6 +3161,7 @@ impl ChatWidget {
                 self.open_review_popup();
             }
             SlashCommand::Rename => {
+                self.otel_manager.counter("codex.thread.rename", 1, &[]);
                 self.show_rename_prompt();
             }
             SlashCommand::Model => {
@@ -2981,6 +3292,12 @@ impl ChatWidget {
             SlashCommand::Status => {
                 self.add_status_output();
             }
+            SlashCommand::DebugConfig => {
+                self.add_debug_config_output();
+            }
+            SlashCommand::Statusline => {
+                self.open_status_line_setup();
+            }
             SlashCommand::Ps => {
                 self.add_ps_output();
             }
@@ -3064,6 +3381,7 @@ impl ChatWidget {
         let trimmed = args.trim();
         match cmd {
             SlashCommand::Rename if !trimmed.is_empty() => {
+                self.otel_manager.counter("codex.thread.rename", 1, &[]);
                 let Some((prepared_args, _prepared_elements)) =
                     self.bottom_pane.prepare_inline_args_submission(false)
                 else {
@@ -3526,6 +3844,7 @@ impl ChatWidget {
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
             EventMsg::ListCustomPromptsResponse(ev) => self.on_list_custom_prompts(ev),
             EventMsg::ListSkillsResponse(ev) => self.on_list_skills(ev),
+            EventMsg::ListRemoteSkillsResponse(_) | EventMsg::RemoteSkillDownloaded(_) => {}
             EventMsg::SkillsUpdateAvailable => {
                 self.submit_op(Op::ListSkills {
                     cwds: Vec::new(),
@@ -3577,6 +3896,10 @@ impl ChatWidget {
                     self.on_plan_item_completed(plan_item.text);
                 }
             }
+        }
+
+        if !from_replay && self.agent_turn_running {
+            self.refresh_runtime_metrics();
         }
     }
 
@@ -3753,6 +4076,233 @@ impl ChatWidget {
             collaboration_mode,
             reasoning_effort_override,
         ));
+    }
+
+    pub(crate) fn add_debug_config_output(&mut self) {
+        self.add_to_history(crate::debug_config::new_debug_config_output(&self.config));
+    }
+
+    fn open_status_line_setup(&mut self) {
+        let view = StatusLineSetupView::new(
+            self.config.tui_status_line.as_deref(),
+            self.app_event_tx.clone(),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    /// Parses configured status-line ids into known items and collects unknown ids.
+    ///
+    /// Unknown ids are deduplicated in insertion order for warning messages.
+    fn status_line_items_with_invalids(&self) -> (Vec<StatusLineItem>, Vec<String>) {
+        let mut invalid = Vec::new();
+        let mut invalid_seen = HashSet::new();
+        let mut items = Vec::new();
+        let Some(config_items) = self.config.tui_status_line.as_ref() else {
+            return (items, invalid);
+        };
+        for id in config_items {
+            match id.parse::<StatusLineItem>() {
+                Ok(item) => items.push(item),
+                Err(_) => {
+                    if invalid_seen.insert(id.clone()) {
+                        invalid.push(format!(r#""{id}""#));
+                    }
+                }
+            }
+        }
+        (items, invalid)
+    }
+
+    fn status_line_cwd(&self) -> &Path {
+        self.current_cwd.as_ref().unwrap_or(&self.config.cwd)
+    }
+
+    fn status_line_project_root(&self) -> Option<PathBuf> {
+        let cwd = self.status_line_cwd();
+        if let Some(repo_root) = get_git_repo_root(cwd) {
+            return Some(repo_root);
+        }
+
+        self.config
+            .config_layer_stack
+            .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
+            .iter()
+            .find_map(|layer| match &layer.name {
+                ConfigLayerSource::Project { dot_codex_folder } => {
+                    dot_codex_folder.as_path().parent().map(Path::to_path_buf)
+                }
+                _ => None,
+            })
+    }
+
+    fn status_line_project_root_name(&self) -> Option<String> {
+        self.status_line_project_root().map(|root| {
+            root.file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| format_directory_display(&root, None))
+        })
+    }
+
+    /// Resets git-branch cache state when the status-line cwd changes.
+    ///
+    /// The branch cache is keyed by cwd because branch lookup is performed relative to that path.
+    /// Keeping stale branch values across cwd changes would surface incorrect repository context.
+    fn sync_status_line_branch_state(&mut self, cwd: &Path) {
+        if self
+            .status_line_branch_cwd
+            .as_ref()
+            .is_some_and(|path| path == cwd)
+        {
+            return;
+        }
+        self.status_line_branch_cwd = Some(cwd.to_path_buf());
+        self.status_line_branch = None;
+        self.status_line_branch_pending = false;
+        self.status_line_branch_lookup_complete = false;
+    }
+
+    /// Starts an async git-branch lookup unless one is already running.
+    ///
+    /// The resulting `StatusLineBranchUpdated` event carries the lookup cwd so callers can reject
+    /// stale completions after directory changes.
+    fn request_status_line_branch(&mut self, cwd: PathBuf) {
+        if self.status_line_branch_pending {
+            return;
+        }
+        self.status_line_branch_pending = true;
+        let tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let branch = current_branch_name(&cwd).await;
+            tx.send(AppEvent::StatusLineBranchUpdated { cwd, branch });
+        });
+    }
+
+    /// Resolves a display string for one configured status-line item.
+    ///
+    /// Returning `None` means "omit this item for now", not "configuration error". Callers rely on
+    /// this to keep partially available status lines readable while waiting for session, token, or
+    /// git metadata.
+    fn status_line_value_for_item(&self, item: &StatusLineItem) -> Option<String> {
+        match item {
+            StatusLineItem::ModelName => Some(self.model_display_name().to_string()),
+            StatusLineItem::ModelWithReasoning => {
+                let label =
+                    Self::status_line_reasoning_effort_label(self.effective_reasoning_effort());
+                Some(format!("{} {label}", self.model_display_name()))
+            }
+            StatusLineItem::CurrentDir => {
+                Some(format_directory_display(self.status_line_cwd(), None))
+            }
+            StatusLineItem::ProjectRoot => self.status_line_project_root_name(),
+            StatusLineItem::GitBranch => self.status_line_branch.clone(),
+            StatusLineItem::UsedTokens => {
+                let usage = self.status_line_total_usage();
+                let total = usage.tokens_in_context_window();
+                if total <= 0 {
+                    None
+                } else {
+                    Some(format!("{} used", format_tokens_compact(total)))
+                }
+            }
+            StatusLineItem::ContextRemaining => self
+                .status_line_context_remaining_percent()
+                .map(|remaining| format!("{remaining}% left")),
+            StatusLineItem::ContextUsed => self
+                .status_line_context_used_percent()
+                .map(|used| format!("{used}% used")),
+            StatusLineItem::FiveHourLimit => {
+                let window = self
+                    .rate_limit_snapshot
+                    .as_ref()
+                    .and_then(|s| s.primary.as_ref());
+                let label = window
+                    .and_then(|window| window.window_minutes)
+                    .map(get_limits_duration)
+                    .unwrap_or_else(|| "5h".to_string());
+                self.status_line_limit_display(window, &label)
+            }
+            StatusLineItem::WeeklyLimit => {
+                let window = self
+                    .rate_limit_snapshot
+                    .as_ref()
+                    .and_then(|s| s.secondary.as_ref());
+                let label = window
+                    .and_then(|window| window.window_minutes)
+                    .map(get_limits_duration)
+                    .unwrap_or_else(|| "weekly".to_string());
+                self.status_line_limit_display(window, &label)
+            }
+            StatusLineItem::CodexVersion => Some(CODEX_CLI_VERSION.to_string()),
+            StatusLineItem::ContextWindowSize => self
+                .status_line_context_window_size()
+                .map(|cws| format!("{} window", format_tokens_compact(cws))),
+            StatusLineItem::TotalInputTokens => Some(format!(
+                "{} in",
+                format_tokens_compact(self.status_line_total_usage().input_tokens)
+            )),
+            StatusLineItem::TotalOutputTokens => Some(format!(
+                "{} out",
+                format_tokens_compact(self.status_line_total_usage().output_tokens)
+            )),
+            StatusLineItem::SessionId => self.thread_id.map(|id| id.to_string()),
+        }
+    }
+
+    fn status_line_context_window_size(&self) -> Option<i64> {
+        self.token_info
+            .as_ref()
+            .and_then(|info| info.model_context_window)
+            .or(self.config.model_context_window)
+    }
+
+    fn status_line_context_remaining_percent(&self) -> Option<i64> {
+        let Some(context_window) = self.status_line_context_window_size() else {
+            return Some(100);
+        };
+        let default_usage = TokenUsage::default();
+        let usage = self
+            .token_info
+            .as_ref()
+            .map(|info| &info.last_token_usage)
+            .unwrap_or(&default_usage);
+        Some(
+            usage
+                .percent_of_context_window_remaining(context_window)
+                .clamp(0, 100),
+        )
+    }
+
+    fn status_line_context_used_percent(&self) -> Option<i64> {
+        let remaining = self.status_line_context_remaining_percent().unwrap_or(100);
+        Some((100 - remaining).clamp(0, 100))
+    }
+
+    fn status_line_total_usage(&self) -> TokenUsage {
+        self.token_info
+            .as_ref()
+            .map(|info| info.total_token_usage.clone())
+            .unwrap_or_default()
+    }
+
+    fn status_line_limit_display(
+        &self,
+        window: Option<&RateLimitWindowDisplay>,
+        label: &str,
+    ) -> Option<String> {
+        let window = window?;
+        let remaining = (100.0f64 - window.used_percent).clamp(0.0f64, 100.0f64);
+        Some(format!("{label} {remaining:.0}%"))
+    }
+
+    fn status_line_reasoning_effort_label(effort: Option<ReasoningEffortConfig>) -> &'static str {
+        match effort {
+            Some(ReasoningEffortConfig::Minimal) => "minimal",
+            Some(ReasoningEffortConfig::Low) => "low",
+            Some(ReasoningEffortConfig::Medium) => "medium",
+            Some(ReasoningEffortConfig::High) => "high",
+            Some(ReasoningEffortConfig::XHigh) => "xhigh",
+            None | Some(ReasoningEffortConfig::None) => "default",
+        }
     }
 
     pub(crate) fn add_ps_output(&mut self) {
@@ -4016,9 +4566,7 @@ impl ChatWidget {
 
         let mut header = ColumnRenderable::new();
         header.push(Line::from("Select Personality".bold()));
-        header.push(Line::from(
-            "Choose a communication style for Codex. Disable in /experimental.".dim(),
-        ));
+        header.push(Line::from("Choose a communication style for Codex.".dim()));
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             header: Box::new(header),
@@ -5216,10 +5764,14 @@ impl ChatWidget {
             self.bottom_pane.set_collaboration_modes_enabled(enabled);
             let settings = self.current_collaboration_mode.settings.clone();
             self.current_collaboration_mode = CollaborationMode {
-                mode: ModeKind::Custom,
+                mode: ModeKind::Default,
                 settings,
             };
-            self.active_collaboration_mask = None;
+            self.active_collaboration_mask = if enabled {
+                collaboration_modes::default_mask(self.models_manager.as_ref())
+            } else {
+                None
+            };
             self.update_collaboration_mode_indicator();
             self.refresh_model_display();
             self.request_redraw();
@@ -5399,7 +5951,7 @@ impl ChatWidget {
         self.active_collaboration_mask
             .as_ref()
             .and_then(|mask| mask.mode)
-            .unwrap_or(ModeKind::Custom)
+            .unwrap_or(ModeKind::Default)
     }
 
     fn effective_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
@@ -5444,13 +5996,10 @@ impl ChatWidget {
         if !self.collaboration_modes_enabled() {
             return None;
         }
-        match self.active_mode_kind() {
-            ModeKind::Plan => Some("Plan"),
-            ModeKind::Code => Some("Code"),
-            ModeKind::PairProgramming => Some("Pair Programming"),
-            ModeKind::Execute => Some("Execute"),
-            ModeKind::Custom => None,
-        }
+        let active_mode = self.active_mode_kind();
+        active_mode
+            .is_tui_visible()
+            .then_some(active_mode.display_name())
     }
 
     fn collaboration_mode_indicator(&self) -> Option<CollaborationModeIndicator> {
@@ -5459,10 +6008,7 @@ impl ChatWidget {
         }
         match self.active_mode_kind() {
             ModeKind::Plan => Some(CollaborationModeIndicator::Plan),
-            ModeKind::Code => None,
-            ModeKind::PairProgramming => Some(CollaborationModeIndicator::PairProgramming),
-            ModeKind::Execute => Some(CollaborationModeIndicator::Execute),
-            ModeKind::Custom => None,
+            ModeKind::Default | ModeKind::PairProgramming | ModeKind::Execute => None,
         }
     }
 
@@ -5473,6 +6019,7 @@ impl ChatWidget {
 
     fn personality_label(personality: Personality) -> &'static str {
         match personality {
+            Personality::None => "None",
             Personality::Friendly => "Friendly",
             Personality::Pragmatic => "Pragmatic",
         }
@@ -5480,12 +6027,13 @@ impl ChatWidget {
 
     fn personality_description(personality: Personality) -> &'static str {
         match personality {
+            Personality::None => "No personality instructions.",
             Personality::Friendly => "Warm, collaborative, and helpful.",
             Personality::Pragmatic => "Concise, task-focused, and direct.",
         }
     }
 
-    /// Cycle to the next collaboration mode variant (Plan -> Code -> Plan).
+    /// Cycle to the next collaboration mode variant (Plan -> Default -> Plan).
     fn cycle_collaboration_mode(&mut self) {
         if !self.collaboration_modes_enabled() {
             return;
@@ -5501,7 +6049,7 @@ impl ChatWidget {
 
     /// Update the active collaboration mask.
     ///
-    /// When collaboration modes are enabled and a preset is selected (not Custom),
+    /// When collaboration modes are enabled and a preset is selected,
     /// the current mode is attached to submissions as `Op::UserTurn { collaboration_mode: Some(...) }`.
     pub(crate) fn set_collaboration_mask(&mut self, mask: CollaborationModeMask) {
         if !self.collaboration_modes_enabled() {
@@ -5718,6 +6266,7 @@ impl ChatWidget {
             items,
             is_searchable: true,
             search_placeholder: Some("Type to search apps".to_string()),
+            col_width_mode: ColumnWidthMode::AutoAllRows,
             ..Default::default()
         });
     }
@@ -5860,6 +6409,10 @@ impl ChatWidget {
         self.bottom_pane.is_task_running() || self.is_review_mode
     }
 
+    fn is_plan_streaming_in_tui(&self) -> bool {
+        self.plan_stream_controller.is_some()
+    }
+
     pub(crate) fn composer_is_empty(&self) -> bool {
         self.bottom_pane.composer_is_empty()
     }
@@ -5869,8 +6422,27 @@ impl ChatWidget {
         text: String,
         collaboration_mode: CollaborationModeMask,
     ) {
+        if self.agent_turn_running
+            && self.active_collaboration_mask.as_ref() != Some(&collaboration_mode)
+        {
+            self.add_error_message(
+                "Cannot switch collaboration mode while a turn is running.".to_string(),
+            );
+            return;
+        }
         self.set_collaboration_mask(collaboration_mode);
-        self.submit_user_message(text.into());
+        let should_queue = self.is_plan_streaming_in_tui();
+        let user_message = UserMessage {
+            text,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+            mention_paths: HashMap::new(),
+        };
+        if should_queue {
+            self.queue_user_message(user_message);
+        } else {
+            self.submit_user_message(user_message);
+        }
     }
 
     /// True when the UI is in the regular composer state with no running task,
@@ -6179,6 +6751,15 @@ impl ChatWidget {
         );
         RenderableItem::Owned(Box::new(flex))
     }
+}
+
+fn has_websocket_timing_metrics(summary: RuntimeMetricsSummary) -> bool {
+    summary.responses_api_overhead_ms > 0
+        || summary.responses_api_inference_time_ms > 0
+        || summary.responses_api_engine_iapi_ttft_ms > 0
+        || summary.responses_api_engine_service_ttft_ms > 0
+        || summary.responses_api_engine_iapi_tbt_ms > 0
+        || summary.responses_api_engine_service_tbt_ms > 0
 }
 
 impl Drop for ChatWidget {

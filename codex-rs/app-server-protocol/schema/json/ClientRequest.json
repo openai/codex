@@ -422,6 +422,27 @@
       ],
       "type": "object"
     },
+    "ExperimentalFeatureListParams": {
+      "properties": {
+        "cursor": {
+          "description": "Opaque pagination cursor returned by a previous call.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "description": "Optional page size; defaults to a reasonable server-side value.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "FeedbackUploadParams": {
       "properties": {
         "classification": {
@@ -480,6 +501,19 @@
       },
       "type": "object"
     },
+    "FunctionCallOutputBody": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "$ref": "#/definitions/FunctionCallOutputContentItem"
+          },
+          "type": "array"
+        }
+      ]
+    },
     "FunctionCallOutputContentItem": {
       "description": "Responses API compatible content items that can be returned by a tool call. This is a subset of ContentItem with the types we support as function call outputs.",
       "oneOf": [
@@ -526,19 +560,10 @@
       ]
     },
     "FunctionCallOutputPayload": {
-      "description": "The payload we send back to OpenAI when reporting a tool call result.\n\n`content` preserves the historical plain-string payload so downstream integrations (tests, logging, etc.) can keep treating tool output as `String`. When an MCP server returns richer data we additionally populate `content_items` with the structured form that the Responses API understands.",
+      "description": "The payload we send back to OpenAI when reporting a tool call result.\n\n`body` serializes directly as the wire value for `function_call_output.output`. `success` remains internal metadata for downstream handling.",
       "properties": {
-        "content": {
-          "type": "string"
-        },
-        "content_items": {
-          "items": {
-            "$ref": "#/definitions/FunctionCallOutputContentItem"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
+        "body": {
+          "$ref": "#/definitions/FunctionCallOutputBody"
         },
         "success": {
           "type": [
@@ -548,7 +573,7 @@
         }
       },
       "required": [
-        "content"
+        "body"
       ],
       "type": "object"
     },
@@ -1049,10 +1074,7 @@
       "description": "Initial collaboration mode to use when the TUI starts.",
       "enum": [
         "plan",
-        "code",
-        "pair_programming",
-        "execute",
-        "custom"
+        "default"
       ],
       "type": "string"
     },
@@ -1174,6 +1196,7 @@
     },
     "Personality": {
       "enum": [
+        "none",
         "friendly",
         "pragmatic"
       ],
@@ -2186,6 +2209,24 @@
       },
       "type": "object"
     },
+    "SkillsRemoteReadParams": {
+      "type": "object"
+    },
+    "SkillsRemoteWriteParams": {
+      "properties": {
+        "hazelnutId": {
+          "type": "string"
+        },
+        "isPreload": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "hazelnutId",
+        "isPreload"
+      ],
+      "type": "object"
+    },
     "TextElement": {
       "properties": {
         "byteRange": {
@@ -2210,6 +2251,17 @@
       "type": "object"
     },
     "ThreadArchiveParams": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadCompactStartParams": {
       "properties": {
         "threadId": {
           "type": "string"
@@ -2266,13 +2318,6 @@
           ]
         },
         "modelProvider": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "path": {
-          "description": "[UNSTABLE] Specify the rollout path to fork from. If specified, the thread_id param will be ignored.",
           "type": [
             "string",
             "null"
@@ -2434,16 +2479,6 @@
             "null"
           ]
         },
-        "history": {
-          "description": "[UNSTABLE] FOR CODEX CLOUD - DO NOT USE. If specified, the thread will be resumed with the provided history instead of loaded from disk.",
-          "items": {
-            "$ref": "#/definitions/ResponseItem"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
         "model": {
           "description": "Configuration overrides for the resumed thread, if any.",
           "type": [
@@ -2452,13 +2487,6 @@
           ]
         },
         "modelProvider": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "path": {
-          "description": "[UNSTABLE] Specify the rollout path to resume from. If specified, the thread_id param will be ignored.",
           "type": [
             "string",
             "null"
@@ -2591,11 +2619,6 @@
             "null"
           ]
         },
-        "experimentalRawEvents": {
-          "default": false,
-          "description": "If true, opt into emitting raw response items on the event stream.\n\nThis is for internal use only (e.g. Codex Cloud). (TODO): Figure out a better way to categorize internal / experimental events & protocols.",
-          "type": "boolean"
-        },
         "model": {
           "type": [
             "string",
@@ -2670,17 +2693,6 @@
           ],
           "description": "Override the approval policy for this turn and subsequent turns."
         },
-        "collaborationMode": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/CollaborationMode"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "EXPERIMENTAL - set a pre-set collaboration mode. Takes precedence over model, reasoning_effort, and developer instructions if set."
-        },
         "cwd": {
           "description": "Override the working directory for this turn and subsequent turns.",
           "type": [
@@ -2753,6 +2765,29 @@
         }
       },
       "required": [
+        "input",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "TurnSteerParams": {
+      "properties": {
+        "expectedTurnId": {
+          "description": "Required active turn id precondition. The request fails when it does not match the currently active turn.",
+          "type": "string"
+        },
+        "input": {
+          "items": {
+            "$ref": "#/definitions/UserInput"
+          },
+          "type": "array"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "expectedTurnId",
         "input",
         "threadId"
       ],
@@ -3202,6 +3237,30 @@
         },
         "method": {
           "enum": [
+            "thread/compact/start"
+          ],
+          "title": "Thread/compact/startRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadCompactStartParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/compact/startRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
             "thread/rollback"
           ],
           "title": "Thread/rollbackRequestMethod",
@@ -3322,6 +3381,54 @@
         },
         "method": {
           "enum": [
+            "skills/remote/read"
+          ],
+          "title": "Skills/remote/readRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/SkillsRemoteReadParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Skills/remote/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "skills/remote/write"
+          ],
+          "title": "Skills/remote/writeRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/SkillsRemoteWriteParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Skills/remote/writeRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
             "app/list"
           ],
           "title": "App/listRequestMethod",
@@ -3394,6 +3501,30 @@
         },
         "method": {
           "enum": [
+            "turn/steer"
+          ],
+          "title": "Turn/steerRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/TurnSteerParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Turn/steerRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
             "turn/interrupt"
           ],
           "title": "Turn/interruptRequestMethod",
@@ -3457,6 +3588,30 @@
         "params"
       ],
       "title": "Model/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "experimentalFeature/list"
+          ],
+          "title": "ExperimentalFeature/listRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ExperimentalFeatureListParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "ExperimentalFeature/listRequest",
       "type": "object"
     },
     {
