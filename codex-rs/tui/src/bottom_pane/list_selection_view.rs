@@ -68,6 +68,7 @@ pub(crate) struct SelectionItem {
 /// `AutoAllRows` measures all rows to ensure stable column widths as the user scrolls
 /// `Fixed` used a fixed 30/70  split between columns
 pub(crate) struct SelectionViewParams {
+    pub view_id: Option<&'static str>,
     pub title: Option<String>,
     pub subtitle: Option<String>,
     pub footer_note: Option<Line<'static>>,
@@ -83,6 +84,7 @@ pub(crate) struct SelectionViewParams {
 impl Default for SelectionViewParams {
     fn default() -> Self {
         Self {
+            view_id: None,
             title: None,
             subtitle: None,
             footer_note: None,
@@ -103,6 +105,7 @@ impl Default for SelectionViewParams {
 /// visible rows and source items and for preserving selection while filters
 /// change.
 pub(crate) struct ListSelectionView {
+    view_id: Option<&'static str>,
     footer_note: Option<Line<'static>>,
     footer_hint: Option<Line<'static>>,
     items: Vec<SelectionItem>,
@@ -139,6 +142,7 @@ impl ListSelectionView {
             ]));
         }
         let mut s = Self {
+            view_id: params.view_id,
             footer_note: params.footer_note,
             footer_hint: params.footer_hint,
             items: params.items,
@@ -458,6 +462,10 @@ impl BottomPaneView for ListSelectionView {
 
     fn is_complete(&self) -> bool {
         self.complete
+    }
+
+    fn view_id(&self) -> Option<&'static str> {
+        self.view_id
     }
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {

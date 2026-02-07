@@ -1,15 +1,20 @@
 use std::collections::HashMap;
+use std::sync::LazyLock;
+use std::sync::Mutex as StdMutex;
 
 use codex_core::config::Config;
 use codex_core::features::Feature;
+use codex_core::token_data::TokenData;
 use serde::Deserialize;
 use std::time::Duration;
+use std::time::Instant;
 
 use crate::chatgpt_client::chatgpt_get_request_with_timeout;
 use crate::chatgpt_token::get_chatgpt_token_data;
 use crate::chatgpt_token::init_chatgpt_token_from_auth;
 
 pub use codex_core::connectors::AppInfo;
+use codex_core::connectors::CONNECTORS_CACHE_TTL;
 pub use codex_core::connectors::connector_display_label;
 use codex_core::connectors::connector_install_url;
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools;
@@ -38,6 +43,24 @@ struct DirectoryApp {
 
 const DIRECTORY_CONNECTORS_TIMEOUT: Duration = Duration::from_secs(60);
 
+#[derive(Clone, PartialEq, Eq)]
+struct AllConnectorsCacheKey {
+    chatgpt_base_url: String,
+    account_id: Option<String>,
+    chatgpt_user_id: Option<String>,
+    is_workspace_account: bool,
+}
+
+#[derive(Clone)]
+struct CachedAllConnectors {
+    key: AllConnectorsCacheKey,
+    expires_at: Instant,
+    connectors: Vec<AppInfo>,
+}
+
+static ALL_CONNECTORS_CACHE: LazyLock<StdMutex<Option<CachedAllConnectors>>> =
+    LazyLock::new(|| StdMutex::new(None));
+
 pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
     if !config.features.enabled(Feature::Apps) {
         return Ok(Vec::new());
@@ -48,8 +71,7 @@ pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
     );
     let connectors = connectors_result?;
     let accessible = accessible_result?;
-    let merged = merge_connectors(connectors, accessible);
-    Ok(filter_disallowed_connectors(merged))
+    Ok(merge_connectors_with_accessible(connectors, accessible))
 }
 
 pub async fn list_all_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
@@ -61,6 +83,11 @@ pub async fn list_all_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>
 
     let token_data =
         get_chatgpt_token_data().ok_or_else(|| anyhow::anyhow!("ChatGPT token not available"))?;
+    let cache_key = all_connectors_cache_key(config, &token_data);
+    if let Some(cached_connectors) = read_cached_all_connectors(&cache_key) {
+        return Ok(cached_connectors);
+    }
+
     let mut apps = list_directory_connectors(config).await?;
     if token_data.id_token.is_workspace_account() {
         apps.extend(list_workspace_connectors(config).await?);
@@ -84,7 +111,54 @@ pub async fn list_all_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>
             .cmp(&right.name)
             .then_with(|| left.id.cmp(&right.id))
     });
+    write_cached_all_connectors(cache_key, &connectors);
     Ok(connectors)
+}
+
+fn all_connectors_cache_key(config: &Config, token_data: &TokenData) -> AllConnectorsCacheKey {
+    AllConnectorsCacheKey {
+        chatgpt_base_url: config.chatgpt_base_url.clone(),
+        account_id: token_data.account_id.clone(),
+        chatgpt_user_id: token_data.id_token.chatgpt_user_id.clone(),
+        is_workspace_account: token_data.id_token.is_workspace_account(),
+    }
+}
+
+fn read_cached_all_connectors(cache_key: &AllConnectorsCacheKey) -> Option<Vec<AppInfo>> {
+    let mut cache_guard = ALL_CONNECTORS_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let now = Instant::now();
+
+    if let Some(cached) = cache_guard.as_ref() {
+        if now < cached.expires_at && cached.key == *cache_key {
+            return Some(cached.connectors.clone());
+        }
+        if now >= cached.expires_at {
+            *cache_guard = None;
+        }
+    }
+
+    None
+}
+
+fn write_cached_all_connectors(cache_key: AllConnectorsCacheKey, connectors: &[AppInfo]) {
+    let mut cache_guard = ALL_CONNECTORS_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *cache_guard = Some(CachedAllConnectors {
+        key: cache_key,
+        expires_at: Instant::now() + CONNECTORS_CACHE_TTL,
+        connectors: connectors.to_vec(),
+    });
+}
+
+pub fn merge_connectors_with_accessible(
+    connectors: Vec<AppInfo>,
+    accessible_connectors: Vec<AppInfo>,
+) -> Vec<AppInfo> {
+    let merged = merge_connectors(connectors, accessible_connectors);
+    filter_disallowed_connectors(merged)
 }
 
 async fn list_directory_connectors(config: &Config) -> anyhow::Result<Vec<DirectoryApp>> {
