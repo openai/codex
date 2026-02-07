@@ -474,6 +474,31 @@ impl McpConnectionManager {
         }
     }
 
+    pub(crate) async fn required_startup_failures(
+        &self,
+        required_servers: &[String],
+    ) -> Vec<McpStartupFailure> {
+        let mut failures = Vec::new();
+        for server_name in required_servers {
+            let Some(async_managed_client) = self.clients.get(server_name).cloned() else {
+                failures.push(McpStartupFailure {
+                    server: server_name.clone(),
+                    error: format!("required MCP server `{server_name}` was not initialized"),
+                });
+                continue;
+            };
+
+            match async_managed_client.client().await {
+                Ok(_) => {}
+                Err(error) => failures.push(McpStartupFailure {
+                    server: server_name.clone(),
+                    error: startup_outcome_error_message(error),
+                }),
+            }
+        }
+        failures
+    }
+
     /// Returns a single map that contains all tools. Each key is the
     /// fully-qualified name for the tool.
     #[instrument(level = "trace", skip_all)]
@@ -1131,6 +1156,13 @@ fn is_mcp_client_startup_timeout_error(error: &StartupOutcomeError) -> bool {
     }
 }
 
+fn startup_outcome_error_message(error: StartupOutcomeError) -> String {
+    match error {
+        StartupOutcomeError::Cancelled => "MCP startup cancelled".to_string(),
+        StartupOutcomeError::Failed { error } => error,
+    }
+}
+
 #[cfg(test)]
 mod mcp_init_error_display_tests {}
 
@@ -1325,6 +1357,7 @@ mod tests {
                     env_http_headers: None,
                 },
                 enabled: true,
+                required: false,
                 disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
@@ -1371,6 +1404,7 @@ mod tests {
                     env_http_headers: None,
                 },
                 enabled: true,
+                required: false,
                 disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,

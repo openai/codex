@@ -76,6 +76,7 @@ fn manager_snapshot_metrics_collects_without_shutdown() -> Result<()> {
         Some("account-id".to_string()),
         None,
         Some(TelemetryAuthMode::ApiKey),
+        "test_originator".to_string(),
         true,
         "tty".to_string(),
         SessionSource::Cli,

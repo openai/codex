@@ -298,7 +298,6 @@ impl ShellHandler {
             .services
             .exec_policy
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
-                features: &features,
                 command: &exec_params.command,
                 approval_policy: turn.approval_policy,
                 sandbox_policy: &turn.sandbox_policy,

@@ -13,7 +13,6 @@
 //!
 //! Some UI is time-based rather than input-based, such as the transient "press again to quit"
 //! hint. The pane schedules redraws so those hints can expire even when the UI is otherwise idle.
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::app_event::ConnectorsSnapshot;
@@ -54,6 +53,14 @@ mod bottom_pane_view;
 pub(crate) struct LocalImageAttachment {
     pub(crate) placeholder: String,
     pub(crate) path: PathBuf,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MentionBinding {
+    /// Mention token text without the leading `$`.
+    pub(crate) mention: String,
+    /// Canonical mention target (for example `app://...` or absolute SKILL.md path).
+    pub(crate) path: String,
 }
 mod chat_composer;
 mod chat_composer_history;
@@ -228,14 +235,19 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub fn take_mention_paths(&mut self) -> HashMap<String, String> {
-        self.composer.take_mention_paths()
+    pub fn take_mention_bindings(&mut self) -> Vec<MentionBinding> {
+        self.composer.take_mention_bindings()
     }
 
-    /// Clear pending attachments and mention paths e.g. when a slash command doesn't submit text.
+    pub fn take_recent_submission_mention_bindings(&mut self) -> Vec<MentionBinding> {
+        self.composer.take_recent_submission_mention_bindings()
+    }
+
+    /// Clear pending attachments and mention bindings e.g. when a slash command doesn't submit text.
     pub(crate) fn drain_pending_submission_state(&mut self) {
         let _ = self.take_recent_submission_images_with_placeholders();
-        let _ = self.take_mention_paths();
+        let _ = self.take_recent_submission_mention_bindings();
+        let _ = self.take_mention_bindings();
     }
 
     pub fn set_steer_enabled(&mut self, enabled: bool) {
@@ -419,7 +431,7 @@ impl BottomPane {
     ///
     /// This is intended for fresh input where mention linkage does not need to
     /// survive; it routes to `ChatComposer::set_text_content`, which resets
-    /// `mention_paths`.
+    /// mention bindings.
     pub(crate) fn set_composer_text(
         &mut self,
         text: String,
@@ -437,18 +449,18 @@ impl BottomPane {
     /// Use this when rehydrating a draft after a local validation/gating
     /// failure (for example unsupported image submit) so previously selected
     /// mention targets remain stable across retry.
-    pub(crate) fn set_composer_text_with_mention_paths(
+    pub(crate) fn set_composer_text_with_mention_bindings(
         &mut self,
         text: String,
         text_elements: Vec<TextElement>,
         local_image_paths: Vec<PathBuf>,
-        mention_paths: HashMap<String, String>,
+        mention_bindings: Vec<MentionBinding>,
     ) {
-        self.composer.set_text_content_with_mention_paths(
+        self.composer.set_text_content_with_mention_bindings(
             text,
             text_elements,
             local_image_paths,
-            mention_paths,
+            mention_bindings,
         );
         self.request_redraw();
     }
@@ -479,6 +491,10 @@ impl BottomPane {
 
     pub(crate) fn composer_local_images(&self) -> Vec<LocalImageAttachment> {
         self.composer.local_images()
+    }
+
+    pub(crate) fn composer_mention_bindings(&self) -> Vec<MentionBinding> {
+        self.composer.mention_bindings()
     }
 
     #[cfg(test)]

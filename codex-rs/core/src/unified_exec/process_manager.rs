@@ -487,7 +487,6 @@ impl UnifiedExecProcessManager {
             &context.turn.shell_environment_policy,
             Some(context.session.conversation_id),
         ));
-        let features = context.session.features();
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);
         let exec_approval_requirement = context
@@ -495,7 +494,6 @@ impl UnifiedExecProcessManager {
             .services
             .exec_policy
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
-                features: &features,
                 command: &request.command,
                 approval_policy: context.turn.approval_policy,
                 sandbox_policy: &context.turn.sandbox_policy,
