@@ -1172,9 +1172,11 @@ mod tests {
 
         let cwd_a = codex_home.join("workspace-a");
         let cwd_b = codex_home.join("workspace-b");
-        let t1 = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
-        let t2 = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
-        let t3 = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        // Use deterministic IDs to keep secondary sort-order assertions stable when
+        // multiple updates share the same second-level timestamp.
+        let t1 = ThreadId::from_string("ffffffff-ffff-4fff-8fff-ffffffffffff").expect("thread id");
+        let t2 = ThreadId::from_string("00000000-0000-4000-8000-000000000000").expect("thread id");
+        let t3 = ThreadId::from_string("11111111-1111-4111-8111-111111111111").expect("thread id");
         runtime
             .upsert_thread(&test_thread_metadata(&codex_home, t1, cwd_a.clone()))
             .await

@@ -1,6 +1,7 @@
 pub mod context;
 pub mod events;
 pub(crate) mod handlers;
+pub mod js_repl;
 pub mod orchestrator;
 pub mod parallel;
 pub mod registry;

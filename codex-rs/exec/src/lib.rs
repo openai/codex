@@ -248,6 +248,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         cwd: resolved_cwd,
         model_provider: model_provider.clone(),
         codex_linux_sandbox_exe,
+        js_repl_node_path: None,
         base_instructions: None,
         developer_instructions: None,
         personality: None,

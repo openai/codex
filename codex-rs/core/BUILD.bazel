@@ -15,7 +15,9 @@ codex_rust_crate(
             "Cargo.toml",
         ],
         allow_empty = True,
-    ),
+    ) + [
+        "//codex-rs:node-version.txt",
+    ],
     integration_compile_data_extra = [
         "//codex-rs/apply-patch:apply_patch_tool_instructions.md",
         "models.json",

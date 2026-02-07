@@ -221,6 +221,9 @@
             "include_apply_patch_tool": {
               "type": "boolean"
             },
+            "js_repl": {
+              "type": "boolean"
+            },
             "memory_tool": {
               "type": "boolean"
             },
@@ -286,6 +289,9 @@
         },
         "include_apply_patch_tool": {
           "type": "boolean"
+        },
+        "js_repl_node_path": {
+          "$ref": "#/definitions/AbsolutePathBuf"
         },
         "model": {
           "type": "string"
@@ -1264,6 +1270,9 @@
         "include_apply_patch_tool": {
           "type": "boolean"
         },
+        "js_repl": {
+          "type": "boolean"
+        },
         "memory_tool": {
           "type": "boolean"
         },
@@ -1382,6 +1391,14 @@
     "instructions": {
       "description": "System instructions.",
       "type": "string"
+    },
+    "js_repl_node_path": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      ],
+      "description": "Optional absolute path to the Node runtime used by `js_repl`."
     },
     "log_dir": {
       "allOf": [
