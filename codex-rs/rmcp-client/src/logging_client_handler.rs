@@ -4,7 +4,7 @@ use rmcp::ClientHandler;
 use rmcp::RoleClient;
 use rmcp::model::CancelledNotificationParam;
 use rmcp::model::ClientInfo;
-use rmcp::model::CreateElicitationRequestParam;
+use rmcp::model::CreateElicitationRequestParams;
 use rmcp::model::CreateElicitationResult;
 use rmcp::model::LoggingLevel;
 use rmcp::model::LoggingMessageNotificationParam;
@@ -37,7 +37,7 @@ impl LoggingClientHandler {
 impl ClientHandler for LoggingClientHandler {
     async fn create_elicitation(
         &self,
-        request: CreateElicitationRequestParam,
+        request: CreateElicitationRequestParams,
         context: RequestContext<RoleClient>,
     ) -> Result<CreateElicitationResult, rmcp::ErrorData> {
         (self.send_elicitation)(context.id, request)

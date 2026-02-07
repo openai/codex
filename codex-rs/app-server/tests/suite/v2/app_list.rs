@@ -288,7 +288,7 @@ impl ServerHandler for AppListMcpServer {
 
     fn list_tools(
         &self,
-        _request: Option<rmcp::model::PaginatedRequestParam>,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
         _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> impl std::future::Future<Output = Result<ListToolsResult, rmcp::ErrorData>> + Send + '_
     {
