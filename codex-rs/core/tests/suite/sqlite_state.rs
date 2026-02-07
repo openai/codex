@@ -30,6 +30,7 @@ async fn new_thread_is_recorded_in_state_db() -> Result<()> {
         config.features.enable(Feature::Sqlite);
     });
     let test = builder.build(&server).await?;
+    test.submit_turn("hello").await?;
 
     let thread_id = test.session_configured.session_id;
     let rollout_path = test.codex.rollout_path().expect("rollout path");

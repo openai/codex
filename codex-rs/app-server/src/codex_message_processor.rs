@@ -1735,25 +1735,31 @@ impl CodexMessageProcessor {
             Ok(new_thread) => {
                 let NewThread {
                     thread_id,
-                    session_configured,
+                    session_configured: _session_configured,
                     ..
                 } = new_thread;
-                let rollout_path = match session_configured.rollout_path {
-                    Some(path) => path,
-                    None => {
+                let rollout_path = match self.resolve_rollout_path(Some(thread_id)).await {
+                    Ok(Some(path)) => path,
+                    Ok(None) => {
                         let error = JSONRPCErrorError {
-                            code: INTERNAL_ERROR_CODE,
-                            message: "rollout path missing for v1 conversation".to_string(),
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: format!(
+                                "thread `{thread_id}` is ephemeral and has no persisted rollout"
+                            ),
                             data: None,
                         };
+                        self.outgoing.send_error(request_id, error).await;
+                        return;
+                    }
+                    Err(error) => {
                         self.outgoing.send_error(request_id, error).await;
                         return;
                     }
                 };
                 let response = NewConversationResponse {
                     conversation_id: thread_id,
-                    model: session_configured.model,
-                    reasoning_effort: session_configured.reasoning_effort,
+                    model: _session_configured.model,
+                    reasoning_effort: _session_configured.reasoning_effort,
                     rollout_path,
                 };
                 self.outgoing.send_response(request_id, response).await;
@@ -3785,14 +3791,20 @@ impl CodexMessageProcessor {
                 session_configured,
                 ..
             }) => {
-                let rollout_path = match session_configured.rollout_path.clone() {
-                    Some(path) => path,
-                    None => {
+                let rollout_path = match self.resolve_rollout_path(Some(thread_id)).await {
+                    Ok(Some(path)) => path,
+                    Ok(None) => {
                         let error = JSONRPCErrorError {
-                            code: INTERNAL_ERROR_CODE,
-                            message: "rollout path missing for resumed conversation".to_string(),
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: format!(
+                                "thread `{thread_id}` is ephemeral and has no persisted rollout"
+                            ),
                             data: None,
                         };
+                        self.outgoing.send_error(request_id, error).await;
+                        return;
+                    }
+                    Err(error) => {
                         self.outgoing.send_error(request_id, error).await;
                         return;
                     }
@@ -3992,14 +4004,20 @@ impl CodexMessageProcessor {
             }
         };
 
-        let rollout_path = match session_configured.rollout_path.clone() {
-            Some(path) => path,
-            None => {
+        let rollout_path = match self.resolve_rollout_path(Some(thread_id)).await {
+            Ok(Some(path)) => path,
+            Ok(None) => {
                 let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: "rollout path missing for forked conversation".to_string(),
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!(
+                        "thread `{thread_id}` is ephemeral and has no persisted rollout"
+                    ),
                     data: None,
                 };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+            Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
                 return;
             }

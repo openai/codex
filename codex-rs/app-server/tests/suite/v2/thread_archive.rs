@@ -57,6 +57,11 @@ async fn thread_archive_moves_rollout_into_archived_directory() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
     )
     .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
 
     // Locate the rollout path recorded for this thread id.
     let rollout_path = find_thread_path_by_id_str(codex_home.path(), &thread.id)

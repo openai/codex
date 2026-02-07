@@ -94,6 +94,11 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
     )
     .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
     let rollout_path = find_thread_path_by_id_str(codex_home.path(), &thread.id).await?;
     assert!(
         rollout_path.is_some(),
