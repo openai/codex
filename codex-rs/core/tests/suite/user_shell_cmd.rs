@@ -100,52 +100,40 @@ async fn user_shell_cmd_can_be_interrupted() {
     // Set up isolated config and conversation.
     let server = start_mock_server().await;
     let mut builder = test_codex();
-    let codex = builder
+    let fixture = builder
         .build(&server)
         .await
-        .expect("create new conversation")
-        .codex;
+        .expect("create new conversation");
+    let codex = &fixture.codex;
 
-    // Start a long-running command and interrupt it. Retry a few times because
-    // command startup/completion timing can race with the interrupt op.
-    let mut saw_interrupted_abort = false;
-    for _ in 0..3 {
-        let sleep_cmd = "sleep 5".to_string();
-        codex
-            .submit(Op::RunUserShellCommand { command: sleep_cmd })
-            .await
-            .unwrap();
+    // Start a long-running command and then interrupt it.
+    let sleep_cmd = "sleep 5".to_string();
+    codex
+        .submit(Op::RunUserShellCommand { command: sleep_cmd })
+        .await
+        .unwrap();
 
-        let _begin = wait_for_event_match(&codex, |ev| match ev {
-            EventMsg::ExecCommandBegin(event) if event.source == ExecCommandSource::UserShell => {
-                Some(event.clone())
-            }
-            _ => None,
-        })
-        .await;
-        codex.submit(Op::Interrupt).await.unwrap();
-
-        let msg = wait_for_event_with_timeout(
-            &codex,
-            |ev| matches!(ev, EventMsg::TurnAborted(_) | EventMsg::TurnComplete(_)),
-            Duration::from_secs(60),
-        )
-        .await;
-        match msg {
-            EventMsg::TurnAborted(ev) => {
-                assert_eq!(ev.reason, TurnAbortReason::Interrupted);
-                saw_interrupted_abort = true;
-                break;
-            }
-            EventMsg::TurnComplete(_) => {}
-            _ => unreachable!(),
+    // Wait until it has started (ExecCommandBegin), then interrupt.
+    let _begin = wait_for_event_match(codex, |ev| match ev {
+        EventMsg::ExecCommandBegin(event) if event.source == ExecCommandSource::UserShell => {
+            Some(event.clone())
         }
-    }
+        _ => None,
+    })
+    .await;
+    codex.submit(Op::Interrupt).await.unwrap();
 
-    assert!(
-        saw_interrupted_abort,
-        "user shell command completed before interrupt in every attempt"
-    );
+    // Expect a TurnAborted(Interrupted) notification.
+    let msg = wait_for_event_with_timeout(
+        codex,
+        |ev| matches!(ev, EventMsg::TurnAborted(_)),
+        Duration::from_secs(60),
+    )
+    .await;
+    let EventMsg::TurnAborted(ev) = msg else {
+        unreachable!()
+    };
+    assert_eq!(ev.reason, TurnAbortReason::Interrupted);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
