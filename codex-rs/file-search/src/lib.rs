@@ -682,12 +682,23 @@ mod tests {
 
     impl RecordingReporter {
         fn wait_for_complete(&self, timeout: Duration) -> bool {
-            let completes = self.complete_times.lock().unwrap();
-            if !completes.is_empty() {
-                return true;
+            let deadline = Instant::now() + timeout;
+            let mut completes = self.complete_times.lock().unwrap();
+            loop {
+                if !completes.is_empty() {
+                    return true;
+                }
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return false;
+                }
+                let (next_completes, wait_result) =
+                    self.complete_cv.wait_timeout(completes, remaining).unwrap();
+                completes = next_completes;
+                if wait_result.timed_out() {
+                    return !completes.is_empty();
+                }
             }
-            let (completes, _) = self.complete_cv.wait_timeout(completes, timeout).unwrap();
-            !completes.is_empty()
         }
         fn clear(&self) {
             self.updates.lock().unwrap().clear();
@@ -699,12 +710,23 @@ mod tests {
         }
 
         fn wait_for_updates_at_least(&self, min_len: usize, timeout: Duration) -> bool {
-            let updates = self.updates.lock().unwrap();
-            if updates.len() >= min_len {
-                return true;
+            let deadline = Instant::now() + timeout;
+            let mut updates = self.updates.lock().unwrap();
+            loop {
+                if updates.len() >= min_len {
+                    return true;
+                }
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return false;
+                }
+                let (next_updates, wait_result) =
+                    self.update_cv.wait_timeout(updates, remaining).unwrap();
+                updates = next_updates;
+                if wait_result.timed_out() {
+                    return updates.len() >= min_len;
+                }
             }
-            let (updates, _) = self.update_cv.wait_timeout(updates, timeout).unwrap();
-            updates.len() >= min_len
         }
 
         fn snapshot(&self) -> FileSearchSnapshot {
