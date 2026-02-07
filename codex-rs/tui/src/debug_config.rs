@@ -3,6 +3,7 @@ use codex_app_server_protocol::ConfigLayerSource;
 use codex_core::config::Config;
 use codex_core::config_loader::ConfigLayerStack;
 use codex_core::config_loader::ConfigLayerStackOrdering;
+use codex_core::config_loader::NetworkConstraints;
 use codex_core::config_loader::RequirementSource;
 use codex_core::config_loader::ResidencyRequirement;
 use codex_core::config_loader::SandboxModeRequirement;
@@ -115,6 +116,14 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
         ));
     }
 
+    if let Some(network) = requirements.network.as_ref() {
+        requirement_lines.push(requirement_line(
+            "experimental_network",
+            format_network_constraints(&network.value),
+            Some(&network.source),
+        ));
+    }
+
     if requirement_lines.is_empty() {
         lines.push("  <none>".dim().into());
     } else {
@@ -199,6 +208,63 @@ fn format_residency_requirement(requirement: ResidencyRequirement) -> String {
     }
 }
 
+fn format_network_constraints(network: &NetworkConstraints) -> String {
+    let mut parts = Vec::new();
+
+    let NetworkConstraints {
+        enabled,
+        http_port,
+        socks_port,
+        allow_upstream_proxy,
+        dangerously_allow_non_loopback_proxy,
+        dangerously_allow_non_loopback_admin,
+        allowed_domains,
+        denied_domains,
+        allow_unix_sockets,
+        allow_local_binding,
+    } = network;
+
+    if let Some(enabled) = enabled {
+        parts.push(format!("enabled={enabled}"));
+    }
+    if let Some(http_port) = http_port {
+        parts.push(format!("http_port={http_port}"));
+    }
+    if let Some(socks_port) = socks_port {
+        parts.push(format!("socks_port={socks_port}"));
+    }
+    if let Some(allow_upstream_proxy) = allow_upstream_proxy {
+        parts.push(format!("allow_upstream_proxy={allow_upstream_proxy}"));
+    }
+    if let Some(dangerously_allow_non_loopback_proxy) = dangerously_allow_non_loopback_proxy {
+        parts.push(format!(
+            "dangerously_allow_non_loopback_proxy={dangerously_allow_non_loopback_proxy}"
+        ));
+    }
+    if let Some(dangerously_allow_non_loopback_admin) = dangerously_allow_non_loopback_admin {
+        parts.push(format!(
+            "dangerously_allow_non_loopback_admin={dangerously_allow_non_loopback_admin}"
+        ));
+    }
+    if let Some(allowed_domains) = allowed_domains {
+        parts.push(format!("allowed_domains=[{}]", allowed_domains.join(", ")));
+    }
+    if let Some(denied_domains) = denied_domains {
+        parts.push(format!("denied_domains=[{}]", denied_domains.join(", ")));
+    }
+    if let Some(allow_unix_sockets) = allow_unix_sockets {
+        parts.push(format!(
+            "allow_unix_sockets=[{}]",
+            allow_unix_sockets.join(", ")
+        ));
+    }
+    if let Some(allow_local_binding) = allow_local_binding {
+        parts.push(format!("allow_local_binding={allow_local_binding}"));
+    }
+
+    join_or_empty(parts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::render_debug_config_lines;
@@ -211,6 +277,7 @@ mod tests {
     use codex_core::config_loader::ConstrainedWithSource;
     use codex_core::config_loader::McpServerIdentity;
     use codex_core::config_loader::McpServerRequirement;
+    use codex_core::config_loader::NetworkConstraints;
     use codex_core::config_loader::RequirementSource;
     use codex_core::config_loader::ResidencyRequirement;
     use codex_core::config_loader::SandboxModeRequirement;
@@ -323,6 +390,14 @@ mod tests {
             Constrained::allow_any(WebSearchMode::Cached),
             Some(RequirementSource::CloudRequirements),
         );
+        requirements.network = Some(Sourced::new(
+            NetworkConstraints {
+                enabled: Some(true),
+                allowed_domains: Some(vec!["example.com".to_string()]),
+                ..Default::default()
+            },
+            RequirementSource::CloudRequirements,
+        ));
 
         let requirements_toml = ConfigRequirementsToml {
             allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
@@ -376,6 +451,9 @@ mod tests {
         );
         assert!(rendered.contains("mcp_servers: docs (source: MDM managed_config.toml (legacy))"));
         assert!(rendered.contains("enforce_residency: us (source: cloud requirements)"));
+        assert!(rendered.contains(
+            "experimental_network: enabled=true, allowed_domains=[example.com] (source: cloud requirements)"
+        ));
         assert!(!rendered.contains("  - rules:"));
     }
 
