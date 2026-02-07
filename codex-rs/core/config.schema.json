@@ -923,6 +923,17 @@
       },
       "type": "object"
     },
+    "SecurityConfigToml": {
+      "additionalProperties": false,
+      "description": "Security settings loaded from config.toml. Fields are optional so we can apply defaults.",
+      "properties": {
+        "process_hardening_disable": {
+          "description": "When `true`, disables process hardening (e.g enables ptrace attach).",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "ShellEnvironmentPolicyInherit": {
       "oneOf": [
         {
@@ -1560,6 +1571,15 @@
         }
       ],
       "description": "Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`."
+    },
+    "security": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/SecurityConfigToml"
+        }
+      ],
+      "default": null,
+      "description": "Security settings."
     },
     "shell_environment_policy": {
       "allOf": [

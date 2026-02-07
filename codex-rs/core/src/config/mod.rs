@@ -14,6 +14,7 @@ use crate::config::types::OtelConfig;
 use crate::config::types::OtelConfigToml;
 use crate::config::types::OtelExporterKind;
 use crate::config::types::SandboxWorkspaceWrite;
+use crate::config::types::SecurityConfigToml;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
 use crate::config::types::SkillsConfig;
@@ -864,6 +865,10 @@ pub struct ConfigToml {
 
     /// Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`.
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
+
+    /// Security settings.
+    #[serde(default)]
+    pub security: Option<SecurityConfigToml>,
 
     /// Optional external command to spawn for end-user notifications.
     #[serde(default)]

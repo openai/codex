@@ -323,6 +323,16 @@ pub enum HistoryPersistence {
     None,
 }
 
+// ===== Security configuration =====
+
+/// Security settings loaded from config.toml. Fields are optional so we can apply defaults.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SecurityConfigToml {
+    /// When `true`, disables process hardening for this installation.
+    pub process_hardening_disable: Option<bool>,
+}
+
 // ===== Analytics configuration =====
 
 /// Analytics settings loaded from config.toml. Fields are optional so we can apply defaults.

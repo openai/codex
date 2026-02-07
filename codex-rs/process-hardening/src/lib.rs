@@ -1,3 +1,6 @@
+use serde::Deserialize;
+use std::path::Path;
+
 #[cfg(unix)]
 use std::ffi::OsString;
 
@@ -10,6 +13,10 @@ use std::os::unix::ffi::OsStrExt;
 /// - disabling ptrace attach on Linux and macOS.
 /// - removing dangerous environment variables such as LD_PRELOAD and DYLD_*
 pub fn pre_main_hardening() {
+    if hardening_disabled_from_user_config() {
+        return;
+    }
+
     #[cfg(any(target_os = "linux", target_os = "android"))]
     pre_main_hardening_linux();
 
@@ -22,6 +29,40 @@ pub fn pre_main_hardening() {
 
     #[cfg(windows)]
     pre_main_hardening_windows();
+}
+
+#[derive(Deserialize)]
+struct HardeningConfigToml {
+    security: Option<SecurityConfigToml>,
+}
+
+#[derive(Deserialize)]
+struct SecurityConfigToml {
+    process_hardening_disable: Option<bool>,
+}
+
+fn hardening_disabled_from_user_config() -> bool {
+    // pre_main_hardening runs before the normal config stack is initialized.
+    let codex_home = codex_utils_home_dir::find_codex_home().ok();
+    codex_home.is_some_and(|home| hardening_disabled_from_codex_home(&home))
+}
+
+fn hardening_disabled_from_codex_home(codex_home: &Path) -> bool {
+    let config_path = codex_home.join("config.toml");
+    hardening_disabled_from_config_path(&config_path)
+}
+
+fn hardening_disabled_from_config_path(config_path: &Path) -> bool {
+    let Ok(contents) = std::fs::read_to_string(config_path) else {
+        return false;
+    };
+    let Ok(config) = toml::from_str::<HardeningConfigToml>(&contents) else {
+        return false;
+    };
+    config
+        .security
+        .and_then(|security| security.process_hardening_disable)
+        .unwrap_or(false)
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -147,8 +188,10 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use std::ffi::OsStr;
+    use std::fs;
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::ffi::OsStringExt;
+    use tempfile::TempDir;
 
     #[test]
     fn env_keys_with_prefix_handles_non_utf8_entries() {
@@ -186,5 +229,41 @@ mod tests {
         let keys = env_keys_with_prefix(vars, b"LD_");
         assert_eq!(keys.len(), 1);
         assert_eq!(keys[0].as_os_str(), ld_test_var);
+    }
+
+    #[test]
+    fn hardening_disabled_from_config_path_requires_true_flag() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config_path = temp_dir.path().join("config.toml");
+        fs::write(
+            &config_path,
+            r#"
+[security]
+process_hardening_disable = true
+"#,
+        )
+        .expect("write config");
+
+        assert_eq!(hardening_disabled_from_config_path(&config_path), true);
+    }
+
+    #[test]
+    fn hardening_disabled_from_config_path_ignores_missing_or_invalid_config() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config_path = temp_dir.path().join("config.toml");
+        assert_eq!(hardening_disabled_from_config_path(&config_path), false);
+
+        fs::write(&config_path, "invalid = [").expect("write invalid config");
+        assert_eq!(hardening_disabled_from_config_path(&config_path), false);
+
+        fs::write(
+            &config_path,
+            r#"
+[security]
+process_hardening_disable = false
+"#,
+        )
+        .expect("write config");
+        assert_eq!(hardening_disabled_from_config_path(&config_path), false);
     }
 }
