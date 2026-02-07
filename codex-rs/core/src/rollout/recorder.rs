@@ -364,6 +364,10 @@ impl RolloutRecorder {
         }
     }
 
+    pub(crate) fn rollout_path_tracker(&self) -> Arc<Mutex<Option<PathBuf>>> {
+        Arc::clone(&self.rollout_path)
+    }
+
     pub async fn ensure_persisted(&self) -> std::io::Result<PathBuf> {
         if let Some(path) = self.rollout_path() {
             return Ok(path);

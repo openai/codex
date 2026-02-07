@@ -491,6 +491,12 @@ impl Codex {
     pub(crate) async fn ensure_rollout_persisted(&self) -> CodexResult<Option<PathBuf>> {
         self.session.ensure_rollout_persisted().await
     }
+
+    pub(crate) async fn rollout_path_tracker(
+        &self,
+    ) -> Option<Arc<std::sync::Mutex<Option<PathBuf>>>> {
+        self.session.rollout_path_tracker().await
+    }
 }
 
 /// Context for an initialized model agent
@@ -1281,6 +1287,11 @@ impl Session {
         };
 
         Ok(Some(rollout_path))
+    }
+
+    async fn rollout_path_tracker(&self) -> Option<Arc<std::sync::Mutex<Option<PathBuf>>>> {
+        let rollout = self.services.rollout.lock().await;
+        rollout.as_ref().map(RolloutRecorder::rollout_path_tracker)
     }
 
     fn next_internal_sub_id(&self) -> String {

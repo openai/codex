@@ -509,10 +509,8 @@ impl ThreadManagerState {
             }
         };
 
-        let thread = Arc::new(CodexThread::new(
-            codex,
-            session_configured.rollout_path.clone(),
-        ));
+        let rollout_path_tracker = codex.rollout_path_tracker().await;
+        let thread = Arc::new(CodexThread::new(codex, rollout_path_tracker));
         let mut threads = self.threads.write().await;
         threads.insert(thread_id, thread.clone());
 

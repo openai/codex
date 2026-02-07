@@ -12,7 +12,10 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::Mutex;
 use tokio::sync::watch;
+use tracing::warn;
 
 use crate::state_db::StateDbHandle;
 
@@ -30,16 +33,19 @@ pub struct ThreadConfigSnapshot {
 
 pub struct CodexThread {
     codex: Codex,
-    rollout_path: Option<PathBuf>,
+    rollout_path_tracker: Option<Arc<Mutex<Option<PathBuf>>>>,
 }
 
 /// Conduit for the bidirectional stream of messages that compose a thread
 /// (formerly called a conversation) in Codex.
 impl CodexThread {
-    pub(crate) fn new(codex: Codex, rollout_path: Option<PathBuf>) -> Self {
+    pub(crate) fn new(
+        codex: Codex,
+        rollout_path_tracker: Option<Arc<Mutex<Option<PathBuf>>>>,
+    ) -> Self {
         Self {
             codex,
-            rollout_path,
+            rollout_path_tracker,
         }
     }
 
@@ -73,7 +79,16 @@ impl CodexThread {
     }
 
     pub fn rollout_path(&self) -> Option<PathBuf> {
-        self.rollout_path.clone()
+        let Some(path_tracker) = &self.rollout_path_tracker else {
+            return None;
+        };
+        match path_tracker.lock() {
+            Ok(path) => path.clone(),
+            Err(err) => {
+                warn!("rollout path lock poisoned: {err}");
+                None
+            }
+        }
     }
 
     /// Ensure this thread has a persisted rollout and return its path.
