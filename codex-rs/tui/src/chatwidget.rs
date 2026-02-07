@@ -20,6 +20,11 @@
 //! is in progress and while MCP server startup is in progress. Those lifecycles are tracked
 //! independently (`agent_turn_running` and `mcp_startup_status`) and synchronized via
 //! `update_task_running_state`.
+//!
+//! For preamble-capable models, assistant output may include commentary before
+//! the final answer. During streaming we hide the status row to avoid duplicate
+//! progress indicators; once commentary completes and stream queues drain, we
+//! re-show it so users still see turn-in-progress state between output bursts.
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -821,8 +826,12 @@ impl ChatWidget {
                 .unwrap_or(true)
     }
 
-    /// Restore the status indicator only after we have a pending restore signal,
+    /// Restore the status indicator only after commentary completion is pending,
     /// the turn is still running, and all stream queues have drained.
+    ///
+    /// This gate prevents flicker while normal output is still actively
+    /// streaming, but still restores a visible "working" affordance when a
+    /// commentary block ends before the turn itself has completed.
     fn maybe_restore_status_indicator_after_stream_idle(&mut self) {
         if !self.pending_status_indicator_restore
             || !self.bottom_pane.is_task_running()
@@ -2125,6 +2134,11 @@ impl ChatWidget {
         self.set_status(message, additional_details);
     }
 
+    /// Handle completion of an `AgentMessage` turn item.
+    ///
+    /// Commentary completion sets a deferred restore flag so the status row
+    /// returns once stream queues are idle. Final-answer completion (or absent
+    /// phase for legacy models) clears the flag to preserve historical behavior.
     fn on_agent_message_item_completed(&mut self, item: AgentMessageItem) {
         self.pending_status_indicator_restore = match item.phase {
             // Models that don't support preambles only output AgentMessageItems on turn completion.

@@ -41,9 +41,18 @@ pub enum AgentMessageContent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+/// Assistant-authored message payload used in turn-item streams.
+///
+/// `phase` is optional because not all providers/models emit it. Consumers
+/// should use it when present, but retain legacy completion semantics when it
+/// is `None`.
 pub struct AgentMessageItem {
     pub id: String,
     pub content: Vec<AgentMessageContent>,
+    /// Optional phase metadata carried through from `ResponseItem::Message`.
+    ///
+    /// This is currently used by TUI rendering to distinguish mid-turn
+    /// commentary from a final answer and avoid status-indicator jitter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub phase: Option<MessagePhase>,
@@ -181,6 +190,8 @@ impl AgentMessageItem {
     }
 
     pub fn as_legacy_events(&self) -> Vec<EventMsg> {
+        // Legacy events only preserve visible assistant text; `phase` has no
+        // representation in the v1 event stream.
         self.content
             .iter()
             .map(|c| match c {
