@@ -993,6 +993,7 @@ impl Session {
             auth.and_then(CodexAuth::get_account_id),
             auth.and_then(CodexAuth::get_account_email),
             auth_mode,
+            crate::default_client::originator().value,
             config.otel.log_user_prompt,
             terminal::user_agent(),
             session_configuration.session_source.clone(),
@@ -1072,7 +1073,9 @@ impl Session {
                 session_configuration.provider.clone(),
                 session_configuration.session_source.clone(),
                 config.model_verbosity,
-                config.features.enabled(Feature::ResponsesWebsockets),
+                config.features.enabled(Feature::ResponsesWebsockets)
+                    || config.features.enabled(Feature::ResponsesWebsocketsV2),
+                config.features.enabled(Feature::ResponsesWebsocketsV2),
                 config.features.enabled(Feature::EnableRequestCompression),
                 config.features.enabled(Feature::RuntimeMetrics),
                 Self::build_model_client_beta_features_header(config.as_ref()),
@@ -4500,6 +4503,7 @@ async fn emit_agent_message_in_plan_mode(
                 TurnItem::AgentMessage(codex_protocol::items::AgentMessageItem {
                     id: agent_message_id.clone(),
                     content: Vec::new(),
+                    phase: None,
                 })
             });
         sess.emit_turn_item_started(turn_context, &start_item).await;
@@ -5793,6 +5797,7 @@ mod tests {
             None,
             Some("test@test.com".to_string()),
             Some(TelemetryAuthMode::Chatgpt),
+            "test_originator".to_string(),
             false,
             "test".to_string(),
             session_source,
@@ -5891,7 +5896,9 @@ mod tests {
                 session_configuration.provider.clone(),
                 session_configuration.session_source.clone(),
                 config.model_verbosity,
-                config.features.enabled(Feature::ResponsesWebsockets),
+                config.features.enabled(Feature::ResponsesWebsockets)
+                    || config.features.enabled(Feature::ResponsesWebsocketsV2),
+                config.features.enabled(Feature::ResponsesWebsocketsV2),
                 config.features.enabled(Feature::EnableRequestCompression),
                 config.features.enabled(Feature::RuntimeMetrics),
                 Session::build_model_client_beta_features_header(config.as_ref()),
@@ -6021,7 +6028,9 @@ mod tests {
                 session_configuration.provider.clone(),
                 session_configuration.session_source.clone(),
                 config.model_verbosity,
-                config.features.enabled(Feature::ResponsesWebsockets),
+                config.features.enabled(Feature::ResponsesWebsockets)
+                    || config.features.enabled(Feature::ResponsesWebsocketsV2),
+                config.features.enabled(Feature::ResponsesWebsocketsV2),
                 config.features.enabled(Feature::EnableRequestCompression),
                 config.features.enabled(Feature::RuntimeMetrics),
                 Session::build_model_client_beta_features_header(config.as_ref()),

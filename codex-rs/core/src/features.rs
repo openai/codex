@@ -127,6 +127,8 @@ pub enum Feature {
     Personality,
     /// Use the Responses API WebSocket transport for OpenAI by default.
     ResponsesWebsockets,
+    /// Enable Responses API websocket v2 mode.
+    ResponsesWebsocketsV2,
 }
 
 impl Feature {
@@ -566,6 +568,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ResponsesWebsockets,
         key: "responses_websockets",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ResponsesWebsocketsV2,
+        key: "responses_websockets_v2",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

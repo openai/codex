@@ -27,6 +27,7 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
         Some("account-id".to_string()),
         None,
         Some(TelemetryAuthMode::ApiKey),
+        "test_originator".to_string(),
         true,
         "tty".to_string(),
         SessionSource::Cli,

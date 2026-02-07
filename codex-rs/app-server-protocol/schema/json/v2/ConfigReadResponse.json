@@ -78,17 +78,6 @@
             }
           ]
         },
-        "apps": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AppsConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
         "compact_prompt": {
           "type": [
             "string",
