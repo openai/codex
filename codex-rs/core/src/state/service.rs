@@ -10,6 +10,7 @@ use crate::file_watcher::FileWatcher;
 use crate::hooks::Hooks;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::models_manager::manager::ModelsManager;
+use crate::rollout::RolloutRecorderParams;
 use crate::skills::SkillsManager;
 use crate::state_db::StateDbHandle;
 use crate::tools::sandboxing::ApprovalStore;
@@ -26,6 +27,7 @@ pub(crate) struct SessionServices {
     pub(crate) analytics_events_client: AnalyticsEventsClient,
     pub(crate) hooks: Hooks,
     pub(crate) rollout: Mutex<Option<RolloutRecorder>>,
+    pub(crate) pending_rollout_create: Mutex<Option<RolloutRecorderParams>>,
     pub(crate) user_shell: Arc<crate::shell::Shell>,
     pub(crate) show_raw_agent_reasoning: bool,
     pub(crate) exec_policy: ExecPolicyManager,
