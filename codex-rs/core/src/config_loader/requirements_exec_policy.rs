@@ -179,7 +179,7 @@ impl RequirementsExecPolicyToml {
             }
         }
 
-        Ok(Policy::new(rules_by_program))
+        Ok(Policy::new(rules_by_program, Vec::new()))
     }
 
     pub(crate) fn to_requirements_policy(

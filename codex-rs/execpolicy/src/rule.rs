@@ -92,6 +92,55 @@ pub struct PrefixRule {
     pub justification: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NetworkRuleProtocol {
+    Http,
+    Https,
+}
+
+impl NetworkRuleProtocol {
+    pub fn parse(raw: &str) -> Result<Self> {
+        match raw {
+            "http" => Ok(Self::Http),
+            "https" => Ok(Self::Https),
+            other => Err(Error::InvalidRule(format!(
+                "invalid network protocol: {other}"
+            ))),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NetworkRuleDecision {
+    Allow,
+    Deny,
+    Ask,
+}
+
+impl NetworkRuleDecision {
+    pub fn parse(raw: &str) -> Result<Self> {
+        match raw {
+            "allow" => Ok(Self::Allow),
+            "deny" => Ok(Self::Deny),
+            "ask" => Ok(Self::Ask),
+            other => Err(Error::InvalidRule(format!(
+                "invalid network decision: {other}"
+            ))),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkRule {
+    pub host: String,
+    pub protocol: NetworkRuleProtocol,
+    pub decision: NetworkRuleDecision,
+    pub justification: Option<String>,
+}
+
 pub trait Rule: Any + Debug + Send + Sync {
     fn program(&self) -> &str;
 
