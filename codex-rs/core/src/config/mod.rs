@@ -1653,6 +1653,7 @@ impl Config {
             mcp_servers,
             exec_policy: _,
             enforce_residency,
+            network: _network_requirements,
         } = requirements;
 
         apply_requirement_constrained_value(

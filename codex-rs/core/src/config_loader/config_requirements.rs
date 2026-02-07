@@ -81,6 +81,7 @@ pub struct ConfigRequirements {
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
     pub(crate) exec_policy: Option<Sourced<RequirementsExecPolicy>>,
     pub enforce_residency: ConstrainedWithSource<Option<ResidencyRequirement>>,
+    pub network: Option<Sourced<NetworkRequirementsToml>>,
 }
 
 impl Default for ConfigRequirements {
@@ -101,6 +102,7 @@ impl Default for ConfigRequirements {
             mcp_servers: None,
             exec_policy: None,
             enforce_residency: ConstrainedWithSource::new(Constrained::allow_any(None), None),
+            network: None,
         }
     }
 }
@@ -121,6 +123,20 @@ pub enum McpServerIdentity {
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct McpServerRequirement {
     pub identity: McpServerIdentity,
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct NetworkRequirementsToml {
+    pub enabled: Option<bool>,
+    pub http_port: Option<u16>,
+    pub socks_port: Option<u16>,
+    pub allow_upstream_proxy: Option<bool>,
+    pub dangerously_allow_non_loopback_proxy: Option<bool>,
+    pub dangerously_allow_non_loopback_admin: Option<bool>,
+    pub allowed_domains: Option<Vec<String>>,
+    pub denied_domains: Option<Vec<String>>,
+    pub allow_unix_sockets: Option<Vec<String>>,
+    pub allow_local_binding: Option<bool>,
 }
 
 #[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -170,6 +186,7 @@ pub struct ConfigRequirementsToml {
     pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
     pub rules: Option<RequirementsExecPolicyToml>,
     pub enforce_residency: Option<ResidencyRequirement>,
+    pub network: Option<NetworkRequirementsToml>,
 }
 
 /// Value paired with the requirement source it came from, for better error
@@ -202,6 +219,7 @@ pub struct ConfigRequirementsWithSources {
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
     pub rules: Option<Sourced<RequirementsExecPolicyToml>>,
     pub enforce_residency: Option<Sourced<ResidencyRequirement>>,
+    pub network: Option<Sourced<NetworkRequirementsToml>>,
 }
 
 impl ConfigRequirementsWithSources {
@@ -236,6 +254,7 @@ impl ConfigRequirementsWithSources {
                 mcp_servers,
                 rules,
                 enforce_residency,
+                network,
             }
         );
     }
@@ -248,6 +267,7 @@ impl ConfigRequirementsWithSources {
             mcp_servers,
             rules,
             enforce_residency,
+            network,
         } = self;
         ConfigRequirementsToml {
             allowed_approval_policies: allowed_approval_policies.map(|sourced| sourced.value),
@@ -256,6 +276,7 @@ impl ConfigRequirementsWithSources {
             mcp_servers: mcp_servers.map(|sourced| sourced.value),
             rules: rules.map(|sourced| sourced.value),
             enforce_residency: enforce_residency.map(|sourced| sourced.value),
+            network: network.map(|sourced| sourced.value),
         }
     }
 }
@@ -301,6 +322,7 @@ impl ConfigRequirementsToml {
             && self.mcp_servers.is_none()
             && self.rules.is_none()
             && self.enforce_residency.is_none()
+            && self.network.is_none()
     }
 }
 
@@ -315,6 +337,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             mcp_servers,
             rules,
             enforce_residency,
+            network,
         } = toml;
 
         let approval_policy = match allowed_approval_policies {
@@ -478,6 +501,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             mcp_servers,
             exec_policy,
             enforce_residency,
+            network,
         })
     }
 }
@@ -506,6 +530,7 @@ mod tests {
             mcp_servers,
             rules,
             enforce_residency,
+            network,
         } = toml;
         ConfigRequirementsWithSources {
             allowed_approval_policies: allowed_approval_policies
@@ -518,6 +543,7 @@ mod tests {
             rules: rules.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             enforce_residency: enforce_residency
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            network: network.map(|value| Sourced::new(value, RequirementSource::Unknown)),
         }
     }
 
@@ -547,6 +573,7 @@ mod tests {
             mcp_servers: None,
             rules: None,
             enforce_residency: Some(enforce_residency),
+            network: None,
         };
 
         target.merge_unset_fields(source.clone(), other);
@@ -566,6 +593,7 @@ mod tests {
                 mcp_servers: None,
                 rules: None,
                 enforce_residency: Some(Sourced::new(enforce_residency, enforce_source)),
+                network: None,
             }
         );
     }
@@ -597,6 +625,7 @@ mod tests {
                 mcp_servers: None,
                 rules: None,
                 enforce_residency: None,
+                network: None,
             }
         );
         Ok(())
@@ -636,6 +665,7 @@ mod tests {
                 mcp_servers: None,
                 rules: None,
                 enforce_residency: None,
+                network: None,
             }
         );
         Ok(())
@@ -948,6 +978,53 @@ mod tests {
                 requirement_source: RequirementSource::Unknown,
             })
         );
+        Ok(())
+    }
+
+    #[test]
+    fn network_requirements_are_preserved_as_constraints_with_source() -> Result<()> {
+        let toml_str = r#"
+            [network]
+            enabled = true
+            allow_upstream_proxy = false
+            allowed_domains = ["api.example.com", "*.openai.com"]
+            denied_domains = ["blocked.example.com"]
+            allow_unix_sockets = ["/tmp/example.sock"]
+            allow_local_binding = false
+        "#;
+
+        let source = RequirementSource::CloudRequirements;
+        let mut requirements_with_sources = ConfigRequirementsWithSources::default();
+        requirements_with_sources.merge_unset_fields(source.clone(), from_str(toml_str)?);
+
+        let requirements = ConfigRequirements::try_from(requirements_with_sources)?;
+        let sourced_network = requirements
+            .network
+            .expect("network requirements should be preserved as constraints");
+
+        assert_eq!(sourced_network.source, source);
+        assert_eq!(sourced_network.value.enabled, Some(true));
+        assert_eq!(sourced_network.value.allow_upstream_proxy, Some(false));
+        assert_eq!(
+            sourced_network.value.allowed_domains.as_ref(),
+            Some(&vec![
+                "api.example.com".to_string(),
+                "*.openai.com".to_string()
+            ])
+        );
+        assert_eq!(
+            sourced_network.value.denied_domains.as_ref(),
+            Some(&vec!["blocked.example.com".to_string()])
+        );
+        assert_eq!(
+            sourced_network.value.allow_unix_sockets.as_ref(),
+            Some(&vec!["/tmp/example.sock".to_string()])
+        );
+        assert_eq!(
+            sourced_network.value.allow_local_binding,
+            Some(false)
+        );
+
         Ok(())
     }
 
