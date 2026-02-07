@@ -8,7 +8,6 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_core::config::CONFIG_TOML_FILE;
-use codex_core::config::Constrained;
 use codex_core::config::ConstraintError;
 use codex_core::config::find_codex_home;
 use codex_core::config_loader::CloudRequirementsLoader;
@@ -221,9 +220,16 @@ pub(crate) fn validate_policy_against_constraints(
         }
     }
 
+    fn validate<T>(
+        candidate: T,
+        validator: impl FnOnce(&T) -> std::result::Result<(), ConstraintError>,
+    ) -> std::result::Result<(), ConstraintError> {
+        validator(&candidate)
+    }
+
     let enabled = config.network.enabled;
     if let Some(max_enabled) = constraints.enabled {
-        let _ = Constrained::new(enabled, move |candidate| {
+        validate(enabled, move |candidate| {
             if *candidate && !max_enabled {
                 Err(invalid_value(
                     "network.enabled",
@@ -237,7 +243,7 @@ pub(crate) fn validate_policy_against_constraints(
     }
 
     if let Some(max_mode) = constraints.mode {
-        let _ = Constrained::new(config.network.mode, move |candidate| {
+        validate(config.network.mode, move |candidate| {
             if network_mode_rank(*candidate) > network_mode_rank(max_mode) {
                 Err(invalid_value(
                     "network.mode",
@@ -251,8 +257,9 @@ pub(crate) fn validate_policy_against_constraints(
     }
 
     let allow_upstream_proxy = constraints.allow_upstream_proxy;
-    let _ = Constrained::new(config.network.allow_upstream_proxy, move |candidate| {
-        match allow_upstream_proxy {
+    validate(
+        config.network.allow_upstream_proxy,
+        move |candidate| match allow_upstream_proxy {
             Some(true) | None => Ok(()),
             Some(false) => {
                 if *candidate {
@@ -265,11 +272,11 @@ pub(crate) fn validate_policy_against_constraints(
                     Ok(())
                 }
             }
-        }
-    })?;
+        },
+    )?;
 
     let allow_non_loopback_admin = constraints.dangerously_allow_non_loopback_admin;
-    let _ = Constrained::new(
+    validate(
         config.network.dangerously_allow_non_loopback_admin,
         move |candidate| match allow_non_loopback_admin {
             Some(true) | None => Ok(()),
@@ -288,7 +295,7 @@ pub(crate) fn validate_policy_against_constraints(
     )?;
 
     let allow_non_loopback_proxy = constraints.dangerously_allow_non_loopback_proxy;
-    let _ = Constrained::new(
+    validate(
         config.network.dangerously_allow_non_loopback_proxy,
         move |candidate| match allow_non_loopback_proxy {
             Some(true) | None => Ok(()),
@@ -307,7 +314,7 @@ pub(crate) fn validate_policy_against_constraints(
     )?;
 
     if let Some(allow_local_binding) = constraints.allow_local_binding {
-        let _ = Constrained::new(config.network.allow_local_binding, move |candidate| {
+        validate(config.network.allow_local_binding, move |candidate| {
             if *candidate && !allow_local_binding {
                 Err(invalid_value(
                     "network.allow_local_binding",
@@ -325,7 +332,7 @@ pub(crate) fn validate_policy_against_constraints(
             .iter()
             .map(|entry| DomainPattern::parse_for_constraints(entry))
             .collect();
-        let _ = Constrained::new(config.network.allowed_domains.clone(), move |candidate| {
+        validate(config.network.allowed_domains.clone(), move |candidate| {
             let mut invalid = Vec::new();
             for entry in candidate {
                 let candidate_pattern = DomainPattern::parse_for_constraints(entry);
@@ -353,7 +360,7 @@ pub(crate) fn validate_policy_against_constraints(
             .iter()
             .map(|s| s.to_ascii_lowercase())
             .collect();
-        let _ = Constrained::new(config.network.denied_domains.clone(), move |candidate| {
+        validate(config.network.denied_domains.clone(), move |candidate| {
             let candidate_set: HashSet<String> =
                 candidate.iter().map(|s| s.to_ascii_lowercase()).collect();
             let missing: Vec<String> = required_set
@@ -378,7 +385,7 @@ pub(crate) fn validate_policy_against_constraints(
             .iter()
             .map(|s| s.to_ascii_lowercase())
             .collect();
-        let _ = Constrained::new(
+        validate(
             config.network.allow_unix_sockets.clone(),
             move |candidate| {
                 let mut invalid = Vec::new();
