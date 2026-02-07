@@ -1020,10 +1020,7 @@ mod tests {
             sourced_network.value.allow_unix_sockets.as_ref(),
             Some(&vec!["/tmp/example.sock".to_string()])
         );
-        assert_eq!(
-            sourced_network.value.allow_local_binding,
-            Some(false)
-        );
+        assert_eq!(sourced_network.value.allow_local_binding, Some(false));
 
         Ok(())
     }
