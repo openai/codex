@@ -637,11 +637,6 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
 
     let mut builder = test_codex();
     let initial = builder.build(&server).await?;
-    let rollout_path = initial
-        .session_configured
-        .rollout_path
-        .clone()
-        .expect("rollout path");
     let home = initial.home.clone();
 
     let collab_text = "resume instructions";
@@ -672,6 +667,7 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
         .await?;
     wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
+    let rollout_path = initial.persisted_rollout_path().await?;
     let resumed = builder.resume(&server, home, rollout_path).await?;
     resumed
         .codex

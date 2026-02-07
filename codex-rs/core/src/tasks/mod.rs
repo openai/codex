@@ -22,6 +22,8 @@ use crate::AuthManager;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::models_manager::manager::ModelsManager;
+use crate::protocol::ErrorEvent;
+use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::TurnAbortReason;
 use crate::protocol::TurnAbortedEvent;
@@ -33,6 +35,7 @@ use crate::state::TaskKind;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
 
@@ -120,6 +123,20 @@ impl Session {
         task: T,
     ) {
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
+        if let Err(err) = self
+            .ensure_rollout_initialized_for_turn(turn_context.as_ref())
+            .await
+        {
+            self.send_event_raw(Event {
+                id: turn_context.sub_id.clone(),
+                msg: EventMsg::Error(ErrorEvent {
+                    message: format!("failed to initialize rollout recorder: {err}"),
+                    codex_error_info: Some(CodexErrorInfo::Other),
+                }),
+            })
+            .await;
+            return;
+        }
         self.seed_initial_context_if_needed(turn_context.as_ref())
             .await;
 

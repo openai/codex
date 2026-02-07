@@ -233,11 +233,6 @@ async fn resume_replays_permissions_messages() -> Result<()> {
         config.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     });
     let initial = builder.build(&server).await?;
-    let rollout_path = initial
-        .session_configured
-        .rollout_path
-        .clone()
-        .expect("rollout path");
     let home = initial.home.clone();
 
     initial
@@ -279,6 +274,7 @@ async fn resume_replays_permissions_messages() -> Result<()> {
         .await?;
     wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
+    let rollout_path = initial.persisted_rollout_path().await?;
     let resumed = builder.resume(&server, home, rollout_path).await?;
     resumed
         .codex
@@ -332,11 +328,6 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
         config.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     });
     let initial = builder.build(&server).await?;
-    let rollout_path = initial
-        .session_configured
-        .rollout_path
-        .clone()
-        .expect("rollout path");
     let home = initial.home.clone();
 
     initial
@@ -378,6 +369,7 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
         .await?;
     wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
+    let rollout_path = initial.persisted_rollout_path().await?;
     let body2 = req2.single_request().body_json();
     let input2 = body2["input"].as_array().expect("input array");
     let permissions_base = permissions_texts(input2);

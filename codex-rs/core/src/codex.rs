@@ -1234,7 +1234,7 @@ impl Session {
     }
 
     /// Ensure a deferred rollout recorder has created its on-disk file.
-    async fn ensure_rollout_initialized_for_turn(
+    pub(crate) async fn ensure_rollout_initialized_for_turn(
         &self,
         turn_context: &TurnContext,
     ) -> std::io::Result<()> {

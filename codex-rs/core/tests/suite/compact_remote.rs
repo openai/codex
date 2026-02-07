@@ -864,12 +864,6 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
     )
     .await?;
     let codex = harness.test().codex.clone();
-    let rollout_path = harness
-        .test()
-        .session_configured
-        .rollout_path
-        .clone()
-        .expect("rollout path");
 
     let responses_mock = responses::mount_sse_once(
         harness.server(),
@@ -925,6 +919,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
 
     codex.submit(Op::Shutdown).await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
+    let rollout_path = harness.test().persisted_rollout_path().await?;
 
     assert_eq!(responses_mock.requests().len(), 1);
     assert_eq!(compact_mock.requests().len(), 1);
@@ -1015,11 +1010,6 @@ async fn remote_compact_and_resume_refresh_stale_developer_instructions() -> Res
         test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
     let initial = start_builder.build(&server).await?;
     let home = initial.home.clone();
-    let rollout_path = initial
-        .session_configured
-        .rollout_path
-        .clone()
-        .expect("rollout path");
 
     let responses_mock = responses::mount_sse_sequence(
         &server,
@@ -1102,6 +1092,7 @@ async fn remote_compact_and_resume_refresh_stale_developer_instructions() -> Res
     })
     .await;
 
+    let rollout_path = initial.persisted_rollout_path().await?;
     let mut resume_builder =
         test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
     let resumed = resume_builder.resume(&server, home, rollout_path).await?;
