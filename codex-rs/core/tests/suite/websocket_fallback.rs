@@ -103,6 +103,9 @@ async fn websocket_fallback_switches_to_http_after_retries_exhausted() -> Result
         .filter(|req| req.method == Method::POST && req.url.path().ends_with("/responses"))
         .count();
 
+    // One websocket attempt comes from startup preconnect.
+    // The first turn then makes 3 websocket stream attempts (initial try + 2 retries),
+    // after which fallback activates and the request is replayed over HTTP.
     assert_eq!(websocket_attempts, 4);
     assert_eq!(http_attempts, 1);
     assert_eq!(response_mock.requests().len(), 1);
@@ -149,6 +152,9 @@ async fn websocket_fallback_is_sticky_across_turns() -> Result<()> {
         .filter(|req| req.method == Method::POST && req.url.path().ends_with("/responses"))
         .count();
 
+    // WebSocket attempts all happen on the first turn:
+    // 1 startup preconnect + 3 stream attempts (initial try + 2 retries) before fallback.
+    // Fallback is sticky, so the second turn stays on HTTP and adds no websocket attempts.
     assert_eq!(websocket_attempts, 4);
     assert_eq!(http_attempts, 2);
     assert_eq!(response_mock.requests().len(), 2);
