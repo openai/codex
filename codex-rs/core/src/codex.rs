@@ -184,6 +184,7 @@ use crate::rollout::map_session_init_error;
 use crate::rollout::metadata;
 use crate::shell;
 use crate::shell_snapshot::ShellSnapshot;
+use crate::skills::ExpandedSkillMentions;
 use crate::skills::SkillError;
 use crate::skills::SkillInjections;
 use crate::skills::SkillMetadata;
@@ -191,6 +192,7 @@ use crate::skills::SkillsManager;
 use crate::skills::build_skill_injections;
 use crate::skills::collect_env_var_dependencies;
 use crate::skills::collect_explicit_skill_mentions;
+use crate::skills::expand_skill_mentions;
 use crate::skills::injection::ToolMentionKind;
 use crate::skills::injection::app_id_from_path;
 use crate::skills::injection::tool_kind_for_path;
@@ -3712,25 +3714,27 @@ pub(crate) async fn run_turn(
         || (HashMap::new(), HashMap::new()),
         |outcome| build_skill_name_counts(&outcome.skills, &outcome.disabled_paths),
     );
-    let connector_slug_counts = if turn_context.config.features.enabled(Feature::Apps) {
-        let mcp_tools = match sess
-            .services
-            .mcp_connection_manager
-            .read()
-            .await
-            .list_all_tools()
-            .or_cancel(&cancellation_token)
-            .await
-        {
-            Ok(mcp_tools) => mcp_tools,
-            Err(_) => return None,
+    let (connectors_for_mentions, connector_slug_counts) =
+        if turn_context.config.features.enabled(Feature::Apps) {
+            let mcp_tools = match sess
+                .services
+                .mcp_connection_manager
+                .read()
+                .await
+                .list_all_tools()
+                .or_cancel(&cancellation_token)
+                .await
+            {
+                Ok(mcp_tools) => mcp_tools,
+                Err(_) => return None,
+            };
+            let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
+            let slug_counts = build_connector_slug_counts(&connectors);
+            (connectors, slug_counts)
+        } else {
+            (Vec::new(), HashMap::new())
         };
-        let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
-        build_connector_slug_counts(&connectors)
-    } else {
-        HashMap::new()
-    };
-    let mentioned_skills = skills_outcome.as_ref().map_or_else(Vec::new, |outcome| {
+    let mut mentioned_skills = skills_outcome.as_ref().map_or_else(Vec::new, |outcome| {
         collect_explicit_skill_mentions(
             &input,
             &outcome.skills,
@@ -3739,7 +3743,29 @@ pub(crate) async fn run_turn(
             &connector_slug_counts,
         )
     });
-    let explicit_app_paths = collect_explicit_app_paths(&input);
+    let mut explicit_app_paths = collect_explicit_app_paths(&input);
+    let mut rewritten_skill_contents = HashMap::new();
+    if let Some(outcome) = skills_outcome.as_ref() {
+        let ExpandedSkillMentions {
+            skills,
+            explicit_app_paths: skill_app_paths,
+            rewritten_contents,
+        } = expand_skill_mentions(
+            &mentioned_skills,
+            &outcome.skills,
+            &outcome.disabled_paths,
+            &skill_name_counts,
+            &skill_name_counts_lower,
+            &connector_slug_counts,
+            &connectors_for_mentions,
+        )
+        .await;
+        mentioned_skills = skills;
+        explicit_app_paths.extend(skill_app_paths);
+        rewritten_skill_contents = rewritten_contents;
+    }
+    let mut seen_app_paths = HashSet::new();
+    explicit_app_paths.retain(|path| seen_app_paths.insert(path.clone()));
 
     let config = turn_context.config.clone();
     if config
@@ -3766,6 +3792,7 @@ pub(crate) async fn run_turn(
         warnings: skill_warnings,
     } = build_skill_injections(
         &mentioned_skills,
+        &rewritten_skill_contents,
         Some(&otel_manager),
         &sess.services.analytics_events_client,
         tracking.clone(),
