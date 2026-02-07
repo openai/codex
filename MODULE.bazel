@@ -88,6 +88,7 @@ crate.annotation(
         "@toolchains_llvm_bootstrapped//runtimes/libunwind:libunwind_library_search_directory",
     ],
     build_script_env = {
+        "AWS_LC_SYS_CMAKE_BUILDER": "1",
         "AWS_LC_SYS_NO_JITTER_ENTROPY": "1",
     },
     crate = "aws-lc-sys",
