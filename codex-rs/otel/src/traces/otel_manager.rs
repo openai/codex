@@ -1,6 +1,10 @@
 use crate::TelemetryAuthMode;
 use crate::metrics::names::API_CALL_COUNT_METRIC;
 use crate::metrics::names::API_CALL_DURATION_METRIC;
+use crate::metrics::names::RESPONSES_API_ENGINE_IAPI_TBT_DURATION_METRIC;
+use crate::metrics::names::RESPONSES_API_ENGINE_IAPI_TTFT_DURATION_METRIC;
+use crate::metrics::names::RESPONSES_API_ENGINE_SERVICE_TBT_DURATION_METRIC;
+use crate::metrics::names::RESPONSES_API_ENGINE_SERVICE_TTFT_DURATION_METRIC;
 use crate::metrics::names::RESPONSES_API_INFERENCE_TIME_DURATION_METRIC;
 use crate::metrics::names::RESPONSES_API_OVERHEAD_DURATION_METRIC;
 use crate::metrics::names::SSE_EVENT_COUNT_METRIC;
@@ -48,6 +52,10 @@ const RESPONSES_WEBSOCKET_TIMING_KIND: &str = "responsesapi.websocket_timing";
 const RESPONSES_WEBSOCKET_TIMING_METRICS_FIELD: &str = "timing_metrics";
 const RESPONSES_API_OVERHEAD_FIELD: &str = "responses_duration_excl_engine_and_client_tool_time_ms";
 const RESPONSES_API_INFERENCE_FIELD: &str = "engine_service_total_ms";
+const RESPONSES_API_ENGINE_IAPI_TTFT_FIELD: &str = "engine_iapi_ttft_total_ms";
+const RESPONSES_API_ENGINE_SERVICE_TTFT_FIELD: &str = "engine_service_ttft_total_ms";
+const RESPONSES_API_ENGINE_IAPI_TBT_FIELD: &str = "engine_iapi_tbt_across_engine_calls_ms";
+const RESPONSES_API_ENGINE_SERVICE_TBT_FIELD: &str = "engine_service_tbt_across_engine_calls_ms";
 
 impl OtelManager {
     #[allow(clippy::too_many_arguments)]
@@ -58,6 +66,7 @@ impl OtelManager {
         account_id: Option<String>,
         account_email: Option<String>,
         auth_mode: Option<TelemetryAuthMode>,
+        originator: String,
         log_user_prompts: bool,
         terminal_type: String,
         session_source: SessionSource,
@@ -68,6 +77,7 @@ impl OtelManager {
                 auth_mode: auth_mode.map(|m| m.to_string()),
                 account_id,
                 account_email,
+                originator,
                 session_source: session_source.to_string(),
                 model: model.to_owned(),
                 slug: slug.to_owned(),
@@ -126,6 +136,7 @@ impl OtelManager {
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
+            originator = %self.metadata.originator,
             user.account_id = self.metadata.account_id,
             user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
@@ -190,6 +201,7 @@ impl OtelManager {
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
+            originator = %self.metadata.originator,
             user.account_id = self.metadata.account_id,
             user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
@@ -221,6 +233,7 @@ impl OtelManager {
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
+            originator = %self.metadata.originator,
             user.account_id = self.metadata.account_id,
             user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
@@ -322,6 +335,7 @@ impl OtelManager {
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
+            originator = %self.metadata.originator,
             user.account_id = self.metadata.account_id,
             user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
@@ -399,6 +413,7 @@ impl OtelManager {
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
+            originator = %self.metadata.originator,
             user.account_id = self.metadata.account_id,
             user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
@@ -432,6 +447,7 @@ impl OtelManager {
                 conversation.id = %self.metadata.conversation_id,
                 app.version = %self.metadata.app_version,
                 auth_mode = self.metadata.auth_mode,
+            originator = %self.metadata.originator,
                 user.account_id = self.metadata.account_id,
                 user.email = self.metadata.account_email,
                 terminal.type = %self.metadata.terminal_type,
@@ -447,6 +463,7 @@ impl OtelManager {
                 conversation.id = %self.metadata.conversation_id,
                 app.version = %self.metadata.app_version,
                 auth_mode = self.metadata.auth_mode,
+            originator = %self.metadata.originator,
                 user.account_id = self.metadata.account_id,
                 user.email = self.metadata.account_email,
                 terminal.type = %self.metadata.terminal_type,
@@ -470,6 +487,7 @@ impl OtelManager {
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
+            originator = %self.metadata.originator,
             user.account_id = self.metadata.account_id,
             user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
@@ -495,6 +513,7 @@ impl OtelManager {
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
+            originator = %self.metadata.originator,
             user.account_id = self.metadata.account_id,
             user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
@@ -530,6 +549,7 @@ impl OtelManager {
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
+            originator = %self.metadata.originator,
             user.account_id = self.metadata.account_id,
             user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
@@ -554,6 +574,7 @@ impl OtelManager {
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
+            originator = %self.metadata.originator,
             user.account_id = self.metadata.account_id,
             user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
@@ -609,6 +630,7 @@ impl OtelManager {
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
+            originator = %self.metadata.originator,
             user.account_id = self.metadata.account_id,
             user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
@@ -646,6 +668,7 @@ impl OtelManager {
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
+            originator = %self.metadata.originator,
             user.account_id = self.metadata.account_id,
             user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
@@ -673,6 +696,42 @@ impl OtelManager {
             timing_metrics.and_then(|value| value.get(RESPONSES_API_INFERENCE_FIELD));
         if let Some(duration) = duration_from_ms_value(inference_value) {
             self.record_duration(RESPONSES_API_INFERENCE_TIME_DURATION_METRIC, duration, &[]);
+        }
+
+        let engine_iapi_ttft_value =
+            timing_metrics.and_then(|value| value.get(RESPONSES_API_ENGINE_IAPI_TTFT_FIELD));
+        if let Some(duration) = duration_from_ms_value(engine_iapi_ttft_value) {
+            self.record_duration(
+                RESPONSES_API_ENGINE_IAPI_TTFT_DURATION_METRIC,
+                duration,
+                &[],
+            );
+        }
+
+        let engine_service_ttft_value =
+            timing_metrics.and_then(|value| value.get(RESPONSES_API_ENGINE_SERVICE_TTFT_FIELD));
+        if let Some(duration) = duration_from_ms_value(engine_service_ttft_value) {
+            self.record_duration(
+                RESPONSES_API_ENGINE_SERVICE_TTFT_DURATION_METRIC,
+                duration,
+                &[],
+            );
+        }
+
+        let engine_iapi_tbt_value =
+            timing_metrics.and_then(|value| value.get(RESPONSES_API_ENGINE_IAPI_TBT_FIELD));
+        if let Some(duration) = duration_from_ms_value(engine_iapi_tbt_value) {
+            self.record_duration(RESPONSES_API_ENGINE_IAPI_TBT_DURATION_METRIC, duration, &[]);
+        }
+
+        let engine_service_tbt_value =
+            timing_metrics.and_then(|value| value.get(RESPONSES_API_ENGINE_SERVICE_TBT_FIELD));
+        if let Some(duration) = duration_from_ms_value(engine_service_tbt_value) {
+            self.record_duration(
+                RESPONSES_API_ENGINE_SERVICE_TBT_DURATION_METRIC,
+                duration,
+                &[],
+            );
         }
     }
 

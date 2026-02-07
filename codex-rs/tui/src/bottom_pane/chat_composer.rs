@@ -157,6 +157,7 @@ use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::LocalImageAttachment;
+use crate::bottom_pane::MentionBinding;
 use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
 use crate::clipboard_paste::normalize_pasted_path;
@@ -290,7 +291,8 @@ pub(crate) struct ChatComposer {
     skills: Option<Vec<SkillMetadata>>,
     connectors_snapshot: Option<ConnectorsSnapshot>,
     dismissed_mention_popup_token: Option<String>,
-    mention_paths: HashMap<String, String>,
+    mention_bindings: HashMap<u64, ComposerMentionBinding>,
+    recent_submission_mention_bindings: Vec<MentionBinding>,
     /// When enabled, `Enter` submits immediately and `Tab` requests queuing behavior.
     steer_enabled: bool,
     collaboration_modes_enabled: bool,
@@ -307,6 +309,12 @@ pub(crate) struct ChatComposer {
 struct FooterFlash {
     line: Line<'static>,
     expires_at: Instant,
+}
+
+#[derive(Clone, Debug)]
+struct ComposerMentionBinding {
+    mention: String,
+    path: String,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -382,7 +390,8 @@ impl ChatComposer {
             skills: None,
             connectors_snapshot: None,
             dismissed_mention_popup_token: None,
-            mention_paths: HashMap::new(),
+            mention_bindings: HashMap::new(),
+            recent_submission_mention_bindings: Vec::new(),
             steer_enabled: false,
             collaboration_modes_enabled: false,
             config,
@@ -414,8 +423,21 @@ impl ChatComposer {
         self.connectors_snapshot = connectors_snapshot;
     }
 
-    pub(crate) fn take_mention_paths(&mut self) -> HashMap<String, String> {
-        std::mem::take(&mut self.mention_paths)
+    pub(crate) fn take_mention_bindings(&mut self) -> Vec<MentionBinding> {
+        let elements = self.current_mention_elements();
+        let mut ordered = Vec::new();
+        for (id, mention) in elements {
+            if let Some(binding) = self.mention_bindings.remove(&id)
+                && binding.mention == mention
+            {
+                ordered.push(MentionBinding {
+                    mention: binding.mention,
+                    path: binding.path,
+                });
+            }
+        }
+        self.mention_bindings.clear();
+        ordered
     }
 
     /// Enables or disables "Steer" behavior for submission keys.
@@ -518,7 +540,12 @@ impl ChatComposer {
         };
         // Persistent ↑/↓ history is text-only (backwards-compatible and avoids persisting
         // attachments), but local in-session ↑/↓ history can rehydrate elements and image paths.
-        self.set_text_content(entry.text, entry.text_elements, entry.local_image_paths);
+        self.set_text_content_with_mention_bindings(
+            entry.text,
+            entry.text_elements,
+            entry.local_image_paths,
+            entry.mention_bindings,
+        );
         true
     }
 
@@ -732,41 +759,41 @@ impl ChatComposer {
     /// This is the "fresh draft" path: it clears pending paste payloads and
     /// mention link targets. Callers restoring a previously submitted draft
     /// that must keep `$name -> path` resolution should use
-    /// [`Self::set_text_content_with_mention_paths`] instead.
+    /// [`Self::set_text_content_with_mention_bindings`] instead.
     pub(crate) fn set_text_content(
         &mut self,
         text: String,
         text_elements: Vec<TextElement>,
         local_image_paths: Vec<PathBuf>,
     ) {
-        self.set_text_content_with_mention_paths(
+        self.set_text_content_with_mention_bindings(
             text,
             text_elements,
             local_image_paths,
-            HashMap::new(),
+            Vec::new(),
         );
     }
 
     /// Replace the entire composer content while restoring mention link targets.
     ///
     /// Mention popup insertion stores both visible text (for example `$file`)
-    /// and hidden `mention_paths` used to resolve the canonical target during
+    /// and hidden mention bindings used to resolve the canonical target during
     /// submission. Use this method when restoring an interrupted or blocked
     /// draft; if callers restore only text and images, mentions can appear
     /// intact to users while resolving to the wrong target or dropping on
     /// retry.
-    pub(crate) fn set_text_content_with_mention_paths(
+    pub(crate) fn set_text_content_with_mention_bindings(
         &mut self,
         text: String,
         text_elements: Vec<TextElement>,
         local_image_paths: Vec<PathBuf>,
-        mention_paths: HashMap<String, String>,
+        mention_bindings: Vec<MentionBinding>,
     ) {
         // Clear any existing content, placeholders, and attachments first.
         self.textarea.set_text_clearing_elements("");
         self.pending_pastes.clear();
         self.attached_images.clear();
-        self.mention_paths = mention_paths;
+        self.mention_bindings.clear();
 
         self.textarea.set_text_with_elements(&text, &text_elements);
 
@@ -781,6 +808,8 @@ impl ChatComposer {
                     .push(AttachedImage { placeholder, path });
             }
         }
+
+        self.bind_mentions_from_snapshot(mention_bindings);
 
         self.textarea.set_cursor(0);
         self.sync_popups();
@@ -808,12 +837,14 @@ impl ChatComposer {
             .iter()
             .map(|img| img.path.clone())
             .collect();
+        let mention_bindings = self.snapshot_mention_bindings();
         self.set_text_content(String::new(), Vec::new(), Vec::new());
         self.history.reset_navigation();
         self.history.record_local_submission(HistoryEntry {
             text: previous.clone(),
             text_elements,
             local_image_paths,
+            mention_bindings,
         });
         Some(previous)
     }
@@ -843,6 +874,14 @@ impl ChatComposer {
                 path: img.path.clone(),
             })
             .collect()
+    }
+
+    pub(crate) fn mention_bindings(&self) -> Vec<MentionBinding> {
+        self.snapshot_mention_bindings()
+    }
+
+    pub(crate) fn take_recent_submission_mention_bindings(&mut self) -> Vec<MentionBinding> {
+        std::mem::take(&mut self.recent_submission_mention_bindings)
     }
 
     fn prune_attached_images_for_submission(&mut self, text: &str, text_elements: &[TextElement]) {
@@ -1476,10 +1515,7 @@ impl ChatComposer {
 
         if close_popup {
             if let Some((insert_text, path)) = selected_mention {
-                if let Some(path) = path.as_deref() {
-                    self.record_mention_path(&insert_text, path);
-                }
-                self.insert_selected_mention(&insert_text);
+                self.insert_selected_mention(&insert_text, path.as_deref());
             }
             self.active_popup = ActivePopup::None;
         }
@@ -1786,7 +1822,7 @@ impl ChatComposer {
         self.textarea.set_cursor(new_cursor);
     }
 
-    fn insert_selected_mention(&mut self, insert_text: &str) {
+    fn insert_selected_mention(&mut self, insert_text: &str, path: Option<&str>) {
         let cursor_offset = self.textarea.cursor();
         let text = self.textarea.text();
         let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
@@ -1807,26 +1843,28 @@ impl ChatComposer {
             .unwrap_or(after_cursor.len());
         let end_idx = safe_cursor + end_rel_idx;
 
-        let inserted = insert_text.to_string();
+        // Remove the active token and insert the selected mention as an atomic element.
+        self.textarea.replace_range(start_idx..end_idx, "");
+        self.textarea.set_cursor(start_idx);
+        let id = self.textarea.insert_element(insert_text);
 
-        let mut new_text =
-            String::with_capacity(text.len() - (end_idx - start_idx) + inserted.len() + 1);
-        new_text.push_str(&text[..start_idx]);
-        new_text.push_str(&inserted);
-        new_text.push(' ');
-        new_text.push_str(&text[end_idx..]);
+        if let (Some(path), Some(mention)) =
+            (path, Self::mention_name_from_insert_text(insert_text))
+        {
+            self.mention_bindings.insert(
+                id,
+                ComposerMentionBinding {
+                    mention,
+                    path: path.to_string(),
+                },
+            );
+        }
 
-        // Mention insertion rebuilds plain text, so drop existing elements.
-        self.textarea.set_text_clearing_elements(&new_text);
-        let new_cursor = start_idx.saturating_add(inserted.len()).saturating_add(1);
+        self.textarea.insert_str(" ");
+        let new_cursor = start_idx
+            .saturating_add(insert_text.len())
+            .saturating_add(1);
         self.textarea.set_cursor(new_cursor);
-    }
-
-    fn record_mention_path(&mut self, insert_text: &str, path: &str) {
-        let Some(name) = Self::mention_name_from_insert_text(insert_text) else {
-            return;
-        };
-        self.mention_paths.insert(name, path.to_string());
     }
 
     fn mention_name_from_insert_text(insert_text: &str) -> Option<String> {
@@ -1845,6 +1883,67 @@ impl ChatComposer {
         }
     }
 
+    fn current_mention_elements(&self) -> Vec<(u64, String)> {
+        self.textarea
+            .text_element_snapshots()
+            .into_iter()
+            .filter_map(|snapshot| {
+                Self::mention_name_from_insert_text(snapshot.text.as_str())
+                    .map(|mention| (snapshot.id, mention))
+            })
+            .collect()
+    }
+
+    fn snapshot_mention_bindings(&self) -> Vec<MentionBinding> {
+        let mut ordered = Vec::new();
+        for (id, mention) in self.current_mention_elements() {
+            if let Some(binding) = self.mention_bindings.get(&id)
+                && binding.mention == mention
+            {
+                ordered.push(MentionBinding {
+                    mention: binding.mention.clone(),
+                    path: binding.path.clone(),
+                });
+            }
+        }
+        ordered
+    }
+
+    fn bind_mentions_from_snapshot(&mut self, mention_bindings: Vec<MentionBinding>) {
+        self.mention_bindings.clear();
+        if mention_bindings.is_empty() {
+            return;
+        }
+
+        let text = self.textarea.text().to_string();
+        let mut scan_from = 0usize;
+        for binding in mention_bindings {
+            let token = format!("${}", binding.mention);
+            let Some(range) =
+                find_next_mention_token_range(text.as_str(), token.as_str(), scan_from)
+            else {
+                continue;
+            };
+
+            let id = if let Some(id) = self.textarea.add_element_range(range.clone()) {
+                Some(id)
+            } else {
+                self.textarea.element_id_for_exact_range(range.clone())
+            };
+
+            if let Some(id) = id {
+                self.mention_bindings.insert(
+                    id,
+                    ComposerMentionBinding {
+                        mention: binding.mention,
+                        path: binding.path,
+                    },
+                );
+                scan_from = range.end;
+            }
+        }
+    }
+
     /// Prepare text for submission/queuing. Returns None if submission should be suppressed.
     /// On success, clears pending paste payloads because placeholders have been expanded.
     ///
@@ -1856,6 +1955,7 @@ impl ChatComposer {
         let mut text = self.textarea.text().to_string();
         let original_input = text.clone();
         let original_text_elements = self.textarea.text_elements();
+        let original_mention_bindings = self.snapshot_mention_bindings();
         let original_local_image_paths = self
             .attached_images
             .iter()
@@ -1864,6 +1964,7 @@ impl ChatComposer {
         let original_pending_pastes = self.pending_pastes.clone();
         let mut text_elements = original_text_elements.clone();
         let input_starts_with_space = original_input.starts_with(' ');
+        self.recent_submission_mention_bindings.clear();
         self.textarea.set_text_clearing_elements("");
 
         if !self.pending_pastes.is_empty() {
@@ -1909,10 +2010,11 @@ impl ChatComposer {
                     self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
                         history_cell::new_info_event(message, None),
                     )));
-                    self.set_text_content(
+                    self.set_text_content_with_mention_bindings(
                         original_input.clone(),
                         original_text_elements,
                         original_local_image_paths,
+                        original_mention_bindings,
                     );
                     self.pending_pastes.clone_from(&original_pending_pastes);
                     self.textarea.set_cursor(original_input.len());
@@ -1929,10 +2031,11 @@ impl ChatComposer {
                         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
                             history_cell::new_error_event(err.user_message()),
                         )));
-                        self.set_text_content(
+                        self.set_text_content_with_mention_bindings(
                             original_input.clone(),
                             original_text_elements,
                             original_local_image_paths,
+                            original_mention_bindings,
                         );
                         self.pending_pastes.clone_from(&original_pending_pastes);
                         self.textarea.set_cursor(original_input.len());
@@ -1950,6 +2053,7 @@ impl ChatComposer {
         if text.is_empty() && self.attached_images.is_empty() {
             return None;
         }
+        self.recent_submission_mention_bindings = original_mention_bindings.clone();
         if record_history && (!text.is_empty() || !self.attached_images.is_empty()) {
             let local_image_paths = self
                 .attached_images
@@ -1960,6 +2064,7 @@ impl ChatComposer {
                 text: text.clone(),
                 text_elements: text_elements.clone(),
                 local_image_paths,
+                mention_bindings: original_mention_bindings,
             });
         }
         self.pending_pastes.clear();
@@ -2022,6 +2127,7 @@ impl ChatComposer {
 
         let original_input = self.textarea.text().to_string();
         let original_text_elements = self.textarea.text_elements();
+        let original_mention_bindings = self.snapshot_mention_bindings();
         let original_local_image_paths = self
             .attached_images
             .iter()
@@ -2053,10 +2159,11 @@ impl ChatComposer {
             }
         } else {
             // Restore text if submission was suppressed.
-            self.set_text_content(
+            self.set_text_content_with_mention_bindings(
                 original_input,
                 original_text_elements,
                 original_local_image_paths,
+                original_mention_bindings,
             );
             self.pending_pastes = original_pending_pastes;
             (InputResult::None, true)
@@ -2245,10 +2352,11 @@ impl ChatComposer {
                         _ => unreachable!(),
                     };
                     if let Some(entry) = replace_entry {
-                        self.set_text_content(
+                        self.set_text_content_with_mention_bindings(
                             entry.text,
                             entry.text_elements,
                             entry.local_image_paths,
+                            entry.mention_bindings,
                         );
                         return (InputResult::None, true);
                     }
@@ -2930,6 +3038,8 @@ impl ChatComposer {
                     insert_text: format!("${skill_name}"),
                     search_terms,
                     path: Some(skill.path.to_string_lossy().into_owned()),
+                    category_tag: (skill.scope == codex_core::protocol::SkillScope::Repo)
+                        .then(|| "[Repo]".to_string()),
                 });
             }
         }
@@ -2952,7 +3062,18 @@ impl ChatComposer {
                     insert_text: format!("${slug}"),
                     search_terms,
                     path: Some(format!("app://{connector_id}")),
+                    category_tag: Some("[App]".to_string()),
                 });
+            }
+        }
+
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        for mention in &mentions {
+            *counts.entry(mention.insert_text.clone()).or_insert(0) += 1;
+        }
+        for mention in &mut mentions {
+            if counts.get(&mention.insert_text).copied().unwrap_or(0) <= 1 {
+                mention.category_tag = None;
             }
         }
 
@@ -2960,15 +3081,7 @@ impl ChatComposer {
     }
 
     fn connector_brief_description(connector: &AppInfo) -> String {
-        let status_label = if connector.is_accessible {
-            "Connected"
-        } else {
-            "Can be installed"
-        };
-        match Self::connector_description(connector) {
-            Some(description) => format!("{status_label} - {description}"),
-            None => status_label.to_string(),
-        }
+        Self::connector_description(connector).unwrap_or_default()
     }
 
     fn connector_description(connector: &AppInfo) -> Option<String> {
@@ -3047,6 +3160,42 @@ fn skill_description(skill: &SkillMetadata) -> Option<String> {
 
 fn is_mention_name_char(byte: u8) -> bool {
     matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'-')
+}
+
+fn find_next_mention_token_range(text: &str, token: &str, from: usize) -> Option<Range<usize>> {
+    if token.is_empty() || from >= text.len() {
+        return None;
+    }
+    let bytes = text.as_bytes();
+    let token_bytes = token.as_bytes();
+    let mut index = from;
+
+    while index < bytes.len() {
+        if bytes[index] != b'$' {
+            index += 1;
+            continue;
+        }
+
+        let end = index.saturating_add(token_bytes.len());
+        if end > bytes.len() {
+            return None;
+        }
+        if &bytes[index..end] != token_bytes {
+            index += 1;
+            continue;
+        }
+
+        if bytes
+            .get(end)
+            .is_none_or(|byte| !is_mention_name_char(*byte))
+        {
+            return Some(index..end);
+        }
+
+        index = end;
+    }
+
+    None
 }
 
 impl Renderable for ChatComposer {
@@ -5511,6 +5660,40 @@ mod tests {
         }
         let imgs = composer.take_recent_submission_images();
         assert_eq!(vec![path], imgs);
+    }
+
+    #[test]
+    fn submit_captures_recent_mention_bindings_before_clearing_textarea() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+
+        let mention_bindings = vec![MentionBinding {
+            mention: "figma".to_string(),
+            path: "/tmp/user/figma/SKILL.md".to_string(),
+        }];
+        composer.set_text_content_with_mention_bindings(
+            "$figma please".to_string(),
+            Vec::new(),
+            Vec::new(),
+            mention_bindings.clone(),
+        );
+
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(result, InputResult::Submitted { .. }));
+        assert_eq!(
+            composer.take_recent_submission_mention_bindings(),
+            mention_bindings
+        );
+        assert!(composer.take_mention_bindings().is_empty());
     }
 
     #[test]

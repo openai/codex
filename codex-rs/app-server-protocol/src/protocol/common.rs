@@ -190,10 +190,12 @@ client_request_definitions! {
     },
     ThreadResume => "thread/resume" {
         params: v2::ThreadResumeParams,
+        inspect_params: true,
         response: v2::ThreadResumeResponse,
     },
     ThreadFork => "thread/fork" {
         params: v2::ThreadForkParams,
+        inspect_params: true,
         response: v2::ThreadForkResponse,
     },
     ThreadArchive => "thread/archive" {
@@ -250,7 +252,12 @@ client_request_definitions! {
     },
     TurnStart => "turn/start" {
         params: v2::TurnStartParams,
+        inspect_params: true,
         response: v2::TurnStartResponse,
+    },
+    TurnSteer => "turn/steer" {
+        params: v2::TurnSteerParams,
+        response: v2::TurnSteerResponse,
     },
     TurnInterrupt => "turn/interrupt" {
         params: v2::TurnInterruptParams,
@@ -299,6 +306,7 @@ client_request_definitions! {
 
     LoginAccount => "account/login/start" {
         params: v2::LoginAccountParams,
+        inspect_params: true,
         response: v2::LoginAccountResponse,
     },
 

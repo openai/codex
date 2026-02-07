@@ -87,8 +87,6 @@ pub enum Feature {
     /// Allow the model to request web searches that fetch cached content.
     /// Takes precedence over `WebSearchRequest`.
     WebSearchCached,
-    /// Gate the execpolicy enforcement for shell/unified exec.
-    ExecPolicy,
     /// Use the bubblewrap-based Linux sandbox pipeline.
     UseLinuxSandboxBwrap,
     /// Allow the model to request approval and propose exec rules.
@@ -97,8 +95,6 @@ pub enum Feature {
     WindowsSandbox,
     /// Use the elevated Windows sandbox pipeline (setup + runner).
     WindowsSandboxElevated,
-    /// Remote compaction enabled (only for ChatGPT auth)
-    RemoteCompaction,
     /// Refresh remote models and emit AppReady once the list is available.
     RemoteModels,
     /// Experimental shell snapshotting.
@@ -131,6 +127,8 @@ pub enum Feature {
     Personality,
     /// Use the Responses API WebSocket transport for OpenAI by default.
     ResponsesWebsockets,
+    /// Enable Responses API websocket v2 mode.
+    ResponsesWebsocketsV2,
 }
 
 impl Feature {
@@ -470,12 +468,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::ExecPolicy,
-        key: "exec_policy",
-        stage: Stage::UnderDevelopment,
-        default_enabled: true,
-    },
-    FeatureSpec {
         id: Feature::UseLinuxSandboxBwrap,
         key: "use_linux_sandbox_bwrap",
         stage: Stage::UnderDevelopment,
@@ -498,12 +490,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "elevated_windows_sandbox",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::RemoteCompaction,
-        key: "remote_compaction",
-        stage: Stage::UnderDevelopment,
-        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::RemoteModels,
@@ -582,6 +568,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ResponsesWebsockets,
         key: "responses_websockets",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ResponsesWebsocketsV2,
+        key: "responses_websockets_v2",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

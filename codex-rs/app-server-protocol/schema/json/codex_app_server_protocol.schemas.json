@@ -869,6 +869,30 @@
             },
             "method": {
               "enum": [
+                "turn/steer"
+              ],
+              "title": "Turn/steerRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/TurnSteerParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Turn/steerRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "turn/interrupt"
               ],
               "title": "Turn/interruptRequestMethod",
@@ -4758,6 +4782,95 @@
           ],
           "title": "CollabCloseEndEventMsg",
           "type": "object"
+        },
+        {
+          "description": "Collab interaction: resume begin.",
+          "properties": {
+            "call_id": {
+              "description": "Identifier for the collab tool call.",
+              "type": "string"
+            },
+            "receiver_thread_id": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/v2/ThreadId"
+                }
+              ],
+              "description": "Thread ID of the receiver."
+            },
+            "sender_thread_id": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/v2/ThreadId"
+                }
+              ],
+              "description": "Thread ID of the sender."
+            },
+            "type": {
+              "enum": [
+                "collab_resume_begin"
+              ],
+              "title": "CollabResumeBeginEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "receiver_thread_id",
+            "sender_thread_id",
+            "type"
+          ],
+          "title": "CollabResumeBeginEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Collab interaction: resume end.",
+          "properties": {
+            "call_id": {
+              "description": "Identifier for the collab tool call.",
+              "type": "string"
+            },
+            "receiver_thread_id": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/v2/ThreadId"
+                }
+              ],
+              "description": "Thread ID of the receiver."
+            },
+            "sender_thread_id": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/v2/ThreadId"
+                }
+              ],
+              "description": "Thread ID of the sender."
+            },
+            "status": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/AgentStatus"
+                }
+              ],
+              "description": "Last known status of the receiver agent reported to the sender agent after resume."
+            },
+            "type": {
+              "enum": [
+                "collab_resume_end"
+              ],
+              "title": "CollabResumeEndEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "receiver_thread_id",
+            "sender_thread_id",
+            "status",
+            "type"
+          ],
+          "title": "CollabResumeEndEventMsg",
+          "type": "object"
         }
       ],
       "title": "EventMsg"
@@ -6040,11 +6153,23 @@
       ]
     },
     "MessagePhase": {
-      "enum": [
-        "commentary",
-        "final_answer"
-      ],
-      "type": "string"
+      "description": "Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
+      "oneOf": [
+        {
+          "description": "Mid-turn assistant text (for example preamble/progress narration).\n\nAdditional tool calls or assistant output may follow before turn completion.",
+          "enum": [
+            "commentary"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The assistant's terminal answer text for the current turn.",
+          "enum": [
+            "final_answer"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "ModeKind": {
       "description": "Initial collaboration mode to use when the TUI starts.",
@@ -9122,6 +9247,7 @@
           "type": "object"
         },
         {
+          "description": "Assistant-authored message payload used in turn-item streams.\n\n`phase` is optional because not all providers/models emit it. Consumers should use it when present, but retain legacy completion semantics when it is `None`.",
           "properties": {
             "content": {
               "items": {
@@ -9131,6 +9257,17 @@
             },
             "id": {
               "type": "string"
+            },
+            "phase": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MessagePhase"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional phase metadata carried through from `ResponseItem::Message`.\n\nThis is currently used by TUI rendering to distinguish mid-turn commentary from a final answer and avoid status-indicator jitter."
             },
             "type": {
               "enum": [
@@ -9801,6 +9938,32 @@
         },
         "type": "object"
       },
+      "AppConfig": {
+        "properties": {
+          "disabled_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AppDisabledReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enabled": {
+            "default": true,
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "AppDisabledReason": {
+        "enum": [
+          "unknown",
+          "user"
+        ],
+        "type": "string"
+      },
       "AppInfo": {
         "properties": {
           "description": {
@@ -9848,6 +10011,9 @@
           "id",
           "name"
         ],
+        "type": "object"
+      },
+      "AppsConfig": {
         "type": "object"
       },
       "AppsListParams": {
@@ -10157,6 +10323,7 @@
         "enum": [
           "spawnAgent",
           "sendInput",
+          "resumeAgent",
           "wait",
           "closeAgent"
         ],
@@ -10924,6 +11091,15 @@
               "null"
             ]
           },
+          "allowedWebSearchModes": {
+            "items": {
+              "$ref": "#/definitions/v2/WebSearchMode"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "enforceResidency": {
             "anyOf": [
               {
@@ -11231,37 +11407,52 @@
       "ExperimentalFeature": {
         "properties": {
           "announcement": {
-            "description": "Announcement copy shown to users when the feature is introduced.",
-            "type": "string"
+            "description": "Announcement copy shown to users when the feature is introduced. Null when this feature is not in beta.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "defaultEnabled": {
             "description": "Whether this feature is enabled by default.",
             "type": "boolean"
           },
           "description": {
-            "description": "Short summary describing what the feature does.",
-            "type": "string"
+            "description": "Short summary describing what the feature does. Null when this feature is not in beta.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "displayName": {
-            "description": "User-facing display name shown in the experimental features UI.",
-            "type": "string"
+            "description": "User-facing display name shown in the experimental features UI. Null when this feature is not in beta.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "enabled": {
             "description": "Whether this feature is currently enabled in the loaded config.",
             "type": "boolean"
           },
-          "flagName": {
+          "name": {
             "description": "Stable key used in config.toml and CLI flag toggles.",
             "type": "string"
+          },
+          "stage": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/ExperimentalFeatureStage"
+              }
+            ],
+            "description": "Lifecycle stage of this feature flag."
           }
         },
         "required": [
-          "announcement",
           "defaultEnabled",
-          "description",
-          "displayName",
           "enabled",
-          "flagName"
+          "name",
+          "stage"
         ],
         "type": "object"
       },
@@ -11310,6 +11501,45 @@
         ],
         "title": "ExperimentalFeatureListResponse",
         "type": "object"
+      },
+      "ExperimentalFeatureStage": {
+        "oneOf": [
+          {
+            "description": "Feature is available for user testing and feedback.",
+            "enum": [
+              "beta"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Feature is still being built and not ready for broad use.",
+            "enum": [
+              "underDevelopment"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Feature is production-ready.",
+            "enum": [
+              "stable"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Feature is deprecated and should be avoided.",
+            "enum": [
+              "deprecated"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Feature flag is retained only for backwards compatibility.",
+            "enum": [
+              "removed"
+            ],
+            "type": "string"
+          }
+        ]
       },
       "FeedbackUploadParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -12071,11 +12301,23 @@
         "type": "string"
       },
       "MessagePhase": {
-        "enum": [
-          "commentary",
-          "final_answer"
-        ],
-        "type": "string"
+        "description": "Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
+        "oneOf": [
+          {
+            "description": "Mid-turn assistant text (for example preamble/progress narration).\n\nAdditional tool calls or assistant output may follow before turn completion.",
+            "enum": [
+              "commentary"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "The assistant's terminal answer text for the current turn.",
+            "enum": [
+              "final_answer"
+            ],
+            "type": "string"
+          }
+        ]
       },
       "ModeKind": {
         "description": "Initial collaboration mode to use when the TUI starts.",
@@ -14112,13 +14354,6 @@
               "null"
             ]
           },
-          "path": {
-            "description": "[UNSTABLE] Specify the rollout path to fork from. If specified, the thread_id param will be ignored.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "sandbox": {
             "anyOf": [
               {
@@ -14877,16 +15112,6 @@
               "null"
             ]
           },
-          "history": {
-            "description": "[UNSTABLE] FOR CODEX CLOUD - DO NOT USE. If specified, the thread will be resumed with the provided history instead of loaded from disk.",
-            "items": {
-              "$ref": "#/definitions/v2/ResponseItem"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
           "model": {
             "description": "Configuration overrides for the resumed thread, if any.",
             "type": [
@@ -14895,13 +15120,6 @@
             ]
           },
           "modelProvider": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "path": {
-            "description": "[UNSTABLE] Specify the rollout path to resume from. If specified, the thread_id param will be ignored.",
             "type": [
               "string",
               "null"
@@ -15105,11 +15323,6 @@
               "boolean",
               "null"
             ]
-          },
-          "experimentalRawEvents": {
-            "default": false,
-            "description": "If true, opt into emitting raw response items on the event stream.\n\nThis is for internal use only (e.g. Codex Cloud). (TODO): Figure out a better way to categorize internal / experimental events & protocols.",
-            "type": "boolean"
           },
           "model": {
             "type": [
@@ -15547,17 +15760,6 @@
             ],
             "description": "Override the approval policy for this turn and subsequent turns."
           },
-          "collaborationMode": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/CollaborationMode"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "EXPERIMENTAL - set a pre-set collaboration mode. Takes precedence over model, reasoning_effort, and developer instructions if set."
-          },
           "cwd": {
             "description": "Override the working directory for this turn and subsequent turns.",
             "type": [
@@ -15674,6 +15876,44 @@
           "inProgress"
         ],
         "type": "string"
+      },
+      "TurnSteerParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "expectedTurnId": {
+            "description": "Required active turn id precondition. The request fails when it does not match the currently active turn.",
+            "type": "string"
+          },
+          "input": {
+            "items": {
+              "$ref": "#/definitions/v2/UserInput"
+            },
+            "type": "array"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "expectedTurnId",
+          "input",
+          "threadId"
+        ],
+        "title": "TurnSteerParams",
+        "type": "object"
+      },
+      "TurnSteerResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "turnId"
+        ],
+        "title": "TurnSteerResponse",
+        "type": "object"
       },
       "UserInput": {
         "oneOf": [

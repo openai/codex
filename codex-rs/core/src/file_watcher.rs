@@ -19,6 +19,7 @@ use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tokio::time::sleep_until;
+use tracing::info;
 use tracing::warn;
 
 use crate::config::Config;
@@ -162,6 +163,12 @@ impl FileWatcher {
                         res = raw_rx.recv() => {
                             match res {
                                 Some(Ok(event)) => {
+                                    info!(
+                                        event_kind = ?event.kind,
+                                        event_paths = ?event.paths,
+                                        event_attrs = ?event.attrs,
+                                        "file watcher received filesystem event"
+                                    );
                                     let skills_paths = classify_event(&event, &state);
                                     let now = Instant::now();
                                     skills.add(skills_paths);

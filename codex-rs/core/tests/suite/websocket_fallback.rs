@@ -58,7 +58,10 @@ async fn websocket_fallback_switches_to_http_on_upgrade_required_connect() -> Re
         .filter(|req| req.method == Method::POST && req.url.path().ends_with("/responses"))
         .count();
 
-    assert_eq!(websocket_attempts, 1);
+    // One websocket attempt comes from startup preconnect and one from the first turn's stream
+    // attempt before fallback activates; after fallback, transport is HTTP. This matches the
+    // retry-budget tradeoff documented in [`codex_core::client`] module docs.
+    assert_eq!(websocket_attempts, 2);
     assert_eq!(http_attempts, 1);
     assert_eq!(response_mock.requests().len(), 1);
 
@@ -100,7 +103,7 @@ async fn websocket_fallback_switches_to_http_after_retries_exhausted() -> Result
         .filter(|req| req.method == Method::POST && req.url.path().ends_with("/responses"))
         .count();
 
-    assert_eq!(websocket_attempts, 3);
+    assert_eq!(websocket_attempts, 4);
     assert_eq!(http_attempts, 1);
     assert_eq!(response_mock.requests().len(), 1);
 
@@ -146,7 +149,7 @@ async fn websocket_fallback_is_sticky_across_turns() -> Result<()> {
         .filter(|req| req.method == Method::POST && req.url.path().ends_with("/responses"))
         .count();
 
-    assert_eq!(websocket_attempts, 3);
+    assert_eq!(websocket_attempts, 4);
     assert_eq!(http_attempts, 2);
     assert_eq!(response_mock.requests().len(), 2);
 

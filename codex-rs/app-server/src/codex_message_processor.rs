@@ -37,6 +37,7 @@ use codex_app_server_protocol::ExecOneOffCommandResponse;
 use codex_app_server_protocol::ExperimentalFeature as ApiExperimentalFeature;
 use codex_app_server_protocol::ExperimentalFeatureListParams;
 use codex_app_server_protocol::ExperimentalFeatureListResponse;
+use codex_app_server_protocol::ExperimentalFeatureStage as ApiExperimentalFeatureStage;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::FeedbackUploadResponse;
 use codex_app_server_protocol::ForkConversationParams;
@@ -138,6 +139,8 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::TurnSteerParams;
+use codex_app_server_protocol::TurnSteerResponse;
 use codex_app_server_protocol::UserInfoResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_app_server_protocol::UserSavedConfig;
@@ -153,6 +156,7 @@ use codex_core::InitialHistory;
 use codex_core::NewThread;
 use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
+use codex_core::SteerInputError;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::ThreadManager;
 use codex_core::ThreadSortKey as CoreThreadSortKey;
@@ -314,7 +318,7 @@ pub(crate) struct CodexMessageProcessorArgs {
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) config: Arc<Config>,
     pub(crate) cli_overrides: Vec<(String, TomlValue)>,
-    pub(crate) cloud_requirements: CloudRequirementsLoader,
+    pub(crate) cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
     pub(crate) feedback: CodexFeedback,
 }
 
@@ -360,7 +364,7 @@ impl CodexMessageProcessor {
             codex_linux_sandbox_exe,
             config,
             cli_overrides,
-            cloud_requirements: Arc::new(RwLock::new(cloud_requirements)),
+            cloud_requirements,
             conversation_listeners: HashMap::new(),
             listener_thread_ids_by_subscription: HashMap::new(),
             active_login: Arc::new(Mutex::new(None)),
@@ -529,6 +533,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::TurnStart { request_id, params } => {
                 self.turn_start(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::TurnSteer { request_id, params } => {
+                self.turn_steer(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::TurnInterrupt { request_id, params } => {
@@ -3262,23 +3270,40 @@ impl CodexMessageProcessor {
 
         let data = FEATURES
             .iter()
-            .filter_map(|spec| {
-                let Stage::Experimental {
-                    name,
-                    menu_description,
-                    announcement,
-                } = spec.stage
-                else {
-                    return None;
+            .map(|spec| {
+                let (stage, display_name, description, announcement) = match spec.stage {
+                    Stage::Experimental {
+                        name,
+                        menu_description,
+                        announcement,
+                    } => (
+                        ApiExperimentalFeatureStage::Beta,
+                        Some(name.to_string()),
+                        Some(menu_description.to_string()),
+                        Some(announcement.to_string()),
+                    ),
+                    Stage::UnderDevelopment => (
+                        ApiExperimentalFeatureStage::UnderDevelopment,
+                        None,
+                        None,
+                        None,
+                    ),
+                    Stage::Stable => (ApiExperimentalFeatureStage::Stable, None, None, None),
+                    Stage::Deprecated => {
+                        (ApiExperimentalFeatureStage::Deprecated, None, None, None)
+                    }
+                    Stage::Removed => (ApiExperimentalFeatureStage::Removed, None, None, None),
                 };
-                Some(ApiExperimentalFeature {
-                    flag_name: spec.key.to_string(),
-                    display_name: name.to_string(),
-                    description: menu_description.to_string(),
-                    announcement: announcement.to_string(),
+
+                ApiExperimentalFeature {
+                    name: spec.key.to_string(),
+                    stage,
+                    display_name,
+                    description,
+                    announcement,
                     enabled: config.features.enabled(spec.id),
                     default_enabled: spec.default_enabled,
-                })
+                }
             })
             .collect::<Vec<_>>();
 
@@ -3317,7 +3342,7 @@ impl CodexMessageProcessor {
         if start > total {
             self.send_invalid_request_error(
                 request_id,
-                format!("cursor {start} exceeds total experimental features {total}"),
+                format!("cursor {start} exceeds total feature flags {total}"),
             )
             .await;
             return;
@@ -4595,6 +4620,63 @@ impl CodexMessageProcessor {
                 let error = JSONRPCErrorError {
                     code: INTERNAL_ERROR_CODE,
                     message: format!("failed to start turn: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn turn_steer(&self, request_id: ConnectionRequestId, params: TurnSteerParams) {
+        let (_, thread) = match self.load_thread(&params.thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        if params.expected_turn_id.is_empty() {
+            self.send_invalid_request_error(
+                request_id,
+                "expectedTurnId must not be empty".to_string(),
+            )
+            .await;
+            return;
+        }
+
+        let mapped_items: Vec<CoreInputItem> = params
+            .input
+            .into_iter()
+            .map(V2UserInput::into_core)
+            .collect();
+
+        match thread
+            .steer_input(mapped_items, Some(&params.expected_turn_id))
+            .await
+        {
+            Ok(turn_id) => {
+                let response = TurnSteerResponse { turn_id };
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(err) => {
+                let (code, message) = match err {
+                    SteerInputError::NoActiveTurn(_) => (
+                        INVALID_REQUEST_ERROR_CODE,
+                        "no active turn to steer".to_string(),
+                    ),
+                    SteerInputError::ExpectedTurnMismatch { expected, actual } => (
+                        INVALID_REQUEST_ERROR_CODE,
+                        format!("expected active turn id `{expected}` but found `{actual}`"),
+                    ),
+                    SteerInputError::EmptyInput => (
+                        INVALID_REQUEST_ERROR_CODE,
+                        "input must not be empty".to_string(),
+                    ),
+                };
+                let error = JSONRPCErrorError {
+                    code,
+                    message,
                     data: None,
                 };
                 self.outgoing.send_error(request_id, error).await;
