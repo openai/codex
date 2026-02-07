@@ -9,6 +9,7 @@ use chrono::Local;
 use chrono::Utc;
 use codex_async_utils::CancelErr;
 use codex_protocol::ThreadId;
+use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
@@ -106,6 +107,14 @@ pub enum CodexErr {
     #[error("{0}")]
     InvalidRequest(String),
 
+    #[error(
+        "Model {model} does not support {modality} inputs. Remove those inputs or switch models."
+    )]
+    UnsupportedInputModality {
+        model: String,
+        modality: InputModality,
+    },
+
     /// Invalid image.
     #[error("Image poisoning")]
     InvalidImageRequest(),
@@ -198,6 +207,7 @@ impl CodexErr {
             | CodexErr::QuotaExceeded
             | CodexErr::InvalidImageRequest()
             | CodexErr::InvalidRequest(_)
+            | CodexErr::UnsupportedInputModality { .. }
             | CodexErr::RefreshTokenFailed(_)
             | CodexErr::UnsupportedOperation(_)
             | CodexErr::Sandbox(_)
@@ -593,6 +603,12 @@ impl CodexErr {
                 model: err.model.clone(),
                 reset_after_seconds: err.reset_after_seconds,
             },
+            CodexErr::UnsupportedInputModality { model, modality } => {
+                CodexErrorInfo::UnsupportedInputModality {
+                    model: model.clone(),
+                    modality: *modality,
+                }
+            }
             CodexErr::RetryLimit(_) => CodexErrorInfo::ResponseTooManyFailedAttempts {
                 http_status_code: self.http_status_code_value(),
             },
@@ -772,6 +788,21 @@ mod tests {
             CodexErrorInfo::ModelCap {
                 model: "boomslang".to_string(),
                 reset_after_seconds: Some(30),
+            }
+        );
+    }
+
+    #[test]
+    fn unsupported_input_modality_maps_to_protocol() {
+        let err = CodexErr::UnsupportedInputModality {
+            model: "gpt-5.2-codex".to_string(),
+            modality: InputModality::Image,
+        };
+        assert_eq!(
+            err.to_codex_protocol_error(),
+            CodexErrorInfo::UnsupportedInputModality {
+                model: "gpt-5.2-codex".to_string(),
+                modality: InputModality::Image,
             }
         );
     }
