@@ -338,6 +338,7 @@ mod tests {
             )])),
             rules: None,
             enforce_residency: Some(ResidencyRequirement::Us),
+            network: None,
         };
 
         let user_file = if cfg!(windows) {
@@ -393,6 +394,7 @@ mod tests {
             mcp_servers: None,
             rules: None,
             enforce_residency: None,
+            network: None,
         };
 
         let stack = ConfigLayerStack::new(Vec::new(), requirements, requirements_toml)

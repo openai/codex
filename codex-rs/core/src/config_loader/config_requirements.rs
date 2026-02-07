@@ -231,6 +231,7 @@ pub struct ConfigRequirementsToml {
     pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
     pub rules: Option<RequirementsExecPolicyToml>,
     pub enforce_residency: Option<ResidencyRequirement>,
+    #[serde(rename = "experimental_network", alias = "network")]
     pub network: Option<NetworkRequirementsToml>,
 }
 
@@ -1033,7 +1034,7 @@ mod tests {
     #[test]
     fn network_requirements_are_preserved_as_constraints_with_source() -> Result<()> {
         let toml_str = r#"
-            [network]
+            [experimental_network]
             enabled = true
             allow_upstream_proxy = false
             allowed_domains = ["api.example.com", "*.openai.com"]
