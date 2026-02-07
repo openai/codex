@@ -1,6 +1,7 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadArchiveParams;
@@ -16,7 +17,7 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[tokio::test]
-async fn thread_archive_moves_rollout_into_archived_directory() -> Result<()> {
+async fn thread_archive_requires_materialized_rollout() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path())?;
 
@@ -38,17 +39,52 @@ async fn thread_archive_moves_rollout_into_archived_directory() -> Result<()> {
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
     assert!(!thread.id.is_empty());
 
-    // Locate the rollout path recorded for this thread id.
-    let rollout_path = find_thread_path_by_id_str(codex_home.path(), &thread.id)
-        .await?
-        .expect("expected rollout path for thread id to exist");
+    let rollout_path = thread.path.clone().expect("thread path");
     assert!(
-        rollout_path.exists(),
-        "expected {} to exist",
+        !rollout_path.exists(),
+        "fresh thread rollout should not exist yet at {}",
         rollout_path.display()
     );
+    assert!(
+        find_thread_path_by_id_str(codex_home.path(), &thread.id)
+            .await?
+            .is_none(),
+        "thread id should not be discoverable before rollout materialization"
+    );
 
-    // Archive the thread.
+    // Archive should fail before the rollout is materialized.
+    let archive_id = mcp
+        .send_thread_archive_request(ThreadArchiveParams {
+            thread_id: thread.id.clone(),
+        })
+        .await?;
+    let archive_err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(archive_id)),
+    )
+    .await??;
+    assert!(
+        archive_err
+            .error
+            .message
+            .contains("no rollout found for thread id"),
+        "unexpected archive error: {}",
+        archive_err.error.message
+    );
+
+    // Materialize a rollout file and confirm archive succeeds.
+    std::fs::create_dir_all(
+        rollout_path
+            .parent()
+            .expect("rollout path should have parent directory"),
+    )?;
+    std::fs::write(&rollout_path, "{}\n")?;
+
+    let discovered_path = find_thread_path_by_id_str(codex_home.path(), &thread.id)
+        .await?
+        .expect("expected rollout path for thread id to exist after materialization");
+    assert_paths_match_on_disk(&discovered_path, &rollout_path)?;
+
     let archive_id = mcp
         .send_thread_archive_request(ThreadArchiveParams {
             thread_id: thread.id.clone(),
@@ -90,4 +126,11 @@ fn config_contents() -> &'static str {
 approval_policy = "never"
 sandbox_mode = "read-only"
 "#
+}
+
+fn assert_paths_match_on_disk(actual: &Path, expected: &Path) -> std::io::Result<()> {
+    let actual = actual.canonicalize()?;
+    let expected = expected.canonicalize()?;
+    assert_eq!(actual, expected);
+    Ok(())
 }

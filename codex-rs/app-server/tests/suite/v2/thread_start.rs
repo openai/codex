@@ -59,6 +59,12 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
         thread.created_at > 0,
         "created_at should be a positive UNIX timestamp"
     );
+    let thread_path = thread.path.clone().expect("thread path should be present");
+    assert!(thread_path.is_absolute(), "thread path should be absolute");
+    assert!(
+        !thread_path.exists(),
+        "fresh thread rollout should not be materialized until first user message"
+    );
 
     // A corresponding thread/started notification should arrive.
     let notif: JSONRPCNotification = timeout(
@@ -111,6 +117,37 @@ model_reasoning_effort = "high"
     } = to_response::<ThreadStartResponse>(resp)?;
 
     assert_eq!(reasoning_effort, Some(ReasoningEffort::High));
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_ephemeral_remains_pathless() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.1".to_string()),
+            ephemeral: Some(true),
+            ..Default::default()
+        })
+        .await?;
+
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(resp)?;
+    assert_eq!(
+        thread.path, None,
+        "ephemeral threads should not expose a path"
+    );
+
     Ok(())
 }
 

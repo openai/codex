@@ -797,6 +797,7 @@ fn build_agent_shared_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::AuthManager;
     use crate::CodexAuth;
     use crate::ThreadManager;
     use crate::agent::MAX_THREAD_SPAWN_DEPTH;
@@ -811,6 +812,10 @@ mod tests {
     use crate::protocol::SubAgentSource;
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_protocol::ThreadId;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::InitialHistory;
+    use codex_protocol::protocol::RolloutItem;
     use pretty_assertions::assert_eq;
     use serde::Deserialize;
     use serde_json::json;
@@ -1142,7 +1147,22 @@ mod tests {
         let manager = thread_manager();
         session.services.agent_control = manager.agent_control();
         let config = turn.config.as_ref().clone();
-        let thread = manager.start_thread(config).await.expect("start thread");
+        let thread = manager
+            .resume_thread_with_history(
+                config,
+                InitialHistory::Forked(vec![RolloutItem::ResponseItem(ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputText {
+                        text: "materialized".to_string(),
+                    }],
+                    end_turn: None,
+                    phase: None,
+                })]),
+                AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy")),
+            )
+            .await
+            .expect("start thread");
         let agent_id = thread.thread_id;
         let _ = manager
             .agent_control()

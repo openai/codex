@@ -11,9 +11,15 @@ use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnarchiveResponse;
 use codex_core::find_archived_thread_path_by_id_str;
 use codex_core::find_thread_path_by_id_str;
+use codex_protocol::ThreadId;
+use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionMetaLine;
+use codex_protocol::protocol::SessionSource;
+use serde_json::json;
 use std::fs::FileTimes;
 use std::fs::OpenOptions;
 use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 use std::time::SystemTime;
 use tempfile::TempDir;
@@ -42,9 +48,13 @@ async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result
     .await??;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
 
-    let rollout_path = find_thread_path_by_id_str(codex_home.path(), &thread.id)
+    let rollout_path = thread.path.clone().expect("thread path");
+    write_minimal_rollout(&thread.id, &rollout_path)?;
+
+    let found_rollout_path = find_thread_path_by_id_str(codex_home.path(), &thread.id)
         .await?
         .expect("expected rollout path for thread id to exist");
+    assert_paths_match_on_disk(&found_rollout_path, &rollout_path)?;
 
     let archive_id = mcp
         .send_thread_archive_request(ThreadArchiveParams {
@@ -118,4 +128,39 @@ fn config_contents() -> &'static str {
 approval_policy = "never"
 sandbox_mode = "read-only"
 "#
+}
+
+fn assert_paths_match_on_disk(actual: &Path, expected: &Path) -> std::io::Result<()> {
+    let actual = actual.canonicalize()?;
+    let expected = expected.canonicalize()?;
+    assert_eq!(actual, expected);
+    Ok(())
+}
+
+fn write_minimal_rollout(thread_id: &str, rollout_path: &Path) -> Result<()> {
+    let parent = rollout_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("rollout path should have parent directory"))?;
+    std::fs::create_dir_all(parent)?;
+    let timestamp = "2026-01-01T00:00:00Z";
+    let meta = SessionMeta {
+        id: ThreadId::from_string(thread_id)?,
+        forked_from_id: None,
+        timestamp: timestamp.to_string(),
+        cwd: PathBuf::from("/"),
+        originator: "codex".to_string(),
+        cli_version: "0.0.0".to_string(),
+        source: SessionSource::Cli,
+        model_provider: Some("openai".to_string()),
+        base_instructions: None,
+        dynamic_tools: None,
+    };
+    let payload = serde_json::to_value(SessionMetaLine { meta, git: None })?;
+    let line = json!({
+        "timestamp": timestamp,
+        "type": "session_meta",
+        "payload": payload,
+    });
+    std::fs::write(rollout_path, format!("{line}\n"))?;
+    Ok(())
 }
