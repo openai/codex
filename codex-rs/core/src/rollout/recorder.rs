@@ -355,10 +355,13 @@ impl RolloutRecorder {
     }
 
     pub fn rollout_path(&self) -> Option<PathBuf> {
-        self.rollout_path
-            .lock()
-            .expect("rollout path lock poisoned")
-            .clone()
+        match self.rollout_path.lock() {
+            Ok(path) => path.clone(),
+            Err(err) => {
+                warn!("rollout path lock poisoned: {err}");
+                None
+            }
+        }
     }
 
     pub async fn ensure_persisted(&self) -> std::io::Result<PathBuf> {
@@ -375,10 +378,11 @@ impl RolloutRecorder {
             .await
             .map_err(|e| IoError::other(format!("failed waiting for ensure persisted: {e}")))??;
 
-        *self
+        let mut rollout_path = self
             .rollout_path
             .lock()
-            .expect("rollout path lock poisoned") = Some(path.clone());
+            .map_err(|err| IoError::other(format!("rollout path lock poisoned: {err}")))?;
+        *rollout_path = Some(path.clone());
         Ok(path)
     }
 
@@ -537,30 +541,25 @@ struct RolloutWriterState {
 }
 
 fn create_session_meta(
-    conversation_id: ThreadId,
-    forked_from_id: Option<ThreadId>,
-    source: SessionSource,
-    base_instructions: BaseInstructions,
-    dynamic_tools: Vec<DynamicToolSpec>,
-    cwd: PathBuf,
-    model_provider_id: String,
+    deferred: DeferredRolloutCreate,
+    session_id: ThreadId,
     timestamp: OffsetDateTime,
 ) -> std::io::Result<SessionMeta> {
     let timestamp = format_timestamp_utc(timestamp)?;
     Ok(SessionMeta {
-        id: conversation_id,
-        forked_from_id,
+        id: session_id,
+        forked_from_id: deferred.forked_from_id,
         timestamp,
-        cwd,
+        cwd: deferred.cwd,
         originator: originator().value,
         cli_version: env!("CARGO_PKG_VERSION").to_string(),
-        source,
-        model_provider: Some(model_provider_id),
-        base_instructions: Some(base_instructions),
-        dynamic_tools: if dynamic_tools.is_empty() {
+        source: deferred.source,
+        model_provider: Some(deferred.model_provider_id),
+        base_instructions: Some(deferred.base_instructions),
+        dynamic_tools: if deferred.dynamic_tools.is_empty() {
             None
         } else {
-            Some(dynamic_tools)
+            Some(deferred.dynamic_tools)
         },
     })
 }
@@ -726,16 +725,7 @@ async fn ensure_writer_persisted(
     });
     state.rollout_path = Some(path.clone());
     state.cwd = deferred.cwd.clone();
-    state.session_meta = Some(create_session_meta(
-        session_id,
-        deferred.forked_from_id,
-        deferred.source,
-        deferred.base_instructions,
-        deferred.dynamic_tools,
-        deferred.cwd,
-        deferred.model_provider_id,
-        timestamp,
-    )?);
+    state.session_meta = Some(create_session_meta(deferred, session_id, timestamp)?);
     write_session_meta_if_needed(state, state_db_ctx, default_provider).await?;
 
     if !state.pending_items.is_empty() {

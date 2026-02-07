@@ -973,7 +973,9 @@ impl Session {
             error!("failed to initialize rollout recorder: {e:#}");
             e
         })?;
-        let rollout_path = rollout_recorder.as_ref().and_then(|rec| rec.rollout_path());
+        let rollout_path = rollout_recorder
+            .as_ref()
+            .and_then(RolloutRecorder::rollout_path);
 
         let mut post_session_configured_events = Vec::<Event>::new();
 
@@ -1269,9 +1271,7 @@ impl Session {
 
         let rollout_path = {
             let rollout = self.services.rollout.lock().await;
-            rollout
-                .as_ref()
-                .and_then(|recorder| recorder.rollout_path())
+            rollout.as_ref().and_then(RolloutRecorder::rollout_path)
         };
         let Some(rollout_path) = rollout_path else {
             return Err(CodexErr::Fatal(format!(
