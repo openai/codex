@@ -37,5 +37,8 @@ personality?: Personality | null, /**
 outputSchema?: JsonValue | null, /**
  * EXPERIMENTAL - Set a pre-set collaboration mode.
  * Takes precedence over model, reasoning_effort, and developer instructions if set.
+ *
+ * For `settings.developer_instructions`, `null` means "use the built-in
+ * instructions for the selected mode".
  */
 collaborationMode?: CollaborationMode | null};
