@@ -2476,6 +2476,16 @@ impl CodexMessageProcessor {
                 Ok(events) => {
                     thread.turns = build_turns_from_event_msgs(&events);
                 }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!(
+                            "thread {thread_uuid} is not materialized yet; includeTurns is unavailable before first user message"
+                        ),
+                    )
+                    .await;
+                    return;
+                }
                 Err(err) => {
                     self.send_internal_error(
                         request_id,
