@@ -17,6 +17,7 @@ use codex_core::config_loader::ConfigRequirementsToml;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::ResidencyRequirement as CoreResidencyRequirement;
 use codex_core::config_loader::SandboxModeRequirement as CoreSandboxModeRequirement;
+use codex_protocol::config_types::WebSearchMode;
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -115,6 +116,16 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
                 .filter_map(map_sandbox_mode_requirement_to_api)
                 .collect()
         }),
+        allowed_web_search_modes: requirements.allowed_web_search_modes.map(|modes| {
+            let mut normalized = modes
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<WebSearchMode>>();
+            if !normalized.contains(&WebSearchMode::Disabled) {
+                normalized.push(WebSearchMode::Disabled);
+            }
+            normalized
+        }),
         enforce_residency: requirements
             .enforce_residency
             .map(map_residency_requirement_to_api),
@@ -177,6 +188,9 @@ mod tests {
                 CoreSandboxModeRequirement::ReadOnly,
                 CoreSandboxModeRequirement::ExternalSandbox,
             ]),
+            allowed_web_search_modes: Some(vec![
+                codex_core::config_loader::WebSearchModeRequirement::Cached,
+            ]),
             mcp_servers: None,
             rules: None,
             enforce_residency: Some(CoreResidencyRequirement::Us),
@@ -196,8 +210,31 @@ mod tests {
             Some(vec![SandboxMode::ReadOnly]),
         );
         assert_eq!(
+            mapped.allowed_web_search_modes,
+            Some(vec![WebSearchMode::Cached, WebSearchMode::Disabled]),
+        );
+        assert_eq!(
             mapped.enforce_residency,
             Some(codex_app_server_protocol::ResidencyRequirement::Us),
+        );
+    }
+
+    #[test]
+    fn map_requirements_toml_to_api_normalizes_allowed_web_search_modes() {
+        let requirements = ConfigRequirementsToml {
+            allowed_approval_policies: None,
+            allowed_sandbox_modes: None,
+            allowed_web_search_modes: Some(Vec::new()),
+            mcp_servers: None,
+            rules: None,
+            enforce_residency: None,
+        };
+
+        let mapped = map_requirements_toml_to_api(requirements);
+
+        assert_eq!(
+            mapped.allowed_web_search_modes,
+            Some(vec![WebSearchMode::Disabled])
         );
     }
 }

@@ -16,6 +16,7 @@ use crate::config_loader::config_requirements::RequirementSource;
 use crate::config_loader::fingerprint::version_for_toml;
 use crate::config_loader::load_requirements_toml;
 use codex_protocol::config_types::TrustLevel;
+use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::protocol::AskForApproval;
 #[cfg(target_os = "macos")]
 use codex_protocol::protocol::SandboxPolicy;
@@ -475,6 +476,7 @@ async fn load_requirements_toml_produces_expected_constraints() -> anyhow::Resul
         &requirements_file,
         r#"
 allowed_approval_policies = ["never", "on-request"]
+allowed_web_search_modes = ["cached"]
 enforce_residency = "us"
 "#,
     )
@@ -490,6 +492,13 @@ enforce_residency = "us"
             .cloned(),
         Some(vec![AskForApproval::Never, AskForApproval::OnRequest])
     );
+    assert_eq!(
+        config_requirements_toml
+            .allowed_web_search_modes
+            .as_deref()
+            .cloned(),
+        Some(vec![crate::config_loader::WebSearchModeRequirement::Cached])
+    );
     let config_requirements: ConfigRequirements = config_requirements_toml.try_into()?;
     assert_eq!(
         config_requirements.approval_policy.value(),
@@ -502,6 +511,25 @@ enforce_residency = "us"
         config_requirements
             .approval_policy
             .can_set(&AskForApproval::OnFailure)
+            .is_err()
+    );
+    assert_eq!(
+        config_requirements.web_search_mode.value(),
+        WebSearchMode::Cached
+    );
+    config_requirements
+        .web_search_mode
+        .can_set(&WebSearchMode::Cached)?;
+    config_requirements
+        .web_search_mode
+        .can_set(&WebSearchMode::Cached)?;
+    config_requirements
+        .web_search_mode
+        .can_set(&WebSearchMode::Disabled)?;
+    assert!(
+        config_requirements
+            .web_search_mode
+            .can_set(&WebSearchMode::Live)
             .is_err()
     );
     assert_eq!(
@@ -536,6 +564,7 @@ allowed_approval_policies = ["on-request"]
             Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_sandbox_modes: None,
+                allowed_web_search_modes: None,
                 mcp_servers: None,
                 rules: None,
                 enforce_residency: None,
@@ -582,6 +611,7 @@ allowed_approval_policies = ["on-request"]
         ConfigRequirementsToml {
             allowed_approval_policies: Some(vec![AskForApproval::Never]),
             allowed_sandbox_modes: None,
+            allowed_web_search_modes: None,
             mcp_servers: None,
             rules: None,
             enforce_residency: None,
@@ -617,6 +647,7 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
     let requirements = ConfigRequirementsToml {
         allowed_approval_policies: Some(vec![AskForApproval::Never]),
         allowed_sandbox_modes: None,
+        allowed_web_search_modes: None,
         mcp_servers: None,
         rules: None,
         enforce_residency: None,

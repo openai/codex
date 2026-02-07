@@ -6,6 +6,7 @@ use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::config_loader::RequirementSource;
 use codex_core::config_loader::ResidencyRequirement;
 use codex_core::config_loader::SandboxModeRequirement;
+use codex_core::config_loader::WebSearchModeRequirement;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 
@@ -70,6 +71,21 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
         ));
     }
 
+    if let Some(modes) = requirements_toml.allowed_web_search_modes.as_ref() {
+        let normalized = normalize_allowed_web_search_modes(modes);
+        let value = join_or_empty(
+            normalized
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+        );
+        requirement_lines.push(requirement_line(
+            "allowed_web_search_modes",
+            value,
+            requirements.web_search_mode.source.as_ref(),
+        ));
+    }
+
     if let Some(servers) = requirements_toml.mcp_servers.as_ref() {
         let value = join_or_empty(servers.keys().cloned().collect::<Vec<_>>());
         requirement_lines.push(requirement_line(
@@ -125,6 +141,20 @@ fn join_or_empty(values: Vec<String>) -> String {
     } else {
         values.join(", ")
     }
+}
+
+fn normalize_allowed_web_search_modes(
+    modes: &[WebSearchModeRequirement],
+) -> Vec<WebSearchModeRequirement> {
+    if modes.is_empty() {
+        return vec![WebSearchModeRequirement::Disabled];
+    }
+
+    let mut normalized = modes.to_vec();
+    if !normalized.contains(&WebSearchModeRequirement::Disabled) {
+        normalized.push(WebSearchModeRequirement::Disabled);
+    }
+    normalized
 }
 
 fn format_config_layer_source(source: &ConfigLayerSource) -> String {
@@ -185,8 +215,10 @@ mod tests {
     use codex_core::config_loader::ResidencyRequirement;
     use codex_core::config_loader::SandboxModeRequirement;
     use codex_core::config_loader::Sourced;
+    use codex_core::config_loader::WebSearchModeRequirement;
     use codex_core::protocol::AskForApproval;
     use codex_core::protocol::SandboxPolicy;
+    use codex_protocol::config_types::WebSearchMode;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use ratatui::text::Line;
     use std::collections::BTreeMap;
@@ -287,10 +319,15 @@ mod tests {
             Constrained::allow_any(Some(ResidencyRequirement::Us)),
             Some(RequirementSource::CloudRequirements),
         );
+        requirements.web_search_mode = ConstrainedWithSource::new(
+            Constrained::allow_any(WebSearchMode::Cached),
+            Some(RequirementSource::CloudRequirements),
+        );
 
         let requirements_toml = ConfigRequirementsToml {
             allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
             allowed_sandbox_modes: Some(vec![SandboxModeRequirement::ReadOnly]),
+            allowed_web_search_modes: Some(vec![WebSearchModeRequirement::Cached]),
             mcp_servers: Some(BTreeMap::from([(
                 "docs".to_string(),
                 McpServerRequirement {
@@ -331,8 +368,39 @@ mod tests {
                 .as_str(),
             )
         );
+        assert!(
+            rendered.contains(
+                "allowed_web_search_modes: cached, disabled (source: cloud requirements)"
+            )
+        );
         assert!(rendered.contains("mcp_servers: docs (source: MDM managed_config.toml (legacy))"));
         assert!(rendered.contains("enforce_residency: us (source: cloud requirements)"));
         assert!(!rendered.contains("  - rules:"));
+    }
+
+    #[test]
+    fn debug_config_output_normalizes_empty_web_search_mode_list() {
+        let mut requirements = ConfigRequirements::default();
+        requirements.web_search_mode = ConstrainedWithSource::new(
+            Constrained::allow_any(WebSearchMode::Disabled),
+            Some(RequirementSource::CloudRequirements),
+        );
+
+        let requirements_toml = ConfigRequirementsToml {
+            allowed_approval_policies: None,
+            allowed_sandbox_modes: None,
+            allowed_web_search_modes: Some(Vec::new()),
+            mcp_servers: None,
+            rules: None,
+            enforce_residency: None,
+        };
+
+        let stack = ConfigLayerStack::new(Vec::new(), requirements, requirements_toml)
+            .expect("config layer stack");
+
+        let rendered = render_to_text(&render_debug_config_lines(&stack));
+        assert!(
+            rendered.contains("allowed_web_search_modes: disabled (source: cloud requirements)")
+        );
     }
 }
