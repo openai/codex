@@ -46,7 +46,7 @@ pub(crate) use user_shell::UserShellCommandTask;
 pub(crate) use user_shell::execute_user_shell_command;
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
-const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn on purpose. If any tools/commands were aborted, they may have partially executed; verify current state before retrying.";
+const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn on purpose. Any running unified exec processes were terminated. If any tools/commands were aborted, they may have partially executed; verify current state before retrying.";
 
 /// Thin wrapper that exposes the parts of [`Session`] task runners need.
 #[derive(Clone)]
@@ -181,7 +181,9 @@ impl Session {
         for task in self.take_all_running_tasks().await {
             self.handle_task_abort(task, reason.clone()).await;
         }
-        self.close_unified_exec_processes().await;
+        if reason == TurnAbortReason::Interrupted {
+            self.close_unified_exec_processes().await;
+        }
     }
 
     pub async fn on_task_finished(
@@ -191,15 +193,15 @@ impl Session {
     ) {
         let mut active = self.active_turn.lock().await;
         let mut pending_input = Vec::<ResponseInputItem>::new();
-        let mut should_close_processes = false;
+        let mut should_clear_active_turn = false;
         if let Some(at) = active.as_mut()
             && at.remove_task(&turn_context.sub_id)
         {
             let mut ts = at.turn_state.lock().await;
             pending_input = ts.take_pending_input();
-            should_close_processes = true;
+            should_clear_active_turn = true;
         }
-        if should_close_processes {
+        if should_clear_active_turn {
             *active = None;
         }
         drop(active);
@@ -210,9 +212,6 @@ impl Session {
                 .collect::<Vec<_>>();
             self.record_conversation_items(turn_context.as_ref(), &pending_response_items)
                 .await;
-        }
-        if should_close_processes {
-            self.close_unified_exec_processes().await;
         }
         let event = EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message });
         self.send_event(turn_context.as_ref(), event).await;
@@ -237,7 +236,7 @@ impl Session {
         }
     }
 
-    async fn close_unified_exec_processes(&self) {
+    pub(crate) async fn close_unified_exec_processes(&self) {
         self.services
             .unified_exec_manager
             .terminate_all_processes()

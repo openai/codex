@@ -91,6 +91,9 @@ pub enum Op {
     /// This server sends [`EventMsg::TurnAborted`] in response.
     Interrupt,
 
+    /// Terminate all running background terminal processes for this thread.
+    CleanBackgroundTerminals,
+
     /// Legacy user input.
     ///
     /// Prefer [`Op::UserTurn`] so the caller provides full turn context

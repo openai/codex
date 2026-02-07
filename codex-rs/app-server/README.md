@@ -93,6 +93,7 @@ Example (from OpenAI's official VSCode extension):
 - `thread/name/set` — set or update a thread’s user-facing name; returns `{}` on success. Thread names are not required to be unique; name lookups resolve to the most recently updated thread.
 - `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success.
 - `thread/compact/start` — trigger conversation history compaction for a thread; returns `{}` immediately while progress streams through standard turn/item notifications.
+- `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread (experimental; requires `capabilities.experimentalApi`); returns `{}` when the cleanup request is accepted.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
 - `turn/steer` — add user input to an already in-flight turn without starting a new turn; returns the active `turnId` that accepted the input.
@@ -363,6 +364,17 @@ You can cancel a running Turn with `turn/interrupt`.
 ```
 
 The server requests cancellations for running subprocesses, then emits a `turn/completed` event with `status: "interrupted"`. Rely on the `turn/completed` to know when Codex-side cleanup is done.
+
+### Example: Clean background terminals
+
+Use `thread/backgroundTerminals/clean` to terminate all running background terminals associated with a thread. This method is experimental and requires `capabilities.experimentalApi = true`.
+
+```json
+{ "method": "thread/backgroundTerminals/clean", "id": 35, "params": {
+    "threadId": "thr_123"
+} }
+{ "id": 35, "result": {} }
+```
 
 ### Example: Steer an active turn
 

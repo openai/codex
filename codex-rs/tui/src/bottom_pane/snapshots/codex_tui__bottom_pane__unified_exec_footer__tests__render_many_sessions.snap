@@ -5,10 +5,9 @@ expression: "format!(\"{buf:?}\")"
 Buffer {
     area: Rect { x: 0, y: 0, width: 50, height: 1 },
     content: [
-        "  123 background terminals running · /ps to view  ",
+        "  123 background terminals running · /ps to view ·",
     ],
     styles: [
         x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
-        x: 48, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
     ]
 }

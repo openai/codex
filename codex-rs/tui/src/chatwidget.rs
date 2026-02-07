@@ -1353,7 +1353,6 @@ impl ChatWidget {
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
-        self.clear_unified_exec_processes();
         self.request_redraw();
 
         if !from_replay && self.queued_user_messages.is_empty() {
@@ -1574,7 +1573,6 @@ impl ChatWidget {
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
-        self.clear_unified_exec_processes();
         self.adaptive_chunking.reset();
         self.stream_controller = None;
         self.plan_stream_controller = None;
@@ -1689,6 +1687,7 @@ impl ChatWidget {
     fn on_interrupted_turn(&mut self, reason: TurnAbortReason) {
         // Finalize, log a gentle prompt, and clear running state.
         self.finalize_turn();
+        self.clear_unified_exec_processes();
 
         if reason != TurnAbortReason::ReviewEnded {
             self.add_to_history(history_cell::new_error_event(
@@ -1818,9 +1817,12 @@ impl ChatWidget {
     fn on_exec_command_begin(&mut self, ev: ExecCommandBeginEvent) {
         self.flush_answer_stream_with_separator();
         if is_unified_exec_source(ev.source) {
+            self.track_unified_exec_process_begin(&ev);
+            if !self.bottom_pane.is_task_running() {
+                return;
+            }
             // Unified exec may be parsed as Unknown; keep the working indicator visible regardless.
             self.bottom_pane.ensure_status_indicator();
-            self.track_unified_exec_process_begin(&ev);
             if !is_standard_tool_call(&ev.parsed_cmd) {
                 return;
             }
@@ -1831,6 +1833,9 @@ impl ChatWidget {
 
     fn on_exec_command_output_delta(&mut self, ev: ExecCommandOutputDeltaEvent) {
         self.track_unified_exec_output_chunk(&ev.call_id, &ev.chunk);
+        if !self.bottom_pane.is_task_running() {
+            return;
+        }
 
         let Some(cell) = self
             .active_cell
@@ -3377,6 +3382,9 @@ impl ChatWidget {
             SlashCommand::Ps => {
                 self.add_ps_output();
             }
+            SlashCommand::Clean => {
+                self.clean_background_terminals();
+            }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
             }
@@ -4461,6 +4469,11 @@ impl ChatWidget {
             })
             .collect();
         self.add_to_history(history_cell::new_unified_exec_processes_output(processes));
+    }
+
+    fn clean_background_terminals(&mut self) {
+        self.submit_op(Op::CleanBackgroundTerminals);
+        self.add_info_message("Stopping all background terminals.".to_string(), None);
     }
 
     fn stop_rate_limit_poller(&mut self) {
