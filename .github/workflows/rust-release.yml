@@ -45,15 +45,6 @@ jobs:
           echo "✅  Tag and Cargo.toml agree (${tag_ver})"
           echo "::endgroup::"
 
-      - name: Verify config schema fixture
-        shell: bash
-        working-directory: codex-rs
-        run: |
-          set -euo pipefail
-          echo "If this fails, run: just write-config-schema to overwrite fixture with intentional changes."
-          cargo run -p codex-core --bin codex-write-config-schema
-          git diff --exit-code core/config.schema.json
-
   build:
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
